@@ -33,6 +33,9 @@ import {
   Download,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
+import {
+  SettingsPage, SettingsSection, inputClass, primaryBtnClass, secondaryBtnClass,
+} from '@/pages/settings/ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -283,7 +286,7 @@ const ImportClientsModal: React.FC<ImportClientsModalProps> = ({ isOpen, onClose
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search customers..."
-                    className="w-full pl-10 pr-4 py-2.5 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:outline-none transition-all"
+                    className={`${inputClass} pl-10`}
                   />
                 </div>
                 <button
@@ -362,7 +365,7 @@ const ImportClientsModal: React.FC<ImportClientsModalProps> = ({ isOpen, onClose
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="px-5 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-all"
+              className={secondaryBtnClass}
             >
               {result ? 'Done' : 'Cancel'}
             </button>
@@ -370,7 +373,7 @@ const ImportClientsModal: React.FC<ImportClientsModalProps> = ({ isOpen, onClose
               <button
                 onClick={handleImport}
                 disabled={importing || selected.size === 0}
-                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 shadow-lg shadow-primary/25 transition-all"
+                className={primaryBtnClass}
               >
                 {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 Import {selected.size} Client{selected.size !== 1 ? 's' : ''}
@@ -409,9 +412,9 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   const connected = status.connected;
 
   return (
-    <div className={cn('border-2 rounded-2xl overflow-hidden transition-all', connected ? config.bgClass : 'border-slate-200 bg-white')}>
+    <SettingsSection tint={connected} className="overflow-hidden">
       {/* Card Header */}
-      <div className="p-5">
+      <div>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
             <div className={cn('w-14 h-14 rounded-xl flex items-center justify-center text-3xl', config.iconBgClass)}>
@@ -491,12 +494,12 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
       </div>
 
       {/* Actions */}
-      <div className="px-5 pb-5">
+      <div className="mt-4">
         {connected ? (
           <div className="flex items-center gap-3">
             <button
               onClick={() => onImportClients(provider)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25 transition-all"
+              className={primaryBtnClass}
             >
               <Download className="w-4 h-4" />
               Import Clients
@@ -511,7 +514,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             </button>
             <button
               onClick={() => onDisconnect(provider)}
-              className="flex items-center gap-2 px-4 py-2.5 border-2 border-red-200 text-red-600 rounded-xl font-bold text-sm hover:bg-red-50 transition-all"
+              className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-200 text-red-600 rounded-lg text-sm font-semibold hover:bg-red-50 transition-all"
             >
               <Unlink className="w-4 h-4" />
               Disconnect
@@ -520,10 +523,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
         ) : (
           <button
             onClick={() => onConnect(provider)}
-            className={cn(
-              'flex items-center gap-2 px-5 py-3 text-white rounded-xl font-bold text-sm transition-all shadow-lg',
-              config.btnClass
-            )}
+            className={primaryBtnClass}
           >
             <Link2 className="w-4 h-4" />
             Connect {config.name}
@@ -534,7 +534,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
 
       {/* Expanded Details */}
       {connected && showDetails && (
-        <div className="border-t-2 border-slate-200/50 bg-white/50 p-5">
+        <div className="border-t border-slate-200/70 mt-4 pt-4">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-slate-500 font-semibold">Provider</p>
@@ -549,7 +549,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </SettingsSection>
   );
 };
 
@@ -662,15 +662,10 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const clientStats = statusData?.client_stats || { from_quickbooks: 0, from_xero: 0, manual: 0 };
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Link2 className="w-5 h-5 text-primary" />
-          Integrations
-        </h2>
-      </div>
-
+    <SettingsPage
+      title="Integrations"
+      subtitle="Connect QuickBooks or Xero to sync invoices, push approved time entries, and import clients."
+    >
       {/* Security note */}
       <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
         <ShieldCheck className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
@@ -738,7 +733,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
           onError={onError}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 };
 

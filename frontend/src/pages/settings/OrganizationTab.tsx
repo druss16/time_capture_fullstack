@@ -1,11 +1,12 @@
 // src/pages/settings/OrganizationTab.tsx
 import { useEffect, useState } from 'react';
 import {
-  Building2, Sparkles, Pencil, Check, RefreshCw,
+  Sparkles, Pencil, Check, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, PlanType } from './types';
+import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -73,27 +74,18 @@ export default function OrganizationTab({
   const planLabel  = orgPlan === 'executive' ? '💎 Executive' : orgPlan === 'professional' ? '⭐ Professional' : '🚫 No Plan';
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Building2 className="w-5 h-5 text-primary" />
-          Organization
-        </h2>
-        {!editing && (
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm border border-border/60 rounded-lg font-semibold text-slate-700 hover:bg-slate-50 transition-all"
-          >
-            <Pencil className="w-3.5 h-3.5" /> Edit
-          </button>
-        )}
-      </div>
-
+    <SettingsPage
+      title="Organization"
+      subtitle="Your firm's name and billing contact details."
+      actions={!editing && (
+        <button onClick={() => setEditing(true)} className={secondaryBtnClass}>
+          <Pencil className="w-3.5 h-3.5" /> Edit
+        </button>
+      )}
+    >
       {/* Org info — edit or view */}
       {editing ? (
-        <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-5 mb-6">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Edit Organization Info</p>
+        <SettingsSection title="Edit organization info">
           <div className="grid grid-cols-2 gap-4">
             {[
               { label: 'Organization Name', key: 'name', type: 'text' },
@@ -101,45 +93,44 @@ export default function OrganizationTab({
               { label: 'Billing Contact',   key: 'billing_contact', type: 'text' },
             ].map(({ label, key, type }) => (
               <div key={key} className={key === 'name' ? 'col-span-2 sm:col-span-1' : ''}>
-                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">{label}</label>
+                <label className={labelClass}>{label}</label>
                 <input
                   type={type}
                   value={(form as any)[key]}
                   onChange={e => setForm({ ...form, [key]: e.target.value })}
-                  className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all bg-white"
+                  className={inputClass}
                 />
               </div>
             ))}
           </div>
-          <div className="flex gap-2 mt-4 pt-4 border-t border-border/50">
-            <button
-              onClick={handleOrgSave} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-all"
-            >
+          <div className="flex gap-2 mt-4 pt-4 border-t border-slate-200/70">
+            <button onClick={handleOrgSave} disabled={saving} className={primaryBtnClass}>
               {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
               Save Changes
             </button>
-            <button onClick={() => setEditing(false)} className="px-4 py-2 border border-border/60 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-all">
+            <button onClick={() => setEditing(false)} className={secondaryBtnClass}>
               Cancel
             </button>
           </div>
-        </div>
+        </SettingsSection>
       ) : (
-        <div className="mb-6">
-          <div className="grid grid-cols-3 gap-px bg-slate-200 rounded-xl overflow-hidden border border-slate-200 mb-4">
-            {[
-              { label: 'Organization',    value: orgInfo.name },
-              { label: 'Billing Email',   value: orgInfo.billing_email || '—' },
-              { label: 'Billing Contact', value: orgInfo.billing_contact || '—' },
-            ].map(({ label, value }) => (
-              <div key={label} className="bg-white px-4 py-3">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">{label}</p>
-                <p className="font-semibold text-slate-900 text-sm truncate">{value}</p>
-              </div>
-            ))}
-          </div>
+        <div className="space-y-4">
+          <SettingsSection>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[
+                { label: 'Organization',    value: orgInfo.name },
+                { label: 'Billing Email',   value: orgInfo.billing_email || '—' },
+                { label: 'Billing Contact', value: orgInfo.billing_contact || '—' },
+              ].map(({ label, value }) => (
+                <div key={label} className="min-w-0">
+                  <p className={labelClass}>{label}</p>
+                  <p className="font-semibold text-slate-900 text-sm truncate">{value}</p>
+                </div>
+              ))}
+            </div>
+          </SettingsSection>
           <div className={cn(
-            'rounded-xl border px-4 py-3 flex items-center justify-between mb-4',
+            'rounded-2xl border px-4 py-3 flex items-center justify-between',
             orgPlan === 'executive' ? 'bg-primary/5 border-primary/20' : 'bg-amber-50 border-amber-200'
           )}>
             <div>
@@ -154,7 +145,6 @@ export default function OrganizationTab({
           </div>
         </div>
       )}
-
-    </div>
+    </SettingsPage>
   );
 }

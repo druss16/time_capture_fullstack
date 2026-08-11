@@ -204,6 +204,16 @@ export default function Settings() {
     { id: 'deployment',   label: 'MDM Deploy',    icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner','admin'] },
   ];
 
+  // Sidebar grouping — clusters the flat `tabs` above under section labels.
+  // `tabs` stays the single source of truth for config; this only orders them.
+  const tabGroups: { label: string; ids: Tab[] }[] = [
+    { label: 'General',     ids: ['organization', 'team'] },
+    { label: 'Clients',     ids: ['clients', 'assignments', 'groups'] },
+    { label: 'Work Types',  ids: ['task-types', 'task-type-sets'] },
+    { label: 'Connections', ids: ['integrations', 'devices', 'deployment'] },
+    { label: 'Billing',     ids: ['economics'] },
+  ];
+
   const isTabLocked = (tab: TabConfig) => {
     if (!tab.requiredPlan) return false;
     return !tab.requiredPlan.includes(orgPlan);
@@ -243,35 +253,48 @@ export default function Settings() {
           <p className="text-base font-extrabold text-slate-900 tracking-tight">Manage your organization</p>
         </div>
 
-        <nav className="flex-1 py-3 px-2 space-y-0.5">
-          {tabs.map(tab => {
-            const locked  = isTabLocked(tab);
-            const isActive = activeTab === tab.id;
+        <nav className="flex-1 py-3 px-2 space-y-4 overflow-y-auto">
+          {tabGroups.map(group => {
+            const groupTabs = group.ids
+              .map(id => tabs.find(t => t.id === id))
+              .filter((t): t is TabConfig => Boolean(t));
+            if (groupTabs.length === 0) return null;
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 group relative',
-                  locked
-                    ? 'text-slate-300 cursor-not-allowed'
-                    : isActive
-                      ? 'bg-primary/8 text-primary font-semibold'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
-                )}
-              >
-                {isActive && (
-                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
-                )}
-                <span className={cn(
-                  'w-4 h-4 shrink-0 transition-colors',
-                  locked ? 'text-slate-200' : isActive ? 'text-primary' : 'text-slate-400 group-hover:text-slate-600'
-                )}>
-                  {tab.icon}
-                </span>
-                <span className="flex-1 text-left truncate">{tab.label}</span>
-                {locked && <Lock className="w-3 h-3 text-slate-200 shrink-0" />}
-              </button>
+              <div key={group.label} className="space-y-0.5">
+                <p className="px-3 mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-300">
+                  {group.label}
+                </p>
+                {groupTabs.map(tab => {
+                  const locked   = isTabLocked(tab);
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 group relative',
+                        locked
+                          ? 'text-slate-300 cursor-not-allowed'
+                          : isActive
+                            ? 'bg-primary/8 text-primary font-semibold'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
+                      )}
+                    >
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
+                      )}
+                      <span className={cn(
+                        'w-4 h-4 shrink-0 transition-colors',
+                        locked ? 'text-slate-200' : isActive ? 'text-primary' : 'text-slate-400 group-hover:text-slate-600'
+                      )}>
+                        {tab.icon}
+                      </span>
+                      <span className="flex-1 text-left truncate">{tab.label}</span>
+                      {locked && <Lock className="w-3 h-3 text-slate-200 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
         </nav>

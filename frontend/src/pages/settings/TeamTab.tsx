@@ -1,10 +1,11 @@
 // src/pages/settings/TeamTab.tsx
 import { useEffect, useState } from 'react';
-import { Users, UserPlus, RefreshCw, Mail, Trash2, Plus, Check, X } from 'lucide-react';
+import { UserPlus, RefreshCw, Mail, Trash2, Plus } from 'lucide-react';
 import { cn, getRoleColor } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import { getUserDisplayName } from './types';
 import type { TeamMember } from './types';
+import { SettingsPage, SettingsSection, inputClass, primaryBtnClass, secondaryBtnClass } from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -98,13 +99,10 @@ export default function TeamTab({ members, currentUserId, currentUserRole, onRef
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Users className="w-5 h-5 text-primary" />
-          Team Members
-          <span className="text-sm font-semibold text-slate-400">({members.length})</span>
-        </h2>
+    <SettingsPage
+      title="Team Members"
+      subtitle={`${members.length} ${members.length === 1 ? 'person has' : 'people have'} access to this workspace.`}
+      actions={
         <button
           onClick={() => setShowInvite(true)}
           disabled={seatInfo !== null && !seatInfo.can_invite}
@@ -117,11 +115,12 @@ export default function TeamTab({ members, currentUserId, currentUserRole, onRef
         >
           <UserPlus className="w-3.5 h-3.5" /> Invite Member
         </button>
-      </div>
-
+      }
+    >
+      <div className="space-y-4">
       {/* Seat usage bar */}
       {seatInfo && seatInfo.seat_count > 0 && (
-        <div className="mb-5 p-4 bg-slate-50 border border-border/60 rounded-xl">
+        <SettingsSection>
           <div className="flex items-center justify-between mb-2">
             <div>
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Team Seats</p>
@@ -145,36 +144,35 @@ export default function TeamTab({ members, currentUserId, currentUserRole, onRef
               style={{ width: `${Math.min(100, (seatInfo.members / seatInfo.seat_count) * 100)}%` }}
             />
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Invite form */}
       {showInvite && (
-        <div className="mb-5 p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Invite Team Member</p>
+        <SettingsSection title="Invite team member">
           <div className="flex gap-2">
             <input
               type="email" value={inviteEmail}
               onChange={e => setInviteEmail(e.target.value)}
               placeholder="email@company.com"
-              className="flex-1 border border-border/60 rounded-lg px-3 py-2 text-sm font-medium text-slate-900 focus:border-primary focus:outline-none transition-all bg-white"
+              className={`${inputClass} flex-1`}
             />
             <button
               onClick={handleInvite} disabled={inviting || !inviteEmail.trim()}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all"
+              className={primaryBtnClass}
             >
               {inviting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
               Send
             </button>
-            <button onClick={() => setShowInvite(false)} className="px-3 py-2 border border-border/60 rounded-lg font-semibold text-sm text-slate-600 hover:bg-slate-100 transition-all">
+            <button onClick={() => setShowInvite(false)} className={secondaryBtnClass}>
               Cancel
             </button>
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Table */}
-      <div className="border border-border/60 rounded-xl overflow-hidden">
+      <div className="rounded-2xl border border-slate-200/70 overflow-hidden">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-border/60 bg-slate-50/80">
@@ -230,6 +228,7 @@ export default function TeamTab({ members, currentUserId, currentUserRole, onRef
           </tbody>
         </table>
       </div>
-    </div>
+      </div>
+    </SettingsPage>
   );
 }

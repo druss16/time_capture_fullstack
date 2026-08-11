@@ -9,6 +9,9 @@ import {
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { RoleType } from './types';
+import {
+  SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
+} from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -157,29 +160,18 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
 
   // ── Render ──
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Tag className="w-5 h-5 text-primary" />
-          Task Types
-          <span className="text-sm font-semibold text-slate-400">({taskTypes.length})</span>
-        </h2>
-        {canManage && (
-          <button
-            onClick={() => { resetForm(); setShowAdd(true); }}
-            className="flex items-center gap-1.5 px-3 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 transition-all"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add Task Type
-          </button>
-        )}
-      </div>
-
-      {/* Intro */}
-      <p className="text-sm text-slate-500 mb-4">
-        Firm-wide categories used to classify time blocks. These appear in your team's timesheet picker and feed billing rates.
-      </p>
-
+    <SettingsPage
+      title="Task Types"
+      subtitle="Firm-wide categories used to classify time blocks. These appear in your team's timesheet picker and feed billing rates."
+      actions={canManage ? (
+        <button
+          onClick={() => { resetForm(); setShowAdd(true); }}
+          className={primaryBtnClass}
+        >
+          <Plus className="w-3.5 h-3.5" /> Add Task Type
+        </button>
+      ) : undefined}
+    >
       {/* Search + filter */}
       <div className="flex items-center gap-3 mb-4">
         <div className="relative flex-1 max-w-sm">
@@ -224,40 +216,36 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
 
       {/* Add/edit form */}
       {showAdd && canManage && (
-        <div className="mb-5 p-5 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">
-            {editingId ? 'Edit Task Type' : 'New Task Type'}
-          </p>
-
+        <SettingsSection tint className="mb-5" title={editingId ? 'Edit Task Type' : 'New Task Type'}>
           <div className="grid grid-cols-12 gap-4 mb-4">
             <div className="col-span-5">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Name *</label>
+              <label className={labelClass}>Name *</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={e => setForm({ ...form, name: e.target.value })}
                 placeholder="Tax Preparation"
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                className={inputClass}
               />
             </div>
             <div className="col-span-3">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Code</label>
+              <label className={labelClass}>Code</label>
               <input
                 type="text"
                 value={form.code}
                 onChange={e => setForm({ ...form, code: e.target.value.toUpperCase().slice(0, 20) })}
                 placeholder="TAX"
                 maxLength={20}
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm font-mono bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
+                className={`${inputClass} font-mono uppercase`}
               />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Sort</label>
+              <label className={labelClass}>Sort</label>
               <input
                 type="number"
                 value={form.sort_order}
                 onChange={e => setForm({ ...form, sort_order: Number(e.target.value) || 0 })}
-                className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                className={inputClass}
               />
             </div>
             <div className="col-span-2 flex items-end">
@@ -275,7 +263,7 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
 
           <div className="grid grid-cols-12 gap-4 mb-4">
             <div className="col-span-3">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
+              <label className={labelClass}>
                 Default Rate <span className="text-[10px] font-normal text-slate-400 normal-case">$/hr, optional</span>
               </label>
               <div className="relative">
@@ -285,12 +273,12 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
                   value={form.default_rate}
                   onChange={e => setForm({ ...form, default_rate: e.target.value })}
                   placeholder="150.00"
-                  className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                  className={`${inputClass} pl-7`}
                 />
               </div>
             </div>
             <div className="col-span-9">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Color</label>
+              <label className={labelClass}>Color</label>
               <div className="flex items-center gap-2">
                 {COLOR_PRESETS.map(c => (
                   <button
@@ -321,27 +309,27 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
             <button
               onClick={handleSave}
               disabled={saving || !form.name.trim()}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all"
+              className={primaryBtnClass}
             >
               {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
               {editingId ? 'Update' : 'Add Task Type'}
             </button>
             <button
               onClick={resetForm}
-              className="px-4 py-2 border border-border/60 rounded-lg font-semibold text-sm text-slate-600 hover:bg-slate-100 transition-all"
+              className={secondaryBtnClass}
             >
               Cancel
             </button>
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {/* Table */}
-      <div className="border border-border/60 rounded-xl overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+      <div className="rounded-2xl border border-slate-200/70 overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         <div className="overflow-auto flex-1">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
-              <tr className="border-b border-border/60 bg-white">
+              <tr className="border-b border-border/60 bg-slate-50/80">
                 {['', 'Code', 'Name', 'Billable', 'Default Rate', 'Sort', 'Status', ...(canManage ? ['Actions'] : [])].map((h, i) => (
                   <th
                     key={i}
@@ -379,9 +367,9 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
                         {canManage && (
                           <button
                             onClick={() => setShowAdd(true)}
-                            className="mt-3 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90"
+                            className={`${primaryBtnClass} mt-3`}
                           >
-                            <Plus className="w-3.5 h-3.5 inline mr-1.5" />Add Task Type
+                            <Plus className="w-3.5 h-3.5" />Add Task Type
                           </button>
                         )}
                       </>
@@ -443,6 +431,6 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
           </table>
         </div>
       </div>
-    </div>
+    </SettingsPage>
   );
 }

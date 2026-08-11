@@ -25,7 +25,6 @@ import {
   Upload,
   Download,
   UserPlus,
-  UserMinus,
   ChevronDown,
   ChevronRight,
   Search,
@@ -34,13 +33,19 @@ import {
   CheckSquare,
   Square,
   MinusSquare,
-  Palette,
   Star,
   Tag,
   FileSpreadsheet,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
+import {
+  SettingsPage,
+  inputClass,
+  labelClass,
+  primaryBtnClass,
+  secondaryBtnClass,
+} from '@/pages/settings/ui';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -317,66 +322,52 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
   // ============================================================================
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-            <Folder className="w-5 h-5 text-primary" />
-            Client Groups
-            <span className="text-sm font-bold text-slate-500">({groups.length})</span>
-          </h2>
-          <p className="text-sm text-slate-500 font-medium mt-1">
-            Organize clients into groups for easy bulk team assignment
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowImportCSV(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
-          >
+    <SettingsPage
+      title="Client Groups"
+      subtitle="Organize clients into groups for easy bulk team assignment"
+      actions={
+        <>
+          <button onClick={() => setShowImportCSV(true)} className={secondaryBtnClass}>
             <Upload className="w-4 h-4" />
             Import CSV
           </button>
-          <button
-            onClick={() => setShowCreateGroup(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25"
-          >
+          <button onClick={() => setShowCreateGroup(true)} className={primaryBtnClass}>
             <FolderPlus className="w-4 h-4" />
             New Group
           </button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
+      <div className="space-y-4">
       {/* Summary Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-slate-50 border-2 border-slate-200 rounded-xl p-4">
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-slate-50 border border-slate-200/70 rounded-2xl p-4">
           <p className="text-2xl font-extrabold text-slate-900">{groups.length}</p>
           <p className="text-sm text-slate-500 font-bold">Groups</p>
         </div>
-        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
+        <div className="bg-emerald-50 border border-emerald-200/70 rounded-2xl p-4">
           <p className="text-2xl font-extrabold text-emerald-700">{totalAssigned}</p>
           <p className="text-sm text-emerald-600 font-bold">Clients Grouped</p>
         </div>
-        <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4">
+        <div className="bg-amber-50 border border-amber-200/70 rounded-2xl p-4">
           <p className="text-2xl font-extrabold text-amber-700">{ungroupedClients.length}</p>
           <p className="text-sm text-amber-600 font-bold">Ungrouped</p>
         </div>
-        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+        <div className="bg-blue-50 border border-blue-200/70 rounded-2xl p-4">
           <p className="text-2xl font-extrabold text-blue-700">{clients.length}</p>
           <p className="text-sm text-blue-600 font-bold">Total Clients</p>
         </div>
       </div>
 
       {/* Search */}
-      <div className="relative mb-6">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search groups..."
-          className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-xl text-slate-900 font-medium focus:border-primary focus:outline-none"
+          className={`${inputClass} pl-10`}
         />
       </div>
 
@@ -386,7 +377,7 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
         </div>
       ) : filteredGroups.length === 0 ? (
-        <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-xl">
+        <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-2xl">
           <Folder className="w-12 h-12 mx-auto mb-3 text-slate-300" />
           <p className="font-bold text-slate-700">No client groups yet</p>
           <p className="text-sm text-slate-500 mt-1">
@@ -394,9 +385,9 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
           </p>
           <button
             onClick={() => setShowCreateGroup(true)}
-            className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
+            className={`${primaryBtnClass} mt-4`}
           >
-            <FolderPlus className="w-4 h-4 inline mr-2" />
+            <FolderPlus className="w-4 h-4" />
             Create First Group
           </button>
         </div>
@@ -412,7 +403,7 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
               <div
                 key={group.id}
                 className={cn(
-                  'border-2 rounded-xl overflow-hidden transition-all',
+                  'border rounded-2xl overflow-hidden transition-all',
                   color.border,
                   isExpanded ? 'shadow-lg' : ''
                 )}
@@ -529,13 +520,13 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
 
       {/* Ungrouped Clients Section */}
       {ungroupedClients.length > 0 && (
-        <div className="mt-8">
+        <div className="pt-4">
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-amber-500" />
             Ungrouped Clients
             <span className="text-sm font-bold text-amber-600">({ungroupedClients.length})</span>
           </h3>
-          <div className="border-2 border-amber-200 bg-amber-50 rounded-xl p-4">
+          <div className="border border-amber-200/70 bg-amber-50 rounded-2xl p-4">
             <div className="flex flex-wrap gap-2">
               {ungroupedClients.slice(0, 20).map((client) => (
                 <div
@@ -558,6 +549,7 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
           </div>
         </div>
       )}
+      </div>
 
       {/* ================================================================ */}
       {/* Create/Edit Group Modal                                          */}
@@ -635,7 +627,7 @@ export default function ClientGroupManager({ users, clients, onSuccess, onError 
           saving={saving}
         />
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -663,7 +655,7 @@ function GroupFormModal({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-extrabold text-slate-900">
+          <h3 className="text-lg font-bold text-slate-900">
             {group ? 'Edit Group' : 'Create Group'}
           </h3>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
@@ -673,29 +665,29 @@ function GroupFormModal({
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Group Name *</label>
+            <label className={labelClass}>Group Name *</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g., Partner: Smith"
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-medium focus:border-primary focus:outline-none"
+              className={inputClass}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Description</label>
+            <label className={labelClass}>Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-medium focus:border-primary focus:outline-none"
+              className={inputClass}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Color</label>
+            <label className={labelClass}>Color</label>
             <div className="flex flex-wrap gap-2">
               {COLORS.map((c) => (
                 <button
@@ -713,7 +705,7 @@ function GroupFormModal({
           </div>
 
           <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Icon</label>
+            <label className={labelClass}>Icon</label>
             <div className="flex gap-2">
               {ICONS.map((i) => {
                 const IconComp = i.icon;
@@ -738,14 +730,14 @@ function GroupFormModal({
         <div className="flex gap-3 mt-6">
           <button
             onClick={onClose}
-            className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+            className={`${secondaryBtnClass} flex-1 justify-center`}
           >
             Cancel
           </button>
           <button
             onClick={() => onSave({ name, description, color, icon })}
             disabled={saving || !name.trim()}
-            className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+            className={`${primaryBtnClass} flex-1 justify-center`}
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             {group ? 'Update' : 'Create'}
@@ -827,7 +819,7 @@ function AssignTeamModal({
         <div className="p-6">
           {/* Mode Selection */}
           <div className="mb-4">
-            <label className="block text-sm font-bold text-slate-800 mb-2">Assignment Mode</label>
+            <label className={labelClass}>Assignment Mode</label>
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setMode('add')}
@@ -866,7 +858,7 @@ function AssignTeamModal({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search team members..."
-              className="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-primary focus:outline-none"
+              className={`${inputClass} pl-10`}
             />
           </div>
 
@@ -888,7 +880,7 @@ function AssignTeamModal({
           </button>
 
           {/* User List */}
-          <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
+          <div className="border border-slate-200/70 rounded-2xl max-h-64 overflow-y-auto">
             {filteredUsers.map((user) => {
               const displayName = getUserDisplayName(user);
               return (
@@ -924,17 +916,17 @@ function AssignTeamModal({
           )}
         </div>
 
-        <div className="flex gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+        <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
           <button
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+            className={`${secondaryBtnClass} flex-1 justify-center`}
           >
             Cancel
           </button>
           <button
             onClick={() => onAssign(Array.from(selectedUserIds), mode)}
             disabled={saving || selectedUserIds.size === 0}
-            className="flex-1 px-4 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+            className={`${primaryBtnClass} flex-1 justify-center`}
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
             Assign to {group.client_count} Clients
@@ -1022,7 +1014,7 @@ function AddClientsModal({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search clients..."
-              className="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-primary focus:outline-none"
+              className={`${inputClass} pl-10`}
             />
           </div>
 
@@ -1044,7 +1036,7 @@ function AddClientsModal({
           </button>
 
           {/* Client List */}
-          <div className="border-2 border-slate-200 rounded-xl max-h-64 overflow-y-auto">
+          <div className="border border-slate-200/70 rounded-2xl max-h-64 overflow-y-auto">
             {filteredClients.length === 0 ? (
               <div className="text-center py-8 text-slate-500">
                 <Briefcase className="w-10 h-10 mx-auto mb-2 text-slate-300" />
@@ -1083,17 +1075,17 @@ function AddClientsModal({
           )}
         </div>
 
-        <div className="flex gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+        <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
           <button
             onClick={onClose}
-            className="flex-1 px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+            className={`${secondaryBtnClass} flex-1 justify-center`}
           >
             Cancel
           </button>
           <button
             onClick={() => onAdd(Array.from(selectedIds))}
             disabled={saving || selectedIds.size === 0}
-            className="flex-1 px-4 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+            className={`${primaryBtnClass} flex-1 justify-center`}
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
             Add {selectedIds.size} Client{selectedIds.size !== 1 ? 's' : ''}
@@ -1151,7 +1143,7 @@ function ImportCSVModal({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-slate-200 bg-slate-50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
               <FileSpreadsheet className="w-5 h-5 text-blue-600" />
@@ -1174,7 +1166,7 @@ function ImportCSVModal({
                 {result.groups_created} groups created, {result.assignments_made} clients assigned
               </p>
               {result.errors?.length > 0 && (
-                <div className="mt-4 text-left bg-amber-50 border-2 border-amber-200 rounded-xl p-4 max-h-32 overflow-y-auto">
+                <div className="mt-4 text-left bg-amber-50 border border-amber-200/70 rounded-2xl p-4 max-h-32 overflow-y-auto">
                   <p className="font-bold text-amber-700 mb-2">Some rows had issues:</p>
                   {result.errors.slice(0, 10).map((err: string, i: number) => (
                     <p key={i} className="text-sm text-amber-600">• {err}</p>
@@ -1183,7 +1175,7 @@ function ImportCSVModal({
               )}
               <button
                 onClick={onClose}
-                className="mt-6 px-6 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90"
+                className={`${primaryBtnClass} mt-6`}
               >
                 Done
               </button>
@@ -1191,7 +1183,7 @@ function ImportCSVModal({
           ) : (
             <>
               {/* Template Download */}
-              <div className="mb-4 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+              <div className="mb-4 p-4 bg-blue-50 border border-blue-200/70 rounded-2xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-bold text-blue-800 text-sm">Download Template</p>
@@ -1208,7 +1200,7 @@ function ImportCSVModal({
               </div>
 
               {/* CSV Format */}
-              <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              <div className="mb-4 p-3 bg-slate-50 border border-slate-200/70 rounded-2xl">
                 <p className="text-sm font-bold text-slate-700 mb-1">Expected format:</p>
                 <code className="text-xs text-slate-600 bg-slate-200 px-2 py-1 rounded block font-mono">
                   client_code,group_name<br />
@@ -1223,24 +1215,24 @@ function ImportCSVModal({
                 onChange={(e) => setCsvContent(e.target.value)}
                 placeholder="Paste your CSV here..."
                 rows={8}
-                className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:border-primary focus:outline-none"
+                className={`${inputClass} font-mono`}
               />
             </>
           )}
         </div>
 
         {!result && (
-          <div className="flex gap-3 px-6 py-4 border-t-2 border-slate-200 bg-slate-50">
+          <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
             <button
               onClick={onClose}
-              className="flex-1 px-4 py-2.5 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+              className={`${secondaryBtnClass} flex-1 justify-center`}
             >
               Cancel
             </button>
             <button
               onClick={handleImport}
               disabled={saving || !csvContent.trim()}
-              className="flex-1 px-4 py-2.5 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+              className={`${primaryBtnClass} flex-1 justify-center`}
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
               Import

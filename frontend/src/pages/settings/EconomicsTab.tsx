@@ -1,10 +1,11 @@
 // src/pages/settings/EconomicsTab.tsx
 // One home for everything that feeds Analytics revenue/cost/margin, ordered by
 // the resolution hierarchy: firm defaults -> tiers -> client rates -> per-person.
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { DollarSign, Check, RefreshCw, Layers, Briefcase, User } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
+import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass } from './ui';
 import CostTiers from './CostTiers';
 import BillingRatesTab from './BillingRatesTab';
 import EmployeeCostRatesTab from './EmployeeCostRatesTab';
@@ -23,17 +24,6 @@ interface Props {
   onRefresh: () => void;
   onSuccess: (m: string) => void;
   onError: (m: string) => void;
-}
-
-function SectionHeader({ icon, title, sub }: { icon: ReactNode; title: string; sub: string }) {
-  return (
-    <div className="mb-4">
-      <p className="text-[13px] font-bold tracking-[-0.01em] text-slate-900 flex items-center gap-1.5">
-        <span className="text-slate-300">{icon}</span>{title}
-      </p>
-      <p className="text-[12px] text-slate-400 mt-0.5 leading-snug">{sub}</p>
-    </div>
-  );
 }
 
 export default function EconomicsTab({
@@ -76,105 +66,105 @@ export default function EconomicsTab({
   };
 
   return (
-    <div style={{ fontFamily: '"Inter", sans-serif' }}>
-      <h2 className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">Economics</h2>
-      <p className="text-[12.5px] text-slate-500 mt-1 mb-5 leading-snug">
-        Everything Analytics uses for revenue, cost, and margin. Rates resolve most-specific first —
-        block or client rate, then tier, then these defaults.
-      </p>
-
-      {/* 1 — Firm defaults */}
-      <div className="rounded-2xl border border-slate-200/70 bg-[#f7faf9] p-4 sm:p-5 mb-4">
-        <SectionHeader
+    <SettingsPage
+      title="Economics"
+      subtitle={
+        <>
+          Everything Analytics uses for revenue, cost, and margin. Rates resolve most-specific first —
+          block or client rate, then tier, then these defaults.
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {/* 1 — Firm defaults */}
+        <SettingsSection
+          tint
           icon={<DollarSign className="w-4 h-4 text-primary" />}
           title="Firm defaults"
           sub="Fallback rates and your utilization target — used when nothing more specific is set."
-        />
-        <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Default Bill Rate</label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-              <input type="number" step="0.01" min="0" value={form.billing_rate_default}
-                onChange={e => setForm({ ...form, billing_rate_default: e.target.value })}
-                className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
-            </div>
-          </div>
-          {isAdmin && (
+        >
+          <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Blended Cost / Hour</label>
+              <label className={labelClass}>Default Bill Rate</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                <input type="number" step="0.01" min="0" value={form.cost_rate_default}
-                  onChange={e => setForm({ ...form, cost_rate_default: e.target.value })}
-                  className="w-full pl-7 pr-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
+                <input type="number" step="0.01" min="0" value={form.billing_rate_default}
+                  onChange={e => setForm({ ...form, billing_rate_default: e.target.value })}
+                  className={`${inputClass} pl-7`} />
               </div>
             </div>
-          )}
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Target Billable %</label>
-            <div className="relative">
-              <input type="number" step="1" min="0" max="100" value={form.target_utilization}
-                onChange={e => setForm({ ...form, target_utilization: e.target.value })}
-                className="w-full pl-3 pr-7 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">%</span>
+            {isAdmin && (
+              <div>
+                <label className={labelClass}>Blended Cost / Hour</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input type="number" step="0.01" min="0" value={form.cost_rate_default}
+                    onChange={e => setForm({ ...form, cost_rate_default: e.target.value })}
+                    className={`${inputClass} pl-7`} />
+                </div>
+              </div>
+            )}
+            <div>
+              <label className={labelClass}>Target Billable %</label>
+              <div className="relative">
+                <input type="number" step="1" min="0" max="100" value={form.target_utilization}
+                  onChange={e => setForm({ ...form, target_utilization: e.target.value })}
+                  className={`${inputClass} pr-7`} />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">%</span>
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>Capacity (hrs/wk)</label>
+              <input type="number" step="0.5" min="0" max="168" value={form.capacity_hours_per_week}
+                onChange={e => setForm({ ...form, capacity_hours_per_week: e.target.value })}
+                className={inputClass} />
+              <p className="text-[11px] text-slate-400 mt-1">Available hours/week per person. Denominator for utilization.</p>
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Capacity (hrs/wk)</label>
-            <input type="number" step="0.5" min="0" max="168" value={form.capacity_hours_per_week}
-              onChange={e => setForm({ ...form, capacity_hours_per_week: e.target.value })}
-              className="w-full px-3 py-2 border border-border/60 rounded-lg text-sm font-medium text-slate-900 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white" />
-            <p className="text-[11px] text-slate-400 mt-1">Available hours/week per person. Denominator for utilization.</p>
-          </div>
-        </div>
-        <button onClick={saveDefaults} disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 mt-4 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-all">
-          {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-          Save Defaults
-        </button>
-      </div>
+          <button onClick={saveDefaults} disabled={saving} className={`${primaryBtnClass} mt-4`}>
+            {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            Save Defaults
+          </button>
+        </SettingsSection>
 
-      {/* 2 — Cost & bill tiers (self-contained; loads its own data) */}
-      <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5 mb-4">
-        <SectionHeader
+        {/* 2 — Cost & bill tiers (self-contained; loads its own data) */}
+        <SettingsSection
           icon={<Layers className="w-4 h-4 text-primary" />}
           title="Cost & bill tiers"
           sub="Set cost (what you pay) and bill (what you charge) per seniority tier, then assign people."
-        />
-        <div className="-mt-2">
-          <CostTiers onSuccess={onSuccess} onError={onError} />
-        </div>
-      </div>
+        >
+          <div className="-mt-2">
+            <CostTiers onSuccess={onSuccess} onError={onError} />
+          </div>
+        </SettingsSection>
 
-      {/* 3 — Client-specific rates (advanced) */}
-      <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5 mb-4">
-        <SectionHeader
+        {/* 3 — Client-specific rates (advanced) */}
+        <SettingsSection
           icon={<Briefcase className="w-4 h-4 text-primary" />}
           title="Client-specific rates"
           sub="Per-client / per-person bill rates. These override the tier bill rate for those clients."
-        />
-        <BillingRatesTab
-          rates={billingRates} users={users} clients={clients}
-          orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
-          onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
-        />
-      </div>
+        >
+          <BillingRatesTab
+            rates={billingRates} users={users} clients={clients}
+            orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
+            onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
+          />
+        </SettingsSection>
 
-      {/* 4 — Per-person cost overrides (advanced) */}
-      {isAdmin && (
-        <div className="rounded-2xl border border-slate-200/70 p-4 sm:p-5">
-          <SectionHeader
+        {/* 4 — Per-person cost overrides (advanced) */}
+        {isAdmin && (
+          <SettingsSection
             icon={<User className="w-4 h-4 text-primary" />}
             title="Per-person cost overrides"
             sub="Exact loaded cost for a specific employee. Overrides their tier cost."
-          />
-          <EmployeeCostRatesTab
-            rates={employeeCostRates} users={users}
-            onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
-          />
-        </div>
-      )}
-    </div>
+          >
+            <EmployeeCostRatesTab
+              rates={employeeCostRates} users={users}
+              onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
+            />
+          </SettingsSection>
+        )}
+      </div>
+    </SettingsPage>
   );
 }

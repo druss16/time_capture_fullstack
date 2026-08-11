@@ -5,16 +5,22 @@ import {
   Users,
   Briefcase,
   Plus,
-  Trash2,
   Upload,
   Copy,
   X,
   Loader2,
-  FileSpreadsheet,
   Download,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
+import {
+  SettingsPage,
+  SettingsSection,
+  inputClass,
+  labelClass,
+  primaryBtnClass,
+  secondaryBtnClass,
+} from '@/pages/settings/ui';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -227,45 +233,29 @@ export default function ClientAssignmentManager({
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-            <Users className="w-5 h-5 text-primary" />
-            Client Access
-            <span className="text-sm font-bold text-slate-500">({assignments.length})</span>
-          </h2>
-          <p className="text-sm text-slate-500 font-medium mt-1">
-            Control which team members can see and log time to each client
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowImport(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
-          >
+    <SettingsPage
+      title="Client Access"
+      subtitle="Control which team members can see and log time to each client"
+      actions={
+        <>
+          <button onClick={() => setShowImport(true)} className={secondaryBtnClass}>
             <Upload className="w-4 h-4" />
             Import
           </button>
-          <button
-            onClick={() => setShowBulkCopy(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
-          >
+          <button onClick={() => setShowBulkCopy(true)} className={secondaryBtnClass}>
             <Copy className="w-4 h-4" />
             Copy From User
           </button>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90 shadow-lg shadow-primary/25"
-          >
+          <button onClick={() => setShowAdd(true)} className={primaryBtnClass}>
             <Plus className="w-4 h-4" />
             Assign Clients
           </button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
+      <div className="space-y-4">
       {/* Quick Info */}
-      <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-xl">
+      <div className="p-4 bg-blue-50 border border-blue-200/70 rounded-2xl">
         <p className="text-sm text-blue-700 font-medium">
           💡 <strong>How it works:</strong> Clients with "Assigned Only" visibility will only be visible to users listed here.
           Clients with "All Team Members" visibility are visible to everyone regardless of assignments.
@@ -273,34 +263,36 @@ export default function ClientAssignmentManager({
       </div>
 
       {/* Filters */}
-      <div className="flex gap-4 mb-6">
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-slate-600 mb-1">Filter by User</label>
-          <select
-            value={filterUser}
-            onChange={(e) => setFilterUser(e.target.value)}
-            className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white"
-          >
-            <option value="">All Users</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
-            ))}
-          </select>
+      <SettingsSection>
+        <div className="flex gap-4">
+          <div className="flex-1">
+            <label className={labelClass}>Filter by User</label>
+            <select
+              value={filterUser}
+              onChange={(e) => setFilterUser(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">All Users</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>{getUserDisplayName(u)}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1">
+            <label className={labelClass}>Filter by Client</label>
+            <select
+              value={filterClient}
+              onChange={(e) => setFilterClient(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">All Clients</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-slate-600 mb-1">Filter by Client</label>
-          <select
-            value={filterClient}
-            onChange={(e) => setFilterClient(e.target.value)}
-            className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-medium bg-white"
-          >
-            <option value="">All Clients</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      </SettingsSection>
 
       {/* Assignment List */}
       {loading ? (
@@ -308,7 +300,7 @@ export default function ClientAssignmentManager({
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
         </div>
       ) : Object.keys(groupedByUser).length === 0 ? (
-        <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-xl">
+        <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-2xl">
           <Users className="w-12 h-12 mx-auto mb-3 text-slate-300" />
           <p className="font-bold text-slate-700">No client assignments yet</p>
           <p className="text-sm text-slate-500 mt-1">
@@ -316,17 +308,17 @@ export default function ClientAssignmentManager({
           </p>
           <button
             onClick={() => setShowAdd(true)}
-            className="mt-4 px-4 py-2 bg-primary text-white rounded-xl font-bold text-sm hover:opacity-90"
+            className={`${primaryBtnClass} mt-4`}
           >
-            <Plus className="w-4 h-4 inline mr-2" />
+            <Plus className="w-4 h-4" />
             Create First Assignment
           </button>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {Object.entries(groupedByUser).map(([userId, data]) => (
-            <div key={userId} className="border-2 border-slate-200 rounded-xl overflow-hidden">
-              <div className="bg-slate-50 px-4 py-3 flex items-center justify-between">
+            <div key={userId} className="rounded-2xl border border-slate-200/70 overflow-hidden">
+              <div className="bg-slate-50/80 px-4 py-3 flex items-center justify-between">
                 <div>
                   <p className="font-bold text-slate-900">{data.user_name}</p>
                   <p className="text-xs text-slate-500">{data.user_email}</p>
@@ -364,6 +356,7 @@ export default function ClientAssignmentManager({
           ))}
         </div>
       )}
+      </div>
 
       {/* ================================================================ */}
       {/* Assign Clients Modal                                            */}
@@ -372,7 +365,7 @@ export default function ClientAssignmentManager({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-extrabold text-slate-900">Assign Clients to Users</h3>
+              <h3 className="text-lg font-bold text-slate-900">Assign Clients to Users</h3>
               <button onClick={() => setShowAdd(false)} className="p-2 hover:bg-slate-100 rounded-lg">
                 <X className="w-5 h-5 text-slate-500" />
               </button>
@@ -381,10 +374,10 @@ export default function ClientAssignmentManager({
             <div className="grid md:grid-cols-2 gap-6">
               {/* Select Users */}
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
+                <label className={labelClass}>
                   Select Users ({selectedUsers.length})
                 </label>
-                <div className="border-2 border-slate-200 rounded-xl max-h-48 overflow-y-auto">
+                <div className="border border-slate-200/70 rounded-2xl max-h-48 overflow-y-auto">
                   {users.map(u => (
                     <label
                       key={u.id}
@@ -426,10 +419,10 @@ export default function ClientAssignmentManager({
 
               {/* Select Clients */}
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">
+                <label className={labelClass}>
                   Select Clients ({selectedClients.length})
                 </label>
-                <div className="border-2 border-slate-200 rounded-xl max-h-48 overflow-y-auto">
+                <div className="border border-slate-200/70 rounded-2xl max-h-48 overflow-y-auto">
                   {clients.map(c => (
                     <label
                       key={c.id}
@@ -472,9 +465,9 @@ export default function ClientAssignmentManager({
             </div>
 
             {/* Summary */}
-            <div className="mt-4 p-3 bg-slate-50 rounded-xl">
+            <div className="mt-4 p-3 bg-slate-50 rounded-2xl">
               <p className="text-sm text-slate-600 font-medium">
-                This will give <span className="font-bold text-primary">{selectedUsers.length}</span> user(s) 
+                This will give <span className="font-bold text-primary">{selectedUsers.length}</span> user(s)
                 access to <span className="font-bold text-primary">{selectedClients.length}</span> client(s)
               </p>
             </div>
@@ -482,14 +475,14 @@ export default function ClientAssignmentManager({
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowAdd(false)}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+                className={`${secondaryBtnClass} flex-1 justify-center`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleBulkAssign}
                 disabled={saving || selectedUsers.length === 0 || selectedClients.length === 0}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
+                className={`${primaryBtnClass} flex-1 justify-center`}
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 Create Assignments
@@ -506,7 +499,7 @@ export default function ClientAssignmentManager({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-extrabold text-slate-900">Copy Client Access</h3>
+              <h3 className="text-lg font-bold text-slate-900">Copy Client Access</h3>
               <button onClick={() => setShowBulkCopy(false)} className="p-2 hover:bg-slate-100 rounded-lg">
                 <X className="w-5 h-5 text-slate-500" />
               </button>
@@ -518,11 +511,11 @@ export default function ClientAssignmentManager({
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Copy FROM</label>
+                <label className={labelClass}>Copy FROM</label>
                 <select
                   value={copyFromUser || ''}
                   onChange={(e) => setCopyFromUser(parseInt(e.target.value) || null)}
-                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-2.5 font-medium bg-white"
+                  className={inputClass}
                 >
                   <option value="">Select user to copy from...</option>
                   {users.map(u => {
@@ -537,8 +530,8 @@ export default function ClientAssignmentManager({
               </div>
 
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Copy TO</label>
-                <div className="border-2 border-slate-200 rounded-xl max-h-48 overflow-y-auto">
+                <label className={labelClass}>Copy TO</label>
+                <div className="border border-slate-200/70 rounded-2xl max-h-48 overflow-y-auto">
                   {users.filter(u => u.id !== copyFromUser).map(u => (
                     <label
                       key={u.id}
@@ -568,14 +561,14 @@ export default function ClientAssignmentManager({
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowBulkCopy(false)}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+                className={`${secondaryBtnClass} flex-1 justify-center`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleCopyAssignments}
                 disabled={saving || !copyFromUser || copyToUsers.length === 0}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
+                className={`${primaryBtnClass} flex-1 justify-center`}
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
                 Copy Access
@@ -592,13 +585,13 @@ export default function ClientAssignmentManager({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-extrabold text-slate-900">Import from CSV</h3>
+              <h3 className="text-lg font-bold text-slate-900">Import from CSV</h3>
               <button onClick={() => { setShowImport(false); setImportResult(null); setCsvContent(''); }} className="p-2 hover:bg-slate-100 rounded-lg">
                 <X className="w-5 h-5 text-slate-500" />
               </button>
             </div>
 
-            <div className="mb-4 p-4 bg-slate-50 rounded-xl">
+            <div className="mb-4 p-4 bg-slate-50 rounded-2xl">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm text-slate-700 font-bold">Expected format:</p>
                 <button
@@ -624,14 +617,14 @@ export default function ClientAssignmentManager({
               onChange={(e) => setCsvContent(e.target.value)}
               placeholder="Paste your CSV here, or copy from Excel..."
               rows={8}
-              className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 font-mono text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+              className={`${inputClass} font-mono`}
             />
 
             {/* Import Results */}
             {importResult && (
               <div className={cn(
-                'mt-4 p-4 rounded-xl',
-                importResult.created > 0 ? 'bg-emerald-50 border-2 border-emerald-200' : 'bg-amber-50 border-2 border-amber-200'
+                'mt-4 p-4 rounded-2xl',
+                importResult.created > 0 ? 'bg-emerald-50 border border-emerald-200/70' : 'bg-amber-50 border border-amber-200/70'
               )}>
                 <p className="font-bold text-sm">
                   ✓ Created: {importResult.created} | Skipped (duplicates): {importResult.skipped_duplicates}
@@ -654,14 +647,14 @@ export default function ClientAssignmentManager({
             <div className="flex gap-3 mt-4">
               <button
                 onClick={() => { setShowImport(false); setImportResult(null); setCsvContent(''); }}
-                className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100"
+                className={`${secondaryBtnClass} flex-1 justify-center`}
               >
                 {importResult ? 'Close' : 'Cancel'}
               </button>
               <button
                 onClick={handleImportCSV}
                 disabled={saving || !csvContent.trim()}
-                className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-primary/25"
+                className={`${primaryBtnClass} flex-1 justify-center`}
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                 Import
@@ -670,6 +663,6 @@ export default function ClientAssignmentManager({
           </div>
         </div>
       )}
-    </div>
+    </SettingsPage>
   );
 }

@@ -3,6 +3,7 @@ import { Monitor, RefreshCw, Check, X } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { Device } from './types';
+import { SettingsPage, secondaryBtnClass } from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -67,22 +68,16 @@ export default function DevicesTab({ devices, onRefresh, onSuccess, onError }: P
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Monitor className="w-5 h-5 text-primary" />
-          Devices
-          <span className="text-sm font-semibold text-slate-400">({devices.length})</span>
-        </h2>
-        <button
-          onClick={onRefresh}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-border/60 rounded-lg font-semibold text-slate-600 hover:bg-slate-50 transition-all"
-        >
+    <SettingsPage
+      title="Devices"
+      subtitle={`${devices.length} registered device${devices.length !== 1 ? 's' : ''}`}
+      actions={
+        <button onClick={onRefresh} className={secondaryBtnClass}>
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
-      </div>
-
-      <div className="border border-border/60 rounded-xl overflow-hidden">
+      }
+    >
+      <div className="rounded-2xl border border-slate-200/70 overflow-hidden">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-border/60 bg-slate-50/80">
@@ -140,6 +135,6 @@ export default function DevicesTab({ devices, onRefresh, onSuccess, onError }: P
           </tbody>
         </table>
       </div>
-    </div>
+    </SettingsPage>
   );
 }

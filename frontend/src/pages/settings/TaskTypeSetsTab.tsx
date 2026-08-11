@@ -9,6 +9,9 @@ import {
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { RoleType } from './types';
+import {
+  SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
+} from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -216,30 +219,20 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
   }
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Layers className="w-5 h-5 text-primary" />
-          Task Type Sets
-          <span className="text-sm font-semibold text-slate-400">({sets.length})</span>
-        </h2>
-        {canManage && (
-          <button
-            onClick={createSet}
-            className="flex items-center gap-1.5 px-3 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 transition-all"
-          >
-            <Plus className="w-3.5 h-3.5" /> New Set
-          </button>
-        )}
-      </div>
-
-      <p className="text-sm text-slate-500 mb-4">
-        Bundle task types into named lists (e.g. "Standard", "Audit-Only"). One set is your firm default; others can be assigned per client.
-      </p>
-
+    <SettingsPage
+      title="Task Type Sets"
+      subtitle='Bundle task types into named lists (e.g. "Standard", "Audit-Only"). One set is your firm default; others can be assigned per client.'
+      actions={canManage ? (
+        <button
+          onClick={createSet}
+          className={primaryBtnClass}
+        >
+          <Plus className="w-3.5 h-3.5" /> New Set
+        </button>
+      ) : undefined}
+    >
       {/* Split layout */}
-      <div className="border border-border/60 rounded-xl overflow-hidden flex" style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}>
+      <div className="rounded-2xl border border-slate-200/70 overflow-hidden flex" style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}>
 
         {/* ── Sidebar ── */}
         <aside className="w-72 border-r border-border/60 bg-slate-50/40 overflow-y-auto">
@@ -331,7 +324,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                   {!detail.is_default && !isReadOnly && (
                     <button
                       onClick={setAsDefault}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-border/60 rounded-lg text-slate-600 hover:bg-slate-50 transition-all"
+                      className={secondaryBtnClass}
                     >
                       <Star className="w-3.5 h-3.5" /> Set as Default
                     </button>
@@ -355,7 +348,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                 {!isReadOnly && (
                   <button
                     onClick={() => setShowTTForm(v => !v)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold border border-border/60 rounded-lg text-slate-600 hover:bg-slate-50 transition-all"
+                    className={secondaryBtnClass}
                   >
                     {showTTForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
                     {showTTForm ? 'Cancel' : 'New Task Type'}
@@ -365,30 +358,27 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
 
               {/* Quick-create form */}
               {showTTForm && !isReadOnly && (
-                <div className="mb-4 p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
-                    New Task Type — added to {detail.name}
-                  </p>
+                <SettingsSection tint className="mb-4" title={`New Task Type — added to ${detail.name}`}>
                   <div className="grid grid-cols-12 gap-3 mb-3">
                     <div className="col-span-7">
-                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Name *</label>
+                      <label className={labelClass}>Name *</label>
                       <input
                         type="text"
                         value={ttForm.name}
                         onChange={e => setTtForm({ ...ttForm, name: e.target.value })}
                         placeholder="Tax Preparation"
-                        className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all"
+                        className={inputClass}
                       />
                     </div>
                     <div className="col-span-3">
-                      <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Code</label>
+                      <label className={labelClass}>Code</label>
                       <input
                         type="text"
                         value={ttForm.code}
                         onChange={e => setTtForm({ ...ttForm, code: e.target.value.toUpperCase().slice(0, 20) })}
                         placeholder="TAX"
                         maxLength={20}
-                        className="w-full border border-border/60 rounded-lg px-3 py-2 text-sm font-mono bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition-all uppercase"
+                        className={`${inputClass} font-mono uppercase`}
                       />
                     </div>
                     <div className="col-span-2 flex items-end">
@@ -404,7 +394,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                     </div>
                   </div>
                   <div className="mb-3">
-                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">Color</label>
+                    <label className={labelClass}>Color</label>
                     <div className="flex items-center gap-2">
                       {COLOR_PRESETS.map(c => (
                         <button
@@ -431,19 +421,19 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                     <button
                       onClick={createTaskTypeAndAdd}
                       disabled={ttSaving || !ttForm.name.trim()}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all"
+                      className={primaryBtnClass}
                     >
                       {ttSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                       Create & Add
                     </button>
                     <button
                       onClick={() => { setShowTTForm(false); setTtForm(BLANK_TT_FORM); }}
-                      className="px-4 py-2 border border-border/60 rounded-lg font-semibold text-sm text-slate-600 hover:bg-slate-100 transition-all"
+                      className={secondaryBtnClass}
                     >
                       Cancel
                     </button>
                   </div>
-                </div>
+                </SettingsSection>
               )}
 
               {allTypes.length === 0 ? (
@@ -452,7 +442,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                   <p className="text-xs text-slate-400 mt-1">Create task types first in the Task Types tab</p>
                 </div>
               ) : (
-                <div className="border border-border/60 rounded-xl divide-y divide-border/30">
+                <div className="rounded-2xl border border-slate-200/70 overflow-hidden divide-y divide-border/30">
                   {allTypes.map(tt => {
                     const isMember = memberIds.has(tt.id);
                     return (
@@ -497,6 +487,6 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
           )}
         </main>
       </div>
-    </div>
+    </SettingsPage>
   );
 }

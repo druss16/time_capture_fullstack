@@ -1,7 +1,7 @@
 // src/pages/settings/CostTiers.tsx
 // Firm-defined labor cost tiers + member assignment. The analytics engine
 // resolves each user's cost as: per-person override > tier rate > org default.
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Check, RefreshCw, Plus, Trash2 } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 
@@ -49,6 +49,25 @@ export default function CostTiers({ onSuccess, onError }: Props) {
   const savedTiers = useMemo(() => tiers.filter(t => t.id != null), [tiers]);
   const tierLabel = (id: number | null) =>
     id == null ? '—' : (tiers.find(t => t.id === id)?.label || 'Unknown');
+
+  // Organize the roster by cost tier (in tier order, unassigned last), then by
+  // permission (owner → admin → manager → member), then name.
+  const roleRank: Record<string, number> = { owner: 0, admin: 1, manager: 2, member: 3 };
+  const memberGroups = useMemo(() => {
+    const order: { id: number | null; label: string }[] = [
+      ...savedTiers.map(t => ({ id: t.id!, label: t.label })),
+      { id: null, label: 'No tier · uses default' },
+    ];
+    return order
+      .map(g => ({
+        ...g,
+        people: members
+          .filter(m => (m.cost_tier_id ?? null) === g.id)
+          .sort((a, b) =>
+            (roleRank[a.role] ?? 9) - (roleRank[b.role] ?? 9) || a.name.localeCompare(b.name)),
+      }))
+      .filter(g => g.people.length > 0);
+  }, [members, savedTiers]);
 
   const editTier = (i: number, field: 'label' | 'cost_rate' | 'bill_rate' | 'hours_per_week', v: string) =>
     setTiers(ts => ts.map((t, idx) => (idx === i ? { ...t, [field]: v } : t)));
@@ -205,36 +224,45 @@ export default function CostTiers({ onSuccess, onError }: Props) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {members.map(m => (
-                  <tr key={m.id} className={selected.has(m.id) ? 'bg-primary/5' : ''}>
-                    <td className="px-3 py-2 text-center">
-                      <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSel(m.id)} />
-                    </td>
-                    <td className="px-4 py-2 font-medium text-slate-800">
-                      {m.name}
-                      {m.override_rate && (
-                        <span className="ml-2 text-[10px] text-amber-600" title="Per-person override">
-                          override ${parseFloat(m.override_rate).toFixed(0)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-slate-400">{m.role}</td>
-                    <td className="px-4 py-2">
-                      <select
-                        value={m.cost_tier_id == null ? '' : String(m.cost_tier_id)}
-                        onChange={e => assign(m.id, e.target.value === '' ? null : Number(e.target.value))}
-                        className="border border-border/60 rounded-lg px-2 py-1 text-sm bg-white text-slate-700"
-                      >
-                        <option value="">— default</option>
-                        {savedTiers.map(t => (
-                          <option key={t.id} value={String(t.id)}>{t.label}</option>
-                        ))}
-                      </select>
-                      {m.cost_tier_id != null && !savedTiers.some(t => t.id === m.cost_tier_id) && (
-                        <span className="ml-1 text-[10px] text-slate-400">({tierLabel(m.cost_tier_id)})</span>
-                      )}
-                    </td>
-                  </tr>
+                {memberGroups.map(g => (
+                  <Fragment key={String(g.id)}>
+                    <tr className="bg-slate-100/70">
+                      <td colSpan={4} className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        {g.label} <span className="text-slate-400">· {g.people.length}</span>
+                      </td>
+                    </tr>
+                    {g.people.map(m => (
+                      <tr key={m.id} className={selected.has(m.id) ? 'bg-primary/5' : ''}>
+                        <td className="px-3 py-2 text-center">
+                          <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSel(m.id)} />
+                        </td>
+                        <td className="px-4 py-2 font-medium text-slate-800">
+                          {m.name}
+                          {m.override_rate && (
+                            <span className="ml-2 text-[10px] text-amber-600" title="Per-person override">
+                              override ${parseFloat(m.override_rate).toFixed(0)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-slate-400">{m.role}</td>
+                        <td className="px-4 py-2">
+                          <select
+                            value={m.cost_tier_id == null ? '' : String(m.cost_tier_id)}
+                            onChange={e => assign(m.id, e.target.value === '' ? null : Number(e.target.value))}
+                            className="border border-border/60 rounded-lg px-2 py-1 text-sm bg-white text-slate-700"
+                          >
+                            <option value="">— default</option>
+                            {savedTiers.map(t => (
+                              <option key={t.id} value={String(t.id)}>{t.label}</option>
+                            ))}
+                          </select>
+                          {m.cost_tier_id != null && !savedTiers.some(t => t.id === m.cost_tier_id) && (
+                            <span className="ml-1 text-[10px] text-slate-400">({tierLabel(m.cost_tier_id)})</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

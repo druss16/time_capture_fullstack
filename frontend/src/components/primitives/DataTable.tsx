@@ -47,7 +47,7 @@ export default function DataTable({ table, onRowClick }: Props) {
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white overflow-hidden">
+    <div className="rounded-[15px] border border-border/70 bg-white overflow-hidden shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
       <header className="px-5 py-4 border-b border-slate-100">
         <h3 className="text-sm font-semibold text-slate-900">{table.title}</h3>
         {table.subtitle && (
@@ -93,7 +93,7 @@ export default function DataTable({ table, onRowClick }: Props) {
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   className={cn(
                     "border-b border-slate-50 last:border-0",
-                    onRowClick && "hover:bg-amber-50/40 cursor-pointer",
+                    onRowClick && "hover:bg-primary/[0.05] cursor-pointer",
                   )}
                 >
                   {table.columns.map(col => (
@@ -122,6 +122,6 @@ export default function DataTable({ table, onRowClick }: Props) {
 function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
   if (!active) return <ArrowUpDown className="h-3 w-3 text-slate-400" />;
   return dir === "asc"
-    ? <ArrowUp className="h-3 w-3 text-amber-600" />
-    : <ArrowDown className="h-3 w-3 text-amber-600" />;
+    ? <ArrowUp className="h-3 w-3 text-primary" />
+    : <ArrowDown className="h-3 w-3 text-primary" />;
 }

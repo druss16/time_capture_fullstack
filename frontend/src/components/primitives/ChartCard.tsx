@@ -12,8 +12,8 @@ import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
 import type { ChartCardPayload } from "@/lib/analytics_v2/types";
 
-// Brand palette — matches v1 ExecutiveDashboard for visual continuity
-const SERIES_COLORS = ["#c9a84c", "#2dd4bf", "#0d1b2a", "#fb7185", "#f97316", "#94a3b8"];
+// Brand palette — teal-led to match the Lightning primary (Daily Review / Reports)
+const SERIES_COLORS = ["#0d9488", "#0d1b2a", "#c9a84c", "#fb7185", "#f97316", "#94a3b8"];
 
 // WIP aging band colors — green to red as age increases
 const WIP_AGING_COLORS = ["#10b981", "#c9a84c", "#f97316", "#dc2626"];
@@ -24,7 +24,7 @@ interface Props {
 
 export default function ChartCard({ card }: Props) {
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white p-5">
+    <div className="rounded-[15px] border border-border/70 bg-white p-5 shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
       <header className="mb-4">
         <h3 className="text-sm font-semibold text-slate-900">{card.title}</h3>
         {card.subtitle && (

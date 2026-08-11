@@ -67,7 +67,10 @@ export default function DashboardV2() {
     <div className="flex min-h-[calc(100vh-64px)] -mx-4 -my-6">
       <Sidebar body={body} onChange={handleSidebarChange} />
 
-      <main className="flex-1 min-w-0 bg-slate-50/30">
+      <main
+        className="flex-1 min-w-0"
+        style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
+      >
         <ViewSentence
           sentence={data?.view?.sentence ?? ""}
           generatedAt={data?.meta?.generated_at}
@@ -168,7 +171,7 @@ function ErrorPanel({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const isPermissionError = /403|permission/i.test(message);
 
   return (
-    <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-6">
+    <div className="rounded-[15px] border border-rose-200 bg-rose-50/40 p-6">
       <div className="flex items-start gap-3">
         <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
         <div className="flex-1">

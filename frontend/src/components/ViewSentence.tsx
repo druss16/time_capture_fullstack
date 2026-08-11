@@ -18,28 +18,34 @@ export default function ViewSentence({
   sentence, generatedAt, dataFreshness, isFetching, onRefresh,
 }: Props) {
   return (
-    <header className="border-b border-slate-200/80 bg-white/95 backdrop-blur-sm sticky top-0 z-20">
-      <div className="px-6 py-3 flex items-center justify-between gap-4">
+    <header
+      className="border-b border-border/70 bg-white/95 backdrop-blur-sm sticky top-0 z-20"
+      style={{ fontFamily: '"Inter", sans-serif' }}
+    >
+      <div className="px-6 py-3.5 flex items-center justify-between gap-4">
         {/* Sentence */}
         <div className="flex-1 min-w-0">
-          <h1 className="font-display font-light text-xl text-slate-900 truncate">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Analytics
+          </div>
+          <h1 className="mt-1 text-[22px] font-bold tracking-[-0.01em] text-slate-900 truncate">
             {sentence || "Dashboard"}
           </h1>
           {dataFreshness && (
-            <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
+            <p className="text-[12px] text-slate-500 mt-0.5 flex items-center gap-1 tabular-nums">
               <Clock className="h-3 w-3" />
               <span>Data through {formatRelative(dataFreshness)}</span>
             </p>
           )}
         </div>
 
-        {/* Actions */}
+        {/* Actions — pill controls matching the Timesheet / Reports hero */}
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={onRefresh}
             disabled={isFetching}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors",
+              "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border/60 bg-white/70 text-slate-600 hover:bg-white hover:text-slate-800 transition-colors",
               isFetching && "opacity-50 cursor-not-allowed",
             )}
             title="Refresh"
@@ -50,7 +56,7 @@ export default function ViewSentence({
 
           <Link
             to="/analytics"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border/60 bg-white/70 text-slate-600 hover:bg-white hover:text-slate-800 transition-colors"
             title="Switch to the classic dashboard"
           >
             <ArrowLeftRight className="h-3.5 w-3.5" />

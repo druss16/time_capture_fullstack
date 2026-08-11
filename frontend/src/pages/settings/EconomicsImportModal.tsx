@@ -5,7 +5,6 @@
 import { useEffect, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, Check, RefreshCw, AlertCircle, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
-import type { TeamMember } from './types';
 import { primaryBtnClass, secondaryBtnClass } from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -26,7 +25,6 @@ interface Preview {
 interface Props {
   onClose: () => void;
   onImported: () => void;
-  users: TeamMember[];
 }
 
 interface Tier { id?: number; label: string; cost_rate?: string | null; bill_rate?: string | null; hours_per_week?: string | null; }
@@ -37,7 +35,7 @@ const TEMPLATE =
   'bob@yourfirm.com,Manager,130,200,40\n' +
   'sara@yourfirm.com,Staff,75,150,40\n';
 
-export default function EconomicsImportModal({ onClose, onImported, users }: Props) {
+export default function EconomicsImportModal({ onClose, onImported }: Props) {
   const [step, setStep]       = useState<'upload' | 'preview' | 'done'>('upload');
   const [csvText, setCsvText] = useState('');
   const [fileName, setFileName] = useState('');
@@ -45,29 +43,13 @@ export default function EconomicsImportModal({ onClose, onImported, users }: Pro
   const [error, setError]     = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [tiers, setTiers]     = useState<Tier[]>([]);
-  const [teamCsv, setTeamCsv] = useState('');
 
-  // Pull existing tiers + roster so we can show valid tier names and offer a
-  // template pre-filled with the real team.
+  // Pull existing tiers so we can show valid tier names + a matching template.
   useEffect(() => {
-    safeFetchJson<{ tiers?: Tier[]; members?: { id: number; cost_tier_id: number | null }[] }>(
-      `${API_BASE}/settings/cost-rates/`,
-    ).then(d => {
-      const tierList = d.tiers || [];
-      setTiers(tierList);
-      const tierById: Record<number, Tier> = {};
-      tierList.forEach(t => { if (t.id != null) tierById[t.id] = t; });
-      const emailById: Record<number, string> = {};
-      users.forEach(u => { if (u.email) emailById[u.id] = u.email; });
-      const lines = (d.members || [])
-        .filter(m => emailById[m.id])
-        .map(m => {
-          const t = m.cost_tier_id != null ? tierById[m.cost_tier_id] : undefined;
-          return [emailById[m.id], t?.label || '', t?.cost_rate ?? '', t?.bill_rate ?? '', t?.hours_per_week ?? ''].join(',');
-        });
-      if (lines.length) setTeamCsv('email,tier,cost_rate,bill_rate,hours_per_week\n' + lines.join('\n') + '\n');
-    }).catch(() => {});
-  }, [users]);
+    safeFetchJson<{ tiers?: Tier[] }>(`${API_BASE}/settings/cost-rates/`)
+      .then(d => setTiers(d.tiers || []))
+      .catch(() => {});
+  }, []);
 
   const download = (content: string, name: string) => {
     const blob = new Blob([content], { type: 'text/csv' });
@@ -77,9 +59,17 @@ export default function EconomicsImportModal({ onClose, onImported, users }: Pro
     a.click();
     URL.revokeObjectURL(url);
   };
-  const downloadTemplate = () => (teamCsv
-    ? download(teamCsv, 'my-team.csv')
-    : download(TEMPLATE, 'economics-roster-template.csv'));
+
+  // Sample rows use the firm's real tier names/rates (with placeholder emails)
+  // when tiers exist, otherwise a generic sample.
+  const downloadTemplate = () => {
+    const csv = tiers.length
+      ? 'email,tier,cost_rate,bill_rate,hours_per_week\n'
+        + tiers.map((t, i) => `you${i + 1}@yourfirm.com,${t.label},${t.cost_rate ?? ''},${t.bill_rate ?? ''},${t.hours_per_week ?? ''}`).join('\n')
+        + '\n'
+      : TEMPLATE;
+    download(csv, 'economics-roster-template.csv');
+  };
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -152,14 +142,12 @@ export default function EconomicsImportModal({ onClose, onImported, users }: Pro
                 <div className="flex items-start gap-2.5 min-w-0">
                   <FileSpreadsheet className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-slate-800">
-                      {teamCsv ? 'Start from your team' : 'Need the format?'}
-                    </p>
+                    <p className="text-[13px] font-semibold text-slate-800">Need the format?</p>
                     <p className="text-[12px] text-slate-400">Columns: email · tier · cost_rate · bill_rate · hours_per_week</p>
                   </div>
                 </div>
                 <button onClick={downloadTemplate} className={`${secondaryBtnClass} shrink-0`}>
-                  <Download className="w-3.5 h-3.5" /> {teamCsv ? 'Download my team' : 'Template'}
+                  <Download className="w-3.5 h-3.5" /> Template
                 </button>
               </div>
 

@@ -2,7 +2,8 @@
 // Shared UI primitives for the Settings tabs — the "Lightning" look that
 // Daily Review / Timesheet / Economics share. Use these instead of hand-rolling
 // cards, headers, and inputs so every tab stays visually consistent.
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 // ── Shared class tokens ─────────────────────────────────────────────────────
@@ -95,6 +96,10 @@ interface SettingsSectionProps {
   actions?: ReactNode;
   /** Soft mint tint for a "primary" section (matches Economics firm-defaults). */
   tint?: boolean;
+  /** Render as a collapsible card. Children mount on first expand (lazy). */
+  collapsible?: boolean;
+  /** Start expanded (collapsible only). Defaults to collapsed. */
+  defaultOpen?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -102,10 +107,16 @@ interface SettingsSectionProps {
 /**
  * A rounded card section. Pass title/sub/icon to render a SectionHeader inside;
  * omit them to use it as a bare card. `tint` applies the mint background.
+ * With `collapsible`, the header toggles the body and children only mount the
+ * first time it's opened (so data-fetching children don't run while collapsed).
  */
 export function SettingsSection({
-  icon, title, sub, actions, tint, className, children,
+  icon, title, sub, actions, tint, collapsible, defaultOpen = false, className, children,
 }: SettingsSectionProps) {
+  const [open, setOpen] = useState(!collapsible || defaultOpen);
+  const [mounted, setMounted] = useState(!collapsible || defaultOpen);
+  const toggle = () => setOpen(o => { const next = !o; if (next) setMounted(true); return next; });
+
   return (
     <div
       className={cn(
@@ -114,10 +125,24 @@ export function SettingsSection({
         className,
       )}
     >
-      {(title || actions) && (
-        <SectionHeader icon={icon} title={title ?? ''} sub={sub} actions={actions} />
+      {collapsible ? (
+        <button type="button" onClick={toggle} className="w-full flex items-center gap-2.5 text-left">
+          <ChevronRight className={cn('w-4 h-4 shrink-0 text-slate-400 transition-transform', open && 'rotate-90')} />
+          <span className="min-w-0 flex-1">
+            <span className="text-[13px] font-bold tracking-[-0.01em] text-slate-900 flex items-center gap-1.5">
+              {icon && <span className="text-slate-300">{icon}</span>}
+              {title}
+            </span>
+            {sub && <span className="block text-[12px] text-slate-400 mt-0.5 leading-snug">{sub}</span>}
+          </span>
+          {actions}
+        </button>
+      ) : (
+        (title || actions) && (
+          <SectionHeader icon={icon} title={title ?? ''} sub={sub} actions={actions} />
+        )
       )}
-      {children}
+      {mounted && <div className={cn(collapsible && 'mt-4', collapsible && !open && 'hidden')}>{children}</div>}
     </div>
   );
 }

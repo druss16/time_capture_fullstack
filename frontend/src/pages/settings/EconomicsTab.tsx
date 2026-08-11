@@ -72,20 +72,20 @@ function RateLadder({ billDefault, costDefault }: { billDefault: string; costDef
       <p className="text-[12px] text-slate-500 mt-1 mb-4">The most specific rate that's set wins — left to right.</p>
 
       <div className="space-y-3">
-        <Track label="What you charge">
-          <Rung tone="win" rank="1 · Most specific" name="Client rate" />
-          <Arrow />
-          <Rung tone="win" rank="2 · Tier" name="Tier bill rate" />
-          <Arrow />
-          <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${billDefault}`} />
-        </Track>
-
         <Track label="What you pay">
           <Rung tone="win" rank="1 · Most specific" name="Per-person cost" />
           <Arrow />
           <Rung tone="win" rank="2 · Tier" name="Tier cost" />
           <Arrow />
           <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${costDefault}`} />
+        </Track>
+
+        <Track label="What you charge">
+          <Rung tone="win" rank="1 · Most specific" name="Client rate" />
+          <Arrow />
+          <Rung tone="win" rank="2 · Tier" name="Tier bill rate" />
+          <Arrow />
+          <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${billDefault}`} />
         </Track>
       </div>
     </div>

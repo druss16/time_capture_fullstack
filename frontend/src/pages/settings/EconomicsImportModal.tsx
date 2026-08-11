@@ -2,9 +2,10 @@
 // Owner/admin CSV import for the Economics page. Uploads a team roster
 // (email, tier, cost_rate, bill_rate, hours_per_week); the backend parses and
 // matches by email, previews the changes (dry run), then applies on confirm.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, Check, RefreshCw, AlertCircle, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
+import type { TeamMember } from './types';
 import { primaryBtnClass, secondaryBtnClass } from './ui';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -25,7 +26,10 @@ interface Preview {
 interface Props {
   onClose: () => void;
   onImported: () => void;
+  users: TeamMember[];
 }
+
+interface Tier { id?: number; label: string; cost_rate?: string | null; bill_rate?: string | null; hours_per_week?: string | null; }
 
 const TEMPLATE =
   'email,tier,cost_rate,bill_rate,hours_per_week\n' +
@@ -33,22 +37,49 @@ const TEMPLATE =
   'bob@yourfirm.com,Manager,130,200,40\n' +
   'sara@yourfirm.com,Staff,75,150,40\n';
 
-export default function EconomicsImportModal({ onClose, onImported }: Props) {
+export default function EconomicsImportModal({ onClose, onImported, users }: Props) {
   const [step, setStep]       = useState<'upload' | 'preview' | 'done'>('upload');
   const [csvText, setCsvText] = useState('');
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [tiers, setTiers]     = useState<Tier[]>([]);
+  const [teamCsv, setTeamCsv] = useState('');
 
-  const downloadTemplate = () => {
-    const blob = new Blob([TEMPLATE], { type: 'text/csv' });
+  // Pull existing tiers + roster so we can show valid tier names and offer a
+  // template pre-filled with the real team.
+  useEffect(() => {
+    safeFetchJson<{ tiers?: Tier[]; members?: { id: number; cost_tier_id: number | null }[] }>(
+      `${API_BASE}/settings/cost-rates/`,
+    ).then(d => {
+      const tierList = d.tiers || [];
+      setTiers(tierList);
+      const tierById: Record<number, Tier> = {};
+      tierList.forEach(t => { if (t.id != null) tierById[t.id] = t; });
+      const emailById: Record<number, string> = {};
+      users.forEach(u => { if (u.email) emailById[u.id] = u.email; });
+      const lines = (d.members || [])
+        .filter(m => emailById[m.id])
+        .map(m => {
+          const t = m.cost_tier_id != null ? tierById[m.cost_tier_id] : undefined;
+          return [emailById[m.id], t?.label || '', t?.cost_rate ?? '', t?.bill_rate ?? '', t?.hours_per_week ?? ''].join(',');
+        });
+      if (lines.length) setTeamCsv('email,tier,cost_rate,bill_rate,hours_per_week\n' + lines.join('\n') + '\n');
+    }).catch(() => {});
+  }, [users]);
+
+  const download = (content: string, name: string) => {
+    const blob = new Blob([content], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'economics-roster-template.csv';
+    a.href = url; a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   };
+  const downloadTemplate = () => (teamCsv
+    ? download(teamCsv, 'my-team.csv')
+    : download(TEMPLATE, 'economics-roster-template.csv'));
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -118,17 +149,30 @@ export default function EconomicsImportModal({ onClose, onImported }: Props) {
           {step === 'upload' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-slate-50/60 p-3.5">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <FileSpreadsheet className="w-5 h-5 text-slate-400 shrink-0" />
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <FileSpreadsheet className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-slate-800">Need the format?</p>
+                    <p className="text-[13px] font-semibold text-slate-800">
+                      {teamCsv ? 'Start from your team' : 'Need the format?'}
+                    </p>
                     <p className="text-[12px] text-slate-400">Columns: email · tier · cost_rate · bill_rate · hours_per_week</p>
                   </div>
                 </div>
                 <button onClick={downloadTemplate} className={`${secondaryBtnClass} shrink-0`}>
-                  <Download className="w-3.5 h-3.5" /> Template
+                  <Download className="w-3.5 h-3.5" /> {teamCsv ? 'Download my team' : 'Template'}
                 </button>
               </div>
+
+              {tiers.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[12px] text-slate-400">Use these tier names:</span>
+                  {tiers.map(t => (
+                    <span key={t.label} className="text-[11px] font-semibold text-primary bg-primary/8 border border-primary/20 rounded-full px-2 py-0.5">
+                      {t.label}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-slate-200 hover:border-primary/40 transition-colors p-8 text-center">
                 <input type="file" accept=".csv,text/csv" onChange={onFile} className="hidden" />

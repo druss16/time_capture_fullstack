@@ -3,11 +3,12 @@
 // resolution ladders (bill + cost): most-specific wins. Ordered tiers (main
 // setup) -> firm defaults (fallback).
 import { useEffect, useState, type ReactNode } from 'react';
-import { DollarSign, Check, RefreshCw, Layers } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass } from './ui';
 import CostTiers from './CostTiers';
+import BillingRatesTab from './BillingRatesTab';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
 const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, '')}/api`;
@@ -93,7 +94,8 @@ function RateLadder({ billDefault, costDefault }: { billDefault: string; costDef
 }
 
 export default function EconomicsTab({
-  orgInfo, currentUserRole, onUpdateOrg, onSuccess, onError,
+  orgInfo, billingRates, users, clients,
+  currentUserRole, onUpdateOrg, onRefresh, onSuccess, onError,
 }: Props) {
   const isAdmin = currentUserRole === 'admin' || currentUserRole === 'owner';
   const [saving, setSaving] = useState(false);
@@ -149,6 +151,20 @@ export default function EconomicsTab({
           <div className="-mt-2">
             <CostTiers onSuccess={onSuccess} onError={onError} />
           </div>
+        </SettingsSection>
+
+        {/* Client rates — per-client hourly override (top of the bill ladder) */}
+        <SettingsSection
+          icon={<Briefcase className="w-4 h-4 text-primary" />}
+          title="Client rates"
+          sub="Bill a specific client at a set hourly rate — beats the tier bill rate for that client."
+          actions={<Badge tone="primary">Level 1 · client-specific</Badge>}
+        >
+          <BillingRatesTab
+            rates={billingRates} users={users} clients={clients}
+            orgDefaultRate={orgInfo?.billing_rate_default || '150.00'}
+            onRefresh={onRefresh} onSuccess={onSuccess} onError={onError}
+          />
         </SettingsSection>
 
         {/* Firm defaults — the fallback */}

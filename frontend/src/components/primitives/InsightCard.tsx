@@ -56,7 +56,7 @@ export default function InsightCard({ card, onDrilldown, onDismiss }: Props) {
 
   return (
     <div className={cn(
-      "rounded-2xl border p-4 transition-all relative group",
+      "rounded-[15px] border p-4 transition-all relative group shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]",
       cfg.borderClass, cfg.bgClass,
       interactive && "hover:shadow-md cursor-pointer",
     )}

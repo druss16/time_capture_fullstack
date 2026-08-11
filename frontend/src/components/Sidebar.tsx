@@ -72,7 +72,10 @@ export default function Sidebar({ body, onChange }: Props) {
   };
 
   return (
-    <aside className="w-64 shrink-0 border-r border-slate-200/80 bg-slate-50/30 px-4 py-6 space-y-6 overflow-y-auto">
+    <aside
+      className="w-64 shrink-0 border-r border-border/70 px-4 py-6 space-y-6 overflow-y-auto"
+      style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
+    >
       {/* Scope section */}
       <section>
         <SectionLabel>Scope</SectionLabel>
@@ -145,7 +148,7 @@ export default function Sidebar({ body, onChange }: Props) {
         <select
           value={typeof body.time.value === "string" ? body.time.value : "this_quarter"}
           onChange={(e) => onChange({ time: { type: "relative", value: e.target.value } })}
-          className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50"
+          className="w-full text-sm rounded-lg border border-border/70 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
         >
           {Object.entries(groupByKey(TIME_OPTIONS, "group")).map(([group, opts]) => (
             <optgroup key={group} label={group}>
@@ -167,7 +170,7 @@ export default function Sidebar({ body, onChange }: Props) {
               ? { type: "relative", value: e.target.value }
               : null,
           })}
-          className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50"
+          className="w-full text-sm rounded-lg border border-border/70 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
         >
           <option value="">No comparison</option>
           {COMPARE_OPTIONS.map(o => (
@@ -183,7 +186,7 @@ export default function Sidebar({ body, onChange }: Props) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">
+    <h3 className="text-[11px] uppercase tracking-[0.16em] font-semibold text-slate-400 mb-2">
       {children}
     </h3>
   );
@@ -205,7 +208,7 @@ function ScopeOption({
       disabled={disabled}
       className={cn(
         "w-full flex items-center gap-2 text-sm rounded-lg px-2.5 py-1.5 text-left transition-colors",
-        active && "bg-amber-100/70 text-amber-900 font-medium",
+        active && "bg-primary/10 text-primary font-semibold",
         !active && !disabled && "text-slate-700 hover:bg-white",
         disabled && "text-slate-400 cursor-not-allowed",
       )}
@@ -236,7 +239,7 @@ function ScopePickerSelect({
           const v = Number(e.target.value);
           if (v) onChange(v);
         }}
-        className="w-full text-sm rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500/50"
+        className="w-full text-sm rounded-lg border border-border/70 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
       >
         <option value="" disabled>{placeholder}</option>
         {options.map(o => (
@@ -269,7 +272,7 @@ function LensOption({
         disabled && "text-slate-400 cursor-not-allowed",
       )}
     >
-      <Icon className={cn("h-4 w-4 shrink-0 mt-0.5", active && "text-amber-400")} />
+      <Icon className={cn("h-4 w-4 shrink-0 mt-0.5", active && "text-primary")} />
       <div className="flex-1">
         <div className={cn("font-medium", active && "text-white")}>{label}</div>
         <div className={cn(

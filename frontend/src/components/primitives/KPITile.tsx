@@ -50,7 +50,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
   if (m.state === "error") {
     return (
       <div className={cn(
-        "rounded-2xl border border-rose-200/60 bg-rose-50/20",
+        "rounded-[15px] border border-rose-200/60 bg-rose-50/20",
         sizeClass,
       )}>
         <div className="flex items-center gap-2 text-rose-700 text-sm">
@@ -69,7 +69,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
     return (
       <TileShell tile={tile} sizeClass={sizeClass} interactive={interactive} onDrilldown={onDrilldown}>
         <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
-        <div className={cn("font-display font-light text-slate-400 mt-1", valueSizeClass)}>—</div>
+        <div className={cn("font-bold tracking-tight tabular-nums text-slate-300 mt-1", valueSizeClass)}>—</div>
         <p className="mt-1 text-xs text-slate-500">No data for this period</p>
       </TileShell>
     );
@@ -82,19 +82,19 @@ export default function KPITile({ tile, onDrilldown }: Props) {
       <TileShell tile={tile} sizeClass={sizeClass} interactive={interactive} onDrilldown={onDrilldown}>
         <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
         <div className="flex items-baseline gap-2 mt-1">
-          <div className={cn("font-display font-light text-slate-700", valueSizeClass)}>
+          <div className={cn("font-bold tracking-tight tabular-nums text-slate-700", valueSizeClass)}>
             {m.preview_value !== null && m.preview_value !== undefined
               ? formatValue(m.preview_value, tile.format)
               : "—"}
           </div>
-          <Sparkles className="h-4 w-4 text-amber-500" />
+          <Sparkles className="h-4 w-4 text-primary" />
         </div>
         <div className="mt-2 space-y-1">
           <p className="text-xs text-slate-600">
             Calibrating · {m.days_in ?? 0} of {m.days_needed} days
           </p>
           <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-            <div className="h-full bg-amber-400 transition-all" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
           </div>
         </div>
       </TileShell>
@@ -117,7 +117,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
       <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
 
       <div className="flex items-baseline gap-3 mt-1.5">
-        <div className={cn("font-display font-light text-slate-900 tracking-tight", valueSizeClass)}>
+        <div className={cn("font-bold text-slate-900 tracking-tight tabular-nums", valueSizeClass)}>
           {valueStr}
         </div>
         {m.threshold_zone && (
@@ -188,10 +188,10 @@ function TileShell({
         ? () => tile.drilldown && onDrilldown && onDrilldown(tile.drilldown)
         : undefined}
       className={cn(
-        "rounded-2xl text-left transition-all",
-        interactive && "hover:shadow-md hover:-translate-y-0.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-500/40",
+        "rounded-[15px] text-left transition-all shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]",
+        interactive && "hover:shadow-md hover:-translate-y-0.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/30",
         sizeClass,
-        extraClass ?? "border border-slate-200/80 bg-white",
+        extraClass ?? "border border-border/70 bg-white",
       )}
     >
       {children}

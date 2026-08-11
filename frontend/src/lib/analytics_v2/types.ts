@@ -105,6 +105,7 @@ export interface DataTableColumn {
   label: string;
   format: NumberFormat;
   sortable: boolean;
+  tooltip?: string | null;
 }
 
 export interface DataTablePayload {

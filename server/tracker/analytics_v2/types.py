@@ -99,6 +99,10 @@ class MetricValue:
     # Optional: secondary value (e.g. realization has both hours and dollar variants)
     secondary_value: Optional[float] = None
     secondary_label: Optional[str] = None
+    # Format for the secondary value when it differs from the tile's primary
+    # format (e.g. a "Margin $" dollar amount under a percent tile). Falls back
+    # to the tile format on the frontend when None.
+    secondary_format: Optional[str] = None
     
     # Comparison delta (when comparison time range was provided)
     delta_value: Optional[float] = None

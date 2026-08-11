@@ -39,6 +39,7 @@ export interface MetricValue {
 
   secondary_value?: number | null;
   secondary_label?: string | null;
+  secondary_format?: NumberFormat | null;
 
   delta_value?: number | null;
   delta_unit?: string | null;

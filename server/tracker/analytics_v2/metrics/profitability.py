@@ -162,6 +162,7 @@ class GrossMarginMetric(Metric):
             value=round(margin, 1),
             secondary_value=round(rev_v - cost_v, 2),
             secondary_label="Margin $" + ("" if basis == "invoiced" else " (est.)"),
+            secondary_format="currency_0dp",
         )
 
 
@@ -221,6 +222,7 @@ class RevenueLeakageMetric(Metric):
             value=round(leakage, 2),
             secondary_value=round(pct, 1),
             secondary_label="of worked value",
+            secondary_format="percent_1dp",
         )
 
 
@@ -253,4 +255,5 @@ class EffectiveRateMetric(Metric):
             value=round(rate, 2),
             secondary_value=round(variance, 2) if standard > 0 else None,
             secondary_label=f"vs ${standard:.0f} standard" if standard > 0 else None,
+            secondary_format="currency_0dp",
         )

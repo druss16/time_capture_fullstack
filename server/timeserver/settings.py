@@ -196,6 +196,20 @@ AI_CLASSIFY_CACHE_TTL = 86400 * 7       # 7 days
 AI_CLASSIFY_RATE_LIMIT = 100            # per org per hour
 AI_CLASSIFY_ENABLED_PLANS = None        # None = all plans, or ["professional", "executive"]
 
+# Second-pass "auto-file unrecognized web browsing to No-Client/Non-Billable".
+# When enabled, second_pass recognizes consumer news/personal browsing (via
+# expanded heuristics + a gpt-4o-mini fallback on signature-less headlines) and
+# auto-commits it non-billable instead of nagging in Daily Review. Protective by
+# design: known work tools (QBO/Onvio/ADP/Paychex/bank portals) are excluded
+# first, and the LLM may ONLY move a block to non-billable when confident it is
+# personal — anything ambiguous stays in Needs You. Disabled => byte-for-byte
+# today's behavior. Roll out per-org via SECOND_PASS_WEB_AUTOFILE_ORG_IDS
+# (comma-separated ints); empty list + enabled = all orgs.
+SECOND_PASS_WEB_AUTOFILE = os.getenv("SECOND_PASS_WEB_AUTOFILE", "false").lower() in ("1", "true", "yes", "on")
+SECOND_PASS_WEB_AUTOFILE_ORG_IDS = [
+    int(x) for x in os.getenv("SECOND_PASS_WEB_AUTOFILE_ORG_IDS", "").replace(" ", "").split(",") if x.strip().isdigit()
+]
+
 # -----------------------------------------------------
 # Internationalization
 # -----------------------------------------------------

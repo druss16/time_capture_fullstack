@@ -30,8 +30,11 @@ class UtilizationLens(Lens):
 
     def assemble(self, org, scope, time, compare=None):
         sections: list[Section] = []
+        # Headline leads with Mix (billable ÷ tracked) — the honest efficiency
+        # number when idle time is excluded — with capacity utilization kept as
+        # a secondary signal beside it.
         sections.append(headline_row(
-            ["billable_utilization", "billable_hours", "total_hours"],
+            ["billable_mix", "billable_utilization", "billable_hours", "total_hours"],
             org, scope, time, compare,
             section_id="headline",
         ))
@@ -124,26 +127,26 @@ class UtilizationLens(Lens):
                 "coverage": round(coverage, 1),
             }
 
-        # Utilization = Mix × Coverage — the two columns decompose the headline so
-        # you can see whether a low number is a billing problem (Mix) or a capture
-        # problem (Coverage).
+        # Headline "Utilization" = billable ÷ tracked (active) time — matches the
+        # KPI. Coverage (tracked ÷ capacity) and Cap. Util (billable ÷ capacity)
+        # are the secondary, capacity-based signals.
         cols = [
             column("name", "Name", "text"),
             column("billable_hours", "Billable", "hours_1dp",
-                   tooltip="Hours marked billable in this period."),
-            column("capacity_hours", "Capacity", "hours_1dp",
-                   tooltip="Available working hours = weekly capacity (cost-tier Hrs/wk, or the firm default) × weeks in the period."),
-            column("utilization", "Utilization", "percent_1dp",
-                   tooltip="Billable ÷ Capacity. The headline efficiency number — of the time you pay for, how much became billable work. Utilization = Mix × Coverage."),
-            column("mix", "Mix", "percent_1dp",
-                   tooltip="Billable ÷ Tracked. Of the time actually logged, how much was billable — a billing-focus signal (not affected by capture gaps)."),
+                   tooltip="Hours marked billable in this period (active-at-computer time; idle excluded)."),
+            column("mix", "Utilization", "percent_1dp",
+                   tooltip="Billable ÷ Tracked (active) time. Of the time actually spent at the computer, how much was billable. The headline efficiency number — idle/away time is excluded from tracked time."),
             column("coverage", "Coverage", "percent_1dp",
-                   tooltip="Tracked ÷ Capacity. How much of available time is being captured — a data/capture-health signal. Low coverage means time isn't being logged."),
+                   tooltip="Tracked ÷ Capacity. How much of available (wall-clock) time shows up as active-computer time — a capture/attendance signal. Naturally well under 100% because idle isn't tracked."),
+            column("capacity_hours", "Capacity", "hours_1dp",
+                   tooltip="Available wall-clock working hours = weekly capacity (cost-tier Hrs/wk, or the firm default) × weeks in the period."),
+            column("utilization", "Cap. Util", "percent_1dp",
+                   tooltip="Billable ÷ Capacity (wall-clock). Secondary signal — reads low because tracked time excludes idle. Use Utilization (billable ÷ tracked) as the headline."),
         ]
 
         main_rows = sorted(
             (_row(uid, d) for uid, d in per_user.items() if uid not in excluded_ids),
-            key=lambda r: -r["utilization"],
+            key=lambda r: -r["mix"],
         )
         excluded_rows = sorted(
             (_row(uid, d) for uid, d in per_user.items() if uid in excluded_ids),
@@ -153,10 +156,10 @@ class UtilizationLens(Lens):
         children = [DataTablePayload(
             id="staff_utilization",
             title="Utilization by staff",
-            subtitle=f"{time.label} · billable ÷ capacity (Mix = billable ÷ tracked)",
+            subtitle=f"{time.label} · Utilization = billable ÷ tracked (active) time",
             columns=cols,
             rows=main_rows,
-            default_sort={"key": "utilization", "direction": "desc"},
+            default_sort={"key": "mix", "direction": "desc"},
             state=MetricState.READY if main_rows else MetricState.EMPTY,
         )]
 
@@ -206,13 +209,15 @@ class UtilizationLens(Lens):
 
         rows = []
         for tid, b in buckets.items():
-            if b["cap"] <= 0:
+            if b["tracked"] <= 0:
                 continue
             tier = tiers.get(tid)
             label = tier.label if tier else "No tier"
             target = (to_float(tier.target_utilization)
                       if tier and tier.target_utilization is not None else org_target)
-            util = b["billable"] / b["cap"] * 100
+            # Headline utilization = billable ÷ tracked (active) time, matched
+            # to the tier's target. Coverage stays capacity-based (secondary).
+            util = b["billable"] / b["tracked"] * 100
             coverage = b["tracked"] / b["cap"] * 100 if b["cap"] > 0 else 0.0
             rows.append({
                 "tier": label,
@@ -238,11 +243,11 @@ class UtilizationLens(Lens):
                 column("billable_hours", "Billable", "hours_1dp",
                        tooltip="Billable hours across the tier."),
                 column("utilization", "Utilization", "percent_1dp",
-                       tooltip="Billable ÷ Capacity for this tier. Utilization = Mix × Coverage."),
+                       tooltip="Billable ÷ Tracked (active) time for this tier — the headline efficiency number, matched to the tier's target."),
                 column("coverage", "Coverage", "percent_1dp",
-                       tooltip="Tracked ÷ Capacity for this tier — how much of available time is being captured."),
+                       tooltip="Tracked ÷ Capacity for this tier — how much of available (wall-clock) time is captured as active-computer time."),
                 column("target", "Target", "percent_1dp",
-                       tooltip="This tier's expected utilization target (Settings → Cost Tiers), or the firm target if unset."),
+                       tooltip="This tier's expected utilization target (Settings → Cost Tiers), or the firm target if unset. Now a billable-share-of-active-time target."),
                 column("vs_target", "vs Target", "percent_1dp",
                        tooltip="Utilization minus target, in points. Positive = above target."),
             ],

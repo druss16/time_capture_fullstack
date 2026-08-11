@@ -14,9 +14,9 @@ from .base import Metric, ThresholdRange, register_metric
 
 @register_metric("billable_utilization")
 class BillableUtilizationMetric(Metric):
-    label = "Billable Utilization"
+    label = "Capacity Utilization"
     format = "percent_1dp"
-    tooltip = "Billable hours ÷ available capacity × 100. Capacity = each person's weekly hours (Settings → Economics) across the period. Benchmarked against your firm's target."
+    tooltip = "Billable hours ÷ available capacity × 100. NOTE: tracked time excludes idle/away time, so against a full wall-clock capacity this reads low — it's a secondary signal. See Utilization (billable ÷ tracked) for the headline efficiency number. Capacity = each person's weekly hours (Settings → Cost Tiers)."
     # in_band: too low = under-utilized, too high = burnout/can't sustain.
     # The band is resolved per-org from Organization.target_utilization in compute().
     threshold = ThresholdRange(low=75, high=85, direction="in_band")
@@ -94,6 +94,38 @@ class BillableUtilizationMetric(Metric):
                 continue
             total += caps.get(uid, default_cap) * weeks
         return total
+
+
+@register_metric("billable_mix")
+class BillableMixMetric(Metric):
+    """Billable ÷ tracked (active) time — the headline utilization for an
+    activity tracker. Because the agent excludes idle/away time from tracked
+    totals, both numerator and denominator are active-at-computer time, so this
+    is the honest 'how billable is their working time' number (unlike capacity
+    utilization, which divides active time by wall-clock hours)."""
+    label = "Utilization"
+    format = "percent_1dp"
+    tooltip = ("Billable ÷ tracked (active) time. Of the time actually spent at "
+               "the computer, how much was billable. Idle/away time is excluded "
+               "from tracked time, so this is the true efficiency number.")
+    threshold = ThresholdRange(low=55, high=75, direction="higher_is_better")
+    valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
+    delta_good_when = "up"
+
+    def compute(self, org, scope, time):
+        qs = self._block_qs(org, scope, time)
+        # Same chargeable-population filter as capacity utilization: drop
+        # non-chargeable staff (admin/ops) from the firm/composite number.
+        if scope.type in ("firm", "composite"):
+            from ..cost_rates import non_utilization_user_ids
+            excl = non_utilization_user_ids(org)
+            if excl:
+                qs = qs.exclude(user_id__in=excl)
+        total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
+        if total_min == 0:
+            return MetricValue(state=MetricState.EMPTY)
+        bill_min = to_float(qs.filter(is_billable=True).aggregate(s=Sum("minutes"))["s"])
+        return MetricValue(value=round(bill_min / total_min * 100, 1))
 
 
 @register_metric("billable_hours")

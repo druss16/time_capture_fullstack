@@ -30,7 +30,7 @@ _HERO_METRICS = [
     "gross_margin",         # profit after the labor that did the work
     "operating_margin",     # after overhead too (diverges once admin tier flagged)
     "effective_rate",       # true $/hour earned
-    "billable_utilization", # billable share of capacity
+    "billable_mix",         # billable share of tracked (active) time — headline utilization
     "revenue_leakage",      # worked-but-unbilled value (our wedge)
 ]
 

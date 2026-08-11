@@ -5264,6 +5264,38 @@ class ClassificationService:
                 )
                 strong_is_ai_only = all(s.type.startswith('ai') for s in strong)
                 if strong_is_ai_only and not non_ai_corroborates:
+                    # IMMATERIALITY OVERRIDES THE CAP: a sub-2-minute sliver is
+                    # never worth a human review click. The lone-AI cap exists to
+                    # stop a confidently-wrong AI guess from auto-BILLING a
+                    # material block ("Mark Utica" -> "Mark Clary"); at < 2 min a
+                    # wrong guess mis-bills at most a minute, so forcing it into
+                    # "Needs you" just re-creates the sliver nag that the
+                    # immaterial auto-file (PR #109) exists to eliminate. File it
+                    # to the AI's best guess (its is_billable rides along) and move
+                    # on. Material lone-AI picks still get the human look below.
+                    if (block.minutes or 0) < IMMATERIAL_MAX_MINUTES:
+                        decision.recommended_state = 'committed'
+                        decision.confidence = max(s.strength for s in strong)
+                        decision.matched_signals.append(Signal(
+                            type='auto_confirm_immaterial',
+                            strength=decision.confidence,
+                            evidence=(
+                                f'Auto-committed: immaterial sub-'
+                                f'{IMMATERIAL_MAX_MINUTES}min sliver '
+                                f'({block.minutes or 0}m) attributed to lone-AI '
+                                f'client {chosen_client_id} (review waived — '
+                                f'immaterial)'
+                            ),
+                            detail={'auto_confirmed': True, 'immaterial': True,
+                                    'client_id': chosen_client_id},
+                        ))
+                        logger.info(
+                            f"[FINALIZE] Block {getattr(block, 'pk', '?')}: lone "
+                            f"ai_client client {chosen_client_id} but immaterial "
+                            f"sub-{IMMATERIAL_MAX_MINUTES}min → auto-committing "
+                            f"(review waived)"
+                        )
+                        return decision
                     decision.needs_review = True
                     decision.review_reason = (
                         'Lone AI client identification -- proposing for review '

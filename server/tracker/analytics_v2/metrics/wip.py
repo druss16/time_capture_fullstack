@@ -41,6 +41,29 @@ def _block_amount(b, default_rate: float) -> float:
     return hours * rate
 
 
+def _realizable_secondary(org, scope, time, gross_total, metric_self) -> dict | None:
+    """Return KPI secondary fields for realizable WIP, or None when we can't
+    compute a trustworthy realization rate (no invoices → don't fake a haircut).
+
+    realizable = gross WIP × (dollar realization % / 100). Only applied when
+    realization is invoice-backed and below 100% (a discount worth showing)."""
+    try:
+        from .realization import RealizationDollarMetric
+        r = RealizationDollarMetric().compute(org, scope, time)
+    except Exception:
+        return None
+    if r.state != MetricState.READY or r.value is None:
+        return None
+    rate = to_float(r.value)
+    if rate <= 0 or rate >= 100:
+        return None
+    return {
+        "secondary_value": round(gross_total * rate / 100.0, 2),
+        "secondary_label": f"Realizable at {rate:.0f}% realization",
+        "secondary_format": "currency_0dp",
+    }
+
+
 def _block_age_days(b, now) -> int:
     """How long has this block been sitting as approved-but-uninvoiced?"""
     ref = b.approved_at or b.start
@@ -68,6 +91,14 @@ class WipTotalMetric(Metric):
             total += _block_amount(b, default)
         if total == 0:
             return MetricValue(state=MetricState.EMPTY)
+
+        # Realizable WIP: standard-rate WIP is optimistic — historically the firm
+        # only collects `realization%` of what it books. Surface a realizable
+        # value (WIP × historical realization) so the number isn't overstated.
+        # Only when we have real invoice-backed realization; otherwise show gross.
+        secondary = _realizable_secondary(org, scope, time, total, self)
+        if secondary:
+            return MetricValue(value=round(total, 2), **secondary)
         return MetricValue(value=round(total, 2))
 
 

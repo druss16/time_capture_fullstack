@@ -68,16 +68,67 @@ class ProfitabilityLens(Lens):
     # ------------------------------------------------------------------------
 
     def _by_client_section(self, org, scope, time) -> Section:
-        table = self._build_client_profit_table(org, scope, time)
+        rows = self._build_client_profit_rows(org, scope, time)
+
+        # Materiality split: tiny clients (a couple of hours, no real dollars)
+        # produce wild margin %s that distort the ranking and any "typical
+        # margin" read. Keep them visible in a separate table, out of the main
+        # ranking — same discipline as the utilization by-staff split.
+        from ..stats import partition_material, median
+        material, immaterial = partition_material(
+            rows, weight_key="hours", revenue_key="revenue",
+            min_weight=1.0, min_revenue=250.0,
+        )
+        material.sort(key=lambda r: -(r["revenue"] or 0))
+        immaterial.sort(key=lambda r: -(r["revenue"] or 0))
+
+        cols = [
+            column("client_name", "Client", "text"),
+            column("billing_type", "Type", "text"),
+            column("revenue", "Revenue", "currency_0dp"),
+            column("hours", "Hours", "hours_1dp"),
+            column("cost", "Cost", "currency_0dp"),
+            column("margin", "Margin $", "currency_0dp"),
+            column("margin_pct", "Margin %", "percent_1dp"),
+        ]
+
+        # Median margin % across material clients — a robust "typical client"
+        # that the pooled headline margin can't tell you (it's outlier-proof).
+        med = median([r["margin_pct"] for r in material if r["margin_pct"] is not None])
+        subtitle = time.label
+        if med is not None:
+            subtitle = f"{time.label} · median client margin {med:.0f}%"
+
+        children = [DataTablePayload(
+            id="clients_profit",
+            title="Client profitability",
+            subtitle=subtitle,
+            columns=cols,
+            rows=material,
+            default_sort={"key": "revenue", "direction": "desc"},
+            state=MetricState.READY if material else MetricState.EMPTY,
+        )]
+
+        if immaterial:
+            children.append(DataTablePayload(
+                id="clients_profit_immaterial",
+                title="Low-materiality clients",
+                subtitle="Under 1h and under $250 — excluded from the ranking and median",
+                columns=cols,
+                rows=immaterial,
+                default_sort={"key": "revenue", "direction": "desc"},
+                state=MetricState.READY,
+            ))
+
         return Section(
             id="by_client",
             type="section",
             title="By Client",
             collapsible=True,
-            children=[table],
+            children=children,
         )
 
-    def _build_client_profit_table(self, org, scope, time) -> DataTablePayload:
+    def _build_client_profit_rows(self, org, scope, time) -> list[dict]:
         # Rate maps (per-person override > cost tier > org default)
         from ..cost_rates import cost_rate_map, bill_rate_map
         cost_rates = cost_rate_map(org)

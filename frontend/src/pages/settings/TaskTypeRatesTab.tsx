@@ -18,6 +18,7 @@ export default function TaskTypeRatesTab({ onSuccess, onError }: Props) {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [q, setQ] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -65,11 +66,19 @@ export default function TaskTypeRatesTab({ onSuccess, onError }: Props) {
   if (loading) return <div className="text-slate-400 text-sm py-3">Loading task types…</div>;
   if (rows.length === 0) return <div className="text-slate-400 text-sm py-3">No task types yet.</div>;
 
+  const filtered = rows.filter(r => r.name.toLowerCase().includes(q.toLowerCase()));
+
   return (
     <div>
-      <div className="rounded-2xl border border-slate-200/70 overflow-x-auto">
+      {rows.length > 8 && (
+        <input
+          value={q} onChange={e => setQ(e.target.value)} placeholder="Search task types…"
+          className="w-56 max-w-full mb-3 px-3 py-1.5 border border-border/60 rounded-lg text-sm text-slate-800 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none bg-white"
+        />
+      )}
+      <div className="rounded-2xl border border-slate-200/70 overflow-auto max-h-[22rem]">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50/80 text-[10px] uppercase tracking-widest text-slate-400">
+          <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-widest text-slate-400 shadow-[0_1px_0_rgba(0,0,0,0.05)]">
             <tr>
               <th className="text-left px-4 py-2 font-bold">Task type</th>
               <th className="text-left px-4 py-2 font-bold">Billable</th>
@@ -77,7 +86,7 @@ export default function TaskTypeRatesTab({ onSuccess, onError }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map(r => (
+            {filtered.map(r => (
               <tr key={r.id}>
                 <td className="px-4 py-2 font-medium text-slate-800">{r.name}</td>
                 <td className="px-4 py-2">

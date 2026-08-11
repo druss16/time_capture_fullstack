@@ -50,7 +50,7 @@ function Rung({
   const toneCls =
     tone === 'win-charge' ? 'border-primary/30 bg-primary/5'
     : tone === 'win-pay'  ? 'border-blue-200 bg-blue-50/60'
-    : tone === 'fall'     ? 'border-dashed border-slate-200 bg-slate-50/70'
+    : tone === 'fall'     ? 'border-slate-200/60 bg-white'
     : 'border-slate-200/70 bg-white';
   return (
     <div className={`flex-1 rounded-xl border p-3 ${toneCls}`}>
@@ -58,7 +58,11 @@ function Rung({
       <p className="text-[13px] font-bold text-slate-900 mt-0.5">{name}</p>
       <p className="text-[11.5px] text-slate-400 mt-1 leading-snug">{desc}</p>
       {usual && (
-        <span className="inline-block mt-2 text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/8 border border-primary/20 rounded-full px-2 py-0.5">
+        <span className={`inline-block mt-2 text-[10px] font-bold uppercase tracking-wide border rounded-full px-2 py-0.5 ${
+          tone === 'win-pay'
+            ? 'text-blue-600 bg-blue-50 border-blue-200'
+            : 'text-primary bg-primary/8 border-primary/20'
+        }`}>
           Most firms live here
         </span>
       )}
@@ -101,7 +105,7 @@ function RateLadder({ billDefault, costDefault }: { billDefault: string; costDef
           <Rung tone="win-charge" rank="1 · Most specific" name="Client rate"
             desc="A rate set for a specific client (or client + task)." />
           <Arrow />
-          <Rung tone="mid" usual rank="2 · If none above" name="Tier bill rate"
+          <Rung tone="win-charge" usual rank="2 · If none above" name="Tier bill rate"
             desc="The bill rate on the person's seniority tier." />
           <Arrow />
           <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${billDefault}`}
@@ -112,7 +116,7 @@ function RateLadder({ billDefault, costDefault }: { billDefault: string; costDef
           <Rung tone="win-pay" rank="1 · Most specific" name="Per-person cost"
             desc="An exact loaded cost set for one employee." />
           <Arrow />
-          <Rung tone="mid" usual rank="2 · If none above" name="Tier cost"
+          <Rung tone="win-pay" usual rank="2 · If none above" name="Tier cost"
             desc="The cost rate on the person's seniority tier." />
           <Arrow />
           <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${costDefault}`}

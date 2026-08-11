@@ -1,8 +1,7 @@
 // src/pages/settings/EconomicsTab.tsx
-// Everything that feeds Analytics revenue/cost/margin, framed by the two
-// resolution ladders (bill + cost): most-specific wins. Ordered tiers (main
-// setup) -> firm defaults (fallback).
-import { useEffect, useState, type ReactNode } from 'react';
+// One place for everything Analytics uses for revenue, cost, and margin:
+// tiers (main setup), per-client rate overrides, and firm-wide defaults.
+import { useEffect, useState } from 'react';
 import { DollarSign, Check, RefreshCw, Layers, Briefcase } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
@@ -24,73 +23,6 @@ interface Props {
   onRefresh: () => void;
   onSuccess: (m: string) => void;
   onError: (m: string) => void;
-}
-
-// ── Precedence badge ─────────────────────────────────────────────────────────
-function Badge({ tone, children }: { tone: 'primary' | 'fallback'; children: ReactNode }) {
-  const cls = tone === 'primary'
-    ? 'bg-primary/8 text-primary border-primary/20'
-    : 'bg-slate-100 text-slate-400 border-slate-200';
-  return (
-    <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full border whitespace-nowrap ${cls}`}>
-      {children}
-    </span>
-  );
-}
-
-// ── One rung of a ladder (rank + name only) ──────────────────────────────────
-function Rung({ rank, name, tone }: { rank: string; name: string; tone: 'win' | 'fall' }) {
-  const toneCls = tone === 'win' ? 'border-primary/40 bg-white' : 'border-slate-200/70 bg-transparent';
-  return (
-    <div className={`flex-1 rounded-xl border px-3 py-2.5 ${toneCls}`}>
-      <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">{rank}</p>
-      <p className="text-[13px] font-bold text-slate-900 mt-0.5">{name}</p>
-    </div>
-  );
-}
-
-const Arrow = () => (
-  <div className="hidden sm:flex items-center px-1.5 text-slate-300 font-bold select-none">→</div>
-);
-
-function Track({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="w-2 h-2 rounded-sm bg-primary" />
-        <span className="text-[12.5px] font-bold text-slate-900">{label}</span>
-      </div>
-      <div className="flex flex-col sm:flex-row sm:items-stretch gap-2 sm:gap-0">{children}</div>
-    </div>
-  );
-}
-
-function RateLadder({ billDefault, costDefault }: { billDefault: string; costDefault: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200/70 bg-[#f7faf9] p-4 sm:p-5">
-      <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Start here</p>
-      <p className="text-[15px] font-extrabold tracking-[-0.01em] text-slate-900 mt-0.5">How a rate is chosen</p>
-      <p className="text-[12px] text-slate-500 mt-1 mb-4">The most specific rate that's set wins — left to right.</p>
-
-      <div className="space-y-3">
-        <Track label="What you pay">
-          <Rung tone="win" rank="1 · Most specific" name="Per-person cost" />
-          <Arrow />
-          <Rung tone="win" rank="2 · Tier" name="Tier cost" />
-          <Arrow />
-          <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${costDefault}`} />
-        </Track>
-
-        <Track label="What you charge">
-          <Rung tone="win" rank="1 · Most specific" name="Client rate" />
-          <Arrow />
-          <Rung tone="win" rank="2 · Tier" name="Tier bill rate" />
-          <Arrow />
-          <Rung tone="fall" rank="3 · Fallback" name={`Firm default · $${billDefault}`} />
-        </Track>
-      </div>
-    </div>
-  );
 }
 
 export default function EconomicsTab({
@@ -137,28 +69,23 @@ export default function EconomicsTab({
       title="Economics"
       subtitle="What Analytics uses for revenue, cost, and margin."
     >
-      <RateLadder billDefault={form.billing_rate_default} costDefault={form.cost_rate_default} />
-
-      <div className="space-y-4 mt-4">
+      <div className="space-y-4">
         {/* Tiers — the main setup */}
         <SettingsSection
-          tint
           icon={<Layers className="w-4 h-4 text-primary" />}
           title="Tiers & assignments"
-          sub="Set cost and bill per seniority tier, then assign people."
-          actions={<Badge tone="primary">Level 2 · main setup</Badge>}
+          sub="Set cost and bill per tier, then assign people."
         >
           <div className="-mt-2">
             <CostTiers onSuccess={onSuccess} onError={onError} />
           </div>
         </SettingsSection>
 
-        {/* Client rates — per-client hourly override (top of the bill ladder) */}
+        {/* Client rates — per-client hourly override */}
         <SettingsSection
           icon={<Briefcase className="w-4 h-4 text-primary" />}
           title="Client rates"
-          sub="Bill a specific client at a set hourly rate — beats the tier bill rate for that client."
-          actions={<Badge tone="primary">Level 1 · client-specific</Badge>}
+          sub="Bill a specific client at a set hourly rate."
         >
           <BillingRatesTab
             rates={billingRates} users={users} clients={clients}
@@ -171,8 +98,7 @@ export default function EconomicsTab({
         <SettingsSection
           icon={<DollarSign className="w-4 h-4 text-primary" />}
           title="Firm defaults"
-          sub="Used only when no tier or client rate applies."
-          actions={<Badge tone="fallback">Level 3 · fallback</Badge>}
+          sub="Used when no tier or client rate applies."
         >
           <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
             <div>

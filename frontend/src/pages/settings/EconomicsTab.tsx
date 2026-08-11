@@ -79,7 +79,6 @@ export default function EconomicsTab({
     >
       {showImport && (
         <EconomicsImportModal
-          users={users}
           onClose={() => setShowImport(false)}
           onImported={() => { setReloadKey(k => k + 1); onRefresh(); onSuccess('Roster imported'); }}
         />

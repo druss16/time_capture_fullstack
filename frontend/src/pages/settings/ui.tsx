@@ -2,7 +2,7 @@
 // Shared UI primitives for the Settings tabs — the "Lightning" look that
 // Daily Review / Timesheet / Economics share. Use these instead of hand-rolling
 // cards, headers, and inputs so every tab stays visually consistent.
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -98,8 +98,11 @@ interface SettingsSectionProps {
   tint?: boolean;
   /** Render as a collapsible card. Children mount on first expand (lazy). */
   collapsible?: boolean;
-  /** Start expanded (collapsible only). Defaults to collapsed. */
+  /** Start expanded (uncontrolled collapsible only). Defaults to collapsed. */
   defaultOpen?: boolean;
+  /** Controlled open state — pass with onToggle for accordion behavior. */
+  open?: boolean;
+  onToggle?: () => void;
   className?: string;
   children: ReactNode;
 }
@@ -111,11 +114,18 @@ interface SettingsSectionProps {
  * first time it's opened (so data-fetching children don't run while collapsed).
  */
 export function SettingsSection({
-  icon, title, sub, actions, tint, collapsible, defaultOpen = false, className, children,
+  icon, title, sub, actions, tint, collapsible, defaultOpen = false, open: openProp, onToggle, className, children,
 }: SettingsSectionProps) {
-  const [open, setOpen] = useState(!collapsible || defaultOpen);
-  const [mounted, setMounted] = useState(!collapsible || defaultOpen);
-  const toggle = () => setOpen(o => { const next = !o; if (next) setMounted(true); return next; });
+  const controlled = openProp !== undefined;
+  const [openState, setOpenState] = useState(defaultOpen);
+  const open = !collapsible ? true : (controlled ? !!openProp : openState);
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => { if (open) setMounted(true); }, [open]);
+  const toggle = () => {
+    if (!collapsible) return;
+    if (controlled) onToggle?.();
+    else setOpenState(o => !o);
+  };
 
   return (
     <div

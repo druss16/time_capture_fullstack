@@ -224,21 +224,57 @@ const HIDDEN_WIDGETS_LS_KEY = "reports_hidden_widgets";
 // opens calm; everything else collapses to a one-line summary. Persists per browser.
 const OPEN_SECTIONS_LS_KEY = "reports_open_sections";
 const DEFAULT_OPEN_SECTIONS = ["clients"];
+// Remember the last-picked timeframe (and, for a custom range, its dates) so the
+// page reopens on whatever the user last chose instead of snapping to "This
+// month". We store the KEY, not the resolved dates — presets like "Today" /
+// "Last month" are relative, so re-resolving keeps them correct as time passes.
+const TIMEFRAME_LS_KEY = "reports_timeframe";
+const CUSTOM_RANGE_LS_KEY = "reports_custom_range";
+
+function loadSavedTimeframe(): {
+  timeframe: TimeframeKey; period: Period; customMode: boolean;
+  appliedStart: string; appliedEnd: string; customStart: string; customEnd: string;
+} {
+  const fallback = {
+    timeframe: "this_month" as TimeframeKey, period: "month" as Period,
+    customMode: false, appliedStart: "", appliedEnd: "", customStart: "", customEnd: "",
+  };
+  try {
+    const key = (localStorage.getItem(TIMEFRAME_LS_KEY) as TimeframeKey | null) || "this_month";
+    if (!TIMEFRAMES.some((t) => t.key === key)) return fallback;
+    if (key === "custom") {
+      const raw = localStorage.getItem(CUSTOM_RANGE_LS_KEY);
+      const r = raw ? JSON.parse(raw) : null;
+      const start = (r && typeof r.start === "string") ? r.start : "";
+      const end = (r && typeof r.end === "string") ? r.end : "";
+      return { ...fallback, timeframe: "custom", customMode: true,
+        appliedStart: start, appliedEnd: end, customStart: start, customEnd: end };
+    }
+    const sel = resolveTimeframe(key);
+    if (sel.period) return { ...fallback, timeframe: key, period: sel.period };
+    if (sel.start && sel.end) return { ...fallback, timeframe: key, appliedStart: sel.start, appliedEnd: sel.end };
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export default function ReportsSummary({
   orgIdOverride,
 }: {
   orgIdOverride?: number | null;
 }) {
-  const [period, setPeriod] = useState<Period>("month");
-  const [timeframe, setTimeframe] = useState<TimeframeKey>("this_month"); // QuickBooks-style preset
-  const [customMode, setCustomMode] = useState(false);
+  // Restore the last-used timeframe once, on mount (see loadSavedTimeframe).
+  const [savedTf] = useState(loadSavedTimeframe);
+  const [period, setPeriod] = useState<Period>(savedTf.period);
+  const [timeframe, setTimeframe] = useState<TimeframeKey>(savedTf.timeframe); // QuickBooks-style preset
+  const [customMode, setCustomMode] = useState(savedTf.customMode);
   // Draft values bound to the date inputs — typing here does NOT fetch.
-  const [customStart, setCustomStart] = useState<string>("");
-  const [customEnd, setCustomEnd] = useState<string>("");
+  const [customStart, setCustomStart] = useState<string>(savedTf.customStart);
+  const [customEnd, setCustomEnd] = useState<string>(savedTf.customEnd);
   // Applied values — only these drive the fetch, set when the user clicks Apply.
-  const [appliedStart, setAppliedStart] = useState<string>("");
-  const [appliedEnd, setAppliedEnd] = useState<string>("");
+  const [appliedStart, setAppliedStart] = useState<string>(savedTf.appliedStart);
+  const [appliedEnd, setAppliedEnd] = useState<string>(savedTf.appliedEnd);
   // Both groupings are shown stacked (no toggle), so we hold both datasets.
   // `data` = employee-grouped response, `clientData` = client-grouped response.
   const [data, setData] = useState<SummaryResponse | null>(null);
@@ -475,6 +511,7 @@ export default function ReportsSummary({
   // inputs and waits for Apply.
   const applyTimeframe = (key: TimeframeKey) => {
     setTimeframe(key);
+    try { localStorage.setItem(TIMEFRAME_LS_KEY, key); } catch { /* private mode — just won't persist */ }
     if (key === "custom") {
       setCustomMode(true);
       return;
@@ -637,6 +674,11 @@ export default function ReportsSummary({
                   if (customStart && customEnd && customStart <= customEnd) {
                     setAppliedStart(customStart);
                     setAppliedEnd(customEnd);
+                    // Persist the applied range so a custom timeframe survives reload too.
+                    try {
+                      localStorage.setItem(TIMEFRAME_LS_KEY, "custom");
+                      localStorage.setItem(CUSTOM_RANGE_LS_KEY, JSON.stringify({ start: customStart, end: customEnd }));
+                    } catch { /* private mode — just won't persist */ }
                   }
                 }}
                 disabled={

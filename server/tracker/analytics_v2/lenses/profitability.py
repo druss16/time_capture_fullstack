@@ -215,25 +215,12 @@ class ProfitabilityLens(Lens):
                 "margin_pct": round(margin_pct, 1) if margin_pct is not None else None,
             })
 
-        rows.sort(key=lambda r: -(r["revenue"] or 0))
+        # Return the raw rows — _by_client_section partitions them into the
+        # material/immaterial tables. (This method used to build the table
+        # itself; the refactor moved that up, so returning a DataTablePayload
+        # here made partition_material try to iterate it → 500.)
+        return rows
 
-        return DataTablePayload(
-            id="clients_profit",
-            title="Client profitability",
-            subtitle=time.label,
-            columns=[
-                column("client_name", "Client", "text"),
-                column("billing_type", "Type", "text"),
-                column("revenue", "Revenue", "currency_0dp"),
-                column("hours", "Hours", "hours_1dp"),
-                column("cost", "Cost", "currency_0dp"),
-                column("margin", "Margin $", "currency_0dp"),
-                column("margin_pct", "Margin %", "percent_1dp"),
-            ],
-            rows=rows,
-            default_sort={"key": "revenue", "direction": "desc"},
-        )
-    
     # ------------------------------------------------------------------------
     # Single-client deep dive
     # ------------------------------------------------------------------------

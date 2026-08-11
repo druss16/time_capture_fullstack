@@ -70,6 +70,11 @@ export default function TaskTypeRatesTab({ onSuccess, onError }: Props) {
 
   return (
     <div>
+      <p className="text-[12px] text-slate-400 leading-snug mb-3">
+        <span className="font-semibold text-slate-500">Default rate</span> is the bill rate for that kind of work
+        when no client rate applies — it beats the firm default but loses to a client rate. Optional; most firms
+        leave it blank and rely on tiers &amp; client rates.
+      </p>
       {rows.length > 8 && (
         <input
           value={q} onChange={e => setQ(e.target.value)} placeholder="Search task types…"

@@ -301,7 +301,16 @@ app.conf.update(
     # Task execution
     task_acks_late=True,  # Acknowledge task after completion
     task_reject_on_worker_lost=True,  # Reject task if worker dies
-    
+
+    # Memory hygiene (512MB Render worker).
+    # Recycle each forked child after 50 tasks so slow per-child RSS creep
+    # can't accumulate into an overnight OOM. Pair with --max-memory-per-child
+    # on the Render start command as a hard backstop.
+    worker_max_tasks_per_child=50,
+    # Pull exactly one task at a time. Prevents an idle-but-prefetched child
+    # from holding a task's working set in memory ahead of running it.
+    worker_prefetch_multiplier=1,
+
     # Time limits
     task_time_limit=300,  # 5 minutes hard limit
     task_soft_time_limit=240,  # 4 minutes soft limit

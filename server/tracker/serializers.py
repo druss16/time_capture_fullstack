@@ -141,7 +141,11 @@ class BlockSerializer(serializers.ModelSerializer):
     # AI fields
     ai_extracted_client = serializers.CharField(read_only=True)
     ai_category = serializers.CharField(read_only=True)
-    ai_confidence = serializers.FloatField(read_only=True)
+    # Sourced from proposed_confidence: the classifier stores its decision
+    # confidence there for all states. The legacy Block.ai_confidence field is
+    # never written by ClassificationService (stuck at its 0.0 default), so
+    # reading it directly always reported 0.0.
+    ai_confidence = serializers.FloatField(source='proposed_confidence', read_only=True)
     
     # Misc
     hints = serializers.JSONField(required=False, allow_null=True)

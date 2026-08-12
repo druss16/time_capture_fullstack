@@ -48,10 +48,14 @@ class ProfitabilityLens(Lens):
     def assemble(self, org, scope, time, compare=None):
         sections: list[Section] = []
 
-        # Hero KPI row (medium tiles so the 5 fit without wrapping awkwardly)
+        # Hero KPI row — only metrics valid for this scope (operating margin is
+        # firm/composite-only: overhead can't be pinned to a single client, so
+        # it must drop out at client/staff scope rather than render an error).
+        from ..metrics.base import get_metric
         tiles = [
             kpi_tile(mid, org, scope, time, compare, size="medium")
             for mid in _HERO_METRICS
+            if scope.type in get_metric(mid).valid_scopes
         ]
         sections.append(Section(id="headline", type="kpi_row", children=tiles))
 

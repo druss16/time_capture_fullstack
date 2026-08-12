@@ -96,18 +96,14 @@ export default function CompactSummary({
     onDragOver: (e: React.DragEvent) => { if (dragLane && dragLane !== id) e.preventDefault(); },
     onDrop: (e: React.DragEvent) => { e.preventDefault(); if (dragLane && dragLane !== id) swapLanes(); },
   });
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [move, setMove] = useState<MoveState | null>(null);
 
   const catList = availableCategories.length ? availableCategories : ["General Client Work"];
 
   const toggleGroup = (key: string) =>
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
+    setOpenGroup((prev) => (prev === key ? null : key));
 
   const openMove = (
     anchor: HTMLElement, ids: number[], clientId: number | null, category: string,
@@ -273,7 +269,7 @@ export default function CompactSummary({
   // One client group in the Certain browse: header (name · blocks · minutes · Move)
   // over its raw captured titles.
   const renderGroup = (g: CertainGroup) => {
-    const open = openGroups.has(g.key) || !!q;
+    const open = openGroup === g.key || !!q;
     const allIds = g.rows.flatMap((r) => r.ids);
     return (
       <div key={g.key}>

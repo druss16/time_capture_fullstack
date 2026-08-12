@@ -4042,6 +4042,14 @@ class WorkCalendar(models.Model):
         default=list, blank=True,
         help_text='Firm holiday dates as ["YYYY-MM-DD", ...] — non-working for everyone.',
     )
+    # Average PTO/vacation days per person per year. Pro-rated across the query
+    # window as an estimate for people who have no explicit TimeOff entries —
+    # so capacity reflects typical vacation without needing an HR feed.
+    avg_pto_days_per_year = models.DecimalField(
+        max_digits=5, decimal_places=1, default=0,
+        help_text="Average PTO/vacation days per person per year (estimate). "
+                  "Pro-rated into capacity for people without explicit TimeOff.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

@@ -4009,6 +4009,85 @@ class TaxpayerBucket(models.Model):
 
 
 # ============================================================================
+# Work calendar + time off — capacity model (utilization denominator)
+# ============================================================================
+
+class WorkCalendar(models.Model):
+    """Org-level working schedule that drives available-capacity for utilization.
+
+    Replaces the flat `hours_per_week × weeks` with scheduled hours net of
+    non-working days, holidays, and (per-person) time off. One per org.
+    """
+    org = models.OneToOneField(
+        'Organization', on_delete=models.CASCADE, related_name='work_calendar',
+    )
+    hours_per_day = models.DecimalField(
+        max_digits=4, decimal_places=2, default=8,
+        help_text="Standard working hours in a full working day.",
+    )
+    # Working weekdays as ints, Mon=0 … Sun=6. Default Mon–Fri.
+    working_weekdays = models.JSONField(
+        default=list,
+        help_text="Weekday ints that are working days (Mon=0 … Sun=6). Default [0,1,2,3,4].",
+    )
+    # Seasonal rule: e.g. summer Fridays off.
+    summer_fridays_off = models.BooleanField(
+        default=False,
+        help_text="If set, Fridays in the summer month range are non-working.",
+    )
+    summer_start_month = models.PositiveSmallIntegerField(default=6)  # June
+    summer_end_month = models.PositiveSmallIntegerField(default=8)    # August
+    # Firm holidays as a list of ISO "YYYY-MM-DD" strings.
+    holidays = models.JSONField(
+        default=list, blank=True,
+        help_text='Firm holiday dates as ["YYYY-MM-DD", ...] — non-working for everyone.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"WorkCalendar(org={self.org_id})"
+
+
+class TimeOff(models.Model):
+    """A per-person block of non-working time (PTO / sick / holiday), used to
+    net capacity down for utilization. Populated manually (A) or auto-derived
+    from calendar out-of-office events (B)."""
+    KIND_CHOICES = [
+        ('pto', 'PTO / Vacation'),
+        ('sick', 'Sick'),
+        ('holiday', 'Holiday'),
+        ('other', 'Other'),
+    ]
+    SOURCE_CHOICES = [
+        ('manual', 'Manual'),
+        ('calendar', 'Calendar-derived'),
+    ]
+    org = models.ForeignKey(
+        'Organization', on_delete=models.CASCADE, related_name='time_off',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='time_off',
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES, default='pto')
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default='manual')
+    # Optional external id so calendar-derived entries upsert cleanly (Phase B).
+    external_id = models.CharField(max_length=255, blank=True, default='', db_index=True)
+    note = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['org', 'user', 'start_date', 'end_date'],
+                         name='tracker_tim_org_id_user_idx'),
+        ]
+
+    def __str__(self):
+        return f"TimeOff({self.user_id}, {self.start_date}→{self.end_date}, {self.kind})"
+
+
+# ============================================================================
 # Phase 1 rebuild — Calendar/Mail integration models
 # ============================================================================
 

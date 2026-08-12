@@ -72,28 +72,21 @@ class BillableUtilizationMetric(Metric):
         return MetricValue(value=round(util, 1))
 
     def _capacity_hours(self, org, scope, time, exclude_ids: set[int] | None = None) -> float:
-        """Available working hours over the window for the people active in scope:
-        Σ (each person's weekly capacity × weeks in the window).
+        """Available working hours over the window for the people active in scope.
 
-        ``exclude_ids`` drops non-chargeable members so their capacity never
-        enters the firm denominator (keeps it symmetric with the numerator)."""
-        from ..cost_rates import capacity_map
-        caps = capacity_map(org)
-        default_cap = to_float(getattr(org, "capacity_hours_per_week", 40)) or 40.0
-        days = (time.end - time.start).days + 1
-        weeks = (days / 7.0) if days > 0 else 0.0
+        Uses the org WorkCalendar (scheduled hours net of holidays / summer
+        Fridays / time off) when configured, else the legacy per-tier weekly
+        hours × weeks. ``exclude_ids`` drops non-chargeable members so their
+        capacity never enters the firm denominator (symmetric with numerator)."""
+        from ..capacity import capacity_hours_map
+        exclude_ids = exclude_ids or set()
         # .order_by() clears any inherited ordering so DISTINCT dedupes on
         # user_id alone (otherwise the order column joins the SELECT DISTINCT and
         # every block counts as its own "user", inflating capacity ~1000x).
-        active = (self._block_qs(org, scope, time)
+        active = [uid for uid in (self._block_qs(org, scope, time)
                   .order_by().values_list("user_id", flat=True).distinct())
-        exclude_ids = exclude_ids or set()
-        total = 0.0
-        for uid in active:
-            if uid in exclude_ids:
-                continue
-            total += caps.get(uid, default_cap) * weeks
-        return total
+                  if uid not in exclude_ids]
+        return sum(capacity_hours_map(org, active, time.start, time.end).values())
 
 
 @register_metric("billable_mix")

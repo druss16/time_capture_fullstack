@@ -1901,9 +1901,13 @@ def dispatch_compact_classify_all():
     cutoff = timezone.now() - timedelta(minutes=5)
     block_cutoff = timezone.now() - timedelta(hours=24)
 
+    # RawEvent has no org FK (only user + block). Reach the org through the
+    # user's membership — the same path compaction uses (compact_day). block is
+    # NULL here, so the block->org route isn't available.
     event_orgs = set(RawEvent.objects
                      .filter(start_ts__gte=cutoff, block__isnull=True)
-                     .values_list('org_id', flat=True).distinct())
+                     .values_list('user__memberships__organization_id', flat=True)
+                     .distinct())
 
     block_orgs = set(Block.objects
                      .filter(classification_state='captured', start__gte=block_cutoff)

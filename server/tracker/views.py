@@ -7179,6 +7179,96 @@ def settings_cost_rates(request):
     return Response({"success": True, "assigned": assigned, "message": "Cost tiers updated"})
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_work_calendar(request):
+    """Org work calendar — the utilization capacity denominator. Admin/owner only.
+
+    Drives available capacity (scheduled hours − holidays − summer Fridays −
+    PTO). When absent, capacity falls back to per-tier hours × weeks.
+    """
+    from tracker.models import WorkCalendar
+
+    org = get_request_org_override(request)
+    if not org:
+        return Response({"error": "No organization found"}, status=404)
+
+    cal = WorkCalendar.objects.filter(org=org).first()
+
+    if request.method == "GET":
+        default_cap = str(getattr(org, "capacity_hours_per_week", None) or "40.00")
+        if not cal:
+            return Response({
+                "configured": False,
+                "hours_per_day": "8.00",
+                "working_weekdays": [0, 1, 2, 3, 4],
+                "summer_fridays_off": False,
+                "summer_start_month": 6,
+                "summer_end_month": 8,
+                "avg_pto_days_per_year": "0.0",
+                "holidays": [],
+                "org_capacity_default": default_cap,
+            })
+        return Response({
+            "configured": True,
+            "hours_per_day": str(cal.hours_per_day),
+            "working_weekdays": cal.working_weekdays or [0, 1, 2, 3, 4],
+            "summer_fridays_off": cal.summer_fridays_off,
+            "summer_start_month": cal.summer_start_month,
+            "summer_end_month": cal.summer_end_month,
+            "avg_pto_days_per_year": str(cal.avg_pto_days_per_year),
+            "holidays": cal.holidays or [],
+            "org_capacity_default": default_cap,
+        })
+
+    # POST — upsert the calendar.
+    data = request.data or {}
+
+    def _dec(v, default):
+        try:
+            return Decimal(str(v))
+        except (TypeError, ValueError, InvalidOperation):
+            return Decimal(str(default))
+
+    def _month(v, default):
+        try:
+            m = int(v)
+            return m if 1 <= m <= 12 else default
+        except (TypeError, ValueError):
+            return default
+
+    weekdays = data.get("working_weekdays")
+    if not isinstance(weekdays, list) or not all(isinstance(x, int) and 0 <= x <= 6 for x in weekdays):
+        weekdays = [0, 1, 2, 3, 4]
+
+    holidays = data.get("holidays")
+    if not isinstance(holidays, list):
+        holidays = []
+    # Keep only well-formed ISO dates, de-duped and sorted.
+    clean_holidays = []
+    for h in holidays:
+        try:
+            d = dt.strptime(str(h), "%Y-%m-%d").date()
+            clean_holidays.append(d.isoformat())
+        except (TypeError, ValueError):
+            continue
+    clean_holidays = sorted(set(clean_holidays))
+
+    WorkCalendar.objects.update_or_create(
+        org=org,
+        defaults={
+            "hours_per_day": _dec(data.get("hours_per_day"), 8),
+            "working_weekdays": sorted(set(weekdays)),
+            "summer_fridays_off": bool(data.get("summer_fridays_off")),
+            "summer_start_month": _month(data.get("summer_start_month"), 6),
+            "summer_end_month": _month(data.get("summer_end_month"), 8),
+            "avg_pto_days_per_year": _dec(data.get("avg_pto_days_per_year"), 0),
+            "holidays": clean_holidays,
+        },
+    )
+    return Response({"success": True, "message": "Work calendar saved"})
+
+
 # Update settings_team_invite in tracker/views.py
 # This uses your existing OrganizationMembership model
 

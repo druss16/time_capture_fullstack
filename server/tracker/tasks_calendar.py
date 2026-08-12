@@ -187,6 +187,8 @@ def sync_user_calendar(self, integration_id):
                         'meeting_url': meeting_url,
                         'start': event_start,
                         'end': event_end,
+                        'is_all_day': bool(evt.get('isAllDay')),
+                        'show_as': (evt.get('showAs') or '')[:16],
                         'attendees': attendees,
                     },
                 )
@@ -222,7 +224,17 @@ def sync_user_calendar(self, integration_id):
     integration.last_sync_error = ''
     integration.sync_failure_count = 0
     integration.save(update_fields=['last_synced_at', 'last_sync_error', 'sync_failure_count'])
-    
+
+    # Phase B: derive PTO/holiday TimeOff from the freshly-synced calendar so the
+    # capacity denominator nets out out-of-office time. Best-effort — never fail
+    # the sync over it.
+    try:
+        from tracker.calendar_timeoff import derive_time_off_for_user
+        kept = derive_time_off_for_user(org, user)
+        logger.info(f"[CAL-SYNC] {user.username}: {kept} time-off entries derived")
+    except Exception as e:
+        logger.warning(f"[CAL-SYNC] time-off derivation failed for {user.username}: {e}")
+
     logger.info(
         f"[CAL-SYNC] ✅ {user.username}: {saved_count} saved, {skipped_count} skipped"
     )

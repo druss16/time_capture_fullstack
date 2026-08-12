@@ -4127,6 +4127,13 @@ class CalendarEvent(models.Model):
     start = models.DateTimeField(db_index=True)
     end = models.DateTimeField(db_index=True)
 
+    # Availability signals — used to derive TimeOff (PTO/holiday) for capacity.
+    is_all_day = models.BooleanField(default=False)
+    show_as = models.CharField(
+        max_length=16, blank=True, default='',
+        help_text="Graph showAs: free / tentative / busy / oof / workingElsewhere.",
+    )
+
     # Attendees as list of {email, domain, response_status}
     attendees = models.JSONField(default=list, blank=True)
 

@@ -37,7 +37,8 @@ class BillableUtilizationMetric(Metric):
         # instantiated per request, so mutating self here is safe.
         self.threshold = self._org_threshold(org)
 
-        qs = self._block_qs(org, scope, time)
+        from ..blocks import exclude_idle
+        qs = exclude_idle(self._block_qs(org, scope, time))
 
         # Chargeable-population filter: at the firm/composite level, drop members
         # whose tier is flagged non-chargeable (admin/ops/non-charging partners)
@@ -106,7 +107,8 @@ class BillableMixMetric(Metric):
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        qs = self._block_qs(org, scope, time)
+        from ..blocks import exclude_idle
+        qs = exclude_idle(self._block_qs(org, scope, time))
         # Same chargeable-population filter as capacity utilization: drop
         # non-chargeable staff (admin/ops) from the firm/composite number.
         if scope.type in ("firm", "composite"):
@@ -141,12 +143,13 @@ class BillableHoursMetric(Metric):
 class TotalHoursMetric(Metric):
     label = "Total Hours"
     format = "hours_1dp"
-    tooltip = "All tracked hours (billable + non-billable) in this scope and time range."
+    tooltip = "All active tracked hours (billable + non-billable). Idle/lock time is excluded."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
-    
+
     def compute(self, org, scope, time):
-        qs = self._block_qs(org, scope, time)
+        from ..blocks import exclude_idle
+        qs = exclude_idle(self._block_qs(org, scope, time))
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)

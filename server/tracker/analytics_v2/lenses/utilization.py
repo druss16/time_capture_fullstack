@@ -71,7 +71,8 @@ class UtilizationLens(Lens):
                     qs = qs.filter(task_type_id__in=ids)
         elif scope.type == "staff":
             qs = qs.filter(user_id__in=scope.ids)
-        return qs
+        from ..blocks import exclude_idle
+        return exclude_idle(qs)
 
     def _per_user(self, org, scope, time):
         """{uid: {billable_h, total_h, cap_h, name}} for users active in scope,

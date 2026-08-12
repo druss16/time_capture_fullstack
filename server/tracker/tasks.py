@@ -742,7 +742,7 @@ def classify_block_task(self, block_id: int):
  
         logger.info(
             f"[CLASSIFY] Block {block_id} → state={final_state} "
-            f"(client={block.client_id}, conf={block.ai_confidence})"
+            f"(client={block.client_id}, conf={block.proposed_confidence})"
         )
  
         return {
@@ -751,7 +751,7 @@ def classify_block_task(self, block_id: int):
             "state": final_state,
             "client_id": block.client_id,
             "category": list((block.category_hours or {}).keys())[0] if block.category_hours else None,
-            "confidence": float(block.ai_confidence or 0.0),
+            "confidence": float(block.proposed_confidence or 0.0),
             "source": "classification_service",
         }
  

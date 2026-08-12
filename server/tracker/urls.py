@@ -141,6 +141,7 @@ urlpatterns = [
     # path("settings/ai/", views.org_ai_settings, name="org_ai_settings"),
     path("settings/team/", views.settings_team_list, name="settings_team_list"),
     path("settings/cost-rates/", views.settings_cost_rates, name="settings_cost_rates"),
+    path("settings/work-calendar/", views.settings_work_calendar, name="settings_work_calendar"),
     path("settings/team/<int:user_id>/", views.settings_team_remove, name="settings_team_remove"),
     path("settings/clients/", views.settings_clients, name="settings_clients"),
     path("settings/clients/<int:client_id>/", views.settings_client_detail, name="settings_client_detail"),

@@ -2,11 +2,12 @@
 // One place for everything Analytics uses for revenue, cost, and margin:
 // tiers (main setup), per-client rate overrides, and firm-wide defaults.
 import { useEffect, useState } from 'react';
-import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag, CalendarDays } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 import CostTiers from './CostTiers';
+import WorkCalendarSettings from './WorkCalendarSettings';
 import BillingRatesTab from './BillingRatesTab';
 import ClientFlatFeeTab from './ClientFlatFeeTab';
 import TaskTypeRatesTab from './TaskTypeRatesTab';
@@ -103,6 +104,18 @@ export default function EconomicsTab({
         >
           <div className="-mt-2">
             <CostTiers key={reloadKey} onSuccess={onSuccess} onError={onError} />
+          </div>
+        </SettingsSection>
+
+        {/* Work calendar — the capacity denominator for utilization */}
+        <SettingsSection
+          {...acc('workcalendar')}
+          icon={<CalendarDays className="w-4 h-4 text-primary" />}
+          title="Work calendar & capacity"
+          sub="Hours/day, working days, summer Fridays, holidays, PTO — drives utilization capacity."
+        >
+          <div className="-mt-2">
+            <WorkCalendarSettings onSuccess={onSuccess} onError={onError} />
           </div>
         </SettingsSection>
 

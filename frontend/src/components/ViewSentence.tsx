@@ -3,7 +3,7 @@
  * with refresh button, freshness indicator, and "back to classic" link.
  */
 import { Link } from "react-router-dom";
-import { RefreshCw, Clock, ArrowLeftRight } from "lucide-react";
+import { RefreshCw, Clock, Settings } from "lucide-react";
 import { cn } from "@/lib/design-system";
 
 interface Props {
@@ -55,12 +55,12 @@ export default function ViewSentence({
           </button>
 
           <Link
-            to="/analytics"
+            to="/settings?tab=economics"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border/60 bg-white/70 text-slate-600 hover:bg-white hover:text-slate-800 transition-colors"
-            title="Switch to the classic dashboard"
+            title="Economics & capacity settings"
           >
-            <ArrowLeftRight className="h-3.5 w-3.5" />
-            <span>Classic view</span>
+            <Settings className="h-3.5 w-3.5" />
+            <span>Settings</span>
           </Link>
         </div>
       </div>

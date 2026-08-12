@@ -73,7 +73,8 @@ class UtilizationLens(Lens):
     def _per_user(self, org, scope, time):
         """{uid: {billable_h, total_h, cap_h, name}} for users active in scope,
         plus (excluded_ids, tier_of). Capacity mirrors the headline metric."""
-        from ..cost_rates import capacity_map, non_utilization_user_ids
+        from ..cost_rates import non_utilization_user_ids
+        from ..capacity import capacity_hours_map
         from tracker.models import OrganizationMembership
 
         qs = self._scoped_qs(org, scope, time)
@@ -84,10 +85,9 @@ class UtilizationLens(Lens):
             if b.is_billable:
                 agg[b.user_id]["billable"] += mins
 
-        caps = capacity_map(org)
-        default_cap = to_float(getattr(org, "capacity_hours_per_week", 40)) or 40.0
-        days = (time.end - time.start).days + 1
-        weeks = (days / 7.0) if days > 0 else 0.0
+        # Calendar-aware capacity (net of holidays / summer Fridays / time off),
+        # with the legacy per-tier × weeks fallback. Same source as the metric.
+        cap_map = capacity_hours_map(org, list(agg.keys()), time.start, time.end)
 
         names = {u.id: (f"{u.first_name} {u.last_name}".strip() or u.username)
                  for u in User.objects.filter(id__in=agg.keys())
@@ -104,7 +104,7 @@ class UtilizationLens(Lens):
                 "name": names.get(uid, f"User {uid}"),
                 "billable_h": d["billable"] / 60.0,
                 "total_h": d["total"] / 60.0,
-                "cap_h": caps.get(uid, default_cap) * weeks,
+                "cap_h": cap_map.get(uid, 0.0),
             }
         return out, non_utilization_user_ids(org), tier_of
 

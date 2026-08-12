@@ -37,8 +37,8 @@ class BillableUtilizationMetric(Metric):
         # instantiated per request, so mutating self here is safe.
         self.threshold = self._org_threshold(org)
 
-        from ..blocks import exclude_idle
-        qs = exclude_idle(self._block_qs(org, scope, time))
+        from ..blocks import working_qs
+        qs = working_qs(self._block_qs(org, scope, time), org)
 
         # Chargeable-population filter: at the firm/composite level, drop members
         # whose tier is flagged non-chargeable (admin/ops/non-charging partners)
@@ -107,8 +107,8 @@ class BillableMixMetric(Metric):
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from ..blocks import exclude_idle
-        qs = exclude_idle(self._block_qs(org, scope, time))
+        from ..blocks import working_qs
+        qs = working_qs(self._block_qs(org, scope, time), org)
         # Same chargeable-population filter as capacity utilization: drop
         # non-chargeable staff (admin/ops) from the firm/composite number.
         if scope.type in ("firm", "composite"):
@@ -132,7 +132,8 @@ class BillableHoursMetric(Metric):
     delta_good_when = "up"
     
     def compute(self, org, scope, time):
-        qs = self._block_qs(org, scope, time, billable_only=True)
+        from ..blocks import working_qs
+        qs = working_qs(self._block_qs(org, scope, time, billable_only=True), org)
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)
@@ -148,8 +149,8 @@ class TotalHoursMetric(Metric):
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from ..blocks import exclude_idle
-        qs = exclude_idle(self._block_qs(org, scope, time))
+        from ..blocks import working_qs
+        qs = working_qs(self._block_qs(org, scope, time), org)
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)

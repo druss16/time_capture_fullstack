@@ -30,6 +30,7 @@ import os
 import re
 import logging
 
+from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -620,7 +621,47 @@ def _co_open_client(block: Block, org) -> "tuple[list, Optional[dict]]":
     return files, match
 
 
-def _compose_why(local_time: str, co_open_client, surrounding: dict) -> "tuple[str, str, Optional[int], Optional[str]]":
+def _client_forms_cached(org_id):
+    """Second-pass client name-forms for an org, cached briefly.
+
+    Reuses second_pass._build_client_forms (the same head-noun-stripped forms the
+    nightly sweep matches on) so the live suggestion and the sweep agree on what a
+    title names. Cached because the /why/ endpoint and Confirm-all call the matcher
+    per-block in a loop and would otherwise re-query Clients for every row."""
+    key = f"cforms:{org_id}"
+    forms = cache.get(key)
+    if forms is None:
+        from tracker.services.second_pass import _build_client_forms
+        forms = _build_client_forms(org_id)
+        cache.set(key, forms, 120)
+    return forms
+
+
+def _title_client_suggestion(block, org):
+    """If the block's OWN title unambiguously names one client, return
+    {'client_id','client_name'}; else None.
+
+    Same matcher the nightly second-pass uses (an 8+ char client name-form as a
+    substring AND a distinct-token hit — second_pass.classify_block). Deliberately
+    ABSTAINS when 2+ clients match, so same-family collisions (St. Mary vs. Sacred
+    Heart & St. Mary) fall through to the temporal tiers instead of guessing wrong.
+    Read-only; suggestion-only — never auto-attributes."""
+    from tracker.services.second_pass import _norm
+    t = _norm(block.window_title or "")
+    if not t:
+        return None
+    tset = set(t.split())
+    hits = {}
+    for cid, cname, fset, distinct in _client_forms_cached(getattr(org, "id", org)):
+        if any(len(f) >= 8 and f in t for f in fset) and (distinct & tset):
+            hits[cid] = cname
+    if len(hits) == 1:
+        cid, cname = next(iter(hits.items()))
+        return {"client_id": cid, "client_name": cname}
+    return None
+
+
+def _compose_why(local_time: str, co_open_client, surrounding: dict, title_client=None) -> "tuple[str, str, Optional[int], Optional[str]]":
     """Return (sentence, tier, suggested_client_id, suggested_client_name).
 
     The suggestion is deliberately offered even at LOWER confidence than the
@@ -628,6 +669,17 @@ def _compose_why(local_time: str, co_open_client, surrounding: dict) -> "tuple[s
     never an automatic placement. Highest-signal explanation wins; always falls
     back to the local time-of-day so the sentence is never empty."""
     when = f" around {local_time}" if local_time else ""
+
+    # Tier 0: the block's own title literally names a client. This is a more direct
+    # signal than "what was open alongside it" or "what you did right before", so it
+    # outranks the temporal tiers below — otherwise a File Explorer window titled
+    # "St James Jun26" gets attributed to whatever QuickBooks file was open just
+    # before it. Only fires on an unambiguous single match (see _title_client_suggestion).
+    if title_client and title_client.get("client_id"):
+        return (
+            f"The title names {title_client['client_name']}.",
+            "title", title_client.get("client_id"), title_client.get("client_name"),
+        )
 
     if co_open_client:
         return (
@@ -707,6 +759,12 @@ def suggested_client_for(block, org):
     adjacent neighbor > day-dominant), or None. Shared by the block_why endpoint
     AND bulk Confirm-all, so the green per-row button and "Confirm all" can never
     disagree about what the best guess is. Read-only."""
+    # The block's own title naming a client beats any temporal cue (see _compose_why
+    # tier 0). Not applied to browser tabs — a portal/news title isn't the client.
+    if not _is_browser(block):
+        tc = _title_client_suggestion(block, org)
+        if tc:
+            return tc["client_id"]
     try:
         _, co = _co_open_client(block, org)
     except Exception:
@@ -740,7 +798,8 @@ def why_summary(block, org):
         surrounding = {} if _is_browser(block) else (_build_surrounding(block) or {})
     except Exception:
         surrounding = {}
-    sentence, _tier, sid, sname = _compose_why("", co, surrounding)
+    tc = None if _is_browser(block) else _title_client_suggestion(block, org)
+    sentence, _tier, sid, sname = _compose_why("", co, surrounding, title_client=tc)
     if _is_browser(block) and not (co and co.get("client_id")):
         sid, sname = None, None
     return (sentence, sid, sname)
@@ -1045,16 +1104,19 @@ def block_why(request, block_id: int):
     if _is_browser(block) and not has_co_client:
         surrounding = {}
 
+    tc = None if _is_browser(block) else _title_client_suggestion(block, org)
     explanation, tier, suggested_id, suggested_name = _compose_why(
-        local_time, co_open_client, surrounding
+        local_time, co_open_client, surrounding, title_client=tc
     )
-    if personal and not has_co_client:
+    # A title that names a client outranks the personal/timesheet heuristics — those
+    # guess from app shape, but the title is explicit about whose work this is.
+    if personal and not has_co_client and tier != "title":
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
         suggested_id = suggested_name = None
     # A personal timesheet touches many clients — the temporal-neighbor guess would
     # misleadingly name whoever came next. Label it honestly and suggest no client.
-    elif not has_co_client and _looks_like_timesheet(block):
+    elif not has_co_client and tier != "title" and _looks_like_timesheet(block):
         explanation = "Looks like your own timesheet — internal, not tied to one client."
         tier = "timesheet"
         suggested_id = suggested_name = None

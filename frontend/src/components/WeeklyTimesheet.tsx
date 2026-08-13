@@ -35,6 +35,11 @@ interface TimesheetData {
   daily_totals: Record<string, number>;
   grand_total: number;
   billable_total: number;
+  // Presence envelope (first→last activity per day) vs summed active work.
+  daily_presence?: Record<string, number>;
+  daily_idle?: Record<string, number>;
+  present_total?: number;
+  idle_total?: number;
   auto_submitted?: boolean;
   submitted_at?: string | null;
   rejection_reason?: string;
@@ -587,6 +592,11 @@ const WeeklyTimesheet: React.FC = () => {
   const nonBillable   = (timesheetData?.grand_total ?? 0) - (timesheetData?.billable_total ?? 0);
   const billable      = timesheetData?.billable_total ?? 0;
   const grandTotal    = timesheetData?.grand_total ?? 0;
+  const presentTotal  = timesheetData?.present_total ?? 0;
+  const idleTotal     = timesheetData?.idle_total ?? 0;
+  // Only surface the Present/Idle triad once the backend supplies the envelope
+  // and it actually exceeds active work (older cached payloads omit it).
+  const hasPresence   = presentTotal > grandTotal + 0.05;
   const totalClients  = clients.length;
   const billablePctLabel = grandTotal > 0 ? Math.round(pct(billable, grandTotal)) : 0;
   const isEmpty       = totalClients === 0;
@@ -671,8 +681,20 @@ const WeeklyTimesheet: React.FC = () => {
               {fmtHours(grandTotal)}
             </span>
             <span className="ml-2 text-[13px] font-semibold text-slate-500">
-              tracked · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
+              active · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
             </span>
+            {hasPresence && (
+              <div
+                className="mt-1 flex items-center gap-2 text-[11.5px] font-medium text-slate-400"
+                title="Present = span from your first to last activity each day (attendance). Active = documented work time. Idle/Away = lunch, breaks, and time away from the keyboard. A normal full day shows more Present than Active — that gap is expected, not lost time."
+              >
+                <span className="tabular-nums">Present <b className="text-slate-600">{fmtHours(presentTotal)}</b></span>
+                <span className="text-slate-300">·</span>
+                <span className="tabular-nums">Active <b className="text-slate-600">{fmtHours(grandTotal)}</b></span>
+                <span className="text-slate-300">·</span>
+                <span className="tabular-nums">Idle/Away <b className="text-slate-600">{fmtHours(idleTotal)}</b></span>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <div className="flex bg-white/70 border border-border/50 rounded-lg p-0.5" title="Toggle hours format">

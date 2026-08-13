@@ -1002,6 +1002,8 @@ def weekly_timesheet_view(request):
     )
 
     grid = {}
+    day_first_ts = {}   # day_str -> earliest event epoch (presence envelope start)
+    day_last_ts  = {}   # day_str -> latest event epoch (presence envelope end)
 
     # ── Event-based attribution (3-min cap) ───────────────────────────────────
     for i, event in enumerate(events):
@@ -1028,6 +1030,15 @@ def weekly_timesheet_view(request):
         day_str = localtime(event.start_ts).date().isoformat()
         if day_str not in day_strings:
             continue
+
+        # Presence envelope: first→last event timestamp per day (wall-clock span).
+        # Active minutes (below) already cap idle gaps at 3 min; the gap between
+        # this span and the summed active time is the day's Idle/Away.
+        ev_ts = event.start_ts.timestamp()
+        if day_str not in day_first_ts or ev_ts < day_first_ts[day_str]:
+            day_first_ts[day_str] = ev_ts
+        if day_str not in day_last_ts or ev_ts > day_last_ts[day_str]:
+            day_last_ts[day_str] = ev_ts
 
         key = (client_id, task_type_id)
         if key not in grid:
@@ -1088,6 +1099,27 @@ def weekly_timesheet_view(request):
     grand_total    = round(sum(daily_totals_hours.values()), 2)
     billable_total = round(sum(e['total'] for e in grid_entries if e['is_billable']), 2)
 
+    # ── Presence envelope + Idle/Away ─────────────────────────────────────────
+    # Present = wall-clock span from first to last activity that day (attendance).
+    # Active  = daily_totals (summed active minutes, idle gaps capped at 3 min).
+    # Idle/Away = the difference: lunch, breaks, meetings away from the keyboard.
+    # Present is NOT summed Mon→Fri as one span; each day's envelope is measured
+    # then summed, so a normal 8h day reads as ~8h present / ~5-7h active.
+    daily_presence = {}
+    daily_idle     = {}
+    for d in day_strings:
+        if d in day_first_ts:
+            present_min = max(0.0, (day_last_ts[d] - day_first_ts[d]) / 60.0)
+        else:
+            present_min = 0.0
+        active_min = daily_totals[d]            # minutes
+        idle_min   = max(0.0, present_min - active_min)
+        daily_presence[d] = round(present_min / 60.0, 2)
+        daily_idle[d]     = round(idle_min / 60.0, 2)
+
+    present_total = round(sum(daily_presence.values()), 2)
+    idle_total    = round(sum(daily_idle.values()), 2)
+
     return Response({
         'week_start': week_start.isoformat(), 'week_end': week_end.isoformat(),
         'timesheet_id': timesheet.id, 'status': timesheet.status,
@@ -1096,6 +1128,8 @@ def weekly_timesheet_view(request):
         'rejection_reason': timesheet.rejection_reason or '',
         'entries': grid_entries, 'daily_totals': daily_totals_hours,
         'grand_total': grand_total, 'billable_total': billable_total,
+        'daily_presence': daily_presence, 'daily_idle': daily_idle,
+        'present_total': present_total, 'idle_total': idle_total,
     })
 # ===============================
 # CLIENT SUMMARY VIEW (MANAGER/BILLING)

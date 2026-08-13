@@ -310,6 +310,7 @@ class ClientBillingProfileSerializer(serializers.ModelSerializer):
             'flat_amount', 'flat_period',
             'billing_system', 'billing_system_display',
             'external_customer_id', 'external_customer_name', 'default_item_name',
+            'counts_billable_utilization',
             'fallback_customer_id', 'notes', 'updated_at',
         ]
         read_only_fields = [

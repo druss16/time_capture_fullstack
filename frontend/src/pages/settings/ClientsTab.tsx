@@ -758,7 +758,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
               <ClientBillingProfilePanel
                 clientId={billingClientId}
                 canManage={canManage}
-                onSuccess={(m) => { onSuccess(m); }}
+                onSuccess={(m) => { onSuccess(m); setBillingClientId(null); }}
                 onError={onError}
               />
             </div>

@@ -670,22 +670,24 @@ def _compose_why(local_time: str, co_open_client, surrounding: dict, title_clien
     back to the local time-of-day so the sentence is never empty."""
     when = f" around {local_time}" if local_time else ""
 
-    # Tier 0: the block's own title literally names a client. This is a more direct
-    # signal than "what was open alongside it" or "what you did right before", so it
-    # outranks the temporal tiers below — otherwise a File Explorer window titled
-    # "St James Jun26" gets attributed to whatever QuickBooks file was open just
-    # before it. Only fires on an unambiguous single match (see _title_client_suggestion).
-    if title_client and title_client.get("client_id"):
-        return (
-            f"The title names {title_client['client_name']}.",
-            "title", title_client.get("client_id"), title_client.get("client_name"),
-        )
-
+    # An actual client FILE open alongside this block (co-open, a high-precision path
+    # match) is the ONE signal that outranks the block's own title — it catches the
+    # template/reference case where you open client X's file to do client Y's work.
     if co_open_client:
         return (
             f"You had {co_open_client['client_name']}’s file "
             f"“{co_open_client['file']}” open at the same time{when}.",
             "co_open", co_open_client.get("client_id"), co_open_client.get("client_name"),
+        )
+
+    # The block's own title literally names a client — a more direct signal than the
+    # temporal tiers below ("what you did right before"). Otherwise a File Explorer
+    # window titled "St James Jun26" gets attributed to whatever was open just before
+    # it. Only fires on an unambiguous single match (see _title_client_suggestion).
+    if title_client and title_client.get("client_id"):
+        return (
+            f"The title names {title_client['client_name']}.",
+            "title", title_client.get("client_id"), title_client.get("client_name"),
         )
 
     sug = (surrounding or {}).get("suggestion") or {}
@@ -759,18 +761,20 @@ def suggested_client_for(block, org):
     adjacent neighbor > day-dominant), or None. Shared by the block_why endpoint
     AND bulk Confirm-all, so the green per-row button and "Confirm all" can never
     disagree about what the best guess is. Read-only."""
-    # The block's own title naming a client beats any temporal cue (see _compose_why
-    # tier 0). Not applied to browser tabs — a portal/news title isn't the client.
-    if not _is_browser(block):
-        tc = _title_client_suggestion(block, org)
-        if tc:
-            return tc["client_id"]
     try:
         _, co = _co_open_client(block, org)
     except Exception:
         co = None
+    # A co-open client FILE outranks the title (mirrors _compose_why) — it catches the
+    # template/reference case (open client X's file to do client Y's work).
     if co and co.get("client_id"):
         return co["client_id"]
+    # Otherwise the block's own title naming a client beats the temporal tiers below.
+    # Not applied to browser tabs — a portal/news title isn't the client.
+    if not _is_browser(block):
+        tc = _title_client_suggestion(block, org)
+        if tc:
+            return tc["client_id"]
     # A browser tab shouldn't inherit a client from temporal adjacency — a news or
     # social tab is not "the client you worked before/after it". Leave it No client.
     if _is_browser(block):

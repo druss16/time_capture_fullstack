@@ -59,16 +59,16 @@ class PulseLens(Lens):
                 # Block-based revenue, no realization (it'd be 0% and misleading).
                 # Leakage still works: worked-but-uncommitted billable value.
                 return ["revenue", "revenue_leakage",
-                        "billable_utilization", "wip_total"]
+                        "billable_mix", "wip_total"]
             return ["invoiced_revenue", "realization_dollar",
                     "revenue_leakage", "wip_total"]
         if scope.type == "client":
             if invoiceless:
                 return ["revenue", "billable_hours",
-                        "billable_utilization", "wip_total"]
+                        "billable_mix", "wip_total"]
             return ["invoiced_revenue", "realization_dollar",
                     "billable_hours", "wip_total"]
         if scope.type == "staff":
             return ["billable_hours", "total_hours",
-                    "billable_utilization", "effective_rate"]
-        return ["revenue", "billable_hours", "billable_utilization"]
+                    "billable_mix", "effective_rate"]
+        return ["revenue", "billable_hours", "billable_mix"]

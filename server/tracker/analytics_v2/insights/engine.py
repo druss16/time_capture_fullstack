@@ -124,7 +124,7 @@ def _generate_threshold_insights(
     # ── Utilization out of band (only at firm or staff scope) ──
     if scope.type in ("firm", "staff"):
         try:
-            ut = get_metric("billable_utilization").safe_compute(org, scope, time)
+            ut = get_metric("billable_mix").safe_compute(org, scope, time)
             if ut.state == MetricState.READY and ut.value is not None:
                 if ut.value < 60:
                     cards.append(_low_utilization_card(ut.value))
@@ -208,8 +208,10 @@ def _low_utilization_card(value: float) -> InsightCardPayload:
         severity="watch",
         headline=f"Utilization at {value:.1f}%",
         body=(
-            "Below typical CPA-firm target of 75-85%. May indicate available capacity or "
-            "admin overload. See Utilization lens for per-staff breakdown."
+            "Billable share of tracked (active) working time is below the ~75% target. "
+            "Indicates a high share of non-billable/internal work — or client work that "
+            "hasn't been attributed to a client. See the Utilization lens for the "
+            "per-staff and Mix × Coverage breakdown."
         ),
         evidence=[{"label": "Utilization", "value": f"{value:.1f}%"}],
         source="threshold",

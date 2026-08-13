@@ -121,15 +121,25 @@ def _generate_threshold_insights(
         except Exception as exc:
             logger.warning("[insights] Realization check failed: %s", exc)
     
-    # ── Utilization out of band (only at firm or staff scope) ──
+    # ── Utilization vs the firm's OWN normal (WHOOP-style baseline) ──
     if scope.type in ("firm", "staff"):
         try:
             ut = get_metric("billable_mix").safe_compute(org, scope, time)
             if ut.state == MetricState.READY and ut.value is not None:
-                if ut.value < 60:
-                    cards.append(_low_utilization_card(ut.value))
-                elif ut.value > 90:
-                    cards.append(_high_utilization_card(ut.value))
+                from ..baselines import weekly_mix_series, band
+                b = band([v for _, v in weekly_mix_series(org, scope, time.end)])
+                if b:
+                    # Judge against the firm's own history, not a textbook target.
+                    if ut.value < b["p25"]:
+                        cards.append(_low_utilization_card(ut.value, b))
+                    elif ut.value > b["max"]:
+                        cards.append(_high_utilization_card(ut.value, b))
+                else:
+                    # Not enough history to learn a baseline — generic fallback.
+                    if ut.value < 60:
+                        cards.append(_low_utilization_card(ut.value, None))
+                    elif ut.value > 90:
+                        cards.append(_high_utilization_card(ut.value, None))
         except Exception as exc:
             logger.warning("[insights] Utilization check failed: %s", exc)
     
@@ -202,33 +212,59 @@ def _low_realization_card(value: float) -> InsightCardPayload:
     )
 
 
-def _low_utilization_card(value: float) -> InsightCardPayload:
+def _low_utilization_card(value: float, band: dict | None = None) -> InsightCardPayload:
+    if band:
+        body = (
+            f"Below your firm's usual {band['p25']:.0f}–{band['p75']:.0f}% range "
+            f"(≈{band['baseline']:.0f}% over the last {band['n']} weeks) — a real dip, "
+            f"not just a low textbook number. Check the Utilization lens for the "
+            f"per-staff and Mix × Coverage breakdown."
+        )
+        evidence = [
+            {"label": "This period", "value": f"{value:.1f}%"},
+            {"label": "Your normal", "value": f"{band['p25']:.0f}–{band['p75']:.0f}%"},
+        ]
+    else:
+        body = (
+            "Billable share of tracked (active) working time is on the low side. "
+            "May reflect non-billable/internal work or client work not yet attributed "
+            "to a client. (Still calibrating your firm's normal range.)"
+        )
+        evidence = [{"label": "Utilization", "value": f"{value:.1f}%"}]
     return InsightCardPayload(
         id="threshold_low_utilization",
         severity="watch",
         headline=f"Utilization at {value:.1f}%",
-        body=(
-            "Billable share of tracked (active) working time is below the ~75% target. "
-            "Indicates a high share of non-billable/internal work — or client work that "
-            "hasn't been attributed to a client. See the Utilization lens for the "
-            "per-staff and Mix × Coverage breakdown."
-        ),
-        evidence=[{"label": "Utilization", "value": f"{value:.1f}%"}],
+        body=body,
+        evidence=evidence,
         source="threshold",
         drilldown={"scope": {"type": "firm", "ids": []}, "lens": "utilization"},
     )
 
 
-def _high_utilization_card(value: float) -> InsightCardPayload:
+def _high_utilization_card(value: float, band: dict | None = None) -> InsightCardPayload:
+    if band:
+        body = (
+            f"Above your firm's usual range (best recent week was {band['max']:.0f}%). "
+            f"Great throughput — but if it's sustained, watch for burnout and consider "
+            f"capacity/hiring."
+        )
+        evidence = [
+            {"label": "This period", "value": f"{value:.1f}%"},
+            {"label": "Your normal", "value": f"{band['p25']:.0f}–{band['p75']:.0f}%"},
+        ]
+    else:
+        body = (
+            "Sustained very high utilization is hard to maintain. Watch for burnout "
+            "signals and consider hiring or workload rebalancing."
+        )
+        evidence = [{"label": "Utilization", "value": f"{value:.1f}%"}]
     return InsightCardPayload(
         id="threshold_high_utilization",
         severity="watch",
         headline=f"Utilization at {value:.1f}%",
-        body=(
-            "Sustained utilization above 90% is hard to maintain. Watch for burnout "
-            "signals and consider hiring or workload rebalancing."
-        ),
-        evidence=[{"label": "Utilization", "value": f"{value:.1f}%"}],
+        body=body,
+        evidence=evidence,
         source="threshold",
         drilldown={"scope": {"type": "firm", "ids": []}, "lens": "utilization"},
     )

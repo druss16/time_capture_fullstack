@@ -125,6 +125,11 @@ export default function KPITile({ tile, onDrilldown }: Props) {
         )}
       </div>
 
+      {/* Trend sparkline vs the firm's own normal band (WHOOP-style baseline) */}
+      {m.sparkline && m.sparkline.length >= 3 && (
+        <Sparkline values={m.sparkline} low={m.threshold_low ?? null} high={m.threshold_high ?? null} />
+      )}
+
       {/* Secondary value (e.g. "$8,400 vs $400 standard" for effective rate) */}
       {m.secondary_value !== null && m.secondary_value !== undefined && m.secondary_label && (
         <p className="mt-1 text-xs text-slate-500">
@@ -223,6 +228,31 @@ function Label({
           )}
         </span>
       )}
+    </div>
+  );
+}
+
+function Sparkline({ values, low, high }: { values: number[]; low: number | null; high: number | null }) {
+  const pts = values.filter((v) => v !== null && v !== undefined) as number[];
+  if (pts.length < 2) return null;
+  const W = 108, H = 28, pad = 3;
+  const lo = Math.min(...pts, low ?? Infinity);
+  const hi = Math.max(...pts, high ?? -Infinity);
+  const range = hi - lo || 1;
+  const x = (i: number) => pad + (i / (pts.length - 1)) * (W - 2 * pad);
+  const y = (v: number) => pad + (1 - (v - lo) / range) * (H - 2 * pad);
+  const line = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  const inBand = low != null && last >= low;   // at/above your normal floor
+  return (
+    <div className="mt-2" title="Trend vs your firm's normal range (last ~12 weeks)">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+        {low != null && high != null && (
+          <rect x={0} y={y(high)} width={W} height={Math.max(0, y(low) - y(high))} fill="#0d9488" opacity="0.10" />
+        )}
+        <polyline points={line} fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinejoin="round" />
+        <circle cx={x(pts.length - 1)} cy={y(last)} r="2.6" fill={inBand ? "#0d9488" : "#f59e0b"} />
+      </svg>
     </div>
   );
 }

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.request
 from collections import defaultdict
@@ -265,31 +266,72 @@ def _is_internal_name(name: str) -> bool:
 
 
 _WEEK_SYSTEM_PROMPT = (
-    "You are helping someone recap their own work week — a warm, human, plain-spoken "
-    "summary of the highlights, the kind of quick note a person jots down for themselves "
-    "or shares with their manager at the end of the week.\n"
-    "Rules:\n"
-    "- Use ONLY the clients, activities, categories, and hours provided. Invent nothing — "
-    "no amounts, findings, outcomes, dates, or specifics that aren't in the data.\n"
-    "- Write 4–7 short bullet points, each on its own line starting with '- '.\n"
-    "- Lead with where the most time went; group related work; name the clients.\n"
-    "- Be personable and conversational, past tense (e.g. \"Spent a good chunk of the week "
-    "with…\"). Warm, not corporate — no invoice or billing language.\n"
-    "- Weave in hours naturally where it helps (\"~7h\"), but don't force a number into every "
-    "bullet.\n"
-    "- You may open with ONE short, friendly one-line lead-in before the bullets.\n"
-    "- No greeting, no sign-off, and no mention of software or file names — describe the WORK, "
-    "not the tools.\n"
-    "- If the week is light, keep it short and honest rather than padding."
+    "You are writing a crisp, personable end-of-week work recap for the person who did the work "
+    "— a clear note they'd drop to their manager or keep for themselves. Warm and human, but "
+    "tight and scannable.\n"
+    "HARD RULES:\n"
+    "- Use ONLY the data provided. Invent nothing — no amounts, findings, outcomes, or specifics "
+    "that aren't in the data.\n"
+    "- NEVER name software, apps, or files (QuickBooks, Excel, Outlook, Microsoft, .xlsx, etc.). "
+    "If an activity is just a tool or file name, describe the underlying task instead — "
+    "bookkeeping, reconciliations, check runs, payroll, worksheets, email. Describe the WORK, "
+    "never the tool.\n"
+    "- Never write precise decimal hours. Use each client's hours_label verbatim (\"~2h\", "
+    "\"about an hour\").\n"
+    "FORMAT:\n"
+    "- Open with ONE short, qualitative lead-in line (where the week's focus went). No numbers, "
+    "no \"busy week\" filler, no exclamation points.\n"
+    "- Then one bullet per main client, in order, each on its own line starting with '- '. "
+    "Each bullet: \"Client Name — <concrete work>, <hours_label>.\" Draw the concrete work from "
+    "that client's activities/categories; be specific (\"ran payroll and printed checks\", "
+    "\"reconciled accounts and sent weekly invoices\", \"prepped the July reports\"). Avoid vague "
+    "\"general client work\" / \"various tasks\" when a real activity exists.\n"
+    "- If other_clients is given, end with ONE bullet: \"A few shorter items — <name up to 3 of "
+    "its sample clients> and <count minus those named> others — <work from their categories>, "
+    "<other_clients.hours_label> in total.\"\n"
+    "- No greeting, no sign-off. No exclamation points anywhere."
 )
+
+# Window-title chrome that describes the tool, not the work — dropped from the digest
+# so the recap has real activity signal to describe.
+_CHROME_LABELS = {
+    "go to", "open a company", "information", "home", "reminders", "untitled",
+    "save print output as", "select checks to print", "print register", "print checks",
+    "quickbooks desktop information", "print checks - confirmation",
+    "quickbooks accountant desktop", "(secondary) quickbooks accountant desktop",
+}
+
+
+def _keep_activity(label: str) -> bool:
+    ll = label.strip().lower()
+    if ll in _CHROME_LABELS:
+        return False
+    if "(secondary)" in ll or "confirmation" in ll or "save print output" in ll:
+        return False
+    if re.sub(r"[^a-z]", "", ll) in ("quickbooks", "quickbooksaccountantdesktop"):
+        return False
+    return len(ll) >= 3
+
+
+def _hours_phrase(h: float) -> str:
+    """Human, rounded duration — never a robotic decimal."""
+    if h < 0.5:
+        return "under an hour"
+    if h < 1.0:
+        return "about an hour"
+    r = round(h * 2) / 2  # nearest half hour
+    return f"~{int(r)}h" if r == int(r) else f"~{r:.1f}h"
+
+
+_WEEK_MAIN_CLIENTS = 6  # top clients get their own bullet; the rest are grouped
 
 
 def _build_week_digest(blocks, start_date, end_date) -> dict:
-    """One person's whole week across clients: per-client hours + top categories +
-    a few distinct activities, ordered by hours. Internal / no-client blocks are
-    filtered by the caller. Feeds the personable week recap."""
+    """One person's whole week across clients, shaped for a clean recap: the top
+    clients (by hours) each with a friendly duration + top categories + a few
+    real activities; the long tail collapsed into one grouped summary. Internal /
+    no-client blocks are filtered by the caller."""
     per_client = {}
-    total_minutes = 0.0
 
     for b in blocks:
         mins = float(b.minutes or 0)
@@ -304,30 +346,46 @@ def _build_week_digest(blocks, start_date, end_date) -> dict:
         raw = (b.window_title or b.app_name or "").strip()
         label = _clean_label(raw) or "Client work"
 
-        total_minutes += mins
         pc["minutes"] += mins
         pc["cat_minutes"][category] += mins
         key = label.lower()
-        if key not in pc["seen"]:
+        if key not in pc["seen"] and _keep_activity(label):
             pc["seen"].add(key)
-            if len(pc["labels"]) < _MAX_ACTIVITIES_PER_CATEGORY:
+            if len(pc["labels"]) < 8:
                 pc["labels"].append(label)
 
-    clients = []
-    for name, pc in sorted(per_client.items(), key=lambda kv: -kv[1]["minutes"]):
-        top_cats = sorted(pc["cat_minutes"].items(), key=lambda kv: -kv[1])[:4]
-        clients.append({
+    ordered = sorted(per_client.items(), key=lambda kv: -kv[1]["minutes"])
+
+    main = []
+    for name, pc in ordered[:_WEEK_MAIN_CLIENTS]:
+        top_cats = [c for c, _ in sorted(pc["cat_minutes"].items(), key=lambda kv: -kv[1])[:4]]
+        main.append({
             "client": name,
-            "hours": round(pc["minutes"] / 60.0, 2),
-            "top_categories": [{"category": c, "hours": round(m / 60.0, 2)} for c, m in top_cats],
+            "hours_label": _hours_phrase(pc["minutes"] / 60.0),
+            "categories": top_cats,
             "activities": pc["labels"],
         })
 
+    rest = ordered[_WEEK_MAIN_CLIENTS:]
+    other = None
+    if rest:
+        rest_minutes = 0.0
+        rest_cats = defaultdict(float)
+        for _name, pc in rest:
+            rest_minutes += pc["minutes"]
+            for c, m in pc["cat_minutes"].items():
+                rest_cats[c] += m
+        other = {
+            "count": len(rest),
+            "hours_label": _hours_phrase(rest_minutes / 60.0),
+            "sample": [n for n, _ in rest[:3]],
+            "categories": [c for c, _ in sorted(rest_cats.items(), key=lambda kv: -kv[1])[:3]],
+        }
+
     return {
         "period": _fmt_period(start_date, end_date),
-        "total_hours": round(total_minutes / 60.0, 2),
-        "client_count": len(clients),
-        "clients": clients,
+        "main_clients": main,
+        "other_clients": other,
     }
 
 
@@ -379,7 +437,7 @@ def my_week_summary(request):
         summary, tokens = _call_openai(
             digest,
             system_prompt=_WEEK_SYSTEM_PROMPT,
-            user_intro="Write a personable recap of this person's work week from the activity below.",
+            user_intro="Write the recap from the data below.",
             temperature=0.4,
             max_tokens=500,
         )
@@ -405,8 +463,6 @@ def my_week_summary(request):
 
     return Response({
         "period": digest["period"],
-        "total_hours": digest["total_hours"],
-        "client_count": digest["client_count"],
         "summary": summary,
     })
 

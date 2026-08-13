@@ -135,24 +135,27 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _call_openai(digest: dict):
+def _call_openai(
+    digest: dict,
+    system_prompt: str = _SYSTEM_PROMPT,
+    user_intro: str = "Draft a work summary for this client from the activity below.",
+    temperature: float = 0.2,
+    max_tokens: int = 400,
+):
     """Returns (summary_text, tokens_used). Raises on failure."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not configured")
 
-    user_prompt = (
-        "Draft a work summary for this client from the activity below.\n\n"
-        + json.dumps(digest, ensure_ascii=False)
-    )
+    user_prompt = user_intro + "\n\n" + json.dumps(digest, ensure_ascii=False)
     payload = json.dumps({
         "model": _MODEL,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
-        "max_tokens": 400,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }).encode()
 
     req = urllib.request.Request(
@@ -253,6 +256,158 @@ def client_work_summary(request, client_id):
         "total_hours": digest["total_hours"],
         "summary": summary,
         "categories": digest["categories"],
+    })
+
+
+def _is_internal_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    return n == "internal" or n.startswith("internal -")
+
+
+_WEEK_SYSTEM_PROMPT = (
+    "You are helping someone recap their own work week — a warm, human, plain-spoken "
+    "summary of the highlights, the kind of quick note a person jots down for themselves "
+    "or shares with their manager at the end of the week.\n"
+    "Rules:\n"
+    "- Use ONLY the clients, activities, categories, and hours provided. Invent nothing — "
+    "no amounts, findings, outcomes, dates, or specifics that aren't in the data.\n"
+    "- Write 4–7 short bullet points, each on its own line starting with '- '.\n"
+    "- Lead with where the most time went; group related work; name the clients.\n"
+    "- Be personable and conversational, past tense (e.g. \"Spent a good chunk of the week "
+    "with…\"). Warm, not corporate — no invoice or billing language.\n"
+    "- Weave in hours naturally where it helps (\"~7h\"), but don't force a number into every "
+    "bullet.\n"
+    "- You may open with ONE short, friendly one-line lead-in before the bullets.\n"
+    "- No greeting, no sign-off, and no mention of software or file names — describe the WORK, "
+    "not the tools.\n"
+    "- If the week is light, keep it short and honest rather than padding."
+)
+
+
+def _build_week_digest(blocks, start_date, end_date) -> dict:
+    """One person's whole week across clients: per-client hours + top categories +
+    a few distinct activities, ordered by hours. Internal / no-client blocks are
+    filtered by the caller. Feeds the personable week recap."""
+    per_client = {}
+    total_minutes = 0.0
+
+    for b in blocks:
+        mins = float(b.minutes or 0)
+        if mins <= 0:
+            continue
+        name = (b.client.name if b.client else "") or "Client"
+        pc = per_client.setdefault(
+            name, {"minutes": 0.0, "cat_minutes": defaultdict(float), "labels": [], "seen": set()}
+        )
+        ch = b.category_hours or {}
+        category = max(ch, key=ch.get) if ch else "General Client Work"
+        raw = (b.window_title or b.app_name or "").strip()
+        label = _clean_label(raw) or "Client work"
+
+        total_minutes += mins
+        pc["minutes"] += mins
+        pc["cat_minutes"][category] += mins
+        key = label.lower()
+        if key not in pc["seen"]:
+            pc["seen"].add(key)
+            if len(pc["labels"]) < _MAX_ACTIVITIES_PER_CATEGORY:
+                pc["labels"].append(label)
+
+    clients = []
+    for name, pc in sorted(per_client.items(), key=lambda kv: -kv[1]["minutes"]):
+        top_cats = sorted(pc["cat_minutes"].items(), key=lambda kv: -kv[1])[:4]
+        clients.append({
+            "client": name,
+            "hours": round(pc["minutes"] / 60.0, 2),
+            "top_categories": [{"category": c, "hours": round(m / 60.0, 2)} for c, m in top_cats],
+            "activities": pc["labels"],
+        })
+
+    return {
+        "period": _fmt_period(start_date, end_date),
+        "total_hours": round(total_minutes / 60.0, 2),
+        "client_count": len(clients),
+        "clients": clients,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def my_week_summary(request):
+    """GET /api/work-summary/week/?date=YYYY-MM-DD&days=7
+
+    A single personable, bulleted recap of the CURRENT user's committed client
+    work across the window (their whole week) — one summary, not one narrative
+    per client. Read-only; logs the call to AIProcessingLog for cost visibility.
+    """
+    from tracker.views import get_user_org
+
+    user = request.user
+    org = get_user_org(user)
+    if not org:
+        return Response({"error": "no org"}, status=400)
+
+    start_date, end_date = _resolve_range(request)
+    if not start_date or not end_date:
+        return Response({"error": "bad date range"}, status=400)
+    start_utc, end_utc = _range_utc(start_date, end_date)
+
+    blocks = list(
+        Block.objects.filter(
+            org=org, user=user,
+            classification_state="committed", deleted_at__isnull=True,
+            client_id__isnull=False,
+            start__gte=start_utc, start__lte=end_utc,
+        )
+        .select_related("client")
+        .only("minutes", "category_hours", "window_title", "app_name", "client__name")
+    )
+    # Drop internal (never client-billable) buckets — this is a client-work recap.
+    blocks = [b for b in blocks if b.client and not _is_internal_name(b.client.name)]
+
+    if not blocks:
+        return Response({
+            "summary": "", "empty": True,
+            "period": _fmt_period(start_date, end_date),
+            "message": "No committed client work in this period yet.",
+        })
+
+    digest = _build_week_digest(blocks, start_date, end_date)
+
+    t0 = time.monotonic()
+    try:
+        summary, tokens = _call_openai(
+            digest,
+            system_prompt=_WEEK_SYSTEM_PROMPT,
+            user_intro="Write a personable recap of this person's work week from the activity below.",
+            temperature=0.4,
+            max_tokens=500,
+        )
+        ok, err = True, ""
+    except Exception as e:  # noqa: BLE001 — surface a clean message, log the detail
+        summary, tokens, ok, err = "", 0, False, str(e)
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    try:
+        from tracker.models import AIProcessingLog
+        AIProcessingLog.objects.create(
+            org=org, user=user, operation_type="work_summary_week",
+            input_data=digest, output_data={"summary": summary},
+            model_used=_MODEL, tokens_used=tokens,
+            processing_time_ms=elapsed_ms, success=ok, error_message=err[:500],
+        )
+    except Exception:
+        pass
+
+    if not ok:
+        return Response({"error": "Couldn’t generate a summary right now."}, status=502)
+
+    return Response({
+        "period": digest["period"],
+        "total_hours": digest["total_hours"],
+        "client_count": digest["client_count"],
+        "summary": summary,
     })
 
 

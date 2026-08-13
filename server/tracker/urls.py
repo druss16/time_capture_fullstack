@@ -475,6 +475,7 @@ urlpatterns = [
     path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
     path("blocks/<int:block_id>/why/", views_block_evidence.block_why, name="block_why"),
     path("clients/<int:client_id>/work-summary/", views_work_summary.client_work_summary, name="client_work_summary"),
+    path("work-summary/week/", views_work_summary.my_week_summary, name="my_week_summary"),
     path("work-summaries/clients/", views_work_summary.firm_period_clients, name="firm_period_clients"),
 
     path("analytics/query/",

@@ -1077,9 +1077,8 @@ const WorkSummaryView: React.FC<{
   weekEnd: string;
   weekLabel: string;
 }> = ({ clients, weekEnd, weekLabel }) => {
-  const [state, setState] = useState<Record<string, SummaryCell>>({});
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const fmtHours = useFmtHours();
+  const [cell, setCell] = useState<SummaryCell>({ loading: false });
+  const [copied, setCopied] = useState(false);
 
   // Real, billable-to clients only — skip Unassigned (null) and internal buckets.
   const real = useMemo(
@@ -1087,43 +1086,28 @@ const WorkSummaryView: React.FC<{
     [clients]
   );
 
-  const gen = useCallback(async (key: string, clientId: number) => {
-    setState(p => ({ ...p, [key]: { loading: true } }));
+  // One personable recap of the whole week across clients (not one per client).
+  const gen = useCallback(async () => {
+    setCell({ loading: true });
     try {
       const d = await safeFetchJson<{ summary: string; empty?: boolean; message?: string }>(
-        `${API_BASE}/clients/${clientId}/work-summary/?date=${weekEnd}&days=7`
+        `${API_BASE}/work-summary/week/?date=${weekEnd}&days=7`
       );
-      const cell: SummaryCell = d.empty
+      setCell(d.empty
         ? { loading: false, empty: true, ...(d.message ? { text: d.message } : {}) }
-        : { loading: false, text: d.summary || '' };
-      setState(p => ({ ...p, [key]: cell }));
+        : { loading: false, text: d.summary || '' });
     } catch {
-      setState(p => ({ ...p, [key]: { loading: false, error: true } }));
+      setCell({ loading: false, error: true });
     }
   }, [weekEnd]);
 
-  const genAll = () => {
-    real.forEach(c => {
-      const id = c.entries[0]?.client_id;
-      if (id != null && !state[c.key]?.text && !state[c.key]?.loading) gen(c.key, id);
-    });
-  };
-
-  const anyBusy = real.some(c => state[c.key]?.loading);
-  const anyDone = real.some(c => state[c.key]?.text);
-
-  const copy = (key: string, text: string) => {
+  const copy = () => {
+    if (!cell.text) return;
     try {
-      navigator.clipboard?.writeText(text);
-      setCopiedKey(key);
-      window.setTimeout(() => setCopiedKey(k => (k === key ? null : k)), 1500);
+      navigator.clipboard?.writeText(cell.text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
     } catch { /* noop */ }
-  };
-  const copyAll = () => {
-    const parts = real
-      .map(c => (state[c.key]?.text ? `${c.clientName}\n${state[c.key]!.text}` : null))
-      .filter((x): x is string => !!x);
-    if (parts.length) copy('__all__', parts.join('\n\n'));
   };
 
   if (!real.length) {
@@ -1131,7 +1115,7 @@ const WorkSummaryView: React.FC<{
       <div className="text-center py-20 text-slate-400">
         <Sparkles className="w-10 h-10 text-slate-200 mx-auto mb-3" />
         <p className="font-medium text-slate-500">No client work to summarize this week</p>
-        <p className="text-sm mt-1">Summaries cover billable client time — not unassigned or internal work.</p>
+        <p className="text-sm mt-1">The recap covers billable client time — not unassigned or internal work.</p>
       </div>
     );
   }
@@ -1140,61 +1124,39 @@ const WorkSummaryView: React.FC<{
     <div className="p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-          <Sparkles className="w-3.5 h-3.5 text-primary" /> Work summary · {weekLabel}
+          <Sparkles className="w-3.5 h-3.5 text-primary" /> Your week in review · {weekLabel}
         </div>
         <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">AI draft — review before sending</span>
         <span className="flex-1" />
-        <button onClick={genAll} disabled={anyBusy}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-40">
-          <Sparkles className="w-3.5 h-3.5" /> {anyBusy ? 'Generating…' : 'Generate all'}
-        </button>
-        {anyDone && (
-          <button onClick={copyAll}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-            <Copy className="w-3.5 h-3.5" /> {copiedKey === '__all__' ? 'Copied' : 'Copy all'}
+        {cell.text ? (
+          <div className="flex items-center gap-2">
+            <button onClick={copy} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
+              <Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button onClick={gen} className="text-[11px] font-medium text-slate-400 hover:text-slate-600">Regenerate</button>
+          </div>
+        ) : (
+          <button onClick={gen} disabled={cell.loading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-40">
+            <Sparkles className="w-3.5 h-3.5" /> {cell.loading ? 'Writing…' : 'Generate my week summary'}
           </button>
         )}
       </div>
 
-      <div className="flex flex-col gap-2">
-        {real.map(c => {
-          const id = c.entries[0]?.client_id as number;
-          const s = state[c.key];
-          const idle = !s || (!s.loading && !s.text && !s.error && !s.empty);
-          return (
-            <div key={c.key} className="rounded-xl border border-border bg-white p-3">
-              <div className="mb-1.5 flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-800">{c.clientName}</span>
-                <span className="text-xs tabular-nums text-slate-400">{fmtHours(c.total)}</span>
-                <span className="flex-1" />
-                {idle ? (
-                  <button onClick={() => gen(c.key, id)}
-                    className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15">
-                    <Sparkles className="w-3 h-3" /> Generate
-                  </button>
-                ) : s?.text ? (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => copy(c.key, s.text!)} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
-                      <Copy className="w-3 h-3" /> {copiedKey === c.key ? 'Copied' : 'Copy'}
-                    </button>
-                    <button onClick={() => gen(c.key, id)} className="text-[11px] font-medium text-slate-400 hover:text-slate-600">Regenerate</button>
-                  </div>
-                ) : null}
-              </div>
-              {s?.loading ? (
-                <div className="text-[12px] text-slate-400">Writing a summary…</div>
-              ) : s?.error ? (
-                <div className="text-[12px] text-slate-500">Couldn’t generate. <button onClick={() => gen(c.key, id)} className="font-medium text-primary hover:underline">Try again</button></div>
-              ) : s?.empty ? (
-                <div className="text-[12px] text-slate-400">{s.text}</div>
-              ) : s?.text ? (
-                <div className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-700">{s.text}</div>
-              ) : (
-                <div className="text-[12px] text-slate-400">Click Generate for a client-ready summary of this week’s work.</div>
-              )}
-            </div>
-          );
-        })}
+      <div className="rounded-xl border border-border bg-white p-4">
+        {cell.loading ? (
+          <div className="text-[12.5px] text-slate-400">Pulling together your week…</div>
+        ) : cell.error ? (
+          <div className="text-[12.5px] text-slate-500">Couldn’t generate right now. <button onClick={gen} className="font-medium text-primary hover:underline">Try again</button></div>
+        ) : cell.empty ? (
+          <div className="text-[12.5px] text-slate-400">{cell.text || 'No client work to summarize this week.'}</div>
+        ) : cell.text ? (
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">{cell.text}</div>
+        ) : (
+          <div className="text-[12.5px] text-slate-400">
+            A friendly, bulleted recap of everything you worked on across {real.length} client{real.length !== 1 ? 's' : ''} this week — one summary, not one per client.
+          </div>
+        )}
       </div>
     </div>
   );

@@ -26,6 +26,7 @@ interface BillingProfile {
   external_customer_name: string;
   default_item_name: string;
   notes: string;
+  counts_billable_utilization: boolean;
   fallback_customer_id: string | null;
   effective_hourly_rate: string | null;
 }
@@ -86,6 +87,7 @@ const ClientBillingProfilePanel: React.FC<{
         external_customer_id: p.external_customer_id,
         external_customer_name: p.external_customer_name,
         default_item_name: p.default_item_name,
+        counts_billable_utilization: p.counts_billable_utilization,
         notes: p.notes,
       };
       const updated = await safeFetchJson<BillingProfile>(
@@ -208,6 +210,24 @@ const ClientBillingProfilePanel: React.FC<{
           </div>
         </div>
       )}
+
+      {/* Billable-effort toggle — count toward utilization without invoicing */}
+      <label className="flex items-start gap-2.5 rounded-lg border border-border/60 bg-slate-50/50 px-3 py-2.5 cursor-pointer">
+        <input
+          type="checkbox" disabled={disabled}
+          checked={!!p.counts_billable_utilization}
+          onChange={e => set('counts_billable_utilization', e.target.checked)}
+          className="h-4 w-4 mt-0.5 accent-primary"
+        />
+        <span className="text-[13px] text-slate-700 leading-snug">
+          <span className="font-semibold">Count as billable for utilization</span>
+          <span className="block text-[12px] text-slate-500">
+            Counts this client's time as billable in utilization analytics even though it isn't
+            invoiced through the system (e.g. tax work billed outside, parked under an Internal client).
+            Doesn't touch billing or export.
+          </span>
+        </span>
+      </label>
 
       {/* Notes */}
       <div>

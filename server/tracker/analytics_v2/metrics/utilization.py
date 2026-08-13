@@ -52,7 +52,8 @@ class BillableUtilizationMetric(Metric):
             if exclude_ids:
                 qs = qs.exclude(user_id__in=exclude_ids)
 
-        billable_min = to_float(qs.filter(is_billable=True).aggregate(s=Sum("minutes"))["s"])
+        from ..blocks import billable_q
+        billable_min = to_float(qs.filter(billable_q(org)).aggregate(s=Sum("minutes"))["s"])
         billable_hours = billable_min / 60.0
 
         # Denominator: available capacity for firm/staff scopes (billable ÷ available);
@@ -119,7 +120,8 @@ class BillableMixMetric(Metric):
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)
-        bill_min = to_float(qs.filter(is_billable=True).aggregate(s=Sum("minutes"))["s"])
+        from ..blocks import billable_q
+        bill_min = to_float(qs.filter(billable_q(org)).aggregate(s=Sum("minutes"))["s"])
         return MetricValue(value=round(bill_min / total_min * 100, 1))
 
 
@@ -132,8 +134,8 @@ class BillableHoursMetric(Metric):
     delta_good_when = "up"
     
     def compute(self, org, scope, time):
-        from ..blocks import working_qs
-        qs = working_qs(self._block_qs(org, scope, time, billable_only=True), org)
+        from ..blocks import working_qs, billable_q
+        qs = working_qs(self._block_qs(org, scope, time), org).filter(billable_q(org))
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)

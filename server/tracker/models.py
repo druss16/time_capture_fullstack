@@ -951,6 +951,15 @@ class ClientBillingProfile(models.Model):
     )
 
     notes = models.TextField(blank=True, default='')
+    counts_billable_utilization = models.BooleanField(
+        default=False,
+        help_text=(
+            "Count this client's time as BILLABLE for utilization analytics even "
+            "though it is not invoiced through the system (e.g. tax work billed "
+            "outside, parked under an Internal client). Lifts utilization without "
+            "touching billing or export."
+        ),
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(

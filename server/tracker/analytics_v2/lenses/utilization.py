@@ -81,12 +81,15 @@ class UtilizationLens(Lens):
         from ..capacity import capacity_hours_map
         from tracker.models import OrganizationMembership
 
+        from ..blocks import billable_effort_client_ids
+        eff = billable_effort_client_ids(org)
+
         qs = self._scoped_qs(org, scope, time)
         agg: dict[int, dict] = defaultdict(lambda: {"billable": 0.0, "total": 0.0})
-        for b in qs.only("user_id", "minutes", "is_billable"):
+        for b in qs.only("user_id", "minutes", "is_billable", "client_id"):
             mins = to_float(b.minutes)
             agg[b.user_id]["total"] += mins
-            if b.is_billable:
+            if b.is_billable or b.client_id in eff:
                 agg[b.user_id]["billable"] += mins
 
         # Calendar-aware capacity (net of holidays / summer Fridays / time off),

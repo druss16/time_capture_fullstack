@@ -24,11 +24,25 @@ def exclude_idle(qs):
     return qs.exclude(q)
 
 
+def billable_effort_client_ids(org) -> set[int]:
+    """Clients flagged 'count as billable for utilization' — work that IS
+    productive/billable effort (e.g. UltraTax parked under Internal-Tax) but
+    isn't invoiced through the system. Counts in the utilization numerator; does
+    NOT touch billing/export."""
+    from tracker.models import ClientBillingProfile
+
+    return set(
+        ClientBillingProfile.objects
+        .filter(org=org, counts_billable_utilization=True)
+        .values_list("client_id", flat=True)
+    )
+
+
 def utilization_excluded_client_ids(org) -> set[int]:
-    """Clients whose time is NOT hourly-billable work, so it shouldn't sit in
-    the utilization numerator or denominator: flat-fee / retainer clients,
-    non-billable clients, and the firm's internal-work clients. Retainer work is
-    measured in Profitability (flat-fee revenue), not hourly utilization."""
+    """Clients whose time is NOT counted in utilization at all: flat-fee /
+    retainer clients, non-billable clients, and the firm's internal-work clients.
+    Billable-effort clients (see above) are NOT excluded — their time counts as
+    billable instead."""
     from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
     from tracker.industry_categories import is_internal_client_name
     from tracker.models import Client
@@ -37,7 +51,18 @@ def utilization_excluded_client_ids(org) -> set[int]:
     for cid, name in Client.objects.filter(org=org).values_list("id", "name"):
         if is_internal_client_name(name or ""):
             ids.add(cid)
-    return ids
+    # Billable-effort clients count as billable — don't exclude them.
+    return ids - billable_effort_client_ids(org)
+
+
+def billable_q(org):
+    """Q for blocks that count as BILLABLE in utilization: normally-billable
+    blocks, PLUS any block on a billable-effort client."""
+    q = Q(is_billable=True)
+    eff = billable_effort_client_ids(org)
+    if eff:
+        q |= Q(client_id__in=eff)
+    return q
 
 
 def working_qs(qs, org):

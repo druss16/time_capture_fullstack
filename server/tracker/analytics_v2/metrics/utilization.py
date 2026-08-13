@@ -122,7 +122,31 @@ class BillableMixMetric(Metric):
             return MetricValue(state=MetricState.EMPTY)
         from ..blocks import billable_q
         bill_min = to_float(qs.filter(billable_q(org)).aggregate(s=Sum("minutes"))["s"])
-        return MetricValue(value=round(bill_min / total_min * 100, 1))
+        mv = MetricValue(value=round(bill_min / total_min * 100, 1))
+        self._attach_baseline(mv, org, scope, time)
+        return mv
+
+    def _attach_baseline(self, mv, org, scope, time):
+        """Firm-relative baseline (WHOOP-style): a trailing weekly sparkline plus
+        a 'your normal' threshold band, so the tile flags deviation from the
+        firm's own history — not a generic 75% target. Falls back to the static
+        threshold until there's enough history to learn a baseline."""
+        try:
+            from ..baselines import weekly_mix_series, band
+            series = weekly_mix_series(org, scope, time.end)
+            if not series:
+                return
+            vals = [v for _, v in series]
+            mv.sparkline = vals[-12:]
+            b = band(vals)
+            if b:
+                # Healthy = at/above your normal floor (p25); watch below it down
+                # to your historical-worst week; bad below that.
+                self.threshold = ThresholdRange(
+                    low=b["min"], high=b["p25"], direction="higher_is_better",
+                )
+        except Exception:
+            pass
 
 
 @register_metric("billable_hours")

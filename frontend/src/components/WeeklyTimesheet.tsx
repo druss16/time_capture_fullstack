@@ -1319,10 +1319,10 @@ const ByDayView: React.FC<{
     }).filter(g => g.clients.length > 0),
   [clients, days, dailyTotals]);
 
-  // Days open by default (a day is open unless collapsed); clients closed by default.
-  const [closedDays, setClosedDays]   = useState<Set<string>>(new Set());
+  // Accordion: all days start collapsed; opening one closes any other. Clients closed by default.
+  const [openDay, setOpenDay]         = useState<string | null>(null);
   const [openClients, setOpenClients] = useState<Set<string>>(new Set());
-  const toggleDay    = (d: string) => setClosedDays(p => { const n = new Set(p); n.has(d) ? n.delete(d) : n.add(d); return n; });
+  const toggleDay    = (d: string) => setOpenDay(prev => (prev === d ? null : d));
   const toggleClient = (id: string) => setOpenClients(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   if (!groups.length) {
@@ -1337,7 +1337,7 @@ const ByDayView: React.FC<{
   return (
     <div className="divide-y divide-border/40">
       {groups.map(({ day, total, clients: dayClients }) => {
-        const dayOpen = !closedDays.has(day.date);
+        const dayOpen = openDay === day.date;
         const span = dailySpan[day.date];
         return (
           <div key={day.date}>

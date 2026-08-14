@@ -433,6 +433,18 @@ export default function DailyReview() {
     runAIClassification();
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
+  // Lightweight refresh for per-block actions (accept a suggestion, move a
+  // block, split, etc.). These only need the stored state re-read — the Needs
+  // You lanes are built entirely from the today-time payload. It deliberately
+  // does NOT call runAIClassification(): that endpoint re-runs the full 5-stage
+  // OpenAI pipeline over the whole day (15s timeout), which cost 3-5s per tap
+  // and whose result the lanes never consume. The full AI pass still runs on
+  // initial load and via the manual Refresh button.
+  const handleRowRefresh = useCallback(() => {
+    loadTimeSummary();
+    loadUncategorizedCount();
+  }, [loadTimeSummary, loadUncategorizedCount]);
+
   const handleConfirmAll = async () => {
     setConfirmingAll(true);
     try {
@@ -713,7 +725,7 @@ export default function DailyReview() {
             availableCategories={availableCategories}
             busy={busy}
             autoFiled={autoFiled}
-            onRefresh={handleRefresh}
+            onRefresh={handleRowRefresh}
             showToast={showToast}
             onIgnoreMismatch={ignoreMismatch}
           />

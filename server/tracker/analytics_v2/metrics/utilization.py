@@ -131,6 +131,9 @@ class BillableMixMetric(Metric):
         a 'your normal' threshold band, so the tile flags deviation from the
         firm's own history — not a generic 75% target. Falls back to the static
         threshold until there's enough history to learn a baseline."""
+        # North-star line: the firm's target billable-mix (aspiration), so the
+        # baseline can't quietly normalize a below-target "normal".
+        mv.benchmark = to_float(getattr(org, "target_utilization", 75)) or 75.0
         try:
             from ..baselines import weekly_mix_series, band
             series = weekly_mix_series(org, scope, time.end)

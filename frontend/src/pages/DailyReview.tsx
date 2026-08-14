@@ -20,7 +20,6 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
-import ClassicSummary from "@/components/ClassicSummary";
 import { deriveLanes, type MismatchBlock, type SplitCandidate } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -36,6 +35,64 @@ const formatHours = (hours: number): string => {
   if (h === 0) return `${m}m`;
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
+};
+
+// ─── Range (Day / Week / Month) ───────────────────────────────────────────────
+// The Lightning view can aggregate a single day, the Mon–Sun week, or the
+// calendar month around an "anchor" date. All date math is done in local time
+// (never toISOString(), which would shift the day in +UTC zones).
+type ViewRange = "day" | "week" | "month";
+
+const isoLocal = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+// Monday-start week to match the rest of the app (WeeklyTimesheet.getMonday).
+const mondayOf = (d: Date): Date => {
+  const x = new Date(d);
+  const day = x.getDay(); // 0=Sun … 6=Sat
+  x.setDate(x.getDate() - day + (day === 0 ? -6 : 1));
+  return x;
+};
+
+// Inclusive [start, end] ISO bounds for the range around `anchorIso`.
+const rangeBounds = (anchorIso: string, range: ViewRange): { start: string; end: string } => {
+  const d = new Date(anchorIso + "T00:00:00");
+  if (range === "week") {
+    const start = mondayOf(d);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { start: isoLocal(start), end: isoLocal(end) };
+  }
+  if (range === "month") {
+    const start = new Date(d.getFullYear(), d.getMonth(), 1);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    return { start: isoLocal(start), end: isoLocal(end) };
+  }
+  return { start: anchorIso, end: anchorIso };
+};
+
+// Human label for the current range (e.g. "Fri, Aug 14", "Aug 10 – 16, 2026",
+// "August 2026").
+const rangeLabel = (anchorIso: string, range: ViewRange): string => {
+  const { start, end } = rangeBounds(anchorIso, range);
+  const s = new Date(start + "T00:00:00");
+  const e = new Date(end + "T00:00:00");
+  if (range === "day") {
+    return s.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  }
+  if (range === "month") {
+    return s.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+  const sameMonth = s.getMonth() === e.getMonth();
+  const left = s.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const right = sameMonth
+    ? e.toLocaleDateString(undefined, { day: "numeric", year: "numeric" })
+    : e.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return `${left} – ${right}`;
 };
 
 type Category = {
@@ -186,17 +243,15 @@ export default function DailyReview() {
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
   const [splitCandidates, setSplitCandidates] = useState<SplitCandidate[]>([]);
-  // Classic view still consumes these; kept alongside the Lightning-view slices.
-  const [flaggedBlocks, setFlaggedBlocks] = useState<FlaggedBlock[]>([]);
-  const [mismatchFlags, setMismatchFlags] = useState<Record<string, string>>({});
-  // Which view: Classic (old client-card summary) or Lightning (confidence lanes).
-  const [view, setView] = useState<"classic" | "lightning">(() => {
-    try { return (localStorage.getItem("dr_view") as "classic" | "lightning") || "lightning"; }
-    catch { return "lightning"; }
+  // Lightning view range: single day, Mon–Sun week, or calendar month. `date`
+  // is the anchor; the range is derived around it. Persisted per browser.
+  const [range, setRange] = useState<ViewRange>(() => {
+    try { return (localStorage.getItem("dr_range") as ViewRange) || "day"; }
+    catch { return "day"; }
   });
-  const chooseView = (v: "classic" | "lightning") => {
-    setView(v);
-    try { localStorage.setItem("dr_view", v); } catch { /* noop */ }
+  const chooseRange = (r: ViewRange) => {
+    setRange(r);
+    try { localStorage.setItem("dr_range", r); } catch { /* noop */ }
   };
   // Mismatch flags the user dismissed as false positives ("Keep here"), per browser.
   const [ignoredMismatch, setIgnoredMismatch] = useState<Set<string>>(() => {
@@ -255,8 +310,10 @@ export default function DailyReview() {
     setBusy(true);
     setErr(null);
     try {
+      const { start, end } = rangeBounds(date, range);
+      const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
       const json = await safeFetchJson<TodayTimeResponse>(
-        `${API_BASE}/today-time/?date=${date}`
+        `${API_BASE}/today-time/?${qs}`
       );
       setTimeSummary(json.clients || []);
       setBillableHours(json.billable_hours || 0);
@@ -265,37 +322,13 @@ export default function DailyReview() {
       setProposedInline(json.proposed_inline || []);
       setMismatchBlocks(json.mismatch_blocks || []);
       setSplitCandidates(json.split_candidates || []);
-      setMismatchFlags(json.mismatch_flags || {});
-      const allFlagged = (json.flagged_blocks || []).map((b) => ({ ...b, type: b.type || "mobile_review" as const }));
-      setFlaggedBlocks(allFlagged);
     } catch (err: any) {
       setErr(err?.message || "Failed to load");
       setTimeSummary([]);
     } finally {
       setBusy(false);
     }
-  }, [date]);
-
-  // Classic-view handlers (mobile-review dismiss + AI/mail/calendar disagreement).
-  const handleDismissReview = async (blockId: number) => {
-    try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/dismiss-review/`, { method: "POST" });
-      setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
-      showToast("Entry confirmed", "success");
-    } catch { showToast("Failed to dismiss", "error"); }
-  };
-  const handleResolveDisagreement = async (blockId: number, action: "accept" | "dismiss") => {
-    try {
-      await safeFetchJson(`${API_BASE}/blocks/${blockId}/resolve-disagreement/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      setFlaggedBlocks((prev) => prev.filter((f) => f.block_id !== blockId));
-      showToast(action === "accept" ? "Switched to suggested client" : "Kept original client", "success");
-      loadTimeSummary();
-    } catch (err: any) { showToast(err?.message || "Failed to resolve", "error"); }
-  };
+  }, [date, range]);
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -403,7 +436,11 @@ export default function DailyReview() {
       }>(`${API_BASE}/blocks/confirm-all/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date }),
+        body: JSON.stringify(
+          range === "day"
+            ? { date }
+            : rangeBounds(date, range) // { start, end } for week / month
+        ),
       });
       const wc = res.confirmed_with_client;
       const nc = res.confirmed_no_client;
@@ -456,11 +493,23 @@ export default function DailyReview() {
         ? Math.min(99, Math.round((sortedMin / totalMin) * 100))
         : 0;
 
-  const stepDate = (days: number) => {
+  // Step the anchor by one range unit: ±1 day, ±1 week, or ±1 month.
+  const stepRange = (dir: -1 | 1) => {
     const d = new Date(date + "T00:00:00");
-    d.setDate(d.getDate() + days);
-    setDate(d.toISOString().split("T")[0]);
+    if (range === "week") {
+      d.setDate(d.getDate() + dir * 7);
+    } else if (range === "month") {
+      d.setMonth(d.getMonth() + dir);
+    } else {
+      d.setDate(d.getDate() + dir);
+    }
+    setDate(isoLocal(d));
   };
+
+  // Disable "next" once the current range already reaches today (never let the
+  // user page into a fully-future range). end === date for the day view, so this
+  // matches the old `date >= today` behavior.
+  const atLatestRange = rangeBounds(date, range).end >= todayIso();
 
   return (
     <div className="min-h-full bg-background">
@@ -505,8 +554,8 @@ export default function DailyReview() {
             {/* Date nav: ‹ date › */}
             <div className="flex items-center gap-0.5 bg-muted/70 border border-border/50 rounded-lg overflow-hidden">
               <button
-                onClick={() => stepDate(-1)}
-                title="Previous day"
+                onClick={() => stepRange(-1)}
+                title={range === "month" ? "Previous month" : range === "week" ? "Previous week" : "Previous day"}
                 className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -522,9 +571,9 @@ export default function DailyReview() {
                 )}
               />
               <button
-                onClick={() => stepDate(1)}
-                title="Next day"
-                disabled={date >= todayIso()}
+                onClick={() => stepRange(1)}
+                title={range === "month" ? "Next month" : range === "week" ? "Next week" : "Next day"}
+                disabled={atLatestRange}
                 className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -599,82 +648,65 @@ export default function DailyReview() {
           </div>
         )}
 */}
-        {/* ── View toggle: Classic (old client cards) vs Lightning (lanes) ── */}
+        {/* ── Range selector: Day / Week / Month (all Lightning view) ── */}
         <div className="mb-5 flex items-center">
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm font-medium">
-            <button onClick={() => chooseView("classic")}
-              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
-                view === "classic" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-              Classic View
-            </button>
-            <button onClick={() => chooseView("lightning")}
-              className={cn("rounded-md px-3.5 py-1.5 transition-colors",
-                view === "lightning" ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-              ⚡ Lightning View
-            </button>
+            {(["day", "week", "month"] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => chooseRange(r)}
+                className={cn("rounded-md px-3.5 py-1.5 capitalize transition-colors",
+                  range === r ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}
+              >
+                {r}
+              </button>
+            ))}
           </div>
         </div>
 
-        {view === "lightning" ? (
-          // Faint teal-tinted "canvas" — cool + trustworthy; the white lane cards float on it.
-          <div className="rounded-2xl bg-[#eef4f3] p-5 sm:p-6">
-            {/* ── Progress hero: how much of the day is sorted vs still needs you ── */}
-            <div className="mb-7 w-full max-w-2xl" style={{ fontFamily: '"Inter", sans-serif' }}>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                {new Date(date + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
-              </div>
-              {totalMin <= 0 ? (
-                <h1 className="mt-2.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">Nothing tracked yet.</h1>
-              ) : (
-                <div className="mt-3">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">
-                      {needsYouCount > 0 ? (
-                        <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you</>
-                      ) : "You’re all caught up"}
-                    </div>
-                    <div className="shrink-0 text-[12.5px] tabular-nums text-slate-500">{sortedPct}% sorted</div>
-                  </div>
-                  <div className="mt-2.5 flex h-3 overflow-hidden rounded-full bg-slate-200 shadow-[inset_0_1px_2px_rgba(16,27,46,0.09)]">
-                    <div className="bg-gradient-to-r from-primary to-accent transition-all" style={{ width: `${sortedPct}%` }} />
-                    <div className="bg-amber-500 transition-all" style={{ width: `${100 - sortedPct}%` }} />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-slate-500">
-                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-primary" /><span className="tabular-nums">{formatHours(sortedMin / 60)}</span> sorted</span>
-                    {needsMin > 0 && (
-                      <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
-                    )}
-                  </div>
-                </div>
-              )}
+        {/* Faint teal-tinted "canvas" — cool + trustworthy; the white lane cards float on it. */}
+        <div className="rounded-2xl bg-[#eef4f3] p-5 sm:p-6">
+          {/* ── Progress hero: how much of the range is sorted vs still needs you ── */}
+          <div className="mb-7 w-full max-w-2xl" style={{ fontFamily: '"Inter", sans-serif' }}>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              {rangeLabel(date, range)}
             </div>
-            <CompactSummary
-              lanes={lanes}
-              availableClients={availableClients}
-              availableCategories={availableCategories}
-              busy={busy}
-              autoFiled={autoFiled}
-              onRefresh={handleRefresh}
-              showToast={showToast}
-              onIgnoreMismatch={ignoreMismatch}
-            />
+            {totalMin <= 0 ? (
+              <h1 className="mt-2.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">Nothing tracked yet.</h1>
+            ) : (
+              <div className="mt-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <div className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">
+                    {needsYouCount > 0 ? (
+                      <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you{range === "week" ? " this week" : range === "month" ? " this month" : ""}</>
+                    ) : "You’re all caught up"}
+                  </div>
+                  <div className="shrink-0 text-[12.5px] tabular-nums text-slate-500">{sortedPct}% sorted</div>
+                </div>
+                <div className="mt-2.5 flex h-3 overflow-hidden rounded-full bg-slate-200 shadow-[inset_0_1px_2px_rgba(16,27,46,0.09)]">
+                  <div className="bg-gradient-to-r from-primary to-accent transition-all" style={{ width: `${sortedPct}%` }} />
+                  <div className="bg-amber-500 transition-all" style={{ width: `${100 - sortedPct}%` }} />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-slate-500">
+                  <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-primary" /><span className="tabular-nums">{formatHours(sortedMin / 60)}</span> sorted</span>
+                  {needsMin > 0 && (
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        ) : (
-          <ClassicSummary
-            timeSummary={timeSummary}
+          <CompactSummary
+            lanes={lanes}
             availableClients={availableClients}
             availableCategories={availableCategories}
-            flaggedBlocks={flaggedBlocks}
-            proposedInline={proposedInline}
             busy={busy}
-            onDismissReview={handleDismissReview}
-            onResolveDisagreement={handleResolveDisagreement}
+            autoFiled={autoFiled}
             onRefresh={handleRefresh}
             showToast={showToast}
-            mismatchFlags={mismatchFlags}
-            date={date}
+            onIgnoreMismatch={ignoreMismatch}
           />
-        )}
+        </div>
       </div>
 
       {showManualEntry && (

@@ -2760,10 +2760,20 @@ def confirm_all_blocks(request):
     user = request.user
     org = get_org_or_default(request)
 
-    date_str = request.data.get("date") or request.query_params.get("date")
-    target_date = parse_date(date_str) if date_str else timezone.localdate()
-    day_start = timezone.make_aware(dt.combine(target_date, dt_time.min))
-    day_end = day_start + timedelta(days=1)
+    # Range-aware (Day / Week / Month views). When `start` & `end` are given,
+    # confirm every pending block across [start, end] inclusive; otherwise fall
+    # back to the single `date` (or today).
+    start_str = request.data.get("start") or request.query_params.get("start")
+    end_str   = request.data.get("end")   or request.query_params.get("end")
+    date_str  = request.data.get("date")  or request.query_params.get("date")
+    if start_str and end_str:
+        start_date = parse_date(start_str)
+        end_date   = parse_date(end_str)
+    else:
+        start_date = parse_date(date_str) if date_str else timezone.localdate()
+        end_date   = start_date
+    day_start = timezone.make_aware(dt.combine(start_date, dt_time.min))
+    day_end = timezone.make_aware(dt.combine(end_date, dt_time.min)) + timedelta(days=1)
 
     # Uncommitted, non-suppressed blocks for the day — mirrors the report's
     # committed_only=False queryset (is_categorized=False, excludes suppressed).
@@ -4306,11 +4316,23 @@ def today_time(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
 
-    date_str = request.GET.get('date')
-    if date_str:
-        target_date = parse_date(date_str)
+    # ── Date range (Day / Week / Month views) ──────────────────────────────
+    # When `start` & `end` are both provided, the summary aggregates every day
+    # in [start, end] inclusive (Week / Month views). Otherwise it falls back to
+    # the single `date` (or today) — the classic one-day view. All the billing
+    # helpers already accept a UTC window, and the per-day block lists below use
+    # `day__gte`/`day__lte` so a range widens them without any other change.
+    date_str  = request.GET.get('date')
+    start_str = request.GET.get('start')
+    end_str   = request.GET.get('end')
+    if start_str and end_str:
+        start_date = parse_date(start_str)
+        end_date   = parse_date(end_str)
     else:
-        target_date = timezone.localdate()
+        start_date = parse_date(date_str) if date_str else timezone.localdate()
+        end_date   = start_date
+    # `target_date` names the range start — used for the response `date` label.
+    target_date = start_date
 
     # Plan B: get the user's org once for TaskType code lookups in category loop.
     user_org = None
@@ -4323,10 +4345,14 @@ def today_time(request):
 
     tz = timezone.get_current_timezone()
     start_local = timezone.make_aware(
-        datetime.combine(target_date, datetime.min.time()),
+        datetime.combine(start_date, datetime.min.time()),
         tz
     )
-    end_local = start_local + timedelta(days=1)
+    # end_local is the exclusive upper bound = midnight AFTER the last day.
+    end_local = timezone.make_aware(
+        datetime.combine(end_date, datetime.min.time()),
+        tz
+    ) + timedelta(days=1)
     start_utc = start_local.astimezone(dt_timezone.utc)
     end_utc = end_local.astimezone(dt_timezone.utc)
 
@@ -4396,7 +4422,8 @@ def today_time(request):
     # =========================================================================
     ai_disagreement_blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        day__gte=start_date,
+        day__lte=end_date,
         ai_disagrees_with_agent=True,
         ai_disagreement_resolved_at__isnull=True,
         deleted_at__isnull=True,
@@ -4421,7 +4448,8 @@ def today_time(request):
     # =========================================================================
     mail_disagreement_blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        day__gte=start_date,
+        day__lte=end_date,
         mail_disagrees_with_agent=True,
         mail_disagreement_resolved_at__isnull=True,
         deleted_at__isnull=True,
@@ -4453,7 +4481,8 @@ def today_time(request):
     # banner copy for 'classifier' vs 'manual' disagreement sources.
     calendar_disagreement_blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        day__gte=start_date,
+        day__lte=end_date,
         calendar_disagrees_with_agent=True,
         calendar_disagreement_resolved_at__isnull=True,
         deleted_at__isnull=True,
@@ -4493,7 +4522,8 @@ def today_time(request):
     # =========================================================================
     needs_review_blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        day__gte=start_date,
+        day__lte=end_date,
         needs_review=True,
         deleted_at__isnull=True,
     ).select_related('client')
@@ -4513,7 +4543,8 @@ def today_time(request):
     # =========================================================================
     second_pass_blocks = Block.objects.filter(
         user=user,
-        day=target_date,
+        day__gte=start_date,
+        day__lte=end_date,
         classification_state='proposed',
         deleted_at__isnull=True,
     ).exclude(
@@ -4555,7 +4586,7 @@ def today_time(request):
     from tracker.views_block_evidence import why_summary
     proposed_inline = []
     _pending = Block.objects.filter(
-        user=user, day=target_date,
+        user=user, day__gte=start_date, day__lte=end_date,
         is_categorized=False, deleted_at__isnull=True,
     ).exclude(classification_state='suppressed').select_related('proposed_client')
     for _b in _pending:

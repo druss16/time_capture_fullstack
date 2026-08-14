@@ -41,7 +41,7 @@ const formatHours = (hours: number): string => {
 // The Lightning view can aggregate a single day, the Mon–Sun week, or the
 // calendar month around an "anchor" date. All date math is done in local time
 // (never toISOString(), which would shift the day in +UTC zones).
-type ViewRange = "day" | "week" | "month";
+type ViewRange = "day" | "week" | "month" | "quarter";
 
 const isoLocal = (d: Date): string => {
   const y = d.getFullYear();
@@ -72,6 +72,12 @@ const rangeBounds = (anchorIso: string, range: ViewRange): { start: string; end:
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     return { start: isoLocal(start), end: isoLocal(end) };
   }
+  if (range === "quarter") {
+    const qStartMonth = Math.floor(d.getMonth() / 3) * 3; // 0,3,6,9
+    const start = new Date(d.getFullYear(), qStartMonth, 1);
+    const end = new Date(d.getFullYear(), qStartMonth + 3, 0);
+    return { start: isoLocal(start), end: isoLocal(end) };
+  }
   return { start: anchorIso, end: anchorIso };
 };
 
@@ -86,6 +92,9 @@ const rangeLabel = (anchorIso: string, range: ViewRange): string => {
   }
   if (range === "month") {
     return s.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+  if (range === "quarter") {
+    return `Q${Math.floor(s.getMonth() / 3) + 1} ${s.getFullYear()}`;
   }
   const sameMonth = s.getMonth() === e.getMonth();
   const left = s.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -500,6 +509,8 @@ export default function DailyReview() {
       d.setDate(d.getDate() + dir * 7);
     } else if (range === "month") {
       d.setMonth(d.getMonth() + dir);
+    } else if (range === "quarter") {
+      d.setMonth(d.getMonth() + dir * 3);
     } else {
       d.setDate(d.getDate() + dir);
     }
@@ -555,7 +566,7 @@ export default function DailyReview() {
             <div className="flex items-center gap-0.5 bg-muted/70 border border-border/50 rounded-lg overflow-hidden">
               <button
                 onClick={() => stepRange(-1)}
-                title={range === "month" ? "Previous month" : range === "week" ? "Previous week" : "Previous day"}
+                title={range === "quarter" ? "Previous quarter" : range === "month" ? "Previous month" : range === "week" ? "Previous week" : "Previous day"}
                 className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -572,7 +583,7 @@ export default function DailyReview() {
               />
               <button
                 onClick={() => stepRange(1)}
-                title={range === "month" ? "Next month" : range === "week" ? "Next week" : "Next day"}
+                title={range === "quarter" ? "Next quarter" : range === "month" ? "Next month" : range === "week" ? "Next week" : "Next day"}
                 disabled={atLatestRange}
                 className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all disabled:opacity-30 disabled:cursor-not-allowed"
               >
@@ -651,7 +662,7 @@ export default function DailyReview() {
         {/* ── Range selector: Day / Week / Month (all Lightning view) ── */}
         <div className="mb-5 flex items-center">
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm font-medium">
-            {(["day", "week", "month"] as const).map((r) => (
+            {(["day", "week", "month", "quarter"] as const).map((r) => (
               <button
                 key={r}
                 onClick={() => chooseRange(r)}
@@ -678,7 +689,7 @@ export default function DailyReview() {
                 <div className="flex items-baseline justify-between gap-3">
                   <div className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">
                     {needsYouCount > 0 ? (
-                      <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you{range === "week" ? " this week" : range === "month" ? " this month" : ""}</>
+                      <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you{range === "week" ? " this week" : range === "month" ? " this month" : range === "quarter" ? " this quarter" : ""}</>
                     ) : "You’re all caught up"}
                   </div>
                   <div className="shrink-0 text-[12.5px] tabular-nums text-slate-500">{sortedPct}% sorted</div>

@@ -122,7 +122,11 @@ class MetricValue:
     
     # Trend for sparkline rendering (~7-12 buckets)
     sparkline: Optional[list[float]] = None
-    
+    # Aspiration/north-star line drawn on the sparkline (e.g. the firm's target),
+    # so a firm-relative baseline doesn't hide "your normal is below where you
+    # want to be."
+    benchmark: Optional[float] = None
+
     # Threshold visualization
     threshold_low: Optional[float] = None
     threshold_high: Optional[float] = None

@@ -54,6 +54,7 @@ export interface MetricValue {
   data_quality_note?: string | null;
 
   sparkline?: number[] | null;
+  benchmark?: number | null;
 
   threshold_low?: number | null;
   threshold_high?: number | null;

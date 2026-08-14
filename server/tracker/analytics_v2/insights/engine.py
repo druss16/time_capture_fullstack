@@ -127,13 +127,18 @@ def _generate_threshold_insights(
             ut = get_metric("billable_mix").safe_compute(org, scope, time)
             if ut.state == MetricState.READY and ut.value is not None:
                 from ..baselines import weekly_mix_series, band
-                b = band([v for _, v in weekly_mix_series(org, scope, time.end)])
+                vals = [v for _, v in weekly_mix_series(org, scope, time.end)]
+                b = band(vals)
                 if b:
                     # Judge against the firm's own history, not a textbook target.
                     if ut.value < b["p25"]:
                         cards.append(_low_utilization_card(ut.value, b))
                     elif ut.value > b["max"]:
                         cards.append(_high_utilization_card(ut.value, b))
+                    # Slow drift the weekly band can't see (frog-boil guard).
+                    drift = _utilization_drift(vals)
+                    if drift:
+                        cards.append(_utilization_drift_card(*drift))
                 else:
                     # Not enough history to learn a baseline — generic fallback.
                     if ut.value < 60:
@@ -209,6 +214,39 @@ def _low_realization_card(value: float) -> InsightCardPayload:
         evidence=[{"label": "Dollar realization", "value": f"{value:.1f}%"}],
         source="threshold",
         drilldown={"scope": {"type": "firm", "ids": []}, "lens": "realization"},
+    )
+
+
+def _utilization_drift(vals: list) -> tuple | None:
+    """Return (recent_avg, earlier_avg) when the last ~4 weeks are meaningfully
+    below the prior 4 — a slow decline each weekly band reads as 'normal'."""
+    complete = vals[:-1]  # drop current partial week
+    if len(complete) < 8:
+        return None
+    import statistics as st
+    recent = st.mean(complete[-4:])
+    earlier = st.mean(complete[-8:-4])
+    if earlier - recent >= 6.0:
+        return round(recent, 1), round(earlier, 1)
+    return None
+
+
+def _utilization_drift_card(recent: float, earlier: float) -> InsightCardPayload:
+    return InsightCardPayload(
+        id="baseline_utilization_drift",
+        severity="watch",
+        headline=f"Utilization trending down ({earlier:.0f}% → {recent:.0f}%)",
+        body=(
+            f"Your last ~4 weeks averaged {recent:.0f}%, down from ~{earlier:.0f}% the "
+            f"month before. Each week still looks 'normal,' but the trend is slipping — "
+            f"worth a look before it becomes the new normal."
+        ),
+        evidence=[
+            {"label": "Last 4 wks", "value": f"{recent:.0f}%"},
+            {"label": "Prior 4 wks", "value": f"{earlier:.0f}%"},
+        ],
+        source="threshold",
+        drilldown={"scope": {"type": "firm", "ids": []}, "lens": "utilization"},
     )
 
 

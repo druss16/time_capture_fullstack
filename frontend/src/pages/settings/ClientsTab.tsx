@@ -440,13 +440,17 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
+    // Flush any alias typed but not yet committed with Enter/Add, so it isn't silently dropped on save.
+    const pending = aliasInput.trim();
+    const aliases = pending && !form.aliases.includes(pending) ? [...form.aliases, pending] : form.aliases;
+    const payload = { ...form, aliases };
     setSaving(true);
     try {
       if (editingId) {
-        await safeFetchJson(`${API_BASE}/settings/clients/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+        await safeFetchJson(`${API_BASE}/settings/clients/${editingId}/`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         onSuccess('Client updated');
       } else {
-        await safeFetchJson(`${API_BASE}/settings/clients/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+        await safeFetchJson(`${API_BASE}/settings/clients/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         onSuccess('Client added');
       }
       resetForm(); onRefresh();

@@ -512,13 +512,12 @@ export default function CompactSummary({
 
           {certainOpen && (
             <div className="border-t border-border/70 bg-card px-3 pb-3 pt-3">
-              {/* Width cap, not decoration. On a wide monitor the row left
-                  ~1400px of dead space between an activity and its duration,
-                  which is what made a right-hand column feel disconnected from
-                  the work. ~980px fits the longest title the backend emits
-                  (MAX_CONTEXT) at this size, so the number lands just past
-                  where the text ends and the column stays scannable. */}
-              <div className="max-w-[980px]">
+              {/* Full width, matching the lane header and Needs You. A width cap
+                  was tried here to shorten the gap between an activity and its
+                  duration; it read as the lane failing to fill its card. Rows
+                  are size-sorted instead, so the column is scannable without
+                  needing the number to sit close to the text. */}
+              <div>
                 {/* Filter box — 17+ rows is past scanning range. */}
                 <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
                   <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

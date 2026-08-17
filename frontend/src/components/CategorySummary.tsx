@@ -36,11 +36,19 @@ const API_BASE = RAW_BASE.endsWith("/api")
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/** Structured twin of a `sample_activities` line — same order, same top-10
+ *  slice, but with the activity's REAL minutes instead of the lossy "(1.5h)"
+ *  tag baked into the display string. */
+export type Activity = { ids: number[]; title: string; minutes: number };
+
 export type Category = {
   name: string;
   hours: number;
   block_count: number;
   sample_activities: string[];
+  /** Absent on payloads from a backend older than this field — parse
+   *  sample_activities instead. */
+  activities?: Activity[];
   needs_review?: boolean;
   task_type_code?: string | null;
   task_type_name?: string | null;

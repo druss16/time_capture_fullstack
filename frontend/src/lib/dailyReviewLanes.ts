@@ -240,23 +240,35 @@ export function deriveLanes(
     const catMinutes = new Map<string, number>();
 
     for (const cat of client.categories) {
-      // Fallback only. today-time caps sample_activities at the top 10 per
-      // category, so spreading the category total evenly across the survivors
-      // (what this used to do for every row) both invents per-line numbers and
-      // smears the dropped lines' time into the ones on screen. Each sample
-      // carries its OWN real duration as a trailing "(Nm)" tag — use that, and
-      // fall back to the even split only for a line that somehow lacks one.
+      // Each row shows its OWN real duration, straight off `cat.activities`.
+      //
+      // Two worse sources this replaced, in order: (1) categoryTotal / lineCount,
+      // an even split that invented every number on screen and smeared the time
+      // of activities past today-time's top-10 cap into the survivors; (2) the
+      // "(Nm)" tag parsed back out of the display string, which is right for
+      // sub-hour rows but unparseable for the "1h" / "1.5h" form the backend
+      // emits at 60m+ — those silently fell back to the even split, and 1.5h
+      // can't express 92m anyway.
+      //
+      // The tag parse survives ONLY as the pre-`activities` backend fallback:
+      // frontend and backend deploy separately, so a new bundle can briefly talk
+      // to an old API. It now understands the hour forms too.
       const perLine = cat.sample_activities.length
         ? (cat.hours * 60) / cat.sample_activities.length
         : 0;
-      for (const a of cat.sample_activities) {
-        const p = parse(a);
+      const lines: { ids: number[]; title: string; minutes: number }[] =
+        cat.activities?.length
+          ? cat.activities.map((a) => ({ ids: a.ids, title: a.title, minutes: a.minutes }))
+          : cat.sample_activities.map((a) => {
+              const p = parse(a);
+              const tagged = parseDurTag(p.title);
+              return { ids: p.blockIds, title: p.title, minutes: tagged > 0 ? tagged : Math.round(perLine) };
+            });
+      for (const line of lines) {
         // A line whose block is flagged (mismatch or split) is shown in Needs-you.
-        if (p.blockIds.some((id) => pulledIds.has(id))) continue;
-        const tagged = parseDurTag(p.title);
-        const minutes = tagged > 0 ? tagged : Math.round(perLine);
-        rows.push({ ids: p.blockIds, title: p.title, category: cat.name, minutes });
-        catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + minutes);
+        if (line.ids.some((id) => pulledIds.has(id))) continue;
+        rows.push({ ids: line.ids, title: line.title, category: cat.name, minutes: line.minutes });
+        catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + line.minutes);
       }
     }
 

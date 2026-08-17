@@ -38,6 +38,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+# How many activities per client-category the cards carry, largest first.
+# Everything past this is real time that still counts in the client's total but
+# gets no line of its own — Daily Review shows the difference as "+ other short
+# activities", so at 10 a busy client could hide an hour behind one grey row.
+# The ceiling exists because these cards also serve the Week and Month ranges,
+# where distinct activities per category run into the hundreds and an uncapped
+# list would be the whole payload.
+_ACTIVITY_SLICE = 25
+
 
 def committed_block_qs(org, start_utc, end_utc, *, user_id=None, can_see_all=True):
     """The confirmed-time block queryset for a window — the exact set Reports and
@@ -180,7 +189,7 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
             activities = []
             for clean_title, info in sorted(
                 cd["by_activity"].items(), key=lambda x: -x[1]["minutes"]
-            )[:10]:
+            )[:_ACTIVITY_SLICE]:
                 time_str = format_duration(info["minutes"])
                 ids = info.get("ids") or ([info["id"]] if info.get("id") else [])
                 seen = set()

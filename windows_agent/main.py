@@ -569,6 +569,13 @@ def _get_cached_client():
 _show_client_widget = False
 
 
+def _set_show_client_widget(val):
+    """Set the module-level hands-off gate (used by _apply_client_switch to block
+    manual switches). Kept as a helper so callers don't need `global` statements."""
+    global _show_client_widget
+    _show_client_widget = bool(val)
+
+
 def _apply_client_switch(client_id: int, client_name: str, source: str = "unknown"):
     """
     Single source of truth for all client switches.
@@ -2701,6 +2708,19 @@ def run_agent():
                 if sync.clients and hasattr(gui_menu_bar, 'refresh_client_menu'):
                     gui_menu_bar.refresh_client_menu(sync.clients)
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
+                # Apply the vendor ticker flag now that the GUI exists. The initial
+                # sync (sync.start ~L2545) fires on_update BEFORE the GUI is ready,
+                # so without this the flag — which doesn't change afterward — would
+                # never be applied and the ticker would stay hidden even when on.
+                try:
+                    _osettings = getattr(sync, 'org_settings', {}) or {}
+                    _sw = bool(_osettings.get('show_client_widget', False))
+                    _set_show_client_widget(_sw)
+                    log(f"[TICKER] applying show_client_widget={_sw} at GUI-ready")
+                    if hasattr(gui_menu_bar, 'set_client_widget_enabled'):
+                        gui_menu_bar.set_client_widget_enabled(_sw)
+                except Exception as _e:
+                    log(f"[TICKER] GUI-ready apply failed: {_e}")
             
             # === QUICK SWITCHER (Alt+Ctrl+T) - FIXED ===
             # === QUICK SWITCHER (Alt+Ctrl+T) ===
@@ -2916,11 +2936,13 @@ def run_agent():
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
                     # Vendor ticker gate → hands-off unless enabled for this org.
-                    global _show_client_widget
-                    _show_client_widget = bool(sync.org_settings.get("show_client_widget", False))
+                    _sw = bool(sync.org_settings.get("show_client_widget", False))
+                    _set_show_client_widget(_sw)
                     try:
-                        if gui_menu_bar is not None:
-                            gui_menu_bar.set_client_widget_enabled(_show_client_widget)
+                        gmb = getattr(sync, 'gui_menu_bar', None) or gui_menu_bar
+                        log(f"[TICKER] sync update: show_client_widget={_sw} (gui={'ready' if gmb else 'not ready'})")
+                        if gmb is not None and hasattr(gmb, 'set_client_widget_enabled'):
+                            gmb.set_client_widget_enabled(_sw)
                     except Exception as _e:
                         log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher

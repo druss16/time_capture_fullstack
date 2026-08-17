@@ -20,7 +20,7 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
-import { deriveLanes, type MismatchBlock, type SplitCandidate } from "@/lib/dailyReviewLanes";
+import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
 
@@ -256,6 +256,10 @@ export default function DailyReview() {
   // drop it from the lanes so the user can keep confirming, WITHOUT waiting for
   // the (slow) today-time reload. Reconciled below once fresh data lands.
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
+  // Just-confirmed blocks, shown under their client in the Certain lane INSTANTLY
+  // (before the reload). Keyed by block id; reconciled away once the real payload
+  // carries the committed block.
+  const [optimisticConfirms, setOptimisticConfirms] = useState<Map<number, OptimisticConfirm>>(new Map());
   // Lightning view range: single day, Mon–Sun week, or calendar month. `date`
   // is the anchor; the range is derived around it. Persisted per browser.
   const [range, setRange] = useState<ViewRange>(() => {
@@ -442,22 +446,51 @@ export default function DailyReview() {
     runAIClassification();
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
-  // Optimistic row control for Needs You actions.
-  //   hideRows — remove rows the INSTANT they're acted on (before the save even
-  //     fires), so the user never waits and can keep confirming.
-  //   showRows — restore them if the save fails.
-  const hideRows = useCallback((ids: number[]) => {
-    if (!ids.length) return;
-    setHiddenIds((prev) => {
-      const next = new Set(prev);
-      ids.forEach((id) => next.add(id));
+  // Optimistic row control for Needs You actions. All of these are INSTANT and
+  // fire before the save, so the user never waits.
+  //   confirmRows — the block leaves Needs You AND appears under its client in
+  //     the Certain lane immediately. Caller passes only {blockId, clientId,
+  //     category}; the parent enriches client name / minutes / title from the
+  //     data it already holds (proposedInline / mismatch / split + client list).
+  //   hideRows — just remove from Needs You (e.g. Split, whose pieces only show
+  //     after the reload).
+  //   revertRows — undo either on save failure (restore the Needs You row, drop
+  //     the optimistic Certain row).
+  const confirmRows = useCallback((items: { blockId: number; clientId: number | null; category: string }[]) => {
+    if (!items.length) return;
+    const ids = items.map((it) => it.blockId);
+    setHiddenIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
+    setOptimisticConfirms((prev) => {
+      const next = new Map(prev);
+      for (const it of items) {
+        // Only PENDING blocks are safe to place optimistically — they aren't in a
+        // client card yet. A mismatch/committed block already sits under its old
+        // client, so we just hide its Needs You row and let the reload move it
+        // (placing it here too would double-count for a few seconds).
+        const p = proposedInline.find((x) => x.block_id === it.blockId);
+        if (!p) continue;
+        const clientName = it.clientId == null
+          ? "" : (availableClients.find((c) => c.id === it.clientId)?.name || "");
+        next.set(it.blockId, {
+          blockId: it.blockId, clientId: it.clientId, clientName,
+          category: it.category, minutes: p.minutes || 0, title: p.window_title || "(entry)",
+        });
+      }
       return next;
     });
-  }, []);
-  const showRows = useCallback((ids: number[]) => {
+  }, [proposedInline, availableClients]);
+
+  const hideRows = useCallback((ids: number[]) => {
     if (!ids.length) return;
-    setHiddenIds((prev) => {
-      const next = new Set(prev);
+    setHiddenIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
+  }, []);
+
+  const revertRows = useCallback((ids: number[]) => {
+    if (!ids.length) return;
+    setHiddenIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
+    setOptimisticConfirms((prev) => {
+      if (!prev.size) return prev;
+      const next = new Map(prev);
       ids.forEach((id) => next.delete(id));
       return next;
     });
@@ -517,21 +550,29 @@ export default function DailyReview() {
   // so it matches the backend global_hours and the Reports total.
   const totalHours = billableHours + nonBillableHours + needsReviewHours;
 
-  // Reconcile the optimistic-hide set whenever fresh today-time data lands: keep
-  // hiding only ids that are STILL unresolved server-side (a block just committed
-  // drops out of pending/mismatch/split, so we stop hiding it and it appears in
-  // the Certain lane). Race-safe across rapid confirms — an in-flight reload that
-  // predates a later confirm won't un-hide that later block.
+  // Reconcile the optimistic sets whenever fresh today-time data lands: keep an
+  // entry only while its block is STILL unresolved server-side (pending/mismatch/
+  // split). Once a block commits it drops out of that live set — so we stop
+  // hiding it AND drop its optimistic Certain row, because the real payload now
+  // carries it (today-time returns clients + proposed together, atomically).
+  // Race-safe across rapid confirms: an in-flight reload predating a later
+  // confirm still lists that later block as unresolved, so it stays optimistic.
   useEffect(() => {
+    const live = new Set<number>([
+      ...proposedInline.map((p) => p.block_id),
+      ...mismatchBlocks.map((m) => m.block_id),
+      ...splitCandidates.map((s) => s.block_id),
+    ]);
     setHiddenIds((prev) => {
       if (!prev.size) return prev;
-      const live = new Set<number>([
-        ...proposedInline.map((p) => p.block_id),
-        ...mismatchBlocks.map((m) => m.block_id),
-        ...splitCandidates.map((s) => s.block_id),
-      ]);
       const next = new Set<number>();
       prev.forEach((id) => { if (live.has(id)) next.add(id); });
+      return next.size === prev.size ? prev : next;
+    });
+    setOptimisticConfirms((prev) => {
+      if (!prev.size) return prev;
+      const next = new Map<number, OptimisticConfirm>();
+      prev.forEach((v, id) => { if (live.has(id)) next.set(id, v); });
       return next.size === prev.size ? prev : next;
     });
   }, [proposedInline, mismatchBlocks, splitCandidates]);
@@ -545,9 +586,11 @@ export default function DailyReview() {
         ? mismatchBlocks.filter((m) => !hiddenIds.has(m.block_id)) : mismatchBlocks;
       const visibleSplit = hiddenIds.size
         ? splitCandidates.filter((s) => !hiddenIds.has(s.block_id)) : splitCandidates;
-      return deriveLanes(timeSummary, visiblePending, visibleMismatch, ignoredMismatch, visibleSplit);
+      const base = deriveLanes(timeSummary, visiblePending, visibleMismatch, ignoredMismatch, visibleSplit);
+      return optimisticConfirms.size
+        ? mergeOptimisticConfirms(base, Array.from(optimisticConfirms.values())) : base;
     },
-    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, hiddenIds],
+    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, hiddenIds, optimisticConfirms],
   );
   const needsYouCount = lanes.needsYou.count;
   const autoFiled = lanes.certain.minutes > 0;
@@ -777,8 +820,9 @@ export default function DailyReview() {
             availableCategories={availableCategories}
             busy={busy}
             autoFiled={autoFiled}
+            onConfirmRows={confirmRows}
             onHideRows={hideRows}
-            onShowRows={showRows}
+            onRevertRows={revertRows}
             onRefresh={handleRowRefresh}
             showToast={showToast}
             onIgnoreMismatch={ignoreMismatch}

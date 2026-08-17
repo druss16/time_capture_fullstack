@@ -344,8 +344,13 @@ export default function CompactSummary({
                   <div onClick={() => toggleWhy(bid)}
                     className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 pr-1 text-muted-foreground hover:text-foreground">
                     <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform", rowOpen && "rotate-90")} />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r.title}</span>
-                    <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
+                    {/* Duration sits IN the line, right after the work it
+                        describes — not in a far-right column the eye has to
+                        travel to. shrink-0 keeps it readable when a long title
+                        ellipsises; the spacer eats the rest of the row. */}
+                    <span className="min-w-0 truncate font-mono text-[12px]">{r.title}</span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70">({fmtMin(r.minutes)})</span>
+                    <span className="flex-1" />
                   </div>
                   {rowOpen && (
                     <div className="mb-2 ml-5 mt-1 flex flex-col items-start gap-3 border-l-2 border-border/60 pl-3 font-sans">
@@ -462,8 +467,9 @@ export default function CompactSummary({
               const rest = Math.max(0, g.minutes - g.rows.reduce((s, r) => s + r.minutes, 0));
               return rest >= 1 ? (
                 <div className="flex items-center gap-2 py-0.5 pl-5 pr-1 font-mono text-[11px] text-muted-foreground/60">
-                  <span className="min-w-0 flex-1 truncate">+ other short activities</span>
-                  <span className="shrink-0 tabular-nums">{fmtMin(rest)}</span>
+                  <span className="min-w-0 truncate">+ other short activities</span>
+                  <span className="shrink-0 tabular-nums">({fmtMin(rest)})</span>
+                  <span className="flex-1" />
                 </div>
               ) : null;
             })()}

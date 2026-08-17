@@ -95,6 +95,14 @@ def clean_app_name(app_name: str) -> str:
 # =============================================================================
 # CONTEXT EXTRACTION - Extract meaningful info from window titles
 # =============================================================================
+# Ceiling on a display title. Every branch below used to cap at 50 (25 for the
+# QuickBooks screen), which cut real work descriptions mid-word — on Daily
+# Review those strings ARE the description of what was worked on, and the row
+# has the width for them. The UI ellipsises anything still too long, so this is
+# a guard against pathological titles, not a formatting choice.
+MAX_CONTEXT = 120
+
+
 def extract_context_from_title(window_title: str, app_name: str = '', url: str = '', client_name: str = '') -> str:
     """
     Extract the meaningful context from a window title.
@@ -136,16 +144,16 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
         if '$' in title:
             cmd = title.split('$')[-1].strip()
             if cmd:
-                return cmd[:50]
+                return cmd[:MAX_CONTEXT]
         if '\u2014' in title:
             parts = title.split('\u2014')
             if len(parts) >= 2:
-                return parts[1].strip()[:50]
+                return parts[1].strip()[:MAX_CONTEXT]
         # Strip user@host:path prefix
         if ':' in title and ('~' in title or '/' in title):
             path_part = title.split(':')[-1].strip()
-            return path_part[:50]
-        return title[:50]
+            return path_part[:MAX_CONTEXT]
+        return title[:MAX_CONTEXT]
     
     # ========================================
     # VS CODE / Sublime - Extract file + project
@@ -161,7 +169,7 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
             if project and project.lower() not in filename.lower():
                 return f"{filename} ({project})"
             return filename
-        return title[:50]
+        return title[:MAX_CONTEXT]
     
     # ========================================
     # GITHUB - Extract repo + context
@@ -175,7 +183,7 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
                 if context:
                     return f"{repo} - {context}"
                 return repo
-        return title.replace('GitHub', '').strip(' -\u2013')[:50]
+        return title.replace('GitHub', '').strip(' -\u2013')[:MAX_CONTEXT]
     
     # ========================================
     # LOCALHOST/DEV - Extract port + context
@@ -188,7 +196,7 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
             if before and len(before) < 30:
                 return f"{port} ({before})"
             return port
-        return title[:50]
+        return title[:MAX_CONTEXT]
     
     # ========================================
     # EMAIL - Clean up
@@ -209,7 +217,7 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
         
         if not title or title.lower() in ('inbox', 'mail', 'email'):
             return 'Inbox'
-        return title[:50]
+        return title[:MAX_CONTEXT]
     
     # ========================================
     # TAX SOFTWARE - Extract app + client from title
@@ -220,8 +228,8 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
             parts = [p.strip() for p in title.split(' - ')]
             # Use last meaningful part (often the open return/client)
             if len(parts) > 1:
-                return parts[-1][:40]
-            return title[:50]
+                return parts[-1][:MAX_CONTEXT]
+            return title[:MAX_CONTEXT]
         
 
     # ========================================
@@ -246,11 +254,14 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
             company = qb_split[0].strip()
         
         if company and screen:
-            return f"{company[:40]} - {screen[:25]}"
+            # Was 40 + 25, which sliced the screen mid-word on any real report
+            # name ("152 · Charles Schwab Inve"). QuickBooks screens ARE the work
+            # description on this screen — give them room.
+            return f"{company[:60]} - {screen[:MAX_CONTEXT - 63]}"
         if company:
-            return company[:50]
+            return company[:MAX_CONTEXT]
         if screen:
-            return screen[:50]
+            return screen[:MAX_CONTEXT]
         # No usable info from title — fall through to generic at bottom
     
     # ========================================
@@ -259,11 +270,19 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
     if any(x in app_lower for x in ['zoom', 'teams', 'facetime', 'meet']):
         # Remove "Zoom Meeting" prefix
         title = re.sub(r'^(Zoom|Teams)\s*(Meeting|Call)\s*[-\u2013\u2014]?\s*', '', title, flags=re.IGNORECASE)
-        return title[:50] if title else 'Call'
+        return title[:MAX_CONTEXT] if title else 'Call'
     
     # ========================================
     # GENERIC - Take meaningful parts
     # ========================================
+    # A title that already fits is shown whole. The part-splitting below exists
+    # to trim noise off LONG titles, but it splits on any hyphen \u2014 including one
+    # inside a token \u2014 so on a short title it only ever loses content:
+    # "ST Pats.pdf - Adobe Acrobat Reader (64-bit)" came out as
+    # "ST Pats.pdf - Adobe Acrobat Reader (64", which reads as a bug.
+    if len(title) <= MAX_CONTEXT:
+        return title
+
     parts = [p.strip() for p in re.split(r'\s*[-\u2013\u2014|]\s*', title)]
     
     # Filter out very generic parts
@@ -271,11 +290,11 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
     meaningful_parts = [p for p in parts if p.lower() not in generic and len(p) > 2]
     
     if meaningful_parts:
-        if len(meaningful_parts) >= 2 and len(meaningful_parts[0]) + len(meaningful_parts[1]) < 50:
+        if len(meaningful_parts) >= 2 and len(meaningful_parts[0]) + len(meaningful_parts[1]) < MAX_CONTEXT:
             return f"{meaningful_parts[0]} - {meaningful_parts[1]}"
-        return meaningful_parts[0][:50]
-    
-    return title[:50] if title else ''
+        return meaningful_parts[0][:MAX_CONTEXT]
+
+    return title[:MAX_CONTEXT] if title else ''
 
 
 # =============================================================================

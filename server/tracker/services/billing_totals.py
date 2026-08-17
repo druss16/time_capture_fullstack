@@ -177,6 +177,7 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
             minutes = cd["minutes"]
 
             samples = []
+            activities = []
             for clean_title, info in sorted(
                 cd["by_activity"].items(), key=lambda x: -x[1]["minutes"]
             )[:10]:
@@ -189,6 +190,16 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
                     samples.append(f"[id:{id_str}] {clean_title} ({time_str})")
                 else:
                     samples.append(f"{clean_title} ({time_str})")
+                # Structured twin of `sample_activities`. The string form carries
+                # its duration only as a human tag ("1h", "1.5h"), which is lossy
+                # (0.1h = 6-minute granularity) and can't be parsed back into the
+                # real figure — so callers that want to SHOW per-activity time
+                # read this instead. Same order, same top-10 slice.
+                activities.append({
+                    "ids": ids,
+                    "title": clean_title,
+                    "minutes": int(round(info["minutes"])),
+                })
 
             task_type_code = None
             task_type_name = None
@@ -207,6 +218,7 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
                 "block_count": cd["block_count"],
                 "unique_activities": len(cd["by_activity"]),
                 "sample_activities": samples,
+                "activities": activities,
                 "task_type_code": task_type_code,
                 "task_type_name": task_type_name,
             })

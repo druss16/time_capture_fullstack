@@ -118,6 +118,18 @@ def sync_status(request):
                 'count': routing_rule_stats.get('count') or 0,
                 'hash': make_hash(routing_rule_stats),
             },
+            # Org-level agent settings (ticker visibility, sensitivity, idle).
+            # Hashing these makes a MavOps toggle (e.g. show_client_widget) trip
+            # change-detection so the agent full-syncs and applies it within a
+            # poll cycle, instead of only on an unrelated change or a restart.
+            'org_settings': {
+                'count': 0,
+                'hash': _compute_hash(
+                    f"{int(bool(getattr(org, 'show_client_widget', False)))}:"
+                    f"{getattr(org, 'ai_sensitivity', 50)}:"
+                    f"{getattr(org, 'mouse_idle_pause_seconds', 600)}"
+                ),
+            },
         },
         'user': {
             'id': request.user.id,

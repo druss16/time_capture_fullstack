@@ -274,8 +274,12 @@ export function deriveLanes(
 
     if (!rows.length) continue; // whole client was mismatches -> nothing left to browse
 
-    // Collapse identical-title rows (same file → one line, not one per block).
-    const mergedRows = mergeRowsByTitle(rows);
+    // Collapse identical-title rows (same file → one line, not one per block),
+    // then order the whole client by size. Rows arrive category by category, so
+    // without this the durations reset partway down the list (1h, 42m, 31m …
+    // 5m, 3m, 15m, 12m) and the biggest item in a client isn't findable by eye —
+    // which is the question this lane exists to answer.
+    const mergedRows = mergeRowsByTitle(rows).sort((a, b) => b.minutes - a.minutes);
 
     const pulled = pulledMinByClient.get(key) || 0;
     const minutes = Math.max(0, Math.round(client.total_hours * 60 - pulled));

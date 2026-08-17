@@ -344,13 +344,12 @@ export default function CompactSummary({
                   <div onClick={() => toggleWhy(bid)}
                     className="flex cursor-pointer items-center gap-2 rounded-md py-0.5 pr-1 text-muted-foreground hover:text-foreground">
                     <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform", rowOpen && "rotate-90")} />
-                    {/* Duration sits IN the line, right after the work it
-                        describes — not in a far-right column the eye has to
-                        travel to. shrink-0 keeps it readable when a long title
-                        ellipsises; the spacer eats the rest of the row. */}
-                    <span className="min-w-0 truncate font-mono text-[12px]">{r.title}</span>
-                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70">({fmtMin(r.minutes)})</span>
-                    <span className="flex-1" />
+                    {/* Right-aligned, tabular: the column is scannable top to
+                        bottom, so the big items are findable without reading a
+                        title. It only worked against you when the row was
+                        1400px wide — the lane caps its width instead. */}
+                    <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r.title}</span>
+                    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70">{fmtMin(r.minutes)}</span>
                   </div>
                   {rowOpen && (
                     <div className="mb-2 ml-5 mt-1 flex flex-col items-start gap-3 border-l-2 border-border/60 pl-3 font-sans">
@@ -467,9 +466,8 @@ export default function CompactSummary({
               const rest = Math.max(0, g.minutes - g.rows.reduce((s, r) => s + r.minutes, 0));
               return rest >= 1 ? (
                 <div className="flex items-center gap-2 py-0.5 pl-5 pr-1 font-mono text-[11px] text-muted-foreground/60">
-                  <span className="min-w-0 truncate">+ other short activities</span>
-                  <span className="shrink-0 tabular-nums">({fmtMin(rest)})</span>
-                  <span className="flex-1" />
+                  <span className="min-w-0 flex-1 truncate">+ other short activities</span>
+                  <span className="shrink-0 tabular-nums">{fmtMin(rest)}</span>
                 </div>
               ) : null;
             })()}
@@ -514,27 +512,35 @@ export default function CompactSummary({
 
           {certainOpen && (
             <div className="border-t border-border/70 bg-card px-3 pb-3 pt-3">
-              {/* Filter box — 17+ rows is past scanning range. */}
-              <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <input
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder="Filter…"
-                  className="w-full bg-transparent font-sans text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
-                {filter && (
-                  <button onClick={() => setFilter("")} className="shrink-0 text-muted-foreground hover:text-foreground">
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+              {/* Width cap, not decoration. On a wide monitor the row left
+                  ~1400px of dead space between an activity and its duration,
+                  which is what made a right-hand column feel disconnected from
+                  the work. ~980px fits the longest title the backend emits
+                  (MAX_CONTEXT) at this size, so the number lands just past
+                  where the text ends and the column stays scannable. */}
+              <div className="max-w-[980px]">
+                {/* Filter box — 17+ rows is past scanning range. */}
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                  <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <input
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    placeholder="Filter…"
+                    className="w-full bg-transparent font-sans text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
+                  {filter && (
+                    <button onClick={() => setFilter("")} className="shrink-0 text-muted-foreground hover:text-foreground">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {filteredGroups.length === 0 && (
+                  <div className="py-6 text-center font-mono text-[12px] text-muted-foreground">no matches</div>
                 )}
-              </div>
 
-              {filteredGroups.length === 0 && (
-                <div className="py-6 text-center font-mono text-[12px] text-muted-foreground">no matches</div>
-              )}
-
-              <div className="flex flex-col divide-y divide-border">
-                {filteredGroups.map(renderGroup)}
+                <div className="flex flex-col divide-y divide-border">
+                  {filteredGroups.map(renderGroup)}
+                </div>
               </div>
             </div>
           )}

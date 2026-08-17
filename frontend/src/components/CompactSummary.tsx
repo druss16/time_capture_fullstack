@@ -34,9 +34,13 @@ type Props = {
   busy: boolean;
   /** Whether the auto-file pass has run — tunes the Certain lane's subtitle. */
   autoFiled: boolean;
-  // Pass the acted block id(s) so the parent can hide those rows immediately
-  // (optimistic) while today-time reloads in the background.
-  onRefresh: (hideIds?: number[]) => void;
+  // Optimistic row control. onHideRows removes the acted rows IMMEDIATELY (before
+  // the save even fires) so the user can keep confirming with zero wait;
+  // onShowRows puts them back if the save fails. onRefresh does a SILENT
+  // background reconcile (no busy spinner, buttons stay live) after the save.
+  onHideRows: (ids: number[]) => void;
+  onShowRows: (ids: number[]) => void;
+  onRefresh: () => void;
   showToast: (msg: string, type: "success" | "error") => void;
   /** Dismiss a mismatch flag as a false positive ("Keep here"). */
   onIgnoreMismatch: (ids: number[]) => void;
@@ -74,7 +78,7 @@ type MoveState = {
 
 export default function CompactSummary({
   lanes, availableClients, availableCategories, busy,
-  autoFiled, onRefresh, showToast, onIgnoreMismatch,
+  autoFiled, onHideRows, onShowRows, onRefresh, showToast, onIgnoreMismatch,
 }: Props) {
   const sysDark = useSystemDark();
   const { certain, needsYou } = lanes;
@@ -123,27 +127,30 @@ export default function CompactSummary({
 
   const moveBlocks = useCallback(async (ids: number[], clientId: number | null, category: string) => {
     if (!ids.length) return;
+    onHideRows(ids);                       // vanish immediately — don't wait on the save
     try {
       await Promise.all(ids.map((id) => recategorize(id, clientId, category)));
       showToast(`Moved ${ids.length} ${ids.length > 1 ? "entries" : "entry"}`, "success");
-      onRefresh(ids);
-    } catch { showToast("Failed to move", "error"); }
-  }, [onRefresh, showToast]);
+      onRefresh();
+    } catch { onShowRows(ids); showToast("Failed to move", "error"); }
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
 
   // Accept a pending row to a client — or to NO client (null = not billable).
   const acceptTo = useCallback(async (b: ProposedInline, clientId: number | null) => {
+    onHideRows([b.block_id]);
     try {
       await recategorize(b.block_id, clientId, b.proposed_category || "General Client Work", "single_confirm");
       showToast(clientId == null ? "Set to not billable" : "Confirmed", "success");
-      onRefresh([b.block_id]);
-    } catch { showToast("Couldn’t update this entry", "error"); }
-  }, [onRefresh, showToast]);
+      onRefresh();
+    } catch { onShowRows([b.block_id]); showToast("Couldn’t update this entry", "error"); }
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
 
   // "Always file titles like this here": confirm this block AND turn it into a
   // hard, firm-wide rule (a client alias derived from the title) so future
   // matching captures auto-file on the next occurrence — no waiting for
   // pattern-learning confidence to build.
   const alwaysFile = useCallback(async (b: ProposedInline, clientId: number) => {
+    onHideRows([b.block_id]);
     try {
       const r = await safeFetchJson<{ alias?: string; client_name?: string }>(
         `${API_BASE}/blocks/${b.block_id}/always-file/`,
@@ -151,22 +158,24 @@ export default function CompactSummary({
       );
       await recategorize(b.block_id, clientId, b.proposed_category || "General Client Work", "single_confirm");
       showToast(r?.alias ? `Now always filing “${r.alias}” here` : "Rule created", "success");
-      onRefresh([b.block_id]);
+      onRefresh();
     } catch (e: any) {
+      onShowRows([b.block_id]);
       showToast(e?.data?.error || "Couldn’t make that a rule", "error");
     }
-  }, [onRefresh, showToast]);
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
 
   // One-click mismatch fix: reassign to the client the title actually names,
   // preserving the block's category.
   const fixMismatch = useCallback(async (m: MismatchBlock) => {
     if (m.looks_like_client_id == null) return;
+    onHideRows([m.block_id]);
     try {
       await recategorize(m.block_id, m.looks_like_client_id, m.category || "General Client Work");
       showToast(`Moved to ${m.looks_like_client_name}`, "success");
-      onRefresh([m.block_id]);
-    } catch { showToast("Failed to move", "error"); }
-  }, [onRefresh, showToast]);
+      onRefresh();
+    } catch { onShowRows([m.block_id]); showToast("Failed to move", "error"); }
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
 
   // "Switch all": one click applies the same title-based fix to every block in
   // an identical-filename group (see groupMismatches). Purely fans out the
@@ -174,6 +183,8 @@ export default function CompactSummary({
   const fixMismatchGroup = useCallback(async (items: MismatchBlock[]) => {
     const targets = items.filter((m) => m.looks_like_client_id != null);
     if (!targets.length) return;
+    const ids = targets.map((m) => m.block_id);
+    onHideRows(ids);
     try {
       await Promise.all(
         targets.map((m) =>
@@ -181,9 +192,9 @@ export default function CompactSummary({
         ),
       );
       showToast(`Moved ${targets.length} blocks to ${targets[0].looks_like_client_name}`, "success");
-      onRefresh(targets.map((m) => m.block_id));
-    } catch { showToast("Failed to move", "error"); }
-  }, [onRefresh, showToast]);
+      onRefresh();
+    } catch { onShowRows(ids); showToast("Failed to move", "error"); }
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
 
   // ── Per-row detail (/why/) + Split ──────────────────────────────────────────
   // Expanding a Certain block row loads its "where the time went" breakdown and
@@ -223,6 +234,7 @@ export default function CompactSummary({
     bid: number, assignments: Record<string, { client_id: number | null; category: string }>,
   ) => {
     setSplitBusy(true);
+    onHideRows([bid]);
     try {
       await safeFetchJson(`${API_BASE}/blocks/${bid}/split/`, {
         method: "POST",
@@ -233,10 +245,10 @@ export default function CompactSummary({
       setSplitFor(null);
       setOpenWhy((cur) => (cur === bid ? null : cur));
       setWhyData((prev) => { const next = { ...prev }; delete next[bid]; return next; });
-      onRefresh([bid]);
-    } catch { showToast("Couldn’t split this entry", "error"); }
+      onRefresh();
+    } catch { onShowRows([bid]); showToast("Couldn’t split this entry", "error"); }
     finally { setSplitBusy(false); }
-  }, [onRefresh, showToast]);
+  }, [onHideRows, onShowRows, onRefresh, showToast]);
   const splitBlock = (bid: number, category: string) => {
     const a: Record<string, { client_id: number | null; category: string }> = {};
     Object.entries(splitAssign).forEach(([label, cid]) => { a[label] = { client_id: cid, category }; });

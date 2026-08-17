@@ -319,9 +319,13 @@ export default function DailyReview() {
     }
   }, [timeSummary, availableClients.length]);
 
-  const loadTimeSummary = useCallback(async () => {
-    setBusy(true);
-    setErr(null);
+  // `background: true` runs the reload SILENTLY — it does NOT flip `busy`, so the
+  // Needs You action buttons stay live and the user can keep confirming while
+  // totals reconcile behind the scenes. Foreground loads (initial, date change,
+  // manual Refresh) still show the spinner and surface errors.
+  const loadTimeSummary = useCallback(async (opts?: { background?: boolean }) => {
+    const background = opts?.background ?? false;
+    if (!background) { setBusy(true); setErr(null); }
     try {
       const { start, end } = rangeBounds(date, range);
       const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
@@ -336,10 +340,11 @@ export default function DailyReview() {
       setMismatchBlocks(json.mismatch_blocks || []);
       setSplitCandidates(json.split_candidates || []);
     } catch (err: any) {
-      setErr(err?.message || "Failed to load");
-      setTimeSummary([]);
+      // A failed background reconcile must not blank the page the user is working
+      // in — leave the current data and stay quiet.
+      if (!background) { setErr(err?.message || "Failed to load"); setTimeSummary([]); }
     } finally {
-      setBusy(false);
+      if (!background) setBusy(false);
     }
   }, [date, range]);
 
@@ -437,25 +442,31 @@ export default function DailyReview() {
     runAIClassification();
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
-  // Lightweight refresh for per-block actions (accept a suggestion, move a
-  // block, split, etc.). Two things make it feel instant:
-  //   1. `hideIds` — the acted rows are hidden IMMEDIATELY (optimistic), so the
-  //      user can keep confirming without waiting for anything.
-  //   2. It does NOT call runAIClassification(): that endpoint re-runs the full
-  //      5-stage OpenAI pipeline over the whole day (15s timeout) and its result
-  //      the lanes never consume. The full AI pass still runs on initial load
-  //      and via the manual Refresh button.
-  // loadTimeSummary still runs in the background to reconcile totals; the row is
-  // already gone from the user's perspective by the time it returns.
-  const handleRowRefresh = useCallback((hideIds?: number[]) => {
-    if (hideIds && hideIds.length) {
-      setHiddenIds((prev) => {
-        const next = new Set(prev);
-        hideIds.forEach((id) => next.add(id));
-        return next;
-      });
-    }
-    loadTimeSummary();
+  // Optimistic row control for Needs You actions.
+  //   hideRows — remove rows the INSTANT they're acted on (before the save even
+  //     fires), so the user never waits and can keep confirming.
+  //   showRows — restore them if the save fails.
+  const hideRows = useCallback((ids: number[]) => {
+    if (!ids.length) return;
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+  const showRows = useCallback((ids: number[]) => {
+    if (!ids.length) return;
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+  // SILENT background reconcile after a per-block action — no busy spinner (so
+  // buttons stay live), no AI re-classification (its result the lanes never use;
+  // the full pass stays on initial load + the manual Refresh button).
+  const handleRowRefresh = useCallback(() => {
+    loadTimeSummary({ background: true });
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
 
@@ -766,6 +777,8 @@ export default function DailyReview() {
             availableCategories={availableCategories}
             busy={busy}
             autoFiled={autoFiled}
+            onHideRows={hideRows}
+            onShowRows={showRows}
             onRefresh={handleRowRefresh}
             showToast={showToast}
             onIgnoreMismatch={ignoreMismatch}

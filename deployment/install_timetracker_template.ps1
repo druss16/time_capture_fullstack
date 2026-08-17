@@ -51,4 +51,31 @@ if (-not $running -and (Test-Path $watchdogExe)) {
     Write-Host "Started tt_watchdog.exe"
 }
 
+# ── Step 5: Force-install the "TimeTracker URL Reporter" browser extension ──
+# Silently installs and pins the extension via Edge browser policy so no user
+# action is needed. Published Unlisted to the Edge Add-ons store (id below).
+# Finds a free numeric slot so it never clobbers another IT-managed extension,
+# and is idempotent on re-runs. Uses the elevated (HKLM) context the installer
+# already runs in.
+# NOTE: Microsoft Edge only — the extension is on the Edge store, not the Chrome
+# Web Store, so Chrome users are not covered by this policy.
+$ttExtId      = "bnnifiompbeebhapoojlonamdghmlifh"
+$ttEdgeCrx    = "https://edge.microsoft.com/extensionwebstorebase/v1/crx"
+$ttPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist"
+try {
+    if (-not (Test-Path $ttPolicyPath)) { New-Item -Path $ttPolicyPath -Force | Out-Null }
+    $ttProps   = @((Get-Item $ttPolicyPath).Property)
+    $ttAlready = $ttProps | Where-Object { (Get-ItemProperty -Path $ttPolicyPath -Name $_).$_ -like "$ttExtId;*" }
+    if ($ttAlready) {
+        Write-Host "TimeTracker extension already force-listed for Edge."
+    } else {
+        $ttUsed = @($ttProps | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+        $ttSlot = 1; while ($ttUsed -contains $ttSlot) { $ttSlot++ }
+        New-ItemProperty -Path $ttPolicyPath -Name "$ttSlot" -Value "$ttExtId;$ttEdgeCrx" -PropertyType String -Force | Out-Null
+        Write-Host "Force-installed TimeTracker extension for Edge [slot $ttSlot]."
+    }
+} catch {
+    Write-Host "WARN: could not set Edge force-install policy: $_"
+}
+
 Write-Host "TimeTracker deployment complete."

@@ -163,51 +163,39 @@ const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clien
 
 // Within one client, fold rows whose title is identical once the trailing
 // per-block "(Nm)" duration tag is stripped — the same file/activity should be
-// ONE line, not one per block. An UN-merged row keeps its original title (with
-// its "(Nm)" tag, exactly as before); a MERGED row shows the clean title with
-// the SUMMED "(Nm)" so the time still reads inline. Grouped by title alone so
-// identical titles always pair (rows are already per-client, never crosses
-// clients). Display-only: the client's total minutes / billable are untouched.
+// ONE line, not one per block. The tag is stripped from the DISPLAYED title in
+// both cases: the row's minutes column now carries that same real duration (see
+// deriveLanes), so leaving it inline would print the number twice. Grouped by
+// title alone so identical titles always pair (rows are already per-client,
+// never crosses clients). Display-only: the client's total minutes / billable
+// are untouched.
 const stripDurTag = (t: string) => t.replace(/\s*\(\d+m\)\s*$/i, "").trim();
 const parseDurTag = (t: string): number => {
   const m = t.match(/\((\d+)m\)\s*$/i);
   return m ? parseInt(m[1], 10) : 0;
 };
 function mergeRowsByTitle(rows: CertainRow[]): CertainRow[] {
-  type Acc = {
-    ids: number[]; base: string; origTitle: string; category: string;
-    minutes: number; inlineSum: number; hadTag: boolean; count: number;
-  };
+  type Acc = { ids: number[]; base: string; category: string; minutes: number };
   const accs: Acc[] = [];
   const idx = new Map<string, number>();
   for (const r of rows) {
     const base = stripDurTag(r.title);
     const key = base.toLowerCase();
-    const tag = parseDurTag(r.title);
-    const hasTag = /\(\d+m\)\s*$/i.test(r.title);
     const at = idx.get(key);
     if (at === undefined) {
       idx.set(key, accs.length);
-      accs.push({
-        ids: [...r.ids], base, origTitle: r.title, category: r.category,
-        minutes: r.minutes, inlineSum: tag, hadTag: hasTag, count: 1,
-      });
+      accs.push({ ids: [...r.ids], base, category: r.category, minutes: r.minutes });
     } else {
       const a = accs[at];
       a.ids = [...a.ids, ...r.ids];
       a.minutes += r.minutes;
-      a.inlineSum += tag;
-      a.hadTag = a.hadTag || hasTag;
-      a.count += 1;
     }
   }
   return accs.map((a) => ({
     ids: a.ids,
     category: a.category,
     minutes: a.minutes,
-    title: a.count === 1
-      ? a.origTitle
-      : a.hadTag ? a.base + " (" + a.inlineSum + "m)" : a.base,
+    title: a.base,
   }));
 }
 
@@ -252,6 +240,12 @@ export function deriveLanes(
     const catMinutes = new Map<string, number>();
 
     for (const cat of client.categories) {
+      // Fallback only. today-time caps sample_activities at the top 10 per
+      // category, so spreading the category total evenly across the survivors
+      // (what this used to do for every row) both invents per-line numbers and
+      // smears the dropped lines' time into the ones on screen. Each sample
+      // carries its OWN real duration as a trailing "(Nm)" tag — use that, and
+      // fall back to the even split only for a line that somehow lacks one.
       const perLine = cat.sample_activities.length
         ? (cat.hours * 60) / cat.sample_activities.length
         : 0;
@@ -259,8 +253,10 @@ export function deriveLanes(
         const p = parse(a);
         // A line whose block is flagged (mismatch or split) is shown in Needs-you.
         if (p.blockIds.some((id) => pulledIds.has(id))) continue;
-        rows.push({ ids: p.blockIds, title: p.title, category: cat.name, minutes: Math.round(perLine) });
-        catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + perLine);
+        const tagged = parseDurTag(p.title);
+        const minutes = tagged > 0 ? tagged : Math.round(perLine);
+        rows.push({ ids: p.blockIds, title: p.title, category: cat.name, minutes });
+        catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + minutes);
       }
     }
 

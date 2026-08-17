@@ -126,7 +126,7 @@ class AgentSync:
             needs_sync = False
             changed_entities = []
             
-            for key in ['clients', 'projects', 'task_types', 'client_patterns', 'routing_rules']:
+            for key in ['clients', 'projects', 'task_types', 'client_patterns', 'routing_rules', 'org_settings']:
                 new_hash = entities.get(key, {}).get('hash', '')
                 old_hash = self._hashes.get(key, '')
                 if new_hash and new_hash != old_hash:

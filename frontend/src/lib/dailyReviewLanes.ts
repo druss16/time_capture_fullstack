@@ -92,6 +92,73 @@ const isInternalClientName = (name: string) => {
   return n === "internal" || n.startsWith("internal -");
 };
 
+/** A block the user JUST confirmed, to show under its client instantly (before
+ *  the slow today-time reload lands). Reconciled away once the block appears in
+ *  the real payload. */
+export type OptimisticConfirm = {
+  blockId: number;
+  clientId: number | null;
+  clientName: string;
+  category: string;
+  minutes: number;
+  title: string;
+};
+
+const NONBILLABLE_CAT = /non-?billable|personal/i;
+
+/**
+ * Fold just-confirmed blocks into the Certain lane so they appear under their
+ * client the instant they're confirmed — no waiting on today-time. Adds to an
+ * existing client group or creates one; skips a block already present from a
+ * real reload (so it can never double-count during the brief overlap window).
+ */
+export function mergeOptimisticConfirms(lanes: Lanes, confirms: OptimisticConfirm[]): Lanes {
+  if (!confirms.length) return lanes;
+  const groups: CertainGroup[] = lanes.certain.groups.map((g) => ({ ...g, rows: [...g.rows] }));
+  const byKey = new Map(groups.map((g) => [g.key, g]));
+  let dMin = 0, dBill = 0, dNon = 0, dCount = 0;
+  for (const c of confirms) {
+    const key = clientKeyOf(c.clientId);
+    let g = byKey.get(key);
+    if (g && g.rows.some((r) => r.ids.includes(c.blockId))) continue; // already in from a reload
+    const internal = isInternalClientName(c.clientName);
+    const billable = c.clientId != null && !internal && !NONBILLABLE_CAT.test(c.category);
+    const row: CertainRow = { ids: [c.blockId], title: c.title || "(entry)", category: c.category, minutes: c.minutes };
+    if (!g) {
+      g = {
+        key, clientId: c.clientId,
+        name: c.clientId == null ? "No client" : (c.clientName || "Client"),
+        internal, unassigned: c.clientId == null,
+        minutes: 0, billableMinutes: 0, nonBillableMinutes: 0,
+        billable, blockCount: 0, repCategory: c.category, rows: [],
+      };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.rows.unshift(row);
+    g.minutes += c.minutes;
+    g.blockCount += 1;
+    if (billable) g.billableMinutes += c.minutes; else g.nonBillableMinutes += c.minutes;
+    g.billable = g.billableMinutes > 0;
+    dMin += c.minutes; dCount += 1;
+    if (billable) dBill += c.minutes; else dNon += c.minutes;
+  }
+  groups.sort((a, b) => {
+    if (a.billable !== b.billable) return a.billable ? -1 : 1;
+    return b.minutes - a.minutes;
+  });
+  return {
+    ...lanes,
+    certain: {
+      groups,
+      blockCount: lanes.certain.blockCount + dCount,
+      minutes: lanes.certain.minutes + dMin,
+      billableMinutes: lanes.certain.billableMinutes + dBill,
+      nonBillableMinutes: lanes.certain.nonBillableMinutes + dNon,
+    },
+  };
+}
+
 const clientKeyOf = (clientId: number | null) => (clientId != null ? `id:${clientId}` : "none");
 
 // Within one client, fold rows whose title is identical once the trailing

@@ -34,7 +34,9 @@ type Props = {
   busy: boolean;
   /** Whether the auto-file pass has run — tunes the Certain lane's subtitle. */
   autoFiled: boolean;
-  onRefresh: () => void;
+  // Pass the acted block id(s) so the parent can hide those rows immediately
+  // (optimistic) while today-time reloads in the background.
+  onRefresh: (hideIds?: number[]) => void;
   showToast: (msg: string, type: "success" | "error") => void;
   /** Dismiss a mismatch flag as a false positive ("Keep here"). */
   onIgnoreMismatch: (ids: number[]) => void;
@@ -124,7 +126,7 @@ export default function CompactSummary({
     try {
       await Promise.all(ids.map((id) => recategorize(id, clientId, category)));
       showToast(`Moved ${ids.length} ${ids.length > 1 ? "entries" : "entry"}`, "success");
-      onRefresh();
+      onRefresh(ids);
     } catch { showToast("Failed to move", "error"); }
   }, [onRefresh, showToast]);
 
@@ -133,7 +135,7 @@ export default function CompactSummary({
     try {
       await recategorize(b.block_id, clientId, b.proposed_category || "General Client Work", "single_confirm");
       showToast(clientId == null ? "Set to not billable" : "Confirmed", "success");
-      onRefresh();
+      onRefresh([b.block_id]);
     } catch { showToast("Couldn’t update this entry", "error"); }
   }, [onRefresh, showToast]);
 
@@ -149,7 +151,7 @@ export default function CompactSummary({
       );
       await recategorize(b.block_id, clientId, b.proposed_category || "General Client Work", "single_confirm");
       showToast(r?.alias ? `Now always filing “${r.alias}” here` : "Rule created", "success");
-      onRefresh();
+      onRefresh([b.block_id]);
     } catch (e: any) {
       showToast(e?.data?.error || "Couldn’t make that a rule", "error");
     }
@@ -162,7 +164,7 @@ export default function CompactSummary({
     try {
       await recategorize(m.block_id, m.looks_like_client_id, m.category || "General Client Work");
       showToast(`Moved to ${m.looks_like_client_name}`, "success");
-      onRefresh();
+      onRefresh([m.block_id]);
     } catch { showToast("Failed to move", "error"); }
   }, [onRefresh, showToast]);
 
@@ -179,7 +181,7 @@ export default function CompactSummary({
         ),
       );
       showToast(`Moved ${targets.length} blocks to ${targets[0].looks_like_client_name}`, "success");
-      onRefresh();
+      onRefresh(targets.map((m) => m.block_id));
     } catch { showToast("Failed to move", "error"); }
   }, [onRefresh, showToast]);
 
@@ -231,7 +233,7 @@ export default function CompactSummary({
       setSplitFor(null);
       setOpenWhy((cur) => (cur === bid ? null : cur));
       setWhyData((prev) => { const next = { ...prev }; delete next[bid]; return next; });
-      onRefresh();
+      onRefresh([bid]);
     } catch { showToast("Couldn’t split this entry", "error"); }
     finally { setSplitBusy(false); }
   }, [onRefresh, showToast]);

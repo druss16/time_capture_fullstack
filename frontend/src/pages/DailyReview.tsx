@@ -252,6 +252,10 @@ export default function DailyReview() {
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
   const [splitCandidates, setSplitCandidates] = useState<SplitCandidate[]>([]);
+  // Optimistically-hidden block ids: as soon as a Needs You row is acted on we
+  // drop it from the lanes so the user can keep confirming, WITHOUT waiting for
+  // the (slow) today-time reload. Reconciled below once fresh data lands.
+  const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
   // Lightning view range: single day, Mon–Sun week, or calendar month. `date`
   // is the anchor; the range is derived around it. Persisted per browser.
   const [range, setRange] = useState<ViewRange>(() => {
@@ -434,13 +438,23 @@ export default function DailyReview() {
   }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   // Lightweight refresh for per-block actions (accept a suggestion, move a
-  // block, split, etc.). These only need the stored state re-read — the Needs
-  // You lanes are built entirely from the today-time payload. It deliberately
-  // does NOT call runAIClassification(): that endpoint re-runs the full 5-stage
-  // OpenAI pipeline over the whole day (15s timeout), which cost 3-5s per tap
-  // and whose result the lanes never consume. The full AI pass still runs on
-  // initial load and via the manual Refresh button.
-  const handleRowRefresh = useCallback(() => {
+  // block, split, etc.). Two things make it feel instant:
+  //   1. `hideIds` — the acted rows are hidden IMMEDIATELY (optimistic), so the
+  //      user can keep confirming without waiting for anything.
+  //   2. It does NOT call runAIClassification(): that endpoint re-runs the full
+  //      5-stage OpenAI pipeline over the whole day (15s timeout) and its result
+  //      the lanes never consume. The full AI pass still runs on initial load
+  //      and via the manual Refresh button.
+  // loadTimeSummary still runs in the background to reconcile totals; the row is
+  // already gone from the user's perspective by the time it returns.
+  const handleRowRefresh = useCallback((hideIds?: number[]) => {
+    if (hideIds && hideIds.length) {
+      setHiddenIds((prev) => {
+        const next = new Set(prev);
+        hideIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
     loadTimeSummary();
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
@@ -492,10 +506,37 @@ export default function DailyReview() {
   // so it matches the backend global_hours and the Reports total.
   const totalHours = billableHours + nonBillableHours + needsReviewHours;
 
+  // Reconcile the optimistic-hide set whenever fresh today-time data lands: keep
+  // hiding only ids that are STILL unresolved server-side (a block just committed
+  // drops out of pending/mismatch/split, so we stop hiding it and it appears in
+  // the Certain lane). Race-safe across rapid confirms — an in-flight reload that
+  // predates a later confirm won't un-hide that later block.
+  useEffect(() => {
+    setHiddenIds((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set<number>([
+        ...proposedInline.map((p) => p.block_id),
+        ...mismatchBlocks.map((m) => m.block_id),
+        ...splitCandidates.map((s) => s.block_id),
+      ]);
+      const next = new Set<number>();
+      prev.forEach((id) => { if (live.has(id)) next.add(id); });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [proposedInline, mismatchBlocks, splitCandidates]);
+
   // ── Confidence lanes (single source for the header numbers + the body) ──────
   const lanes = useMemo(
-    () => deriveLanes(timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates),
-    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates],
+    () => {
+      const visiblePending = hiddenIds.size
+        ? proposedInline.filter((p) => !hiddenIds.has(p.block_id)) : proposedInline;
+      const visibleMismatch = hiddenIds.size
+        ? mismatchBlocks.filter((m) => !hiddenIds.has(m.block_id)) : mismatchBlocks;
+      const visibleSplit = hiddenIds.size
+        ? splitCandidates.filter((s) => !hiddenIds.has(s.block_id)) : splitCandidates;
+      return deriveLanes(timeSummary, visiblePending, visibleMismatch, ignoredMismatch, visibleSplit);
+    },
+    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, hiddenIds],
   );
   const needsYouCount = lanes.needsYou.count;
   const autoFiled = lanes.certain.minutes > 0;

@@ -682,11 +682,27 @@ class FloatingClientWidget:
         self.enabled = enabled
         if not self._root_alive():
             return
+
+        def _apply():
+            try:
+                if enabled:
+                    # The widget was created withdrawn (hands-off default), so we
+                    # must actually deiconify it — refreshing the view alone leaves
+                    # a hidden window hidden until a state transition happens to
+                    # deiconify (which never fires on a steady state).
+                    self.is_visible = True
+                    self.root.deiconify()
+                    self.root.attributes('-topmost', True)
+                    self.root.lift()
+                    self._refresh_current_view()
+                else:
+                    self.is_visible = False
+                    self.root.withdraw()
+            except Exception as e:
+                print(f"[WIDGET] set_enabled({enabled}) failed: {e}")
+
         try:
-            if enabled:
-                self.root.after(0, self._refresh_current_view)
-            else:
-                self.root.after(0, self.root.withdraw)
+            self.root.after(0, _apply)
         except Exception:
             pass
 

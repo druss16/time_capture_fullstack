@@ -295,7 +295,14 @@ export default function CompactSummary({
               {g.name}
             </span>
           </button>
-          {/* per-client total time (billable split lives in the hero, not per row) */}
+          {/* Billable / non-billable split, only when the client actually mixes
+              the two — otherwise the total already says which it is. */}
+          {g.billableMinutes > 0 && g.nonBillableMinutes > 0 && (
+            <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
+              {fmtMin(g.billableMinutes)} billable · {fmtMin(g.nonBillableMinutes)} non-bill
+            </span>
+          )}
+          {/* per-client total time */}
           <span className="shrink-0 font-mono text-[12px] tabular-nums font-semibold text-foreground">
             {fmtMin(g.minutes)}
           </span>
@@ -438,6 +445,19 @@ export default function CompactSummary({
                 </div>
               );
             })}
+            {/* Each row above shows its OWN real duration, so the rows no longer
+                add up to the client total by construction: today-time sends only
+                the top 10 activities per category, and sub-2min slivers get no
+                row at all. Account for the difference rather than hide it. */}
+            {(() => {
+              const rest = Math.max(0, g.minutes - g.rows.reduce((s, r) => s + r.minutes, 0));
+              return rest >= 1 ? (
+                <div className="flex items-center gap-2 py-0.5 pl-5 pr-1 font-mono text-[11px] text-muted-foreground/60">
+                  <span className="min-w-0 flex-1 truncate">+ other short activities</span>
+                  <span className="shrink-0 tabular-nums">{fmtMin(rest)}</span>
+                </div>
+              ) : null;
+            })()}
           </div>
         )}
       </div>

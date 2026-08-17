@@ -304,13 +304,17 @@ export default function CompactSummary({
               {g.name}
             </span>
           </button>
-          {/* Billable / non-billable split, only when the client actually mixes
-              the two — otherwise the total already says which it is. */}
-          {g.billableMinutes > 0 && g.nonBillableMinutes > 0 && (
-            <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
-              {fmtMin(g.billableMinutes)} billable · {fmtMin(g.nonBillableMinutes)} non-bill
-            </span>
-          )}
+          {/* Billable / non-billable, on EVERY client. Showing the split only
+              for mixed clients left gaps down the column, and a gap reads as
+              data that failed to load rather than as "this client is entirely
+              billable" — indistinguishable from a broken row at list length. */}
+          <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
+            {g.billableMinutes > 0 && g.nonBillableMinutes > 0
+              ? `${fmtMin(g.billableMinutes)} billable · ${fmtMin(g.nonBillableMinutes)} non-bill`
+              : g.nonBillableMinutes > 0 ? "all non-bill"
+              : g.billableMinutes > 0 ? "all billable"
+              : /* both zero — say nothing rather than assert either */ ""}
+          </span>
           {/* per-client total time */}
           <span className="shrink-0 font-mono text-[12px] tabular-nums font-semibold text-foreground">
             {fmtMin(g.minutes)}

@@ -108,6 +108,16 @@ export default function CompactSummary({
   });
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  // Certain-lane ordering. Time is the default — "where did the day go" is the
+  // question this lane answers — but a firm with thirty clients looking for one
+  // by name wants the alphabet. Persisted, like the lane order.
+  const [sort, setSort] = useState<"time" | "name">(() =>
+    (typeof localStorage !== "undefined" && localStorage.getItem("dr_certain_sort") === "name")
+      ? "name" : "time");
+  const setSortPersist = (next: "time" | "name") => {
+    setSort(next);
+    try { localStorage.setItem("dr_certain_sort", next); } catch { /* noop */ }
+  };
   const [move, setMove] = useState<MoveState | null>(null);
 
   const catList = availableCategories.length ? availableCategories : ["General Client Work"];
@@ -276,18 +286,35 @@ export default function CompactSummary({
     postSplit(bid, a);
   };
 
-  // ── Certain lane: filter groups + rows by the query ─────────────────────────
+  // ── Certain lane: filter groups + rows by the query, then order them ────────
   const q = filter.trim().toLowerCase();
   const filteredGroups = useMemo(() => {
-    if (!q) return certain.groups;
-    return certain.groups
-      .map((g) => {
-        if (g.name.toLowerCase().includes(q)) return g;
-        const rows = g.rows.filter((r) => r.title.toLowerCase().includes(q));
-        return rows.length ? { ...g, rows } : null;
-      })
-      .filter(Boolean) as CertainGroup[];
-  }, [certain.groups, q]);
+    const matched = !q
+      ? certain.groups
+      : (certain.groups
+          .map((g) => {
+            if (g.name.toLowerCase().includes(q)) return g;
+            const rows = g.rows.filter((r) => r.title.toLowerCase().includes(q));
+            return rows.length ? { ...g, rows } : null;
+          })
+          .filter(Boolean) as CertainGroup[]);
+
+    if (sort === "time") return matched;   // deriveLanes already orders by size
+
+    // By name: A→Z, but still billable clients before non-billable overhead, so
+    // the lane keeps its two sections instead of interleaving "No client" and
+    // internal time among the real clients. Rows inside a group sort by title
+    // too, so the whole lane reads one way.
+    return [...matched]
+      .sort((a, b) => (a.billable === b.billable
+        ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+        : a.billable ? -1 : 1))
+      .map((g) => ({
+        ...g,
+        rows: [...g.rows].sort((x, y) =>
+          x.title.localeCompare(y.title, undefined, { numeric: true, sensitivity: "base" })),
+      }));
+  }, [certain.groups, q, sort]);
 
   // One client group in the Certain browse: header (name · blocks · minutes · Move)
   // over its raw captured titles.
@@ -522,19 +549,35 @@ export default function CompactSummary({
                   are size-sorted instead, so the column is scannable without
                   needing the number to sit close to the text. */}
               <div>
-                {/* Filter box — 17+ rows is past scanning range. */}
-                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                  <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <input
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    placeholder="Filter…"
-                    className="w-full bg-transparent font-sans text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
-                  {filter && (
-                    <button onClick={() => setFilter("")} className="shrink-0 text-muted-foreground hover:text-foreground">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                {/* Filter box — 17+ rows is past scanning range — and the sort. */}
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="flex flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <input
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Filter…"
+                      className="w-full bg-transparent font-sans text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
+                    {filter && (
+                      <button onClick={() => setFilter("")} className="shrink-0 text-muted-foreground hover:text-foreground">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center rounded-lg border border-border bg-background p-0.5">
+                    {(["time", "name"] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setSortPersist(s)}
+                        aria-pressed={sort === s}
+                        className={cn("rounded-md px-2.5 py-1 font-sans text-[12px] font-medium transition-colors",
+                          sort === s
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground")}>
+                        {s === "time" ? "Time" : "Name"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {filteredGroups.length === 0 && (

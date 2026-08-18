@@ -53,6 +53,7 @@ from tracker.utils.content_classifier import (
 
 from tracker.utils.content_identity import content_identity
 from tracker.utils.grouping_key import grouping_key, client_folder_bucket
+from tracker.services.qb_company_file import company_file_key as _qb_company_file_key
 
 import logging
 logger = logging.getLogger(__name__)
@@ -885,11 +886,14 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             # (extracted or forward-filled) so all of one company's QB events
             # in a session share a key and merge into one block.
             _qb_comp = None
-            _qb_path = ""
+            _qb_file = None
             if (ev.get("app_name") or "").strip().lower() in _QB_COMPACT_APPS:
                 _qb_comp = (_extract_qb_company_for_compaction(ev.get("window_title") or "")
                             or ev.get("_qb_company_fill"))
-                _qb_path = (ev.get("qb_company_path") or "").strip()
+                # Same helper the block-extension key uses, so the two can
+                # never drift apart on a detail like a non-.qbw path.
+                _qb_file = _qb_company_file_key(ev.get("app_name") or "",
+                                                ev.get("qb_company_path") or "")
             # The company FILE beats the company NAME as identity when the
             # agent captured it. QB company names are not unique across a
             # firm's clients — one directory holds fourteen files that all
@@ -897,8 +901,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             # one block, after which no classifier stage can pull them apart.
             # The .qbw path is unique, so key on it. Events from older agents
             # carry no path and keep the name key exactly as before.
-            if _qb_path:
-                content_id = "qbfile=" + _qb_path.lower()
+            if _qb_file:
+                content_id = _qb_file
             elif _qb_comp:
                 # The COMPANY is the content identity. NOTE: _content_identifier
                 # returns '' for a bare company (it expects a full title), which
@@ -988,6 +992,21 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             rep_path = rep_event.get("file_path") or ""
             rep_url = rep_event.get("url") or ""
             file_path = rep_path or (paths[0] if paths else "")
+
+            # QB blocks carry no file_path of their own (QuickBooks never puts
+            # one in a window title, and 0 of 7,908 existing QB blocks have
+            # one). Persist the open .qbw path here instead. Two reasons:
+            #   1. The merge key below must be computable from the BLOCK alone,
+            #      for both a new block and an already-stored one. Without the
+            #      path on the block, block-extension falls back to the company
+            #      NAME and re-merges two parishes that grouping just separated.
+            #   2. It is simply true — that file IS what the block is work on —
+            #      so the filename also reaches Stage 4 and the "Why?" panel.
+            if not file_path:
+                for _e in app_events:
+                    if _e.get("qb_company_path"):
+                        file_path = _e["qb_company_path"]
+                        break
             url = rep_url or (urls[0] if urls else "")
 
             # v1.3.39: drop client attribution on pure-personal blocks.
@@ -1042,9 +1061,15 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         # so the merge glued different churches into one block (48778: Christ
         # Our Light + St Mark's + Transfiguration + Divine Mercy). Key on the
         # company so different companies never merge.
+        # The company FILE wins over the company NAME — must mirror the
+        # grouping key, or two same-named parishes that grouping separated get
+        # re-merged here.
+        _eb_file = _qb_company_file_key(b.app_name or "", b.file_path or "")
         _eb_comp = (_extract_qb_company_for_compaction(b.window_title or "")
                     if (b.app_name or "").strip().lower() in _QB_COMPACT_APPS else None)
-        if _eb_comp:
+        if _eb_file:
+            existing_content_id = _eb_file
+        elif _eb_comp:
             existing_content_id = "qbco=" + _eb_comp.strip().lower()
         else:
             existing_content_id = _grouping_content_id(
@@ -1076,9 +1101,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             new_client_id = block_data.get("current_client_id") or 0
             # v1.3.47: match the existing-block key shape — include content_id
             # so different-file blocks don't merge into each other.
+            _nb_file = _qb_company_file_key(block_data.get("app_name") or "",
+                                            block_data.get("file_path") or "")
             _nb_comp = (_extract_qb_company_for_compaction(block_data.get("window_title") or "")
                         if (block_data.get("app_name") or "").strip().lower() in _QB_COMPACT_APPS else None)
-            if _nb_comp:
+            if _nb_file:
+                new_content_id = _nb_file
+            elif _nb_comp:
                 new_content_id = "qbco=" + _nb_comp.strip().lower()
             else:
                 new_content_id = _grouping_content_id(

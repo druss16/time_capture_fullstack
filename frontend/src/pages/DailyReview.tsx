@@ -2,7 +2,7 @@
  * DailyReview.tsx — modernized toolbar & layout
  */
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   RefreshCw,
   BarChart3,
@@ -28,6 +28,19 @@ const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api
 const API_BASE = RAW_BASE.endsWith("/api")
   ? RAW_BASE
   : `${RAW_BASE.replace(/\/+$/, "")}/api`;
+
+// How long the user must pause before a post-action reconcile actually fires.
+// Long enough that a run of confirms costs ONE today-time query instead of one
+// per click; short enough that the totals settle before you look up at them.
+const REFRESH_QUIET_MS = 1200;
+// How long after a row action the periodic poll keeps out of the way, so a tick
+// can't land in the middle of a run of confirms.
+const QUIET_AFTER_ACTION_MS = 20 * 1000;
+// Ceiling on how stale the header totals may get. Someone confirming steadily
+// never pauses long enough to trip the quiet-period debounce, so without this
+// the numbers up top would sit frozen for the whole run. Past this, reconcile
+// mid-run anyway — it's silent, and the rows are already optimistic.
+const MAX_STALE_MS = 15 * 1000;
 
 const formatHours = (hours: number): string => {
   const h = Math.floor(hours);
@@ -323,6 +336,45 @@ export default function DailyReview() {
     }
   }, [timeSummary, availableClients.length]);
 
+  // Reload plumbing. today-time is an expensive query (it re-derives why /
+  // mismatch / split for the whole day), so the rules are:
+  //   - only ONE may be in flight; starting a new one ABORTS the old one, whose
+  //     answer is already stale and whose open connection would otherwise sit in
+  //     the browser's per-host pool ahead of the user's next confirm PATCH.
+  //   - a response that has been superseded is dropped, never applied.
+  const reloadSeq = useRef(0);
+  const reloadAbort = useRef<AbortController | null>(null);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the user last acted on a row. The periodic poll stays out of the way
+  // for a beat after each action. Deliberately a TIMESTAMP and not an
+  // "is-reconciling" flag: a flag that somehow never cleared (a block the server
+  // keeps returning as pending) would silently kill auto-refresh for the whole
+  // session, whereas a stale timestamp just lets the next tick through.
+  const lastActionAt = useRef(0);
+  // When today-time data last actually landed — bounds how stale the totals get.
+  const lastLoadAt = useRef(0);
+  // True while a row-anchored editor (Change client, Split) is open. Reloading
+  // then re-renders the row the popover is pinned to and the half-made choice is
+  // gone, so reconciles WAIT — they don't get cancelled, just held, and the one
+  // held request runs the moment the picker closes.
+  const interactionOpen = useRef(false);
+  const reloadHeld = useRef(false);
+  // A payload that arrived while a picker was open. Holding the REQUEST isn't
+  // enough on its own: one already in flight when the picker opens still lands
+  // mid-selection, and rows disappearing above the open popover shift the row
+  // it's pinned to out from under it. So the data waits here and is applied on
+  // close — the reload isn't wasted, just not shown yet.
+  const heldPayload = useRef<TodayTimeResponse | null>(null);
+
+  const applyTodayTime = useCallback((json: TodayTimeResponse) => {
+    setTimeSummary(json.clients || []);
+    setBillableHours(json.billable_hours || 0);
+    setNonBillableHours(json.non_billable_hours || 0);
+    setNeedsReviewHours(json.needs_review_hours || 0);
+    setProposedInline(json.proposed_inline || []);
+    setMismatchBlocks(json.mismatch_blocks || []);
+    setSplitCandidates(json.split_candidates || []);
+  }, []);
   // `background: true` runs the reload SILENTLY — it does NOT flip `busy`, so the
   // Needs You action buttons stay live and the user can keep confirming while
   // totals reconcile behind the scenes. Foreground loads (initial, date change,
@@ -330,27 +382,34 @@ export default function DailyReview() {
   const loadTimeSummary = useCallback(async (opts?: { background?: boolean }) => {
     const background = opts?.background ?? false;
     if (!background) { setBusy(true); setErr(null); }
+    reloadAbort.current?.abort();
+    const ctl = new AbortController();
+    reloadAbort.current = ctl;
+    const seq = ++reloadSeq.current;
+    lastLoadAt.current = Date.now();
+    heldPayload.current = null;  // superseded — and never paint one from another date
     try {
       const { start, end } = rangeBounds(date, range);
       const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
       const json = await safeFetchJson<TodayTimeResponse>(
-        `${API_BASE}/today-time/?${qs}`
+        `${API_BASE}/today-time/?${qs}`, { signal: ctl.signal }
       );
-      setTimeSummary(json.clients || []);
-      setBillableHours(json.billable_hours || 0);
-      setNonBillableHours(json.non_billable_hours || 0);
-      setNeedsReviewHours(json.needs_review_hours || 0);
-      setProposedInline(json.proposed_inline || []);
-      setMismatchBlocks(json.mismatch_blocks || []);
-      setSplitCandidates(json.split_candidates || []);
+      if (seq !== reloadSeq.current) return;   // a newer reload already owns the page
+      // A silent reconcile never redraws under an open picker — it waits. A
+      // foreground load is the user asking for fresh data, so it always applies.
+      if (background && interactionOpen.current) { heldPayload.current = json; return; }
+      applyTodayTime(json);
     } catch (err: any) {
+      if (ctl.signal.aborted || seq !== reloadSeq.current) return;  // superseded, not a failure
       // A failed background reconcile must not blank the page the user is working
       // in — leave the current data and stay quiet.
       if (!background) { setErr(err?.message || "Failed to load"); setTimeSummary([]); }
     } finally {
-      if (!background) setBusy(false);
+      // Only the reload that still owns the page clears the spinner — an aborted
+      // one must not un-dim a page the newer foreground load is still filling.
+      if (!background && seq === reloadSeq.current) setBusy(false);
     }
-  }, [date, range]);
+  }, [date, range, applyTodayTime]);
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -384,9 +443,14 @@ export default function DailyReview() {
         }
         
         const autoSaved = response.filter((r) => r.ai_suggestion?.auto_saved).length;
-        if (autoSaved > 0) { 
-          loadTimeSummary(); 
-          loadUncategorizedCount(); 
+        if (autoSaved > 0) {
+          // BACKGROUND. /blocks/suggestions/ runs the full classifier incl. a live
+          // OpenAI batch, so this lands 5-15s after page load — by which time the
+          // user is already confirming rows. A foreground reload here flipped
+          // `busy` and killed every button mid-click for no reason the user could
+          // see; the lanes don't need the spinner to absorb an auto-file.
+          loadTimeSummary({ background: true });
+          loadUncategorizedCount();
         }
       }
     } catch {}
@@ -412,15 +476,6 @@ export default function DailyReview() {
     }, 200);
     return () => clearTimeout(t);
   }, [loadTimeSummary, loadUncategorizedCount, loadClients, runAIClassification]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadTimeSummary();
-      loadUncategorizedCount();
-      runAIClassification();
-    }, 2 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
 
   useEffect(() => {
     const dateParam = searchParams.get("date");
@@ -458,6 +513,7 @@ export default function DailyReview() {
   //     the optimistic Certain row).
   const confirmRows = useCallback((items: { blockId: number; clientId: number | null; category: string }[]) => {
     if (!items.length) return;
+    lastActionAt.current = Date.now();
     const ids = items.map((it) => it.blockId);
     setHiddenIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
     setOptimisticConfirms((prev) => {
@@ -482,6 +538,7 @@ export default function DailyReview() {
 
   const hideRows = useCallback((ids: number[]) => {
     if (!ids.length) return;
+    lastActionAt.current = Date.now();
     setHiddenIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
   }, []);
 
@@ -498,10 +555,85 @@ export default function DailyReview() {
   // SILENT background reconcile after a per-block action — no busy spinner (so
   // buttons stay live), no AI re-classification (its result the lanes never use;
   // the full pass stays on initial load + the manual Refresh button).
-  const handleRowRefresh = useCallback(() => {
+  //
+  // COALESCED. Every Needs You action used to fire its own reload, so triaging
+  // twenty rows queued twenty full today-time queries; they saturated the
+  // browser's per-host connection pool, the confirm PATCHes behind them crawled,
+  // and the page spent minutes "catching up". The rows already move instantly
+  // (optimistic), so the reconcile only has to happen once the user pauses:
+  // restart the timer on each action and reload after REFRESH_QUIET_MS of quiet.
+  // The one place a silent reconcile actually happens. Held — not skipped —
+  // while a picker is open, so nothing is lost: the reload runs on close.
+  const reconcile = useCallback(() => {
+    if (interactionOpen.current) { reloadHeld.current = true; return; }
+    reloadHeld.current = false;
     loadTimeSummary({ background: true });
     loadUncategorizedCount();
   }, [loadTimeSummary, loadUncategorizedCount]);
+
+  const scheduleRowRefresh = useCallback(() => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    // Steady clicking never leaves a REFRESH_QUIET_MS gap, so the debounce alone
+    // would let the totals freeze for the whole run. Past MAX_STALE_MS, go now.
+    if (Date.now() - lastLoadAt.current >= MAX_STALE_MS) { reconcile(); return; }
+    reloadTimer.current = setTimeout(() => {
+      reloadTimer.current = null;
+      reconcile();
+    }, REFRESH_QUIET_MS);
+  }, [reconcile]);
+
+  // Called by the lanes as a Change-client / Split editor opens and closes. On
+  // close, paint whatever the reconcile learned while it was open — the held
+  // payload first (already fetched), else run the reconcile that was held back.
+  const handleInteractionChange = useCallback((active: boolean) => {
+    interactionOpen.current = active;
+    if (active) return;
+    if (heldPayload.current) {
+      applyTodayTime(heldPayload.current);
+      heldPayload.current = null;
+      reloadHeld.current = false;
+      return;
+    }
+    if (reloadHeld.current) scheduleRowRefresh();
+  }, [applyTodayTime, scheduleRowRefresh]);
+
+  // Periodic catch-up for time the agent captured while the page sat open. The
+  // auto-refresh STAYS — it just stops fighting the user for the page:
+  //   - BACKGROUND (a foreground poll flipped `busy`, which disables every Needs
+  //     You button — the page going dead mid-run of confirms was this poll
+  //     landing, not the confirms themselves being slow),
+  //   - HELD while a picker is open, and skipped while rows are still
+  //     reconciling or a post-action reload is already queued — in every case
+  //     the next tick (or the picker closing) picks the new time up,
+  //   - free of runAIClassification, the heaviest call on the page and one the
+  //     lanes never read (it stays on initial load + the manual Refresh button).
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      if (reloadTimer.current) return;                                   // a reconcile is already queued
+      if (Date.now() - lastActionAt.current < QUIET_AFTER_ACTION_MS) return;  // user is mid-run
+      reconcile();
+    }, 2 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [reconcile]);
+
+  // Coming back to the tab shouldn't mean waiting out the rest of a 2-minute
+  // tick to see current numbers — reconcile on return if the data has aged.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastLoadAt.current < MAX_STALE_MS) return;
+      reconcile();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [reconcile]);
+
+  // Drop any pending reconcile / in-flight reload when the page goes away.
+  useEffect(() => () => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    reloadAbort.current?.abort();
+  }, []);
 
   const handleConfirmAll = async () => {
     setConfirmingAll(true);
@@ -823,9 +955,10 @@ export default function DailyReview() {
             onConfirmRows={confirmRows}
             onHideRows={hideRows}
             onRevertRows={revertRows}
-            onRefresh={handleRowRefresh}
+            onRefresh={scheduleRowRefresh}
             showToast={showToast}
             onIgnoreMismatch={ignoreMismatch}
+            onInteractionChange={handleInteractionChange}
           />
         </div>
       </div>

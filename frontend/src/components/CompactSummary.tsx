@@ -48,6 +48,11 @@ type Props = {
   showToast: (msg: string, type: "success" | "error") => void;
   /** Dismiss a mismatch flag as a false positive ("Keep here"). */
   onIgnoreMismatch: (ids: number[]) => void;
+  /** Fires whenever the user opens or closes something anchored to a row — the
+   *  Change-client popover or a split editor. A reload landing mid-selection
+   *  re-renders the row the popover is pinned to and the choice is lost, so the
+   *  parent holds its auto-refresh while this is true and reconciles after. */
+  onInteractionChange?: (active: boolean) => void;
 };
 
 function useSystemDark(): boolean {
@@ -83,6 +88,7 @@ type MoveState = {
 export default function CompactSummary({
   lanes, availableClients, availableCategories, busy,
   autoFiled, onConfirmRows, onHideRows, onRevertRows, onRefresh, showToast, onIgnoreMismatch,
+  onInteractionChange,
 }: Props) {
   const sysDark = useSystemDark();
   const { certain, needsYou } = lanes;
@@ -238,6 +244,12 @@ export default function CompactSummary({
   const [splitFor, setSplitFor] = useState<number | null>(null);
   const [splitAssign, setSplitAssign] = useState<Record<string, number | null>>({});
   const [splitBusy, setSplitBusy] = useState(false);
+
+  // Tell the parent when a row-anchored editor is open, so its auto-refresh
+  // waits rather than re-rendering the row out from under the open picker.
+  useEffect(() => {
+    onInteractionChange?.(move !== null || splitFor !== null);
+  }, [move, splitFor, onInteractionChange]);
   const sliceGuess = (r: Slice, currentClientId: number | null) =>
     r.suggested_client_id !== undefined ? r.suggested_client_id : currentClientId;
   const openSplit = (bid: number, breakdown: Slice[], currentClientId: number | null) => {

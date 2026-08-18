@@ -91,16 +91,29 @@ class Command(BaseCommand):
 
         # No paths. Distinguish "no new agent yet" from "the handle read failed".
         self.stdout.write(self.style.WARNING("\n  NO company file paths reported."))
-        if all(str(v).startswith(('1.7.0', '1.7.1', '1.7.2', '1.7.3', '1.7.4',
-                                  '1.7.5', '1.7.6', '1.7.7', '1.7.8', '1.7.9',
-                                  '1.7.10', '1.7.11', '1.7.12', '1.7.13', 'unknown'))
-               for v in versions):
+        # Compare as version TUPLES. String prefixes are a trap here:
+        # '1.7.14'.startswith('1.7.1') is True, so a prefix test reports the
+        # first agent that actually HAS the feature as "too old" — exactly
+        # backwards, and it hides the failure this command exists to catch.
+        def _tuple(v):
+            try:
+                return tuple(int(x) for x in str(v).split('.')[:3])
+            except (TypeError, ValueError):
+                return (0, 0, 0)
+
+        FIRST_WITH_CAPTURE = (1, 7, 14)
+        capable = {v: n for v, n in versions.items()
+                   if _tuple(v) >= FIRST_WITH_CAPTURE}
+        if not capable:
             self.stdout.write(
-                "  Every agent doing QB work predates the capture — expected.\n"
-                "  Re-run once a machine with QuickBooks has updated to v1.7.14+.")
+                "  Every agent doing QB work predates v1.7.14 — expected.\n"
+                "  Re-run once a machine with QuickBooks has updated.")
         else:
+            n = sum(capable.values())
             self.stdout.write(self.style.ERROR(
-                "  An agent at v1.7.14+ IS doing QuickBooks work and still reports\n"
-                "  no path. That is the failure mode to chase: psutil.open_files()\n"
-                "  is most likely being refused on the network share (Q:). Check the\n"
-                "  agent log on that machine for '[FILE]' warnings."))
+                f"  {n:,} event(s) from agents at v1.7.14+ "
+                f"({', '.join(sorted(capable))}) did QuickBooks work and reported\n"
+                "  NO company file. The code is shipping but the handle read is\n"
+                "  returning nothing — psutil.open_files() most likely cannot\n"
+                "  resolve paths on the mapped network drive. Confirm on one\n"
+                "  machine before changing the mechanism."))

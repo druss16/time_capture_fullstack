@@ -746,6 +746,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             "hostname": event.hostname or hostname or "unknown",
             "device_id": _safe_device_id(getattr(event, "device_id", None)),
             "current_client_id": getattr(event, "current_client_id", None),
+            # Open .qbw path from qbw.exe's handle table (agent Tier 1). Unique
+            # per client where the QB company NAME is not — see the content_id
+            # comment below.
+            "qb_company_path": (
+                (getattr(event, "ctx", {}) or {}).get("qb_company_path") or ""
+                if isinstance(getattr(event, "ctx", None), dict) else ""
+            ),
         })
 
     # Split into sessions using REAL inter-event gaps (next.start - prev.end)
@@ -791,6 +798,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         # which reads _qb_company_fill when computing content_id.
         _last_qb_company = None
         _last_qb_client_id = None
+        _last_qb_path = None
         for fill_ev in session:
             app_l = (fill_ev.get("app_name") or "").strip().lower()
             if app_l not in _QB_COMPACT_APPS:
@@ -803,7 +811,18 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             if _is_qb_boundary(title):
                 _last_qb_company = None
                 _last_qb_client_id = None
+                _last_qb_path = None
                 continue
+            # Forward-fill the company FILE PATH on the same boundary rules.
+            # The agent reads it from qbw.exe's handles rather than the title,
+            # so it is normally present on every event including modals; the
+            # fill covers intermittent handle-enumeration misses so one
+            # company's run does not fragment into path-keyed and name-keyed
+            # halves.
+            if fill_ev.get("qb_company_path"):
+                _last_qb_path = fill_ev["qb_company_path"]
+            elif _last_qb_path:
+                fill_ev["qb_company_path"] = _last_qb_path
             comp = _extract_qb_company_for_compaction(title)
             if comp:
                 _last_qb_company = comp
@@ -827,10 +846,21 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             # (extracted or forward-filled) so all of one company's QB events
             # in a session share a key and merge into one block.
             _qb_comp = None
+            _qb_path = ""
             if (ev.get("app_name") or "").strip().lower() in _QB_COMPACT_APPS:
                 _qb_comp = (_extract_qb_company_for_compaction(ev.get("window_title") or "")
                             or ev.get("_qb_company_fill"))
-            if _qb_comp:
+                _qb_path = (ev.get("qb_company_path") or "").strip()
+            # The company FILE beats the company NAME as identity when the
+            # agent captured it. QB company names are not unique across a
+            # firm's clients — one directory holds fourteen files that all
+            # read "St. Mary's ..." — so a name key MERGES two parishes into
+            # one block, after which no classifier stage can pull them apart.
+            # The .qbw path is unique, so key on it. Events from older agents
+            # carry no path and keep the name key exactly as before.
+            if _qb_path:
+                content_id = "qbfile=" + _qb_path.lower()
+            elif _qb_comp:
                 # The COMPANY is the content identity. NOTE: _content_identifier
                 # returns '' for a bare company (it expects a full title), which
                 # silently broke this — QB blocks fell back to the agent's

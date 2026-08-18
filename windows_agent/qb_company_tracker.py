@@ -72,6 +72,7 @@ SAFETY PROPERTIES
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -306,3 +307,193 @@ def get_company_global() -> str | None:
             logger.warning("QB tracker global error (fail-open): %s", e)
             _global_warned = True
         return _global_cache['company']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Company FILE PATH capture — the fix for ambiguous company NAMES.
+#
+# The title bar carries QuickBooks' Company Name field, which the client typed
+# when the file was created. For a firm doing 135 parish/cemetery books that
+# name is routinely non-unique: fourteen distinct .qbw files in one directory
+# all announce themselves as some flavour of "St. Mary's Church", and the only
+# disambiguator (Clinton / Rome / Minoa / Baldwinsville / NY Mills / …) lives
+# in the FILENAME, which never reaches any window title.
+#
+# qbw.exe holds an open handle to the company file it has loaded, so the path
+# is readable from the process handle table:
+#
+#     Q:\QB\QB2024 Files\St. Mary's Church_Clinton_QB2024.QBW
+#
+# That string is unique per client and routes through the same folder/filename
+# client matcher that already works for Office documents.
+#
+# COST: psutil.open_files() enumerates the process handle table — materially
+# more expensive than reading a window title. Rate-limited to one enumeration
+# per ENUM_INTERVAL_SECONDS, with an immediate re-read whenever the company
+# NAME changes (i.e. the user switched files), so a switch is never served
+# stale from cache.
+#
+# PRIVACY: paths only, from QuickBooks processes only, and only files ending
+# in .qbw. No file contents are read or opened.
+# ─────────────────────────────────────────────────────────────────────────────
+
+QB_COMPANY_EXT = '.qbw'
+
+
+def _norm_for_pairing(text: str) -> str:
+    """Lowercase alphanumerics only — 'St. Mary's Church_Clinton' → 'stmaryschurchclinton'."""
+    return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
+
+
+# Bookkeeping noise firms bolt onto company filenames. Stripped before matching
+# so 'St. Mary's Church_Clinton_QB2024.QBW' and 'st mary's church_Baldwinsville
+# .qbw' both reduce to the client identity and nothing else. Patterns are taken
+# from a real 135-file production directory.
+_STEM_PREFIX_RE = re.compile(r'^(restored|fixed|copy of|copy)[_\-\s]+', re.IGNORECASE)
+_STEM_YEAR_RE = re.compile(r'[_\-.\s]*qb?w?\s*20\d\d$', re.IGNORECASE)
+_STEM_DATE_RE = re.compile(r'[_\-.\s]*\d{6,8}[a-z]?$', re.IGNORECASE)
+
+
+def clean_company_file_stem(path: str) -> str:
+    """
+    Company filename → client identity.
+
+      'Q:\\QB\\QB2024 Files\\St. Mary's Church_Clinton_QB2024.QBW'
+          → "St. Mary's Church_Clinton"
+      'fixed_harrington homes of jamesville01142026b.qbw'
+          → 'harrington homes of jamesville'
+      'Midnight Express Towing & Recovery_qbw2024.qbw'
+          → 'Midnight Express Towing & Recovery'
+
+    Version years and working-copy dates are stripped because they are
+    bookkeeping metadata, not client identity — 'Cadd Systems_03042025' and
+    'Cadd Systems_022626' are the same client.
+    """
+    # Separator-agnostic: these are Windows paths, but the same helper is
+    # exercised by tests (and mirrored server-side) on POSIX hosts.
+    stem = (path or '').replace('/', '\\').rsplit('\\', 1)[-1]
+    if '.' in stem:
+        stem = stem.rsplit('.', 1)[0]
+    stem = _STEM_PREFIX_RE.sub('', stem).strip()
+
+    # Suffixes stack ('_QB2024' after a date, a date after '_QB2024') — peel
+    # until stable rather than assuming an order.
+    for _ in range(4):
+        before = stem
+        stem = _STEM_YEAR_RE.sub('', stem).strip()
+        stem = _STEM_DATE_RE.sub('', stem).strip()
+        if stem == before:
+            break
+    return stem.strip(' _-.')
+
+
+def _enumerate_open_company_files() -> list[str]:
+    """Open .qbw paths across every running QuickBooks process. [] on any failure."""
+    try:
+        import psutil
+    except Exception:
+        return []
+
+    found = set()
+    try:
+        for proc in psutil.process_iter(['name']):
+            try:
+                if (proc.info.get('name') or '').lower() not in QB_EXE_NAMES:
+                    continue
+                for f in proc.open_files():
+                    path = f.path
+                    if path and path.lower().endswith(QB_COMPANY_EXT):
+                        found.add(path)
+            except Exception:
+                # AccessDenied / NoSuchProcess / anything else — skip this proc.
+                continue
+    except Exception as e:
+        logger.warning("QB company-file enumeration failed: %s", e)
+        return []
+    return sorted(found)
+
+
+# Cached because handle-table enumeration is expensive. Invalidated on company
+# change, so a file switch is picked up immediately rather than up to 15s late.
+_files_cache = {'paths': [], 'enumerated_at': 0.0, 'company': None}
+
+
+def get_open_company_files(company_hint: str | None = None) -> list[str]:
+    """
+    Every open QuickBooks company file path. Rate-limited; re-reads immediately
+    when `company_hint` differs from the company seen at the last enumeration
+    (the user switched company files). Fail-open: returns the last known list.
+    """
+    now = time.monotonic()
+    stale = (now - _files_cache['enumerated_at']) >= ENUM_INTERVAL_SECONDS
+    switched = company_hint is not None and company_hint != _files_cache['company']
+
+    if not stale and not switched:
+        return list(_files_cache['paths'])
+
+    try:
+        paths = _enumerate_open_company_files()
+        _files_cache['paths'] = paths
+        _files_cache['enumerated_at'] = now
+        _files_cache['company'] = company_hint
+        return list(paths)
+    except Exception as e:
+        logger.warning("QB company-file cache refresh failed (fail-open): %s", e)
+        return list(_files_cache['paths'])
+
+
+def get_company_file_context(window_title: str | None = None) -> dict:
+    """
+    One handle-table read, both answers:
+
+        {'open_files': [path, …], 'active': path | None}
+
+    'active' is the file the user is actually working in, resolved as:
+      1. Exactly one company file open  → that one. (The common case.)
+      2. Several open (QB Accountant's "Open Second Company" — the Primary /
+         Secondary pair) → pair them against the company NAME in the title:
+         the name is a substring of its own filename, so a unique normalized
+         match identifies the file.
+      3. No unique winner → None. A coin flip between a parish and its cemetery
+         is exactly the misattribution this capture exists to end, so abstain
+         and let the server fall back to the existing title path.
+
+    Callers should prefer this over calling get_open_company_files() and a
+    separate resolver: enumerating the handle table is the expensive part, and
+    doing it twice per event doubles that cost for nothing.
+    """
+    company = _extract_company_from_main_title(window_title or '') or get_company_global()
+    paths = get_open_company_files(company_hint=company)
+    return {'open_files': paths, 'active': _resolve_active(paths, company)}
+
+
+def _resolve_active(paths: list[str], company: str | None) -> str | None:
+    if not paths:
+        return None
+    if len(paths) == 1:
+        return paths[0]
+
+    # With two companies loaded, QB appends "(Primary)" / "(Secondary)" to the
+    # company name — and that marker is exactly what breaks a naive substring
+    # pair, since it is in the TITLE and never in the filename. Strip a trailing
+    # parenthetical and try both forms. (Two-companies-open is the only case
+    # that reaches here, so this path must handle the marker or it never pairs.)
+    forms = []
+    for form in (company or '', re.sub(r'\s*\([^)]*\)\s*$', '', company or '')):
+        norm = _norm_for_pairing(form)
+        if norm and norm not in forms:
+            forms.append(norm)
+    if not forms:
+        return None
+
+    matches = [
+        p for p in paths
+        if any(f in _norm_for_pairing(clean_company_file_stem(p)) for f in forms)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def get_active_company_file(window_title: str | None = None) -> str | None:
+    """The open company file the user is working in, or None. See
+    get_company_file_context() when you also want the full open set."""
+    return get_company_file_context(window_title)['active']

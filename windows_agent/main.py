@@ -2201,6 +2201,26 @@ def write_event(
     except Exception:
         pass
 
+    # ── Tier 1: QuickBooks company FILE PATH (additive context) ──
+    # QB's title bar carries the Company Name field, not the filename. For a
+    # firm keeping books for 135 parishes those names collide wholesale (14
+    # distinct .qbw files that all read "St. Mary's Church…"), and every
+    # disambiguator lives in the filename. qbw.exe holds the .qbw open, so the
+    # unique path is readable from its handle table. Additive only: never
+    # touches window_title/file_path, never raises.
+    try:
+        if (app_name or "").lower() in ("qbw.exe", "qbw32.exe"):
+            from qb_company_tracker import get_company_file_context as _qb_ctx
+            _qb = _qb_ctx(title or "")   # ONE handle-table read, both answers
+            if _qb["open_files"]:
+                if not isinstance(payload.get("ctx"), dict):
+                    payload["ctx"] = {}
+                payload["ctx"]["qb_open_files"] = _qb["open_files"]
+                if _qb["active"]:
+                    payload["ctx"]["qb_company_path"] = _qb["active"]
+    except Exception:
+        pass
+
     # ── Tier 2: Excel sheet tabs for UNSAVED scratch workbooks only ──
     # A "Book2 - Excel" has no file identity, but its sheet tabs may be named
     # by client (e.g. "DivineMercy_JE"). Read them via a read-only COM attach.

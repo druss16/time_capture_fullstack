@@ -836,14 +836,10 @@ def _clean_label(s: str) -> str:
     return s
 
 
-def _block_breakdown(block, events=None):
+def _block_breakdown(block):
     """Foreground time-split within a block — how long each distinct window/doc was
     actually IN FRONT, from the sub-events. Answers 'was most of it X, or a bit of
-    Y?'. Returns [{label, minutes, pct}] biggest-first (max 6, sub-minute dropped).
-
-    `events` lets a caller that already holds this block's RawEvents (e.g. the
-    Daily Review scan, which bulk-loads them for the whole day in one query) skip
-    the per-block fetch — otherwise scanning N blocks costs N round trips."""
+    Y?'. Returns [{label, minutes, pct}] biggest-first (max 6, sub-minute dropped)."""
     from collections import defaultdict
     try:
         from tracker.views import _tabctx_lead_name, _tabctx_is_noise
@@ -851,11 +847,8 @@ def _block_breakdown(block, events=None):
         _tabctx_lead_name = lambda t: (t or "").strip()          # noqa: E731
         _tabctx_is_noise = lambda n: False                        # noqa: E731
 
-    if events is None:
-        events = RawEvent.objects.filter(block=block).only("window_title", "start_ts", "end_ts")
-
     secs = defaultdict(float)
-    for ev in events:
+    for ev in RawEvent.objects.filter(block=block).only("window_title", "start_ts", "end_ts"):
         if not ev.start_ts or not ev.end_ts:
             continue
         dur = (ev.end_ts - ev.start_ts).total_seconds()
@@ -958,7 +951,7 @@ def _phrase_client_for_label(label, names, index):
     return cid
 
 
-def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
+def _slice_suggestions(block, org, breakdown=None):
     """Best-guess client for each breakdown slice, so a split can be PRE-FILLED
     instead of hand-assigned. Returns {label: {"client_id", "client_name"}}.
 
@@ -967,22 +960,15 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
       2. the label looks like a timesheet / personal admin → No client
       3. the label is a bare app dialog (noise)            → inherit the dominant slice
       4. otherwise                                          → the block's current client
-         (a safe no-op — we don't invent a move we're unsure of).
-
-    `names` / `index` let a caller scanning many blocks pass the org's client map
-    and its token index in, instead of re-querying and re-indexing every client
-    once per block."""
+         (a safe no-op — we don't invent a move we're unsure of)."""
     from tracker.utils.client_name_match import build_token_index, detect_title_client
 
     bd = breakdown if breakdown is not None else _block_breakdown(block)
     if not bd:
         return {}
 
-    if names is None:
-        names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
-        index = None  # a caller-supplied index would not match a fresh name map
-    if index is None:
-        index = build_token_index(names) if names else None
+    names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
+    index = build_token_index(names) if names else None
     firm = getattr(org, "name", None)
     cur_id = block.client_id
     cur_name = getattr(getattr(block, "client", None), "name", None)

@@ -4652,33 +4652,17 @@ def today_time(request):
         _names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')} if org else {}
         if _names:
             _index = build_token_index(_names)
-            _scan = [
-                _b for _b in committed_block_qs(
-                    org, start_utc, end_utc, user_id=user.id, can_see_all=False
-                )[:200]
-                if _b.client_id and _b.client_id in _names and _b.window_title
-            ]
-            # Bulk-load every scanned block's sub-events in ONE query and group by
-            # block. The per-block fetch this replaces made the scan cost a DB
-            # round trip per block — the single largest chunk of this endpoint's
-            # latency, and it was paid again on every reload after a confirm.
-            _events_by_block = defaultdict(list)
-            if _scan:
-                for _ev in RawEvent.objects.filter(
-                    block_id__in=[b.id for b in _scan]
-                ).only('block_id', 'window_title', 'start_ts', 'end_ts'):
-                    _events_by_block[_ev.block_id].append(_ev)
-            for _b in _scan:
+            for _b in list(committed_block_qs(org, start_utc, end_utc, user_id=user.id, can_see_all=False)[:200]):
+                if not _b.client_id or _b.client_id not in _names or not _b.window_title:
+                    continue
                 _cat = list((_b.category_hours or {}).keys())[0] if _b.category_hours else 'General Client Work'
 
                 # SPLIT: does the activity breakdown point at 2+ distinct clients?
                 _is_split = False
                 try:
-                    _bd = _block_breakdown(_b, events=_events_by_block.get(_b.id, []))
+                    _bd = _block_breakdown(_b)
                     if _bd and len(_bd) > 1:
-                        _sug = _slice_suggestions(
-                            _b, org, breakdown=_bd, names=_names, index=_index,
-                        )
+                        _sug = _slice_suggestions(_b, org, breakdown=_bd)
                         _cids = {s['client_id'] for s in _sug.values() if s.get('client_id') is not None}
                         if len(_cids) >= 2:
                             _is_split = True

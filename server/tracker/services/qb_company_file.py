@@ -193,3 +193,30 @@ def parse_listing(text):
 def listing_tokens(text):
     """Distinctive (>=4 char) lowercase tokens, for candidate ranking."""
     return {t for t in re.split(r'[^a-z0-9]+', (text or '').lower()) if len(t) >= 4}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Compaction merge key. Lives here (not in compaction.py) so it is testable
+# without Django, and so the ONE definition is shared by all three places
+# compaction computes a content_id — they must never drift apart.
+# ─────────────────────────────────────────────────────────────────────────────
+
+QB_COMPACT_APPS = {'qbw', 'qbw.exe', 'qbw32', 'qbw32.exe'}
+
+
+def company_file_key(app_name: str, file_path: str):
+    """'qbfile=<path>' when a QB block knows its own .qbw file, else None.
+
+    The company FILE is a stronger identity than the company NAME: a firm's
+    QB company names are not unique (fourteen "St. Mary's ..." files in one
+    directory), so keying a merge on the name glues two parishes into one
+    block. Used by BOTH the grouping key and the block-extension key — they
+    must agree, or grouping separates two companies and extension re-merges
+    them.
+    """
+    if (app_name or "").strip().lower() not in QB_COMPACT_APPS:
+        return None
+    fp = (file_path or "").strip()
+    if not fp.lower().endswith(".qbw"):
+        return None
+    return "qbfile=" + fp.lower()

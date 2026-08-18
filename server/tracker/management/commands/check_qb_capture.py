@@ -56,6 +56,8 @@ class Command(BaseCommand):
         with_path = with_open = 0
         paths = Counter()
         versions = Counter()
+        probes = Counter()       # what the agent's own probe reported
+        errors = Counter()
         reporting_hosts, qb_hosts = set(), set()
 
         for ctx, ver, host in rows:
@@ -63,6 +65,15 @@ class Command(BaseCommand):
             qb_hosts.add(host)
             if not isinstance(ctx, dict):
                 continue
+            probe = ctx.get('qb_capture')
+            if isinstance(probe, dict):
+                probes[probe.get('src') or 'none'] += 1
+                if probe.get('err'):
+                    errors[f"{probe['err']}  "
+                           f"(procs={probe.get('procs', '?')} "
+                           f"handles={probe.get('handles', '?')} "
+                           f"ini={probe.get('ini', '?')} "
+                           f"reg={probe.get('reg', '?')})"] += 1
             if ctx.get('qb_open_files'):
                 with_open += 1
                 reporting_hosts.add(host)
@@ -77,6 +88,18 @@ class Command(BaseCommand):
                           f"({100.0*with_path/total:.1f}%)")
         self.stdout.write(f"  machines seen doing QB  : {len(qb_hosts)}   "
                           f"of which reporting paths: {len(reporting_hosts)}")
+
+        if probes:
+            self.stdout.write("\n  what the agent's own probe reported:")
+            for src, n in probes.most_common():
+                label = {'handles': 'read from qbw.exe handle table',
+                         'mru': 'read from QuickBooks recent-file list',
+                         'none': 'found nothing'}.get(src, src)
+                self.stdout.write(f"    {src:>8}  {n:,} events   ({label})")
+        if errors:
+            self.stdout.write("\n  probe errors (this is the actual cause):")
+            for e, n in errors.most_common(5):
+                self.stdout.write(f"    {n:6,}x  {e}")
 
         self.stdout.write("\n  agent versions doing QB work:")
         for v, n in versions.most_common(6):
@@ -113,7 +136,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(
                 f"  {n:,} event(s) from agents at v1.7.14+ "
                 f"({', '.join(sorted(capable))}) did QuickBooks work and reported\n"
-                "  NO company file. The code is shipping but the handle read is\n"
-                "  returning nothing — psutil.open_files() most likely cannot\n"
-                "  resolve paths on the mapped network drive. Confirm on one\n"
-                "  machine before changing the mechanism."))
+                "  NO company file. The code is shipping but no mechanism can\n"
+                "  see the path. Read the probe lines above for the cause; if\n"
+                "  they are absent the agent predates the diagnostic (v1.7.15)."))

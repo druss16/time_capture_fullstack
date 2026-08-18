@@ -127,5 +127,33 @@ check("MRU read is safe on a machine with no QuickBooks", _mru_ok)
 check("MRU probe records its counters", 'ini' in _diag)
 check("get_capture_diagnostics returns a dict", isinstance(get_capture_diagnostics(), dict))
 
+
+print("\n=== v1.7.16: command-line mechanism + environment probe ===")
+from qb_company_tracker import _paths_from_cmdline, _record_environment  # noqa: E402
+
+check("extracts a company file from a QuickBooks command line",
+      found(r'"C:\Program Files\Intuit\QBW.EXE" "Q:\QB\QB2024 Files\Sacred Heart Cicero_QB2024.qbw"')
+      == [r"Q:\QB\QB2024 Files\Sacred Heart Cicero_QB2024.qbw"])
+check("a bare launch with no company argument yields nothing",
+      found(r'"C:\Program Files\Intuit\QBW.EXE"') == [])
+
+_d = {}
+try:
+    _paths_from_cmdline(_d)
+    _cmd_ok = True
+except Exception:
+    _cmd_ok = False
+check("cmdline probe is safe with no QuickBooks running", _cmd_ok)
+check("cmdline probe records its counter", 'cmd' in _d)
+
+_e = {}
+try:
+    _record_environment(_e)
+    _env_ok = True
+except Exception:
+    _env_ok = False
+check("environment probe never raises", _env_ok)
+check("environment probe reports the agent user", 'me' in _e)
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

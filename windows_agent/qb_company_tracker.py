@@ -527,6 +527,94 @@ def _paths_from_mru(diag: dict) -> list[str]:
     return found
 
 
+def _paths_from_cmdline(diag: dict) -> list[str]:
+    """Company file path from qbw.exe's COMMAND LINE.
+
+    Opening a company by double-clicking the .qbw, or from the Windows recent
+    list, launches QuickBooks with the path as an argument. Reading a command
+    line needs only PROCESS_QUERY_LIMITED_INFORMATION, which a normal user
+    holds even against an ELEVATED process — unlike duplicating its handles,
+    which is what returns AccessDenied in the field.
+
+    Blind to a company opened from inside a running QuickBooks (File > Open,
+    or Open Second Company), so it complements the other mechanisms rather
+    than replacing them.
+    """
+    found = []
+    try:
+        import psutil
+    except Exception as e:
+        # Record even this: a counter that is simply ABSENT reads as "not
+        # reached", which is the same ambiguity the whole probe exists to kill.
+        diag['cmd'] = 0
+        diag['cmd_err'] = f'psutil:{type(e).__name__}'
+        return found
+    try:
+        for proc in psutil.process_iter(['name']):
+            try:
+                if (proc.info.get('name') or '').lower() not in QB_EXE_NAMES:
+                    continue
+                for arg in (proc.cmdline() or []):
+                    for m in _QBW_PATH_RE.finditer(arg or ''):
+                        p = m.group(1).strip()
+                        if p not in found:
+                            found.append(p)
+            except Exception as e:
+                diag.setdefault('cmd_err', type(e).__name__)
+                continue
+    except Exception as e:
+        diag.setdefault('cmd_err', type(e).__name__)
+    diag['cmd'] = len(found)
+    return found
+
+
+def _record_environment(diag: dict):
+    """Facts that decide WHICH mechanism can ever work here.
+
+    AccessDenied against a same-user process, plus an empty HKCU read, both
+    point at the same thing: the agent and QuickBooks are not the same
+    security context. Guessing which cost a release cycle — so measure it.
+    """
+    try:
+        import getpass
+        diag['me'] = (getpass.getuser() or '')[:24]
+    except Exception:
+        pass
+    try:
+        import psutil
+        for proc in psutil.process_iter(['name']):
+            try:
+                if (proc.info.get('name') or '').lower() not in QB_EXE_NAMES:
+                    continue
+                try:
+                    # 'DOMAIN\user' -> 'user'; this is the comparison that
+                    # tells elevation apart from a different account.
+                    diag['qbuser'] = (proc.username() or '').split('\\')[-1][:24]
+                except Exception as e:
+                    diag['qbuser'] = f'?{type(e).__name__}'
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    # Do the MRU locations we probe actually EXIST? 'ini=0' alone cannot tell
+    # "file absent" from "file present but no paths in it".
+    seen = []
+    for raw_dir in _QBW_INI_DIRS:
+        base = os.path.expandvars(raw_dir)
+        if '%' not in base and os.path.isdir(base):
+            seen.append(os.path.basename(os.path.dirname(base)) or base[:12])
+    diag['inidirs'] = len(seen)
+    if sys.platform == 'win32':
+        try:
+            import winreg
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                           r'Software\Intuit\QuickBooks'))
+            diag['regkey'] = 1
+        except Exception:
+            diag['regkey'] = 0
+
+
 def _enumerate_open_company_files() -> list[str]:
     """Company file paths, by whichever mechanism can see them.
 
@@ -535,7 +623,7 @@ def _enumerate_open_company_files() -> list[str]:
     total failure was indistinguishable from "nobody used QuickBooks" — the
     whole feature is fail-open, and a silent fail-open is unfalsifiable.
     """
-    diag = {'procs': 0, 'handles': 0, 'ini': 0, 'reg': 0}
+    diag = {'procs': 0, 'handles': 0, 'ini': 0, 'reg': 0, 'cmd': 0}
 
     paths = _paths_from_handles(diag)
     if paths:
@@ -544,9 +632,23 @@ def _enumerate_open_company_files() -> list[str]:
         return sorted(paths)
 
     paths = _paths_from_mru(diag)
-    diag['src'] = 'mru' if paths else 'none'
+    if paths:
+        diag['src'] = 'mru'
+        _last_diag.clear(); _last_diag.update(diag)
+        return paths
+
+    # Command line survives elevation, so it is the mechanism most likely to
+    # work exactly where the other two just failed.
+    paths = _paths_from_cmdline(diag)
+    diag['src'] = 'cmdline' if paths else 'none'
+    if not paths:
+        # Nothing worked — spend the extra calls to report WHY, so the next
+        # release is aimed rather than guessed.
+        try:
+            _record_environment(diag)
+        except Exception:
+            pass
     _last_diag.clear(); _last_diag.update(diag)
-    # MRU order is most-recent-first; keep it (the caller pairs by company name).
     return paths
 
 

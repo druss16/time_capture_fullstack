@@ -88,5 +88,44 @@ check("dated working copy still pairs to its company name",
 check("clean() drops the version year for pairing",
       clean(CHURCH) == "St. Mary's Church_Clinton")
 
+
+# ── v1.7.15: MRU fallback + probe diagnostics ────────────────────────────────
+from qb_company_tracker import (  # noqa: E402
+    _QBW_PATH_RE, _paths_from_mru, get_capture_diagnostics,
+)
+
+print("\n=== company-file path extraction (MRU / registry text) ===")
+
+
+def found(text):
+    return [m.group(1) for m in _QBW_PATH_RE.finditer(text)]
+
+
+check("pulls a drive-letter path out of INI text",
+      found(r"PriorCompany1=Q:\QB\QB2024 Files\St. Mary's Church_Clinton_QB2024.QBW")
+      == [r"Q:\QB\QB2024 Files\St. Mary's Church_Clinton_QB2024.QBW"])
+check("pulls a UNC path (share not mapped to a letter)",
+      found(r'x=\\tlwserver\QB\QB2024 Files\Sacred Heart Cicero_QB2024.qbw')
+      == [r'\\tlwserver\QB\QB2024 Files\Sacred Heart Cicero_QB2024.qbw'])
+check("finds several entries in one MRU blob",
+      len(found(r'A=Q:\QB\a.qbw' + '\n' + r'B=Q:\QB\b.qbw')) == 2)
+check("ignores .qbw sidecars that are not company files",
+      found(r'Q:\QB\x.qbw.TLG') == [r'Q:\QB\x.qbw'])   # truncates at .qbw, sidecar tail dropped
+check("does not run past a line ending",
+      found('A=Q:\\QB\\a.qbw\nnoise') == [r'Q:\QB\a.qbw'])
+check("no false positive on text without a path",
+      found('PriorCompany1=') == [])
+
+print("\n=== probe never raises, always reports ===")
+_diag = {}
+try:
+    _paths_from_mru(_diag)          # no QuickBooks on this host — must not raise
+    _mru_ok = True
+except Exception:
+    _mru_ok = False
+check("MRU read is safe on a machine with no QuickBooks", _mru_ok)
+check("MRU probe records its counters", 'ini' in _diag)
+check("get_capture_diagnostics returns a dict", isinstance(get_capture_diagnostics(), dict))
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

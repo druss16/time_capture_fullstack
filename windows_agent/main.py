@@ -2210,11 +2210,21 @@ def write_event(
     # touches window_title/file_path, never raises.
     try:
         if (app_name or "").lower() in ("qbw.exe", "qbw32.exe"):
-            from qb_company_tracker import get_company_file_context as _qb_ctx
-            _qb = _qb_ctx(title or "")   # ONE handle-table read, both answers
+            from qb_company_tracker import (
+                get_company_file_context as _qb_ctx,
+                get_capture_diagnostics as _qb_diag,
+            )
+            _qb = _qb_ctx(title or "")   # ONE probe, both answers
+            if not isinstance(payload.get("ctx"), dict):
+                payload["ctx"] = {}
+            # ALWAYS record the probe result, including the empty case. v1.7.14
+            # emitted nothing when it found nothing, so a machine that could not
+            # read any path was indistinguishable from a machine not running
+            # QuickBooks — the feature is fail-open by design, and a fail-open
+            # with no diagnostic cannot be proven broken. It took a 217-event
+            # sample to notice. This dict is a handful of integers.
+            payload["ctx"]["qb_capture"] = _qb_diag()
             if _qb["open_files"]:
-                if not isinstance(payload.get("ctx"), dict):
-                    payload["ctx"] = {}
                 payload["ctx"]["qb_open_files"] = _qb["open_files"]
                 if _qb["active"]:
                     payload["ctx"]["qb_company_path"] = _qb["active"]

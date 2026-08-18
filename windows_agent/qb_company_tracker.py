@@ -387,30 +387,176 @@ def clean_company_file_stem(path: str) -> str:
     return stem.strip(' _-.')
 
 
-def _enumerate_open_company_files() -> list[str]:
-    """Open .qbw paths across every running QuickBooks process. [] on any failure."""
+# Why two mechanisms: handle enumeration is authoritative — it reports the file
+# the process has OPEN right now — but psutil.open_files() on Windows resolves
+# handles to paths through NtQueryObject, which routinely returns nothing for a
+# MAPPED NETWORK DRIVE. This firm keeps every company file on Q:, and the first
+# release (v1.7.14) reported zero paths from 217 events across 8 machines while
+# the code was demonstrably running. So handles are tried first and QuickBooks'
+# own recently-opened list is the fallback: a plain file/registry read, immune
+# to handle resolution, that names the same paths.
+#
+# The MRU is "recently opened", not "currently open" — which is why the caller
+# still pairs the candidates against the company name in the title before
+# trusting one. That pairing is what makes a stale MRU entry harmless.
+
+# QuickBooks' per-user settings file. Its exact home moved across versions, so
+# probe all known locations rather than betting on one.
+_QBW_INI_DIRS = (
+    r'%APPDATA%\Intuit\QuickBooks',
+    r'%LOCALAPPDATA%\Intuit\QuickBooks',
+    r'%PROGRAMDATA%\Intuit\QuickBooks',
+    r'%USERPROFILE%\AppData\Roaming\Intuit\QuickBooks',
+)
+_QBW_INI_NAMES = ('QBWUSER.INI', 'qbwuser.ini')
+
+# Any absolute path ending in .qbw, drive-letter or UNC.
+_QBW_PATH_RE = re.compile(r'((?:[A-Za-z]:\\|\\\\)[^\r\n"|*?<>]{0,200}?\.qbw)', re.IGNORECASE)
+
+
+def _paths_from_handles(diag: dict) -> list[str]:
+    """Open .qbw paths read from qbw.exe's handle table. Authoritative when it
+    works; commonly empty for files on a mapped network drive."""
     try:
         import psutil
-    except Exception:
+    except Exception as e:
+        diag['err'] = f'psutil:{type(e).__name__}'
         return []
 
     found = set()
+    procs = 0
     try:
         for proc in psutil.process_iter(['name']):
             try:
                 if (proc.info.get('name') or '').lower() not in QB_EXE_NAMES:
                     continue
+                procs += 1
                 for f in proc.open_files():
                     path = f.path
                     if path and path.lower().endswith(QB_COMPANY_EXT):
                         found.add(path)
-            except Exception:
-                # AccessDenied / NoSuchProcess / anything else — skip this proc.
+            except Exception as e:
+                # AccessDenied is the expected failure here — record it once so
+                # the server can tell "refused" from "no QuickBooks running".
+                diag.setdefault('err', type(e).__name__)
                 continue
     except Exception as e:
-        logger.warning("QB company-file enumeration failed: %s", e)
-        return []
+        diag['err'] = type(e).__name__
+        logger.warning("QB handle enumeration failed: %s", e)
+    diag['procs'] = procs
+    diag['handles'] = len(found)
     return sorted(found)
+
+
+def _paths_from_mru(diag: dict) -> list[str]:
+    r"""Company file paths from QuickBooks' own recently-opened list.
+
+    Two sources, both plain reads that never touch a handle table:
+      - QBWUSER.INI  (per-user settings file; location varies by version)
+      - HKCU\Software\Intuit\QuickBooks  (registry, scanned for .qbw values)
+    """
+    found = []
+
+    for raw_dir in _QBW_INI_DIRS:
+        base = os.path.expandvars(raw_dir)
+        if '%' in base or not os.path.isdir(base):
+            continue
+        # QB nests per-version dirs ("QuickBooks 2024"), so look one level down too.
+        candidates = [base] + [os.path.join(base, d) for d in os.listdir(base)[:20]
+                               if os.path.isdir(os.path.join(base, d))]
+        for d in candidates:
+            for name in _QBW_INI_NAMES:
+                fp = os.path.join(d, name)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    with open(fp, 'r', encoding='utf-8', errors='replace') as fh:
+                        text = fh.read(600_000)
+                except Exception as e:
+                    diag.setdefault('err', f'ini:{type(e).__name__}')
+                    continue
+                for m in _QBW_PATH_RE.finditer(text):
+                    p = m.group(1).strip()
+                    if p not in found:
+                        found.append(p)
+    diag['ini'] = len(found)
+
+    if sys.platform == 'win32':
+        try:
+            import winreg
+            n_before = len(found)
+            stack = [r'Software\Intuit\QuickBooks']
+            visited = 0
+            while stack and visited < 60:
+                keypath = stack.pop()
+                visited += 1
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, keypath)
+                except Exception:
+                    continue
+                try:
+                    i = 0
+                    while True:
+                        try:
+                            _n, val, _t = winreg.EnumValue(key, i)
+                        except OSError:
+                            break
+                        i += 1
+                        if isinstance(val, str) and '.qbw' in val.lower():
+                            for m in _QBW_PATH_RE.finditer(val):
+                                p = m.group(1).strip()
+                                if p not in found:
+                                    found.append(p)
+                    j = 0
+                    while True:
+                        try:
+                            sub = winreg.EnumKey(key, j)
+                        except OSError:
+                            break
+                        j += 1
+                        stack.append(keypath + '\\' + sub)
+                finally:
+                    try:
+                        winreg.CloseKey(key)
+                    except Exception:
+                        pass
+            diag['reg'] = len(found) - n_before
+        except Exception as e:
+            diag.setdefault('err', f'reg:{type(e).__name__}')
+
+    return found
+
+
+def _enumerate_open_company_files() -> list[str]:
+    """Company file paths, by whichever mechanism can see them.
+
+    Also records HOW it went in _last_diag, which the agent ships in ctx even
+    when the result is empty. v1.7.14 shipped with no diagnostic at all, so a
+    total failure was indistinguishable from "nobody used QuickBooks" — the
+    whole feature is fail-open, and a silent fail-open is unfalsifiable.
+    """
+    diag = {'procs': 0, 'handles': 0, 'ini': 0, 'reg': 0}
+
+    paths = _paths_from_handles(diag)
+    if paths:
+        diag['src'] = 'handles'
+        _last_diag.clear(); _last_diag.update(diag)
+        return sorted(paths)
+
+    paths = _paths_from_mru(diag)
+    diag['src'] = 'mru' if paths else 'none'
+    _last_diag.clear(); _last_diag.update(diag)
+    # MRU order is most-recent-first; keep it (the caller pairs by company name).
+    return paths
+
+
+# Last probe result, shipped in ctx so the server can see WHY a machine reports
+# no company file rather than having to guess.
+_last_diag: dict = {}
+
+
+def get_capture_diagnostics() -> dict:
+    return dict(_last_diag)
 
 
 # Cached because handle-table enumeration is expensive. Invalidated on company

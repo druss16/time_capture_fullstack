@@ -58,6 +58,7 @@ class Command(BaseCommand):
         versions = Counter()
         probes = Counter()       # what the agent's own probe reported
         errors = Counter()
+        env = Counter()          # security-context facts, when nothing worked
         reporting_hosts, qb_hosts = set(), set()
 
         for ctx, ver, host in rows:
@@ -68,12 +69,20 @@ class Command(BaseCommand):
             probe = ctx.get('qb_capture')
             if isinstance(probe, dict):
                 probes[probe.get('src') or 'none'] += 1
-                if probe.get('err'):
-                    errors[f"{probe['err']}  "
+                if probe.get('err') or probe.get('cmd_err'):
+                    errors[f"handles={probe.get('err', '-')} "
+                           f"cmdline={probe.get('cmd_err', '-')}  "
                            f"(procs={probe.get('procs', '?')} "
                            f"handles={probe.get('handles', '?')} "
                            f"ini={probe.get('ini', '?')} "
-                           f"reg={probe.get('reg', '?')})"] += 1
+                           f"reg={probe.get('reg', '?')} "
+                           f"cmd={probe.get('cmd', '?')})"] += 1
+                # Security-context facts, only present when nothing worked.
+                if 'me' in probe or 'qbuser' in probe:
+                    env[f"agent_user={probe.get('me', '?')} "
+                        f"qbw_user={probe.get('qbuser', '?')} "
+                        f"ini_dirs_exist={probe.get('inidirs', '?')} "
+                        f"registry_key_exists={probe.get('regkey', '?')}"] += 1
             if ctx.get('qb_open_files'):
                 with_open += 1
                 reporting_hosts.add(host)
@@ -94,12 +103,21 @@ class Command(BaseCommand):
             for src, n in probes.most_common():
                 label = {'handles': 'read from qbw.exe handle table',
                          'mru': 'read from QuickBooks recent-file list',
+                         'cmdline': 'read from the qbw.exe command line',
                          'none': 'found nothing'}.get(src, src)
                 self.stdout.write(f"    {src:>8}  {n:,} events   ({label})")
         if errors:
             self.stdout.write("\n  probe errors (this is the actual cause):")
             for e, n in errors.most_common(5):
                 self.stdout.write(f"    {n:6,}x  {e}")
+        if env:
+            self.stdout.write("\n  security context (agent vs QuickBooks):")
+            for e, n in env.most_common(5):
+                self.stdout.write(f"    {n:6,}x  {e}")
+            self.stdout.write(
+                "    -> different users means HKCU/%APPDATA% read the WRONG profile\n"
+                "       and handle access is refused; same user means QuickBooks is\n"
+                "       simply running ELEVATED.")
 
         self.stdout.write("\n  agent versions doing QB work:")
         for v, n in versions.most_common(6):

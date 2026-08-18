@@ -4648,15 +4648,41 @@ def today_time(request):
     try:
         from tracker.utils.client_name_match import build_token_index, detect_mismatch
         from tracker.services.billing_totals import committed_block_qs
+        from tracker.services.classification_service import (
+            FALLBACK_CATEGORIES, FALLBACK_CATEGORIES_DEFAULT,
+        )
         from tracker.views_block_evidence import _block_breakdown, _slice_suggestions
         _names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')} if org else {}
         if _names:
             _index = build_token_index(_names)
+            # The category a NO-CLIENT row should carry once it moves to a real
+            # client. Those blocks sit in the non-billable catch-all the "no
+            # client identified" fallback gave them, and the one-click fix reuses
+            # the row's category verbatim — so handing back Personal/Non-Billable
+            # would file the block under a client AND leave it non-billable.
+            _billable_fb = FALLBACK_CATEGORIES.get(
+                getattr(org, 'industry_type', None) or 'general', FALLBACK_CATEGORIES_DEFAULT
+            )[0]
+            # Scan committed blocks WITH a client (title names someone else ->
+            # mismatch) and committed blocks with NO client (title/activities name
+            # someone -> it should be under that client, or split between several).
+            # No-client blocks used to be filtered out here, so a 13-minute Outlook
+            # thread whose activities plainly name two parishes sat silently in the
+            # "No client" browse instead of asking for a decision.
+            # A no-client block only qualifies if a MACHINE parked it there.
+            # "No client" is a legitimate answer a person can give (personal
+            # browsing, firm admin, their own timesheet), and re-asking a
+            # question they already answered is exactly the nagging this lane
+            # is supposed to avoid.
+            _human = {'manual', 'correction'}
             _scan = [
                 _b for _b in committed_block_qs(
                     org, start_utc, end_utc, user_id=user.id, can_see_all=False
                 )[:200]
-                if _b.client_id and _b.client_id in _names and _b.window_title
+                if _b.window_title and _b.bundle_id != '__idle__' and (
+                    _b.client_id in _names if _b.client_id
+                    else _b.categorized_by not in _human
+                )
             ]
             # Bulk-load every scanned block's sub-events in ONE query and group by
             # block. The per-block fetch this replaces made the scan cost a DB
@@ -4669,40 +4695,96 @@ def today_time(request):
                 ).only('block_id', 'window_title', 'start_ts', 'end_ts'):
                     _events_by_block[_ev.block_id].append(_ev)
             for _b in _scan:
+                _unassigned = _b.client_id is None
                 _cat = list((_b.category_hours or {}).keys())[0] if _b.category_hours else 'General Client Work'
+                # The category the one-click fix will apply. A no-client block is
+                # parked in the non-billable catch-all; once it moves to a client
+                # it is client work, so hand back the billable fallback instead.
+                _row_cat = _billable_fb if _unassigned else _cat
 
                 # SPLIT: does the activity breakdown point at 2+ distinct clients?
                 _is_split = False
+                _lone_cid = None
                 try:
                     _bd = _block_breakdown(_b, events=_events_by_block.get(_b.id, []))
-                    if _bd and len(_bd) > 1:
-                        _sug = _slice_suggestions(
-                            _b, org, breakdown=_bd, names=_names, index=_index,
-                        )
-                        _cids = {s['client_id'] for s in _sug.values() if s.get('client_id') is not None}
-                        if len(_cids) >= 2:
-                            _is_split = True
-                            split_candidates.append({
-                                'block_id':           _b.id,
-                                'window_title':       _b.window_title or '',
-                                'minutes':            _b.minutes or 0,
-                                'category':           _cat,
-                                'booked_client_id':   _b.client_id,
-                                'booked_client_name': _names.get(_b.client_id, ''),
-                                'slices': [
-                                    {
-                                        'label':                 it['label'],
-                                        'minutes':               it.get('minutes', 0),
-                                        'suggested_client_id':   (_sug.get(it['label']) or {}).get('client_id'),
-                                        'suggested_client_name': (_sug.get(it['label']) or {}).get('client_name'),
-                                    }
-                                    for it in _bd
-                                ],
-                            })
+                    # Single-slice blocks skip the per-slice matcher (their one
+                    # label IS the title) — except when nobody is booked, where
+                    # that matcher is the only thing that can name a client.
+                    _sug = (
+                        _slice_suggestions(_b, org, breakdown=_bd, names=_names, index=_index)
+                        if _bd and (len(_bd) > 1 or _unassigned) else {}
+                    )
+                    _cids = {s['client_id'] for s in _sug.values() if s.get('client_id') is not None}
+                    # Minutes whose activity names nobody. On a no-client block a
+                    # material unnamed remainder is a party in its own right: the
+                    # block genuinely is mixed, and moving the whole thing to the
+                    # one client it does name would bill that client for the rest.
+                    _bd_min = sum(it.get('minutes', 0) for it in (_bd or [])) or 1
+                    _none_min = sum(
+                        it.get('minutes', 0) for it in (_bd or [])
+                        if (_sug.get(it['label']) or {}).get('client_id') is None
+                    )
+                    # A fifth of the block, not a fixed minute count: on a 2-minute
+                    # block (own timesheet + a parish file) one minute IS half the
+                    # block, and a minutes floor turned that into a one-click
+                    # "move it all to the parish" — billing them for the timesheet.
+                    _remainder_is_party = (
+                        _unassigned and _none_min >= 1 and _none_min >= 0.2 * _bd_min
+                    )
+                    if len(_cids) >= 2 or (len(_cids) == 1 and _remainder_is_party):
+                        _is_split = True
+                        split_candidates.append({
+                            'block_id':           _b.id,
+                            'window_title':       _b.window_title or '',
+                            'minutes':            _b.minutes or 0,
+                            'category':           _row_cat,
+                            'booked_client_id':   _b.client_id,
+                            'booked_client_name': _names.get(_b.client_id, '') if not _unassigned else 'No client',
+                            'slices': [
+                                {
+                                    'label':                 it['label'],
+                                    'minutes':               it.get('minutes', 0),
+                                    'suggested_client_id':   (_sug.get(it['label']) or {}).get('client_id'),
+                                    'suggested_client_name': (_sug.get(it['label']) or {}).get('client_name'),
+                                    # Slices that land on nobody stay non-billable;
+                                    # only the ones that name a client become work.
+                                    'suggested_category': (
+                                        _row_cat if (_sug.get(it['label']) or {}).get('client_id') is not None
+                                        else _cat
+                                    ),
+                                }
+                                for it in _bd
+                            ],
+                        })
+                    elif _unassigned and len(_cids) == 1:
+                        _lone_cid = next(iter(_cids))
                 except Exception:
                     pass
                 if _is_split:
                     continue  # a multi-client split isn't also a single-client mismatch
+
+                if _unassigned:
+                    # Nothing is booked, so detect_mismatch has no disagreement to
+                    # find — the per-slice matcher above is what named this block's
+                    # client, and it is the ONLY thing we trust here. Running the
+                    # title matcher over the raw window title instead skips that
+                    # path's timesheet/noise guards and mis-reads incidental words
+                    # ("...on-demand webinar" -> "On Demand Delivery Inc", "E DILLON
+                    # TIMESHEET" -> a parish), which is a worse failure than staying
+                    # quiet: it invites a one-click move to the wrong client.
+                    if _lone_cid and _b.id is not None:
+                        mismatch_flags[_b.id] = _names.get(_lone_cid, '')
+                        mismatch_blocks.append({
+                            'block_id':               _b.id,
+                            'window_title':           _b.window_title or '',
+                            'minutes':                _b.minutes or 0,
+                            'category':               _row_cat,
+                            'booked_client_id':       None,
+                            'booked_client_name':     'No client',
+                            'looks_like_client_id':   _lone_cid,
+                            'looks_like_client_name': _names.get(_lone_cid, ''),
+                        })
+                    continue
 
                 # MISMATCH: title clearly names ONE different client than booked.
                 _m = detect_mismatch(_b.window_title, _b.client_id, _index, _names, firm_name=org.name)

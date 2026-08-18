@@ -420,6 +420,15 @@ class ClassificationService:
         # path STRUCTURE — folder segments, depth — to find stronger signals.
         self._stage_4_file_path(block, decision)
 
+        # Stage 4.5 — QuickBooks company FILE match.
+        # Runs after Stage 4 because it is the same kind of evidence — a path
+        # the firm curated — just sourced from qbw.exe's open handle instead of
+        # the foreground window, since QB never puts its filename in a title.
+        # This is the only stage that can separate same-family QB clients
+        # ("St. Mary's Church" ×14); without it they reach Stage 10 and the AI
+        # guesses a town that appears nowhere in its input.
+        self._stage_4_5_qb_company_file(block, decision)
+
         # Stage 5 — URL domain match
         # SKIPPED in foundation: Stage 3 already handles URL domain matching.
         # Stage 5 was originally planned for Client.email_domain matching but
@@ -2983,6 +2992,90 @@ class ClassificationService:
             },
         ))
 
+    def _stage_4_5_qb_company_file(self, block, decision: 'ClassificationDecision'):
+        """
+        Stage 4.5 — attribute QuickBooks work from the open .qbw company FILE.
+
+        QB puts its Company Name field in the title bar, never the filename.
+        Those names are not unique across a firm's book of business (14 of one
+        client's 135 company files read "St. Mary's ..."), so a title-only read
+        is a coin flip between same-family clients. Stage 3 correctly abstains
+        on that collision, which used to leave the block to Stage 10's AI — an
+        LLM guessing a town it cannot see.
+
+        The agent now reports qbw.exe's open company file, which is unique:
+
+            Q:\\QB\\QB2024 Files\\St. Mary's Church_Clinton_QB2024.QBW
+
+        Emitted at 0.93 — declarative, on par with a client folder segment
+        (Stage 4's 0.90) and below tax-software taxpayer extraction. Strong
+        enough to auto-commit and, being >= 0.65, it keeps Stage 10 from
+        spending an AI call on a question the filesystem already answered.
+
+        Abstains (adds no Signal) when the path is missing, unresolvable, or
+        matches two clients equally well.
+        """
+        from tracker.models import RawEvent
+
+        app = (block.app_name or '').lower()
+        if not app.startswith('qbw'):
+            return
+
+        # Prefer the agent's resolved active file. Fall back to the full open
+        # set only when it holds exactly one file — with two companies open
+        # (QB Accountant's "Open Second Company") and no agent resolution,
+        # which one is in front is unknowable here, so we do not guess.
+        path = None
+        try:
+            open_files = set()
+            for ctx in (RawEvent.objects.filter(block=block)
+                        .values_list('ctx', flat=True)):
+                if not isinstance(ctx, dict):
+                    continue
+                if ctx.get('qb_company_path'):
+                    path = ctx['qb_company_path']
+                for p in (ctx.get('qb_open_files') or []):
+                    if p:
+                        open_files.add(p)
+            if not path and len(open_files) == 1:
+                path = next(iter(open_files))
+        except Exception:
+            return
+        if not path:
+            return
+
+        candidates = []
+        for client in self._clients:
+            if client.name.lower().strip() in META_CLIENT_NAMES:
+                continue
+            for matchable in [client.name] + list(client.aliases or []):
+                if self._alias_is_safe(matchable):
+                    candidates.append((client.id, client.name, matchable))
+
+        from tracker.services.qb_company_file import match_stem as _match_qb_stem
+        matched = _match_qb_stem(path, candidates)
+        if not matched:
+            return
+
+        client_id, client_name, matched_on = matched
+        # Windows path on a Linux server — os.path.basename would not split it.
+        basename = path.replace('/', '\\').rsplit('\\', 1)[-1]
+        decision.matched_signals.append(Signal(
+            type='qb_company_file',
+            strength=0.93,
+            evidence=(
+                f"QuickBooks company file '{basename}' "
+                f"identifies client '{client_name}' (matched '{matched_on}'). "
+                f"The window title alone does not distinguish this client."
+            ),
+            detail={
+                'client_id': client_id,
+                'client_name': client_name,
+                'company_file': path[:300],
+                'matched_on': matched_on,
+            },
+        ))
+
     def _match_co_open_office(self, block):
         """Deterministic co-open-file attribution (Tier 1 consumer).
 
@@ -5060,7 +5153,7 @@ class ClassificationService:
             'title_match_title_alias', 'title_match_file_path',
             'title_match_domain', 'file_path_structure',
             'calendar', 'mail', 'learned_pattern',
-            'org_rule', 'tax_software',
+            'org_rule', 'tax_software', 'qb_company_file',
         }
         verified_signals = []
         for sig in signals:

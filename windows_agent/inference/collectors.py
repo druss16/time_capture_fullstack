@@ -300,6 +300,54 @@ def collect_tax_software_evidence(
     return []
 
 
+def _match_qb_company_filename(qb_path: str, clients: List[dict]):
+    """
+    Match an open .qbw path to exactly one client, or None.
+
+    'Q:\\QB\\QB2024 Files\\St. Mary's Church_Clinton_QB2024.QBW' → the Clinton
+    parish. Returns (client_id, client_name, matched_on) or None.
+
+    MOST-SPECIFIC WINS: when both 'St. Mary's Church' and 'St. Mary's Church
+    Clinton' are client names and both are contained in the filename, the
+    longer one is the real subject. ABSTAINS on a genuine tie (two different
+    clients matching equally well) — a wrong parish is worse than no answer.
+    """
+    from qb_company_tracker import clean_company_file_stem, _norm_for_pairing
+
+    file_norm = _norm_for_pairing(clean_company_file_stem(qb_path))
+    if len(file_norm) < 5:
+        return None
+
+    best = []          # [(len, client_id, client_name, matched_on)]
+    best_len = 0
+    for client in clients:
+        client_name = (client.get("name") or "").strip()
+        client_id = client.get("id")
+        if not client_name or not client_id:
+            continue
+        for candidate in [client_name] + list(client.get("aliases") or []):
+            cand_norm = _norm_for_pairing(candidate)
+            # Short aliases ("SMC", "STM") would match half the directory.
+            if len(cand_norm) < 5 or cand_norm not in file_norm:
+                continue
+            # A generic record ("Sacred Heart") must not claim a specific file
+            # ("Church of Sacred Heart & St. Mary NY Mills"). Mirrors
+            # server/tracker/services/qb_company_file.MIN_COVERAGE — keep in step.
+            if len(cand_norm) / len(file_norm) < 0.5:
+                continue
+            if len(cand_norm) > best_len:
+                best_len = len(cand_norm)
+                best = [(client_id, client_name, candidate)]
+            elif len(cand_norm) == best_len:
+                best.append((client_id, client_name, candidate))
+
+    if not best:
+        return None
+    if len({b[0] for b in best}) > 1:
+        return None  # equally-specific rival clients — abstain
+    return best[0]
+
+
 def collect_qb_company_file_evidence(
     ctx: WindowContext,
     clients: List[dict],
@@ -327,6 +375,34 @@ def collect_qb_company_file_evidence(
     exe_lower = (ctx.exe_name or "").lower()
     if "qbw" not in exe_lower and "quickbooks" not in (ctx.app_name or "").lower():
         return []
+
+    # ── Strongest read: the open .qbw company FILE PATH ──
+    # The title carries QB's Company Name field, which is not unique across a
+    # firm's client base (14 "St. Mary's …" files in one directory). The
+    # filename is. Read it off qbw.exe's open handle and match that first;
+    # only fall back to the ambiguous name when the path can't resolve.
+    try:
+        from qb_company_tracker import get_active_company_file
+        qb_path = get_active_company_file(ctx.title or "")
+    except Exception:
+        qb_path = None  # tracker must never break collection
+
+    if qb_path:
+        matched = _match_qb_company_filename(qb_path, clients)
+        if matched:
+            client_id, client_name, matched_on = matched
+            return [Evidence(
+                source="qb_company_file",
+                client_id=client_id,
+                strength=0.97,
+                detected_at=ctx.timestamp,
+                detail={
+                    "company_file_path": qb_path,
+                    "matched_client_name": client_name,
+                    "matched_on": matched_on,
+                    "via": "file_path",
+                },
+            )]
 
     # ── Try to extract the company from THIS window's title ──
     company_file = None

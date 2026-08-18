@@ -1,0 +1,92 @@
+"""
+Tests for the agent's QuickBooks company-FILE capture.
+
+Covers the piece that has no server-side equivalent: deciding WHICH open
+company file the user is working in when QB Accountant's "Open Second Company"
+has two loaded at once — the (Primary) / (Secondary) pair seen in production.
+
+Pure functions only; no Windows APIs are called, so this runs anywhere:
+
+    python windows_agent/test_qb_company_file.py
+
+Exits non-zero if any assertion fails.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from qb_company_tracker import (  # noqa: E402
+    _resolve_active,
+    _extract_company_from_main_title as company_of,
+    clean_company_file_stem as clean,
+)
+
+_passed = _failed = 0
+
+
+def check(label, cond):
+    global _passed, _failed
+    if cond:
+        _passed += 1
+        print(f"  PASS  {label}")
+    else:
+        _failed += 1
+        print(f"  FAIL  {label}")
+
+
+QB = r"Q:\QB\QB2024 Files"
+CHURCH = rf"{QB}\St. Mary's Church_Clinton_QB2024.QBW"
+CEMETERY = rf"{QB}\St. Mary's Cemetery Clinton_QB2024.QBW"
+CADD = rf"{QB}\Cadd Systems_03042025.qbw"
+
+print("\n=== title parsing (unchanged behaviour) ===")
+check("main window title yields the company name",
+      company_of("St. Mary's Church - QuickBooks Accountant Desktop Plus 2024 - [Home]")
+      == "St. Mary's Church")
+check("Primary marker is part of the company segment, not stripped here",
+      company_of("St. Mary's Church (Primary) - QuickBooks Accountant Desktop Plus 2024")
+      == "St. Mary's Church (Primary)")
+check("a modal title yields no company",
+      company_of("Make General Journal Entries") is None)
+check("bare product chrome yields no company",
+      company_of("QuickBooks Accountant Desktop Plus 2024") is None)
+
+print("\n=== single company open (the common case) ===")
+check("one file open → that file, even with no usable title",
+      _resolve_active([CHURCH], None) == CHURCH)
+check("one file open → that file, title ignored",
+      _resolve_active([CADD], "St. Mary's Church") == CADD)
+check("no files open → None",
+      _resolve_active([], "St. Mary's Church") is None)
+
+print("\n=== two companies open (Open Second Company) ===")
+check("church title picks the church file, not the cemetery",
+      _resolve_active([CHURCH, CEMETERY], "St. Mary's Church") == CHURCH)
+check("cemetery title picks the cemetery file, not the church",
+      _resolve_active([CHURCH, CEMETERY], "St. Mary's Cemetery") == CEMETERY)
+check("(Primary) marker still pairs to the right file",
+      _resolve_active([CHURCH, CEMETERY], "St. Mary's Church (Primary)") == CHURCH)
+check("an unrelated second file does not confuse the pairing",
+      _resolve_active([CHURCH, CADD], "Cadd Systems") == CADD)
+
+print("\n=== two open, unresolvable → abstain rather than guess ===")
+check("no company name (nameless modal, cache cold) → abstain",
+      _resolve_active([CHURCH, CEMETERY], None) is None)
+check("company name that fits BOTH open files → abstain",
+      _resolve_active(
+          [rf"{QB}\St. Mary's Church_Clinton_QB2024.QBW",
+           rf"{QB}\St. Mary's Church Cemetery Clinton_QB2024.QBW"],
+          "St. Mary's Church") is None)
+check("company name matching neither open file → abstain",
+      _resolve_active([CHURCH, CEMETERY], "Krueger Funeral Home") is None)
+
+print("\n=== pairing survives filename bookkeeping noise ===")
+check("dated working copy still pairs to its company name",
+      _resolve_active([rf"{QB}\Cadd Systems_022626.qbw", CHURCH], "Cadd Systems")
+      == rf"{QB}\Cadd Systems_022626.qbw")
+check("clean() drops the version year for pairing",
+      clean(CHURCH) == "St. Mary's Church_Clinton")
+
+print(f"\n{_passed} passed, {_failed} failed")
+sys.exit(1 if _failed else 0)

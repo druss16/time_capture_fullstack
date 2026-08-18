@@ -557,6 +557,45 @@ def _filter_foreground_inside_meetings(user, day: date_type) -> int:
 # Auto-categorization (delegates to ClassificationService)
 # =============================================================================
 
+def _should_reclassify_on_merge(block: Block, new_minutes: int, new_title: str) -> bool:
+    """Has a merge changed this block enough to re-ask who it belongs to?
+
+    Deliberately narrow — it only ever re-opens blocks parked with NO client:
+
+      * a block already attributed to a client is left alone, so this can never
+        churn an attribution or a billing amount. If its title drifted, the
+        Daily Review mismatch lane is the place that raises it, with a human
+        making the call.
+      * a human's decision (manual / correction) is final, including their
+        decision that something belongs to nobody.
+      * invoiced or accounting-synced time is immutable.
+
+    Within that, re-open when the block became something the first pass didn't
+    judge: it crossed the materiality line it was auto-filed under, or the
+    dominant activity — the thing the classifier actually reads — changed.
+    """
+    if block.client_id is not None:
+        return False
+    if block.categorized_by in ('manual', 'correction'):
+        return False
+    if getattr(block, 'classification_state', None) == 'suppressed':
+        return False
+    if block.invoiced or getattr(block, 'qb_time_activity_id', None) \
+            or getattr(block, 'xero_invoice_id', None):
+        return False
+    # Nothing to re-open — the block was never given a verdict.
+    if not block.is_categorized and getattr(block, 'classification_state', None) == 'captured':
+        return False
+
+    from tracker.services.classification_service import IMMATERIAL_MAX_MINUTES
+    old_minutes = block.minutes or 0
+    crossed_materiality = (
+        old_minutes < IMMATERIAL_MAX_MINUTES <= (new_minutes or 0)
+    )
+    title_changed = (new_title or '').strip() != (block.window_title or '').strip()
+    return crossed_materiality or title_changed
+
+
 def auto_categorize_block(block: Block) -> bool:
     """Auto-categorize a block via ClassificationService deterministic stages."""
     if block.is_categorized:
@@ -1149,7 +1188,25 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                             (updated_minutes / 60) * float(locked.billing_rate), 2
                         )
 
-                    if locked.is_categorized and locked.category_hours:
+                    # Should the block's classification be re-opened? A block is
+                    # classified the instant compaction creates it — often ~30
+                    # seconds into the activity — and then GROWS here as more
+                    # events land, sometimes to an hour, without anyone looking
+                    # again. When that first look found no client, the block is
+                    # auto-filed No-Client / non-billable (the sub-2-min
+                    # immaterial rule), COMMITTED, and every later safety net
+                    # skips it for being committed: a 13-minute Outlook thread
+                    # titled "RE: From Odett at Christ Our Light" sat as
+                    # non-billable overhead all day. Re-ask the question when
+                    # the block materially changed under that verdict.
+                    _reopen = _should_reclassify_on_merge(
+                        locked, updated_minutes, new_title
+                    )
+                    if _reopen:
+                        update_fields["category_hours"] = {}
+                        update_fields["is_categorized"] = False
+                        update_fields["classification_state"] = "captured"
+                    elif locked.is_categorized and locked.category_hours:
                         category = list(locked.category_hours.keys())[0]
                         update_fields["category_hours"] = {
                             category: round(updated_minutes / 60.0, 2)
@@ -1157,6 +1214,18 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
 
                     Block.objects.filter(id=locked.id).update(**update_fields)
                     merged_count += 1
+                    if _reopen:
+                        logger.info(
+                            f"[COMPACT] Re-opening block {locked.id} for classification: "
+                            f"grew to {updated_minutes}m, title {new_title[:60]!r} — it was "
+                            f"auto-filed with no client"
+                        )
+                        # Mirror the .update() onto the in-memory row and queue it
+                        # with the newly-created blocks. Classification runs AFTER
+                        # this atomic block, so an AI call can't hold the row lock.
+                        for _f, _v in update_fields.items():
+                            setattr(locked, _f, _v)
+                        blocks_to_categorize.append(locked)
                     continue
 
                 except Block.DoesNotExist:

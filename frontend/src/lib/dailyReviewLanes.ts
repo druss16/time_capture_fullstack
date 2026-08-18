@@ -35,6 +35,11 @@ export type SplitSlice = {
   minutes: number;
   suggested_client_id: number | null;
   suggested_client_name: string | null;
+  /** Category for THIS slice. A no-client block's slices don't all want the
+   *  same one: the ones that name a client become billable work, the leftovers
+   *  stay in the non-billable bucket the block already sits in. Absent on older
+   *  backends — callers fall back to the candidate's category. */
+  suggested_category?: string;
 };
 
 /** A committed block whose activities point at 2+ clients → offer a split. */

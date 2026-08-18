@@ -119,5 +119,43 @@ if probe_ok:
     for label, fn in extraction_cases:
         check(label, fn())
 
+# --- app-chrome guard (needs the classifier's normalize, so it rides along with
+# --- the probe above): a window title pasted into the alias field is not a name.
+# --- Org 21 saved 'ATU - QuickBooks Accountant Desktop Plus 2024 - [Enter Bills]'
+# --- for Amalgamated Transit Union; 'atu' is 3 chars so the matcher discarded it
+# --- and the leftover QuickBooks chrome matched every QB window firm-wide —
+# --- 204 billable minutes of seven users' work landed on ATU in one day.
+chrome_cases = [
+    ("window title pasted as alias -> refused",
+     lambda: alias_is_safe_to_add(
+         "ATU - QuickBooks Accountant Desktop Plus 2024 - [Enter Bills]",
+         _client(1, "Amalgamated Transit Union"), []) is False),
+    ("bare app chrome -> refused",
+     lambda: alias_is_safe_to_add(
+         "QuickBooks Accountant Desktop Plus 2024", smith, []) is False),
+    ("scratch workbook -> refused",
+     lambda: alias_is_safe_to_add("Book1 - Excel", smith, []) is False),
+    ("empty Outlook window -> refused",
+     lambda: alias_is_safe_to_add("Untitled - Message (HTML)", smith, []) is False),
+    # ...while real names keep working. The furniture list only condemns an
+    # alias when it is ALL that survives, so "T&S Enterprises" and "Sunrise Home
+    # Care" are unaffected; all 520 live aliases pass.
+    ("a real client name -> allowed",
+     lambda: alias_is_safe_to_add("Cameza, LLC", _client(2, "CAMEZA_Champions Fitness"), []) is True),
+    ("real name shortened -> allowed",
+     lambda: alias_is_safe_to_add("Amalgamated Transit", _client(1, "Amalgamated Transit Union"), []) is True),
+    ("short token rescued by a real one -> allowed",
+     lambda: alias_is_safe_to_add("ATU Local 580", _client(1, "Amalgamated Transit Union"), []) is True),
+    ("business word is not furniture on its own -> allowed",
+     lambda: alias_is_safe_to_add("T&S Enterprises of CNY", _client(3, "T&S Enterprises of CNY, Inc."), []) is True),
+    ("short initialism (substring path) -> allowed",
+     lambda: alias_is_safe_to_add("WJ Bos", _client(4, "WJ Bos LLC"), []) is True),
+]
+if probe_ok:
+    for label, fn in chrome_cases:
+        check(label, fn())
+else:
+    _skipped += len(chrome_cases)
+
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")
 sys.exit(1 if _failed else 0)

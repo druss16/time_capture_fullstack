@@ -289,7 +289,9 @@ export default function CompactSummary({
   // its filename names (the backend's per-slice guess).
   const applySplitCandidate = useCallback((sc: SplitCandidate) => {
     const a: Record<string, { client_id: number | null; category: string }> = {};
-    sc.slices.forEach((s) => { a[s.label] = { client_id: s.suggested_client_id, category: sc.category }; });
+    sc.slices.forEach((s) => {
+      a[s.label] = { client_id: s.suggested_client_id, category: s.suggested_category || sc.category };
+    });
     postSplit(sc.block_id, a);
   }, [postSplit]);
   const applySmartSplit = (bid: number, breakdown: Slice[], currentClientId: number | null, category: string) => {

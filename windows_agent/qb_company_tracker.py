@@ -780,6 +780,10 @@ def _discover_company_dirs(diag: dict) -> list[str]:
 # is present even when several people are working on the share at once.
 RECENT_REPORT_LIMIT = 10
 
+# Last handle/command-line read, so the expensive process enumeration runs
+# once per interval rather than once per event.
+_exact_cache = {'at': 0.0, 'paths': [], 'diag': {}}
+
 
 def get_capture_report(window_title: str | None = None) -> dict:
     """Everything the agent can see about which company file is in use.
@@ -816,8 +820,17 @@ def get_capture_report(window_title: str | None = None) -> dict:
         diag['co_err'] = type(e).__name__
 
     # The authoritative mechanisms first — if either works we say so plainly.
+    # Rate-limited: enumerating process handles is the most expensive thing this
+    # module does, QuickBooks events arrive every few seconds, and the answer
+    # only changes when someone opens a different company file.
     try:
-        exact = _paths_from_handles(diag) or _paths_from_cmdline(diag)
+        now = time.monotonic()
+        if (now - _exact_cache['at']) >= ENUM_INTERVAL_SECONDS:
+            exact = _paths_from_handles(diag) or _paths_from_cmdline(diag)
+            _exact_cache.update({'at': now, 'paths': exact, 'diag': dict(diag)})
+        else:
+            exact = _exact_cache['paths']
+            diag.update(_exact_cache['diag'])   # keep reporting why it failed
         if exact:
             report['exact'] = exact[:4]
     except Exception as e:

@@ -59,6 +59,7 @@ class Command(BaseCommand):
         probes = Counter()       # what the agent's own probe reported
         errors = Counter()
         env = Counter()          # security-context facts, when nothing worked
+        share = Counter()        # what the share scan could see
         reporting_hosts, qb_hosts = set(), set()
 
         for ctx, ver, host in rows:
@@ -69,19 +70,27 @@ class Command(BaseCommand):
             probe = ctx.get('qb_capture')
             if isinstance(probe, dict):
                 probes[probe.get('src') or 'none'] += 1
-                if probe.get('err') or probe.get('cmd_err'):
+                if probe.get('err') or probe.get('cmd_err') or probe.get('share_err'):
                     errors[f"handles={probe.get('err', '-')} "
-                           f"cmdline={probe.get('cmd_err', '-')}  "
+                           f"cmdline={probe.get('cmd_err', '-')} "
+                           f"share={probe.get('share_err', '-')}  "
                            f"(procs={probe.get('procs', '?')} "
                            f"handles={probe.get('handles', '?')} "
                            f"ini={probe.get('ini', '?')} "
                            f"reg={probe.get('reg', '?')} "
-                           f"cmd={probe.get('cmd', '?')})"] += 1
+                           f"cmd={probe.get('cmd', '?')} "
+                           f"share={probe.get('share', '?')})"] += 1
+                # Did the share scan find the directory and the files at all?
+                if 'sharedirs' in probe or 'sharefiles' in probe:
+                    share[f"dirs_found={probe.get('sharedirs', '?')} "
+                          f"company_files_seen={probe.get('sharefiles', '?')} "
+                          f"active_now={probe.get('share', '?')}"] += 1
                 # Security-context facts, only present when nothing worked.
                 if 'me' in probe or 'qbuser' in probe:
                     env[f"agent_user={probe.get('me', '?')} "
                         f"qbw_user={probe.get('qbuser', '?')} "
-                        f"ini_dirs_exist={probe.get('inidirs', '?')} "
+                        f"agent_is_admin={probe.get('admin', '?')} "
+                        f"ini_files_found={probe.get('inifiles', '?')} "
                         f"registry_key_exists={probe.get('regkey', '?')}"] += 1
             if ctx.get('qb_open_files'):
                 with_open += 1
@@ -104,20 +113,32 @@ class Command(BaseCommand):
                 label = {'handles': 'read from qbw.exe handle table',
                          'mru': 'read from QuickBooks recent-file list',
                          'cmdline': 'read from the qbw.exe command line',
+                         'share': 'read from the file share (no process access)',
                          'none': 'found nothing'}.get(src, src)
                 self.stdout.write(f"    {src:>8}  {n:,} events   ({label})")
         if errors:
             self.stdout.write("\n  probe errors (this is the actual cause):")
             for e, n in errors.most_common(5):
                 self.stdout.write(f"    {n:6,}x  {e}")
+        if share:
+            self.stdout.write("\n  share scan (reads the drive, not the process):")
+            for e, n in share.most_common(5):
+                self.stdout.write(f"    {n:6,}x  {e}")
+            self.stdout.write(
+                "    -> dirs_found=0 means the company directory was never located;\n"
+                "       company_files_seen>0 with active_now=0 means the files were\n"
+                "       found but none looked in-use (widen SHARE_HOT_SECONDS).")
+
         if env:
             self.stdout.write("\n  security context (agent vs QuickBooks):")
             for e, n in env.most_common(5):
                 self.stdout.write(f"    {n:6,}x  {e}")
             self.stdout.write(
-                "    -> different users means HKCU/%APPDATA% read the WRONG profile\n"
-                "       and handle access is refused; same user means QuickBooks is\n"
-                "       simply running ELEVATED.")
+                "    -> same user + AccessDenied = QuickBooks is ELEVATED.\n"
+                "       agent_is_admin=0 means the agent is NOT elevated even though\n"
+                "       these users clearly can be — the scheduled task asks for\n"
+                "       HighestAvailable, so it is not taking effect, and fixing that\n"
+                "       is smaller than any new mechanism.")
 
         self.stdout.write("\n  agent versions doing QB work:")
         for v, n in versions.most_common(6):

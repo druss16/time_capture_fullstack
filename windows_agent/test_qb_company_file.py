@@ -155,5 +155,70 @@ except Exception:
 check("environment probe never raises", _env_ok)
 check("environment probe reports the agent user", 'me' in _e)
 
+
+print("\n=== v1.7.17: share scan (reads the drive, not the process) ===")
+import tempfile, time as _time, os as _os  # noqa: E402
+import qb_company_tracker as _qbt  # noqa: E402
+
+# A miniature QuickBooks directory: three parishes, only one of them in use.
+_tmp = tempfile.mkdtemp()
+_now = _time.time()
+
+
+def _mk(name, age_seconds):
+    fp = _os.path.join(_tmp, name)
+    with open(fp, 'w') as fh:
+        fh.write('x')
+    _os.utime(fp, (_now - age_seconds, _now - age_seconds))
+    return fp
+
+
+# Clinton: transaction log touched seconds ago -> someone is working in it.
+_mk("St. Mary's Church_Clinton_QB2024.QBW", 90_000)
+_mk("St. Mary's Church_Clinton_QB2024.QBW.TLG", 5)
+# Hamilton and Minoa: nothing touched for a day -> idle.
+_mk("St. Mary's Church_Hamilton_QB2024.QBW", 90_000)
+_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 90_000)
+_mk("St. Mary's Church_Minoa_QB2024.QBW", 90_000)
+
+_qbt._share_cache.update({'dirs': [_tmp], 'discovered_at': _time.monotonic(),
+                          'paths': [], 'scanned_at': 0.0})
+_d = {}
+_hot = _qbt._paths_from_share(_d)
+
+check("sees every company file in the directory", _d.get('sharefiles') == 3)
+check("reports only the file being worked in as active", len(_hot) == 1)
+check("and it is the Clinton file, identified by its transaction log",
+      _hot and _hot[0].endswith("St. Mary's Church_Clinton_QB2024.QBW"))
+check("idle parishes are not reported active",
+      not any('Hamilton' in p or 'Minoa' in p for p in _hot))
+
+print("\n=== the whole point: title says 'St. Mary's Church', share says WHICH ===")
+check("ambiguous title + one active file -> resolves to Clinton",
+      _qbt._resolve_active(_hot, "St. Mary's Church").endswith(
+          "St. Mary's Church_Clinton_QB2024.QBW"))
+
+# Two same-family files active at once (two staff, two parishes, one share).
+_qbt._share_cache['scanned_at'] = 0.0
+_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 5)
+_d2 = {}
+_hot2 = _qbt._paths_from_share(_d2)
+check("two same-family files active -> both reported", len(_hot2) == 2)
+check("...and the ambiguous title ABSTAINS rather than guessing a parish",
+      _qbt._resolve_active(_hot2, "St. Mary's Church") is None)
+check("...but a title naming the town still resolves",
+      _qbt._resolve_active(_hot2, "St. Mary's Church Hamilton").endswith(
+          "St. Mary's Church_Hamilton_QB2024.QBW"))
+
+print("\n=== safety ===")
+_qbt._share_cache.update({'dirs': [], 'discovered_at': _time.monotonic(),
+                          'paths': [], 'scanned_at': 0.0})
+_d3 = {}
+check("no company directory found -> returns nothing, does not raise",
+      _qbt._paths_from_share(_d3) == [])
+check("and records that it found no directories", _d3.get('share') == 0)
+import shutil as _shutil  # noqa: E402
+_shutil.rmtree(_tmp, ignore_errors=True)
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

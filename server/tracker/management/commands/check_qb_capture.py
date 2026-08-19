@@ -60,6 +60,9 @@ class Command(BaseCommand):
         errors = Counter()
         env = Counter()          # security-context facts, when nothing worked
         share = Counter()        # what the share scan could see
+        elev = Counter()         # is the agent elevated?
+        recent = Counter()       # age of the freshest company file
+        named = 0
         reporting_hosts, qb_hosts = set(), set()
 
         for ctx, ver, host in rows:
@@ -67,6 +70,17 @@ class Command(BaseCommand):
             qb_hosts.add(host)
             if not isinstance(ctx, dict):
                 continue
+            rep = ctx.get('qb_report')
+            if isinstance(rep, dict):
+                rd = rep.get('diag') or {}
+                elev[f"agent_is_admin={rd.get('admin', '?')}"] += 1
+                for item in (rep.get('recent') or [])[:1]:
+                    try:
+                        recent[f"freshest_file_age_seconds={int(item.get('age')):,}"] += 1
+                    except Exception:
+                        pass
+                if rep.get('company'):
+                    named += 1
             probe = ctx.get('qb_capture')
             if isinstance(probe, dict):
                 probes[probe.get('src') or 'none'] += 1
@@ -123,6 +137,21 @@ class Command(BaseCommand):
             self.stdout.write("\n  probe errors (this is the actual cause):")
             for e, n in errors.most_common(5):
                 self.stdout.write(f"    {n:6,}x  {e}")
+        if elev:
+            self.stdout.write("\n  agent elevation (decides if handles can ever work):")
+            for e, n in elev.most_common(4):
+                self.stdout.write(f"    {n:6,}x  {e}")
+        if recent:
+            self.stdout.write("\n  freshest company file on the share — THE deciding number:")
+            for e, n in recent.most_common(8):
+                self.stdout.write(f"    {n:6,}x  {e}")
+            self.stdout.write(
+                "    -> small values (seconds/minutes) mean the timestamps move and\n"
+                "       this works. Uniformly huge values mean QuickBooks never\n"
+                "       publishes a fresh timestamp and the share route is dead.")
+        if named:
+            self.stdout.write(f"\n  events whose title carried a company name: {named:,}")
+
         if share:
             self.stdout.write("\n  share scan (reads the drive, not the process):")
             for e, n in share.most_common(8):

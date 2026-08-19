@@ -794,6 +794,19 @@ def get_capture_report(window_title: str | None = None) -> dict:
     """
     report: dict = {}
     diag: dict = {}
+
+    # Always report elevation. This is the single fact that decides whether the
+    # authoritative mechanism (reading qbw.exe's open handles) can work at all,
+    # and the watchdog used to start the agent as a child process — inheriting
+    # its own least-privilege token and silently overriding the
+    # HighestAvailable the agent's task asks for.
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            diag['admin'] = int(bool(ctypes.windll.shell32.IsUserAnAdmin()))
+        except Exception:
+            diag['admin'] = -1
+
     try:
         company = (_extract_company_from_main_title(window_title or '')
                    or get_company_global())

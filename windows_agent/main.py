@@ -2211,11 +2211,9 @@ def write_event(
     try:
         if (app_name or "").lower() in ("qbw.exe", "qbw32.exe"):
             from qb_company_tracker import (
-                get_company_file_context as _qb_ctx,
                 get_capture_diagnostics as _qb_diag,
                 get_capture_report as _qb_report,
             )
-            _qb = _qb_ctx(title or "")   # ONE probe, both answers
             if not isinstance(payload.get("ctx"), dict):
                 payload["ctx"] = {}
             # Raw observations for the server to interpret. The agent cannot
@@ -2230,10 +2228,6 @@ def write_event(
             # with no diagnostic cannot be proven broken. It took a 217-event
             # sample to notice. This dict is a handful of integers.
             payload["ctx"]["qb_capture"] = _qb_diag()
-            if _qb["open_files"]:
-                payload["ctx"]["qb_open_files"] = _qb["open_files"]
-                if _qb["active"]:
-                    payload["ctx"]["qb_company_path"] = _qb["active"]
     except Exception:
         pass
 

@@ -36,6 +36,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from tracker.models import Block, Engagement, Organization
+from tracker.utils.db_iter import keyset_iter
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ def refresh_inferred_phases(org: Organization, *, dry_run: bool = True) -> dict:
     now = timezone.now()
     counts: dict[str, int] = defaultdict(int)
 
-    for eng in Engagement.objects.filter(org=org, status="open").iterator(chunk_size=200):
+    for eng in keyset_iter(Engagement.objects.filter(org=org, status="open"), 200):
         phase, confidence, signals = infer_phase(eng)
         if phase is None:
             counts["no_signal"] += 1
@@ -195,7 +196,7 @@ def agreement_report(org: Organization) -> dict:
     total = exact = adjacent = 0
     confusion: dict[str, int] = defaultdict(int)
 
-    for eng in qs.iterator(chunk_size=200):
+    for eng in keyset_iter(qs, 200):
         ladder = [k for k, _l, _w in eng.ladder]
         if eng.phase not in ladder or eng.inferred_phase not in ladder:
             continue

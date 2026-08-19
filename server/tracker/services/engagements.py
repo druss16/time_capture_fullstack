@@ -27,6 +27,7 @@ from django.utils import timezone
 
 from tracker.models import Block, Engagement, Organization
 from tracker.models_engagements import phase_progress
+from tracker.utils.db_iter import keyset_iter
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,6 @@ def assign_engagements(org: Organization, *, since: date | None = None,
         .select_related("task_type")
         .only("id", "client_id", "taxpayer_bucket_id", "day", "tax_return_type",
               "task_type_id", "task_type__name")
-        .order_by("day", "id")
     )
     if since:
         qs = qs.filter(day__gte=since)
@@ -156,7 +156,7 @@ def assign_engagements(org: Organization, *, since: date | None = None,
     cache: dict[tuple, Engagement] = {}
     seen_keys: set[tuple] = set()
 
-    for block in qs.iterator(chunk_size=1000):
+    for block in keyset_iter(qs, 1000):
         key = engagement_key_for_block(block)
         if key is None:
             skipped += 1
@@ -312,7 +312,7 @@ def derive_budgets(org: Organization, *, dry_run: bool = True,
         qs = qs.filter(status="open")
 
     counts: dict[str, int] = {}
-    for eng in qs.iterator(chunk_size=200):
+    for eng in keyset_iter(qs, 200):
         result = derive_budget(eng, dry_run=dry_run)
         counts[result["action"]] = counts.get(result["action"], 0) + 1
 

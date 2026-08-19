@@ -14,3 +14,4 @@ from . import utilization  # noqa: F401
 from . import profitability  # noqa: F401
 from . import wip  # noqa: F401
 from . import compliance  # noqa: F401
+from . import engagements  # noqa: F401

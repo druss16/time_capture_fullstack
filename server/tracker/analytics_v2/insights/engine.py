@@ -98,12 +98,7 @@ def _generate_threshold_insights(
     
     # ── WIP aged 60+ over $25K ──
     try:
-        from ..metrics.base import Metric as _M
-        # Use a throwaway Metric() just for its scope-application helper
-        class _Helper:
-            def _apply_scope(self, qs, s):
-                return _M()._apply_scope(qs, s)
-        bands = compute_wip_aging_bands(org, scope, _Helper())
+        bands = compute_wip_aging_bands(org, scope)
         aged_total = bands["61_90"] + bands["90_plus"]
         if aged_total > 25000:
             cards.append(_wip_aging_card(org, scope, aged_total, bands))

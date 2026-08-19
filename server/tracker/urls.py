@@ -3,7 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -193,6 +193,15 @@ urlpatterns = [
     # Invoice Export
     path("billing/invoice/<int:client_id>/", views_billing.invoice_export, name="invoice-export"),
     path("billing/mark-invoiced/", views_billing.mark_invoiced, name="mark-invoiced"),
+    path("billing/wip-relief/", views_billing.wip_relief_run, name="wip-relief"),
+
+    # -------------------------------
+    # Engagements — budget vs progress
+    # -------------------------------
+    path("engagements/", views_engagements.list_engagements, name="engagements-list"),
+    path("engagements/phase-agreement/", views_engagements.phase_agreement, name="engagement-phase-agreement"),
+    path("engagements/<int:engagement_id>/phase/", views_engagements.set_engagement_phase, name="engagement-set-phase"),
+    path("engagements/<int:engagement_id>/budget/", views_engagements.set_engagement_budget, name="engagement-set-budget"),
     
     # Block Billing Management
     path("billing/blocks/<int:block_id>/", views_billing.update_block_billing, name="update-block-billing"),

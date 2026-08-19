@@ -1376,11 +1376,18 @@ def mark_invoiced(request):
                 f"logged, NOT blocked (UI handler pending)"
             )
 
+    # NOTE: this used to require approved=True. Nothing in the product sets
+    # `approved` unless a firm runs the timesheet-approval workflow, so the
+    # filter silently dropped most blocks and WIP never drained. WIP now
+    # accrues at capture (see analytics_v2/metrics/wip.py) and relief follows
+    # the same definition: any uninvoiced billable block can be billed.
     updated = Block.objects.filter(
         id__in=block_ids,
         org=org,
-        approved=True,
         invoiced=False,
+        is_billable=True,
+    ).exclude(
+        classification_state='suppressed',
     ).update(
         invoiced=True,
         invoiced_at=timezone.now(),
@@ -4744,3 +4751,50 @@ def export_billing_csv(request):
     response = StreamingHttpResponse(row_iter(), content_type='text/csv')
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+# ===============================
+# WIP RELIEF
+# ===============================
+
+@api_view(['POST'])
+def wip_relief_run(request):
+    """
+    Apply synced invoices against uninvoiced WIP so WIP drains as the firm bills.
+
+    POST {"apply": false, "since": "2026-01-01", "limit": 50}
+
+    Defaults to a dry run: the response shows exactly which invoices would
+    relieve which blocks, and nothing is written unless apply=true. Owner /
+    admin / manager only — this changes billing state.
+
+    See tracker/services/wip_relief.py for the FIFO (hourly) vs period
+    (flat-fee) rules.
+    """
+    from datetime import date as _date
+    from tracker.services.wip_relief import relieve_org
+
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=400)
+    if not _can_export_org_wide(request, org):
+        return Response({'error': 'Not permitted'}, status=403)
+
+    since = None
+    raw_since = request.data.get('since')
+    if raw_since:
+        try:
+            since = _date.fromisoformat(raw_since)
+        except ValueError:
+            return Response({'error': f'since must be YYYY-MM-DD, got {raw_since!r}'}, status=400)
+
+    limit = request.data.get('limit')
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return Response({'error': 'limit must be an integer'}, status=400)
+
+    dry_run = not bool(request.data.get('apply', False))
+    report = relieve_org(org, dry_run=dry_run, since=since, limit=limit)
+    return Response(report)

@@ -156,7 +156,7 @@ def _quarter_label(start: date) -> str:
 # ---------------------------------------------------------------------------
 
 VALID_SCOPE_TYPES: set[str] = {"firm", "client", "staff", "service", "engagement", "composite"}
-VALID_LENS_KEYS: set[str] = {"pulse", "profitability", "utilization", "wip", "realization", "trends"}
+VALID_LENS_KEYS: set[str] = {"pulse", "profitability", "utilization", "wip", "realization", "trends", "engagements"}
 
 
 def parse_scope(raw: Any) -> Scope:

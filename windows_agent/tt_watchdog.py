@@ -159,9 +159,48 @@ def agent_heartbeat_age():
         return None
 
 
+# The agent's own scheduled task, which is registered with
+# <RunLevel>HighestAvailable</RunLevel> (see startup_task.py).
+AGENT_TASK_NAME = "TimeTrackerAgent"
+
+
 def start_agent(agent_exe: str) -> bool:
+    """Start the agent, preferring its own scheduled task.
+
+    WHY NOT JUST Popen. A child process inherits its parent's token, and this
+    watchdog runs at LeastPrivilege — so every agent the watchdog started came
+    up NON-elevated, silently overriding the HighestAvailable its own task asks
+    for. Field data across 5 staff: agent_is_admin=0 on every machine, while
+    QuickBooks ran elevated as the SAME user. That mismatch is why the agent
+    cannot read which company file QuickBooks has open: Windows refuses a
+    normal-integrity process access to an elevated one.
+
+    Starting the task instead of the executable lets Task Scheduler build the
+    token from the task definition, so the agent gets the elevation it was
+    always meant to have — and the watchdog itself stays least-privilege, which
+    is the smallest change that fixes it.
+
+    Falls back to a direct launch if the task is missing or refuses to run, so
+    a machine without the task registered still gets an agent.
+    """
     try:
-        log(f"[WATCHDOG] 🚀 Starting agent: {agent_exe}")
+        r = subprocess.run(
+            ["schtasks", "/Run", "/TN", AGENT_TASK_NAME],
+            capture_output=True, text=True, timeout=20,
+            creationflags=_NO_WINDOW,
+        )
+        if r.returncode == 0:
+            log(f"[WATCHDOG] 🚀 Started agent via task {AGENT_TASK_NAME!r} "
+                f"(inherits its HighestAvailable run level)")
+            return True
+        log(f"[WATCHDOG] ⚠️ schtasks /Run {AGENT_TASK_NAME!r} failed "
+            f"(code {r.returncode}): {(r.stderr or '').strip()[:160]} — "
+            f"falling back to a direct launch")
+    except Exception as e:
+        log(f"[WATCHDOG] ⚠️ schtasks /Run failed ({e}) — falling back")
+
+    try:
+        log(f"[WATCHDOG] 🚀 Starting agent directly: {agent_exe}")
         subprocess.Popen(
             [agent_exe],
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,

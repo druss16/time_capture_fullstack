@@ -2213,10 +2213,16 @@ def write_event(
             from qb_company_tracker import (
                 get_company_file_context as _qb_ctx,
                 get_capture_diagnostics as _qb_diag,
+                get_capture_report as _qb_report,
             )
             _qb = _qb_ctx(title or "")   # ONE probe, both answers
             if not isinstance(payload.get("ctx"), dict):
                 payload["ctx"] = {}
+            # Raw observations for the server to interpret. The agent cannot
+            # decide this well — it lacks the client list and the block's other
+            # titles — and every agent-side rule has cost a release to correct.
+            # Reporting facts moves all future refinement to a server deploy.
+            payload["ctx"]["qb_report"] = _qb_report(title or "")
             # ALWAYS record the probe result, including the empty case. v1.7.14
             # emitted nothing when it found nothing, so a machine that could not
             # read any path was indistinguishable from a machine not running

@@ -3026,10 +3026,14 @@ class ClassificationService:
         # (QB Accountant's "Open Second Company") and no agent resolution,
         # which one is in front is unknowable here, so we do not guess.
         path = None
+        via = 'direct'
         try:
             open_files = set()
-            for ctx in (RawEvent.objects.filter(block=block)
-                        .values_list('ctx', flat=True)):
+            reports = []
+            titles = [block.window_title or '']
+            for ctx, wt in (RawEvent.objects.filter(block=block)
+                            .values_list('ctx', 'window_title')):
+                titles.append(wt or '')
                 if not isinstance(ctx, dict):
                     continue
                 if ctx.get('qb_company_path'):
@@ -3037,8 +3041,30 @@ class ClassificationService:
                 for p in (ctx.get('qb_open_files') or []):
                     if p:
                         open_files.add(p)
+                if isinstance(ctx.get('qb_report'), dict):
+                    reports.append(ctx['qb_report'])
             if not path and len(open_files) == 1:
                 path = next(iter(open_files))
+
+            # Nothing read the path outright — interpret the agent's raw report.
+            # Company names are gathered from EVERY title in the block, which is
+            # what makes this work at all: most QuickBooks samples are modals
+            # carrying no company, but a block almost always contains at least
+            # one main-window sample that does.
+            if not path and reports:
+                from tracker.services.qb_company_file import (
+                    pick_recent_company_file, extract_qb_company)
+                companies = set()
+                for t in titles:
+                    c = extract_qb_company(t)
+                    if c:
+                        companies.add(c)
+                for r in reports:
+                    if isinstance(r, dict) and r.get('company'):
+                        companies.add(r['company'])
+                picked, via = pick_recent_company_file(reports, companies)
+                if picked:
+                    path = picked
         except Exception:
             return
         if not path:
@@ -3064,7 +3090,7 @@ class ClassificationService:
             type='qb_company_file',
             strength=0.93,
             evidence=(
-                f"QuickBooks company file '{basename}' "
+                f"QuickBooks company file '{basename}' ({via}) "
                 f"identifies client '{client_name}' (matched '{matched_on}'). "
                 f"The window title alone does not distinguish this client."
             ),
@@ -3073,6 +3099,7 @@ class ClassificationService:
                 'client_name': client_name,
                 'company_file': path[:300],
                 'matched_on': matched_on,
+                'via': via,
             },
         ))
 

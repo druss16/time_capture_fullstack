@@ -14,7 +14,7 @@ import { cn } from "@/lib/design-system";
 import type { Section as SectionType, SectionChild } from "@/lib/analytics_v2/types";
 import { KPITile } from "./KPITile";
 import { ChartCard } from "./ChartCard";
-import { DataTable } from "./DataTable";
+import DataTable from "./DataTable";
 import { InsightCard } from "./InsightCard";
 
 interface Props {

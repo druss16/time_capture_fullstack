@@ -105,6 +105,9 @@ class WipSnapshot(models.Model):
     
     # Total + aging bands
     total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
+    # Captured billable time not yet confirmed in Daily Review — real money,
+    # tracked next to WIP rather than inside it.
+    unreviewed = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
     aged_0_30 = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
     aged_31_60 = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
     aged_61_90 = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))

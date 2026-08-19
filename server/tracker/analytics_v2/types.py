@@ -38,7 +38,7 @@ class MetricState(str, Enum):
 # ---------------------------------------------------------------------------
 
 ScopeType = Literal["firm", "client", "staff", "service", "engagement", "composite"]
-LensKey = Literal["pulse", "profitability", "utilization", "wip", "realization", "trends"]
+LensKey = Literal["pulse", "profitability", "utilization", "wip", "realization", "trends", "engagements"]
 
 
 @dataclass(frozen=True)

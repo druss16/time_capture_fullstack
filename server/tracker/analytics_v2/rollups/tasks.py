@@ -235,29 +235,23 @@ def snapshot_wip_all_orgs():
 
 
 def _snapshot_wip_for_org(org: Organization, captured_at: datetime) -> WipSnapshot:
-    qs = Block.objects.filter(
-        org=org, approved=True, invoiced=False, is_billable=True,
-    ).only("client_id", "minutes", "billing_amount", "billing_rate",
-           "approved_at", "start")
-    
-    default_rate = to_float(getattr(org, "billing_rate_default", 0))
+    # Same definition of WIP the lens and metrics use — see metrics/wip.py.
+    from ..metrics.wip import (
+        TIER_BILLABLE_READY, TIER_UNREVIEWED, WIP_FIELDS, block_age_days,
+        block_amount, default_rate_for, wip_qs,
+    )
+
+    qs = wip_qs(org, None, TIER_BILLABLE_READY).only("client_id", *WIP_FIELDS)
+
+    default_rate = default_rate_for(org)
+    today = timezone.localdate()
     bands = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
     by_client: dict[int, float] = defaultdict(float)
     total = 0.0
-    
+
     for b in qs:
-        hours = to_float(b.minutes) / 60.0
-        amount = to_float(b.billing_amount)
-        if not amount:
-            rate = to_float(b.billing_rate) or default_rate
-            amount = hours * rate
-        ref = b.approved_at or b.start
-        if ref:
-            if timezone.is_naive(ref):
-                ref = timezone.make_aware(ref)
-            age_days = max(0, (captured_at - ref).days)
-        else:
-            age_days = 0
+        amount = block_amount(b, default_rate)
+        age_days = block_age_days(b, today)
         if age_days <= 30:
             bands["0_30"] += amount
         elif age_days <= 60:
@@ -270,10 +264,16 @@ def _snapshot_wip_for_org(org: Organization, captured_at: datetime) -> WipSnapsh
         if b.client_id:
             by_client[b.client_id] += amount
     
+    unreviewed = sum(
+        block_amount(b, default_rate)
+        for b in wip_qs(org, None, TIER_UNREVIEWED).only(*WIP_FIELDS)
+    )
+
     snap = WipSnapshot.objects.create(
         org=org,
         captured_at=captured_at,
         total=Decimal(str(round(total, 2))),
+        unreviewed=Decimal(str(round(unreviewed, 2))),
         aged_0_30=Decimal(str(round(bands["0_30"], 2))),
         aged_31_60=Decimal(str(round(bands["31_60"], 2))),
         aged_61_90=Decimal(str(round(bands["61_90"], 2))),

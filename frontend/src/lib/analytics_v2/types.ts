@@ -9,7 +9,8 @@ export type ScopeType =
   | "firm" | "client" | "staff" | "service" | "engagement" | "composite";
 
 export type LensKey =
-  | "pulse" | "profitability" | "utilization" | "wip" | "realization" | "trends";
+  | "pulse" | "profitability" | "utilization" | "wip" | "realization" | "trends"
+  | "engagements";
 
 export interface Scope {
   type: ScopeType;
@@ -70,7 +71,10 @@ export type NumberFormat =
   | "currency_0dp" | "currency_2dp"
   | "hours_1dp" | "days_1dp"
   | "integer" | "decimal_1dp" | "decimal_2dp"
-  | "text";
+  | "text"
+  // Interactive: renders a phase dropdown that writes back to the engagement.
+  // The row must carry `engagement_id` and `phase_options`.
+  | "phase_picker";
 
 export type TileSize = "small" | "medium" | "large";
 

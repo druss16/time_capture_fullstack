@@ -71,6 +71,14 @@ class Organization(models.Model):
         default=Decimal('75.00'),
         help_text="Default hourly employee cost (for margin calculations)"
     )
+    wip_auto_relief = models.BooleanField(
+        default=False,
+        help_text=(
+            "Nightly, apply synced invoices against uninvoiced WIP so WIP drains "
+            "as the firm bills (services/wip_relief.py). Off until the firm's "
+            "invoice feed is trusted — run the relieve_wip command dry first."
+        ),
+    )
     target_utilization = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -1098,6 +1106,34 @@ class Invoice(models.Model):
 
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')
     external_id = models.CharField(max_length=100, blank=True)  # QBO/Xero invoice ID
+
+    # ---- WIP relief bookkeeping (services/wip_relief.py) --------------------
+    # An invoice takes uninvoiced time out of WIP. We don't require a line-item
+    # mapping: the invoice relieves the oldest matching WIP for that client
+    # (hourly) or the whole period (flat fee). These fields make that idempotent
+    # and auditable.
+    RELIEF_MODE_CHOICES = [
+        ('amount', 'FIFO to invoice amount (hourly)'),
+        ('period', 'Whole period (flat fee / retainer)'),
+    ]
+    wip_relieved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When this invoice was applied against WIP. Set → never re-applied.',
+    )
+    wip_relieved_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text='Standard-rate value of the WIP blocks this invoice relieved.',
+    )
+    wip_relief_residual = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text=(
+            'Invoice amount minus WIP relieved. Positive = billed more than the '
+            'time on file (premium/uncaptured time). Negative = wrote down WIP.'
+        ),
+    )
+    wip_relief_mode = models.CharField(
+        max_length=10, choices=RELIEF_MODE_CHOICES, blank=True, default='',
+    )
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1834,6 +1870,25 @@ class Block(models.Model):
         blank=True,
         default='',
         help_text="Reference to external invoice (e.g., QBO invoice ID)"
+    )
+    # The job this time belongs to — client + service + period. Derived
+    # automatically (services/engagements.py); drives budget burn vs progress.
+    engagement = models.ForeignKey(
+        'Engagement',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='blocks',
+        help_text='Engagement this block rolls up to, for budget vs actual',
+    )
+    # Which Invoice relieved this block out of WIP. Set by the WIP relief
+    # service (services/wip_relief.py) or by an explicit billing export.
+    # invoice_reference above is the human string; this is the real link.
+    relieving_invoice = models.ForeignKey(
+        'Invoice',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='relieved_blocks',
+        help_text='Invoice that took this block out of WIP',
     )
     # Integration push tracking
     qb_time_activity_id = models.CharField(
@@ -4409,6 +4464,11 @@ from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402
 from tracker.models_task_type_sets import (
     TaskTypeSet, TaskTypeSetMember, ClientTaskType,
     ExternalClientMapping, ExternalTaskTypeMapping, ExternalStaffMapping,
+)
+
+# Engagements — budget + progress unit (see models_engagements.py)
+from tracker.models_engagements import (  # noqa: F401, E402
+    Engagement, PHASE_LADDERS, ladder_for, phase_progress,
 )
 
 

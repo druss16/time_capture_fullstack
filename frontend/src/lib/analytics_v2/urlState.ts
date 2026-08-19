@@ -12,6 +12,7 @@ import type { AnalyticsQueryBody, LensKey, Scope, ScopeType } from "./types";
 
 const VALID_LENSES = new Set<LensKey>([
   "pulse", "profitability", "utilization", "wip", "realization", "trends",
+  "engagements",
 ]);
 
 const VALID_SCOPE_TYPES = new Set<ScopeType>([
@@ -155,5 +156,6 @@ export const LENS_OPTIONS: Array<{ value: LensKey; label: string; description: s
   { value: "realization",   label: "Realization",    description: "Billing efficiency" },
   { value: "utilization",   label: "Utilization",    description: "Billable share of tracked time" },
   { value: "wip",           label: "WIP",            description: "Uninvoiced work, aged" },
+  { value: "engagements",   label: "Engagements",    description: "Budget burn vs work done" },
   { value: "trends",        label: "Trends",         description: "Monthly trend (Executive)" },
 ];

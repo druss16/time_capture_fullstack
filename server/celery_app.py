@@ -73,6 +73,21 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=2, minute=30),
     },
 
+    # ✅ NIGHTLY 3:45 AM: Drain WIP with the invoices that landed.
+    # Opt-in per org (Organization.wip_auto_relief). Runs after invoice syncs
+    # so the day's invoices relieve the same night they arrive.
+    'relieve-wip-nightly': {
+        'task': 'tracker.relieve_wip_all_orgs',
+        'schedule': crontab(hour=3, minute=45),
+    },
+
+    # ✅ NIGHTLY 4:20 AM: Fold new time into engagements, refresh budgets from
+    # prior-year actuals, re-run shadow phase inference. Feeds burn-vs-progress.
+    'derive-engagements-nightly': {
+        'task': 'tracker.derive_engagements_all_orgs',
+        'schedule': crontab(hour=4, minute=20),
+    },
+
     # ✅ NIGHTLY 3:00 AM: Client-name mismatch backstop scan.
     # Detection-only — opens/resolves MismatchFlag rows over a 7-day rolling
     # window. Watched in MavOps Admin org-health; feeds the pre-invoice gate.

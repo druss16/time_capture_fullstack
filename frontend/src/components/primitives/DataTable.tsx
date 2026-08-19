@@ -8,7 +8,71 @@ import { useMemo, useState } from "react";
 import { ArrowUpDown, ArrowUp, ArrowDown, Inbox, Info } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
+import { API_BASE, safeFetchJson } from "@/lib/api";
 import type { DataTablePayload, DataTableColumn } from "@/lib/analytics_v2/types";
+
+/**
+ * PhaseCell — the one piece of data entry in budget-vs-progress.
+ *
+ * Burn comes free from captured time; progress cannot. Someone has to say how
+ * far along the job is, so the ask is one dropdown, inline, right next to the
+ * number it corrects. Saving updates the row in place rather than reloading
+ * the whole lens — the picker is next to a table people scan, and a full
+ * refetch on every pick would make it feel like a form.
+ */
+interface PhaseOption { value: string; label: string; progress: number }
+
+function PhaseCell({ row }: { row: Record<string, any> }) {
+  const [phase, setPhase] = useState<string>(row.phase ?? "");
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const options: PhaseOption[] = row.phase_options ?? [];
+  const engagementId = row.engagement_id;
+
+  if (!engagementId || options.length === 0) {
+    return <span className="text-slate-400">{row.phase_label ?? "—"}</span>;
+  }
+
+  const save = async (next: string) => {
+    const previous = phase;
+    setPhase(next);
+    setSaving(true);
+    setFailed(false);
+    try {
+      await safeFetchJson(`${API_BASE}/engagements/${engagementId}/phase/`, {
+        method: "POST",
+        body: JSON.stringify({ phase: next }),
+      });
+    } catch {
+      setPhase(previous);
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <select
+      value={phase}
+      disabled={saving}
+      onClick={e => e.stopPropagation()}
+      onChange={e => save(e.target.value)}
+      title={failed ? "Could not save — try again" : "How far along is this job?"}
+      className={cn(
+        "rounded-md border px-2 py-1 text-xs bg-white",
+        failed ? "border-rose-300 text-rose-700" : "border-slate-200 text-slate-700",
+        saving && "opacity-60",
+      )}
+    >
+      <option value="">Not set</option>
+      {options.map(o => (
+        <option key={o.value} value={o.value}>
+          {o.label} · {o.progress}%
+        </option>
+      ))}
+    </select>
+  );
+}
 
 interface Props {
   table: DataTablePayload;
@@ -91,12 +155,17 @@ export default function DataTable({ table, onRowClick }: Props) {
                       key={col.key}
                       className={cn(
                         "px-4 py-3 text-slate-700",
-                        col.format !== "text" && "text-right tabular-nums font-medium",
+                        col.format !== "text" && col.format !== "phase_picker" &&
+                          "text-right tabular-nums font-medium",
                       )}
                     >
-                      {col.format === "text"
-                        ? String(row[col.key] ?? "")
-                        : formatValue(row[col.key], col.format)}
+                      {col.format === "phase_picker" ? (
+                        <PhaseCell row={row} />
+                      ) : col.format === "text" ? (
+                        String(row[col.key] ?? "")
+                      ) : (
+                        formatValue(row[col.key], col.format)
+                      )}
                     </td>
                   ))}
                 </tr>

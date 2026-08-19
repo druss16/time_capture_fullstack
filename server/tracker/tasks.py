@@ -2105,3 +2105,78 @@ def derive_client_aliases_all_orgs(min_confidence: float = 0.8):
 
     logger.info("[ALIAS] Nightly sweep complete: %d orgs ok, %d failed", ok, failed)
     return {'ok': ok, 'failed': failed}
+
+# ---------------------------------------------------------------------------
+# WIP relief — drain WIP as invoices land
+# ---------------------------------------------------------------------------
+
+@shared_task(name='tracker.relieve_wip_all_orgs')
+def relieve_wip_all_orgs():
+    """
+    Nightly: apply synced invoices against uninvoiced WIP so WIP goes down when
+    the firm bills. Without this, WIP aging is a ramp that only grows.
+
+    Opt-in per org via Organization.wip_auto_relief — an org whose invoice feed
+    isn't trusted yet should run `manage.py relieve_wip --org N` dry first.
+
+    Schedule: crontab(hour=3, minute=45)  # after the nightly invoice syncs
+    """
+    from tracker.models import Organization
+    from tracker.services.wip_relief import relieve_org
+
+    totals = {'orgs': 0, 'invoices_applied': 0, 'blocks_relieved': 0, 'wip_relieved': 0.0}
+    for org in Organization.objects.filter(wip_auto_relief=True):
+        try:
+            report = relieve_org(org, dry_run=False)
+        except Exception as e:
+            logger.warning("[WIP-RELIEF] org %s failed: %s", org.id, e, exc_info=True)
+            continue
+        totals['orgs'] += 1
+        totals['invoices_applied'] += report['invoices_applied']
+        totals['blocks_relieved'] += report['blocks_relieved']
+        totals['wip_relieved'] += report['wip_relieved']
+        if report['invoices_applied']:
+            logger.info(
+                "[WIP-RELIEF] org %s: %d invoices relieved $%.2f across %d blocks",
+                org.id, report['invoices_applied'], report['wip_relieved'],
+                report['blocks_relieved'],
+            )
+
+    return totals
+
+
+# ---------------------------------------------------------------------------
+# Engagements — keep budgets and progress current
+# ---------------------------------------------------------------------------
+
+@shared_task(name='tracker.derive_engagements_all_orgs')
+def derive_engagements_all_orgs():
+    """
+    Nightly: fold new time into engagements, refresh budgets from history, and
+    re-run the shadow phase inference.
+
+    Safe to run on every org — assignment only touches blocks with no
+    engagement, budget derivation never overwrites a manual budget, and
+    inference writes only to `inferred_phase`, never to the phase a preparer set.
+
+    Schedule: crontab(hour=4, minute=20)  # after alias derivation
+    """
+    from tracker.models import Organization
+    from tracker.services.engagements import assign_engagements, derive_budgets
+    from tracker.services.phase_inference import refresh_inferred_phases
+
+    totals = {'orgs': 0, 'engagements_created': 0, 'blocks_assigned': 0}
+    for org in Organization.objects.all():
+        try:
+            assigned = assign_engagements(org, dry_run=False)
+            derive_budgets(org, dry_run=False)
+            refresh_inferred_phases(org, dry_run=False)
+        except Exception as e:
+            logger.warning("[ENGAGEMENTS] org %s failed: %s", org.id, e, exc_info=True)
+            continue
+        totals['orgs'] += 1
+        totals['engagements_created'] += assigned['engagements_created']
+        totals['blocks_assigned'] += assigned['blocks_assigned']
+
+    logger.info("[ENGAGEMENTS] nightly: %s", totals)
+    return totals

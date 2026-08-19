@@ -161,8 +161,6 @@ def agent_heartbeat_age():
 
 # The agent's own scheduled task, which is registered with
 # <RunLevel>HighestAvailable</RunLevel> (see startup_task.py).
-AGENT_TASK_NAME = "TimeTrackerAgent"
-
 # How long to wait for the task-started agent to appear before falling back.
 # Short: the fallback is cheap and an agent that is down is the worst outcome.
 TASK_START_VERIFY_SECONDS = 6

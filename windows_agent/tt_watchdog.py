@@ -163,6 +163,10 @@ def agent_heartbeat_age():
 # <RunLevel>HighestAvailable</RunLevel> (see startup_task.py).
 AGENT_TASK_NAME = "TimeTrackerAgent"
 
+# How long to wait for the task-started agent to appear before falling back.
+# Short: the fallback is cheap and an agent that is down is the worst outcome.
+TASK_START_VERIFY_SECONDS = 6
+
 
 def start_agent(agent_exe: str) -> bool:
     """Start the agent, preferring its own scheduled task.
@@ -186,16 +190,32 @@ def start_agent(agent_exe: str) -> bool:
     try:
         r = subprocess.run(
             ["schtasks", "/Run", "/TN", AGENT_TASK_NAME],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=15,
             creationflags=_NO_WINDOW,
         )
         if r.returncode == 0:
-            log(f"[WATCHDOG] 🚀 Started agent via task {AGENT_TASK_NAME!r} "
-                f"(inherits its HighestAvailable run level)")
-            return True
-        log(f"[WATCHDOG] ⚠️ schtasks /Run {AGENT_TASK_NAME!r} failed "
-            f"(code {r.returncode}): {(r.stderr or '').strip()[:160]} — "
-            f"falling back to a direct launch")
+            # A zero exit does NOT mean the agent started. The agent task is
+            # registered MultipleInstancesPolicy=IgnoreNew, so if Task Scheduler
+            # still believes an instance is running — stale state after a kill,
+            # which is precisely the situation the watchdog exists to recover
+            # from — it accepts the request, starts nothing, and reports
+            # success. Trusting the exit code would leave the agent down while
+            # the watchdog reported it started: a silent regression in the one
+            # job this process has. So verify, and fall back if it did not come
+            # up.
+            for _ in range(TASK_START_VERIFY_SECONDS):
+                time.sleep(1)
+                if is_agent_running():
+                    log(f"[WATCHDOG] 🚀 Started agent via task {AGENT_TASK_NAME!r} "
+                        f"(inherits its HighestAvailable run level)")
+                    return True
+            log(f"[WATCHDOG] ⚠️ task {AGENT_TASK_NAME!r} reported success but no "
+                f"agent process appeared in {TASK_START_VERIFY_SECONDS}s "
+                f"(likely IgnoreNew vs stale instance) — falling back")
+        else:
+            log(f"[WATCHDOG] ⚠️ schtasks /Run {AGENT_TASK_NAME!r} failed "
+                f"(code {r.returncode}): {(r.stderr or '').strip()[:160]} — "
+                f"falling back to a direct launch")
     except Exception as e:
         log(f"[WATCHDOG] ⚠️ schtasks /Run failed ({e}) — falling back")
 

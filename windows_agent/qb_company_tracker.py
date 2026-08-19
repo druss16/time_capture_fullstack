@@ -755,6 +755,129 @@ def _discover_company_dirs(diag: dict) -> list[str]:
     return found
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REPORT FACTS, DO NOT DECIDE.
+#
+# Four mechanisms have now been shipped and four have failed, each costing a
+# release to learn one thing. The last one failed for an avoidable reason: the
+# share scan narrows candidates by the company name in the title, and most
+# QuickBooks samples are modals ("Make General Journal Entries") that carry no
+# company — which is the entire reason this module exists. So it discarded
+# every candidate before comparing anything, and reported cands=0.
+#
+# The deciding does not belong here. The server knows the client list, the
+# block's whole title history, and what the neighbouring blocks were; the agent
+# knows none of that. So the agent's job is reduced to reporting what it can
+# see, and every future refinement becomes a server deploy instead of another
+# agent release and another day of waiting.
+#
+# Cheap by construction: one cached directory listing, no per-file stat, no
+# process access, nothing that can be denied.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# How many recently-touched company files to report. Enough that the real one
+# is present even when several people are working on the share at once.
+RECENT_REPORT_LIMIT = 10
+
+
+def get_capture_report(window_title: str | None = None) -> dict:
+    """Everything the agent can see about which company file is in use.
+
+    Returns raw observations only:
+      company : the company name in the title, if any (may be None — modals)
+      recent  : [{'f': filename, 'age': seconds since modified}, …] newest first
+      diag    : mechanism counters, for diagnosing this from the server side
+
+    Never raises. Every field may be absent; the server treats missing as
+    unknown rather than as evidence.
+    """
+    report: dict = {}
+    diag: dict = {}
+    try:
+        company = (_extract_company_from_main_title(window_title or '')
+                   or get_company_global())
+        if company:
+            report['company'] = company[:120]
+    except Exception as e:
+        diag['co_err'] = type(e).__name__
+
+    # The authoritative mechanisms first — if either works we say so plainly.
+    try:
+        exact = _paths_from_handles(diag) or _paths_from_cmdline(diag)
+        if exact:
+            report['exact'] = exact[:4]
+    except Exception as e:
+        diag.setdefault('err', type(e).__name__)
+
+    try:
+        report['recent'] = _recent_company_files(diag)
+    except Exception as e:
+        diag.setdefault('share_err', type(e).__name__)
+
+    report['diag'] = diag
+    _last_diag.clear()
+    _last_diag.update(diag)
+    return report
+
+
+def _recent_company_files(diag: dict) -> list:
+    """The most recently modified company files on the share, newest first.
+
+    No company-name filtering and no threshold — both were mistakes. A filter
+    needs a company name that usually is not there, and a threshold needs the
+    file server's clock to agree with this machine's. Ages are reported as
+    observed and the server decides what they mean.
+    """
+    dirs = _discover_company_dirs(diag)
+    diag['sharedirs'] = len(dirs)
+    if not dirs:
+        return []
+
+    now = time.monotonic()
+    if not _share_cache['files'] or (now - _share_cache['scanned_at']) >= SHARE_SCAN_INTERVAL:
+        seen = {}
+        for d in dirs:
+            try:
+                with os.scandir(d) as it:
+                    for entry in it:
+                        try:
+                            low = entry.name.lower()
+                            # Both the company file and its sidecars matter:
+                            # QuickBooks writes the transaction log far more
+                            # often than the .qbw itself.
+                            base = low
+                            for tail in ('.tlg', '.nd', '.lgb', '.dsn', '.sds'):
+                                if base.endswith(tail):
+                                    base = base[:-len(tail)]
+                                    break
+                            if not base.endswith(QB_COMPANY_EXT):
+                                continue
+                            mt = entry.stat().st_mtime
+                            if mt > seen.get(base, (0, ''))[0]:
+                                seen[base] = (mt, base)
+                        except Exception:
+                            continue
+            except Exception as e:
+                diag.setdefault('share_err', type(e).__name__)
+        _share_cache['files'] = seen
+        _share_cache['scanned_at'] = now
+
+    seen = _share_cache['files']
+    diag['sharefiles'] = len(seen)
+    if not seen:
+        return []
+
+    import time as _t
+    wall = _t.time()
+    ordered = sorted(seen.values(), reverse=True)[:RECENT_REPORT_LIMIT]
+    out = []
+    for mt, name in ordered:
+        out.append({'f': name[:120], 'age': int(max(0, wall - mt))})
+    diag['recent'] = len(out)
+    return out
+
+
 def _paths_from_share(diag: dict, company: str | None = None) -> list[str]:
     """Which company file matching `company` is being worked in right now.
 

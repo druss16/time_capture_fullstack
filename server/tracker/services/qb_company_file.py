@@ -56,6 +56,25 @@ MIN_MATCHABLE_LEN = 5
 MIN_COVERAGE = 0.5
 
 
+_QB_TITLE_RE = re.compile(r'^(?P<c>.+?)\s+[-\u2013]\s+quickbooks\b', re.IGNORECASE)
+
+
+def extract_qb_company(title: str):
+    """'{Company} - QuickBooks ... - [Screen]' -> 'Company', else None.
+
+    The '(Primary)' / '(Secondary)' markers QuickBooks appends when two company
+    files are open are stripped: they identify the WINDOW, not the client.
+    """
+    t = (title or '').rsplit(' - [', 1)[0].strip()
+    m = _QB_TITLE_RE.match(t)
+    if not m:
+        return None
+    c = re.sub(r'\s*\([^)]*\)\s*$', '', m.group('c').strip()).strip()
+    if len(c) < 4 or c.lower().startswith(('quickbooks', 'intuit')):
+        return None
+    return c
+
+
 def norm(text: str) -> str:
     """Lowercase alphanumerics only: "St. Mary's Church– Clinton" → 'stmaryschurchclinton'."""
     return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
@@ -220,3 +239,80 @@ def company_file_key(app_name: str, file_path: str):
     if not fp.lower().endswith(".qbw"):
         return None
     return "qbfile=" + fp.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interpreting the agent's raw report (ctx.qb_report).
+#
+# The agent reports observations and does not decide. It cannot decide well:
+# most QuickBooks samples are modals with no company name in the title, so an
+# agent-side rule that needs one discards everything. The server has what the
+# agent lacks — every event in the block, so a company name from ANY sample
+# covers the modals, plus the client list.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The winner must be this much fresher than the next candidate. Seven people
+# share the drive, so several files are always warm; only a decisive lead means
+# "this block's work", and anything closer is a coin flip between colleagues.
+RECENT_LEAD_SECONDS = 120
+
+# Beyond this the file was not being worked in during the block, whatever else
+# was going on.
+RECENT_MAX_AGE_SECONDS = 60 * 60
+
+
+def pick_recent_company_file(reports, companies):
+    """Choose the company file this block was working in, or None.
+
+    `reports`  — ctx.qb_report dicts from the block's events.
+    `companies`— company names seen in ANY of the block's titles.
+
+    Two routes, strongest first:
+      1. A mechanism read the path outright ('exact') — believe it.
+      2. Otherwise the freshest company file whose name matches a company seen
+         in the block. Matching first, freshness second: a colleague's file may
+         well be fresher, but it will not carry this block's company name.
+
+    With no company name anywhere in the block, the freshest file is accepted
+    only if it leads every other candidate decisively — otherwise abstain,
+    because on a shared drive "most recent" alone is somebody's work, not
+    necessarily this person's.
+    """
+    for r in reports:
+        if isinstance(r, dict) and r.get('exact'):
+            for path in r['exact']:
+                if path:
+                    return path, 'exact'
+
+    # Freshest observation wins per file: the same file appears in every event's
+    # report, ageing as the block runs.
+    best_age = {}
+    for r in reports:
+        if not isinstance(r, dict):
+            continue
+        for item in (r.get('recent') or []):
+            try:
+                name, age = item.get('f'), int(item.get('age'))
+            except Exception:
+                continue
+            if not name or age < 0:
+                continue
+            if name not in best_age or age < best_age[name]:
+                best_age[name] = age
+
+    fresh = sorted(((a, n) for n, a in best_age.items() if a <= RECENT_MAX_AGE_SECONDS))
+    if not fresh:
+        return None, 'none'
+
+    cnorms = [norm(c) for c in (companies or []) if len(norm(c)) >= 4]
+    if cnorms:
+        for age, name in fresh:
+            fnorm = norm(clean_stem(name))
+            if any(cn in fnorm for cn in cnorms):
+                return name, 'named'
+        return None, 'no_name_match'
+
+    # No company name anywhere in the block — accept only a decisive lead.
+    if len(fresh) == 1 or (fresh[1][0] - fresh[0][0]) >= RECENT_LEAD_SECONDS:
+        return fresh[0][1], 'lead'
+    return None, 'ambiguous'

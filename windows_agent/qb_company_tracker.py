@@ -597,14 +597,38 @@ def _record_environment(diag: dict):
                 continue
     except Exception:
         pass
+    # Is the agent ITSELF elevated? The task asks for HighestAvailable, and the
+    # field data shows QuickBooks running elevated as the SAME user — which
+    # means these users can elevate. So if this reports 0, the task is not
+    # taking effect, and that is a smaller fix than any new mechanism.
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            diag['admin'] = int(bool(ctypes.windll.shell32.IsUserAnAdmin()))
+        except Exception:
+            diag['admin'] = -1
+
     # Do the MRU locations we probe actually EXIST? 'ini=0' alone cannot tell
-    # "file absent" from "file present but no paths in it".
-    seen = []
+    # "file absent" from "file present but no paths in it" — and last round
+    # reported inidirs=2 while finding nothing, which is exactly that ambiguity.
+    # Count the FILES, not just the directories.
+    seen, ini_files = [], 0
     for raw_dir in _QBW_INI_DIRS:
         base = os.path.expandvars(raw_dir)
-        if '%' not in base and os.path.isdir(base):
-            seen.append(os.path.basename(os.path.dirname(base)) or base[:12])
+        if '%' in base or not os.path.isdir(base):
+            continue
+        seen.append(base)
+        try:
+            candidates = [base] + [os.path.join(base, d) for d in os.listdir(base)[:20]
+                                   if os.path.isdir(os.path.join(base, d))]
+            for d in candidates:
+                for name in _QBW_INI_NAMES:
+                    if os.path.isfile(os.path.join(d, name)):
+                        ini_files += 1
+        except Exception:
+            continue
     diag['inidirs'] = len(seen)
+    diag['inifiles'] = ini_files
     if sys.platform == 'win32':
         try:
             import winreg
@@ -615,6 +639,183 @@ def _record_environment(diag: dict):
             diag['regkey'] = 0
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mechanism 4 — read the SHARE, not the process.
+#
+# The field verdict was unambiguous: agent_user == qbw_user on every machine,
+# handle duplication refused, command line readable but empty. QuickBooks runs
+# ELEVATED, so no amount of asking Windows about that process will work from a
+# normal-integrity agent.
+#
+# So stop asking about the process. QuickBooks touches files on the share while
+# a company is open — the transaction log beside the .qbw, and the lock files it
+# creates on open and removes on close. Staff read Q:\QB\QB2024 Files all day,
+# so the agent inherits that access: no elevation, no handle duplication,
+# nothing for Windows to deny.
+#
+# What this can and cannot do: a "hot" file means SOMEONE on the share has it
+# open, not necessarily this user — seven machines share that drive. That is
+# fine, because it is not being used to pick a client outright. It is used to
+# DISAMBIGUATE the company name already in the title: if the title says
+# "St. Mary's Church" and only the Clinton file is active, that is the answer.
+# Two same-family files hot at once -> abstain, as everywhere else here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A company file counts as in-use if it or a sidecar changed this recently.
+# Generous on purpose: QuickBooks writes the transaction log on activity, so an
+# idle-but-open file can go quiet for a while.
+SHARE_HOT_SECONDS = 15 * 60
+
+# Directory discovery is the expensive part, and the answer never changes.
+SHARE_DISCOVERY_INTERVAL = 30 * 60
+SHARE_SCAN_INTERVAL = 60.0
+
+# Depth-2 covers the real layout (Q:\QB\QB2024 Files) without walking a whole
+# volume. Caps keep a misconfigured drive from turning this into a crawl.
+_SHARE_MAX_DIRS = 300
+_SHARE_MAX_ENTRIES = 4000
+_SHARE_SKIP_DIRS = {
+    'windows', 'program files', 'program files (x86)', 'programdata',
+    '$recycle.bin', 'system volume information', 'appdata', 'temp', 'tmp',
+    'node_modules', '.git', 'onedrive', 'perflogs', 'recovery',
+}
+
+_share_cache = {'dirs': [], 'discovered_at': 0.0, 'paths': [], 'scanned_at': 0.0}
+
+
+def _candidate_roots() -> list[str]:
+    """Drive letters that exist, network drives first — the company files live
+    on a share, so looking there first usually ends discovery immediately."""
+    import string
+    roots = []
+    for letter in string.ascii_uppercase:
+        root = f'{letter}:\\'
+        try:
+            if not os.path.isdir(root):
+                continue
+        except Exception:
+            continue
+        remote = False
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                # DRIVE_REMOTE == 4
+                remote = ctypes.windll.kernel32.GetDriveTypeW(root) == 4
+            except Exception:
+                pass
+        roots.append((0 if remote else 1, root))
+    roots.sort()
+    return [r for _, r in roots]
+
+
+def _discover_company_dirs(diag: dict) -> list[str]:
+    """Directories that actually contain .qbw company files."""
+    now = time.monotonic()
+    if (_share_cache['dirs']
+            and (now - _share_cache['discovered_at']) < SHARE_DISCOVERY_INTERVAL):
+        return _share_cache['dirs']
+
+    found, visited = [], 0
+    try:
+        for root in _candidate_roots():
+            queue = [(root, 0)]
+            while queue and visited < _SHARE_MAX_DIRS:
+                path, depth = queue.pop(0)
+                visited += 1
+                try:
+                    with os.scandir(path) as it:
+                        subdirs, has_qbw = [], False
+                        for n, entry in enumerate(it):
+                            if n > _SHARE_MAX_ENTRIES:
+                                break
+                            try:
+                                if entry.is_file() and entry.name.lower().endswith(QB_COMPANY_EXT):
+                                    has_qbw = True
+                                elif entry.is_dir() and depth < 2:
+                                    if entry.name.lower() not in _SHARE_SKIP_DIRS:
+                                        subdirs.append(entry.path)
+                            except Exception:
+                                continue
+                        if has_qbw and path not in found:
+                            found.append(path)
+                        queue.extend((d, depth + 1) for d in subdirs)
+                except Exception:
+                    continue
+            if found:
+                break     # a share with company files on it — good enough
+    except Exception as e:
+        diag.setdefault('share_err', type(e).__name__)
+
+    _share_cache['dirs'] = found
+    _share_cache['discovered_at'] = now
+    diag['sharedirs'] = len(found)
+    return found
+
+
+def _paths_from_share(diag: dict) -> list[str]:
+    """Company files on the share that something is currently working in.
+
+    One directory listing per scan (os.scandir carries mtime on Windows, so
+    this is a single SMB round trip, not one stat per file), rate-limited, and
+    cached between scans.
+    """
+    now = time.monotonic()
+    if (_share_cache['paths']
+            and (now - _share_cache['scanned_at']) < SHARE_SCAN_INTERVAL):
+        diag['share'] = len(_share_cache['paths'])
+        diag['sharedirs'] = len(_share_cache['dirs'])
+        return list(_share_cache['paths'])
+
+    dirs = _discover_company_dirs(diag)
+    if not dirs:
+        diag['share'] = 0
+        return []
+
+    import time as _t
+    wall = _t.time()
+    companies, newest = {}, {}
+    try:
+        for d in dirs:
+            try:
+                with os.scandir(d) as it:
+                    for entry in it:
+                        try:
+                            if not entry.is_file():
+                                continue
+                            name = entry.name
+                            low = name.lower()
+                            if low.endswith(QB_COMPANY_EXT):
+                                companies[low] = entry.path
+                            # '<company>.qbw', '<company>.qbw.TLG', '<company>.ND',
+                            # '<company>.qbw.ND', '<company>.lgb' all key back to
+                            # the same company once the tail is stripped.
+                            base = low
+                            for tail in ('.tlg', '.nd', '.lgb', '.dsn', '.sds'):
+                                if base.endswith(tail):
+                                    base = base[:-len(tail)]
+                            if not base.endswith(QB_COMPANY_EXT):
+                                base = base + QB_COMPANY_EXT
+                            mt = entry.stat().st_mtime
+                            if mt > newest.get(base, 0):
+                                newest[base] = mt
+                        except Exception:
+                            continue
+            except Exception as e:
+                diag.setdefault('share_err', type(e).__name__)
+                continue
+    except Exception as e:
+        diag.setdefault('share_err', type(e).__name__)
+
+    hot = [companies[k] for k, mt in newest.items()
+           if k in companies and (wall - mt) <= SHARE_HOT_SECONDS]
+    diag['sharefiles'] = len(companies)
+    diag['share'] = len(hot)
+    _share_cache['paths'] = hot
+    _share_cache['scanned_at'] = now
+    return hot
+
+
 def _enumerate_open_company_files() -> list[str]:
     """Company file paths, by whichever mechanism can see them.
 
@@ -623,7 +824,7 @@ def _enumerate_open_company_files() -> list[str]:
     total failure was indistinguishable from "nobody used QuickBooks" — the
     whole feature is fail-open, and a silent fail-open is unfalsifiable.
     """
-    diag = {'procs': 0, 'handles': 0, 'ini': 0, 'reg': 0, 'cmd': 0}
+    diag = {'procs': 0, 'handles': 0, 'ini': 0, 'reg': 0, 'cmd': 0, 'share': 0}
 
     paths = _paths_from_handles(diag)
     if paths:
@@ -640,7 +841,15 @@ def _enumerate_open_company_files() -> list[str]:
     # Command line survives elevation, so it is the mechanism most likely to
     # work exactly where the other two just failed.
     paths = _paths_from_cmdline(diag)
-    diag['src'] = 'cmdline' if paths else 'none'
+    if paths:
+        diag['src'] = 'cmdline'
+        _last_diag.clear(); _last_diag.update(diag)
+        return paths
+
+    # Nothing about the PROCESS is readable from a normal-integrity agent when
+    # QuickBooks runs elevated. The share is.
+    paths = _paths_from_share(diag)
+    diag['src'] = 'share' if paths else 'none'
     if not paths:
         # Nothing worked — spend the extra calls to report WHY, so the next
         # release is aimed rather than guessed.

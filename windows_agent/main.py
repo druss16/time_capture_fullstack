@@ -2228,6 +2228,16 @@ def write_event(
             # with no diagnostic cannot be proven broken. It took a 217-event
             # sample to notice. This dict is a handful of integers.
             payload["ctx"]["qb_capture"] = _qb_diag()
+            # When a mechanism read the path outright, also publish it under the
+            # original key. Compaction's merge key reads ctx.qb_company_path to
+            # keep two same-named parishes in separate blocks (PR #206), and it
+            # runs BEFORE classification — so it cannot wait for the server to
+            # interpret the report. Without this the merge fix goes dead the
+            # moment the exact read starts working.
+            _exact = (payload["ctx"]["qb_report"] or {}).get("exact") or []
+            if _exact:
+                payload["ctx"]["qb_company_path"] = _exact[0]
+                payload["ctx"]["qb_open_files"] = _exact[:4]
     except Exception:
         pass
 

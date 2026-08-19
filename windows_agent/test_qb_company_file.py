@@ -156,11 +156,10 @@ check("environment probe never raises", _env_ok)
 check("environment probe reports the agent user", 'me' in _e)
 
 
-print("\n=== v1.7.17: share scan (reads the drive, not the process) ===")
+print("\n=== v1.7.18: share scan, RELATIVE mtime ===")
 import tempfile, time as _time, os as _os  # noqa: E402
 import qb_company_tracker as _qbt  # noqa: E402
 
-# A miniature QuickBooks directory: three parishes, only one of them in use.
 _tmp = tempfile.mkdtemp()
 _now = _time.time()
 
@@ -173,50 +172,53 @@ def _mk(name, age_seconds):
     return fp
 
 
-# Clinton: transaction log touched seconds ago -> someone is working in it.
-_mk("St. Mary's Church_Clinton_QB2024.QBW", 90_000)
-_mk("St. Mary's Church_Clinton_QB2024.QBW.TLG", 5)
-# Hamilton and Minoa: nothing touched for a day -> idle.
-_mk("St. Mary's Church_Hamilton_QB2024.QBW", 90_000)
-_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 90_000)
-_mk("St. Mary's Church_Minoa_QB2024.QBW", 90_000)
+def _rescan(company):
+    _qbt._share_cache.update({'dirs': [_tmp], 'discovered_at': _time.monotonic(),
+                              'files': {}, 'scanned_at': 0.0})
+    d = {}
+    return _qbt._paths_from_share(d, company), d
 
-_qbt._share_cache.update({'dirs': [_tmp], 'discovered_at': _time.monotonic(),
-                          'paths': [], 'scanned_at': 0.0})
-_d = {}
-_hot = _qbt._paths_from_share(_d)
 
-check("sees every company file in the directory", _d.get('sharefiles') == 3)
-check("reports only the file being worked in as active", len(_hot) == 1)
-check("and it is the Clinton file, identified by its transaction log",
+# Three St. Mary parishes. EVERY timestamp is ancient — this is the case the
+# absolute-threshold version got wrong in the field, where 1,099 files were
+# found and none looked recent enough to count.
+for _town, _age in (('Clinton', 86_400), ('Hamilton', 90_000), ('Minoa', 95_000)):
+    _mk(f"St. Mary's Church_{_town}_QB2024.QBW", _age + 500)
+    _mk(f"St. Mary's Church_{_town}_QB2024.QBW.TLG", _age)
+_mk("Cadd Systems_QB2024.QBW", 200)          # unrelated client, freshest of all
+
+_hot, _d = _rescan("St. Mary's Church")
+check("picks a winner even when EVERY file is a day stale (relative, not absolute)",
+      len(_hot) == 1)
+check("...and it is the least-stale St. Mary file, Clinton",
       _hot and _hot[0].endswith("St. Mary's Church_Clinton_QB2024.QBW"))
-check("idle parishes are not reported active",
-      not any('Hamilton' in p or 'Minoa' in p for p in _hot))
+check("narrows to the company named in the title", _d.get('cands') == 3)
+check("a fresher UNRELATED client cannot win — it is not a candidate",
+      not any('Cadd' in p for p in _hot))
+check("reports how stale the freshest candidate is", _d.get('freshmin', 0) >= 1400)
 
-print("\n=== the whole point: title says 'St. Mary's Church', share says WHICH ===")
-check("ambiguous title + one active file -> resolves to Clinton",
-      _qbt._resolve_active(_hot, "St. Mary's Church").endswith(
-          "St. Mary's Church_Clinton_QB2024.QBW"))
+print("\n=== abstains rather than guessing between siblings ===")
+_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 86_400 + 30)   # ~30s from Clinton
+_hot2, _d2 = _rescan("St. Mary's Church")
+check("two candidates within the margin -> abstain", _hot2 == [])
+check("...and the margin is reported", _d2.get('gapmin') is not None)
 
-# Two same-family files active at once (two staff, two parishes, one share).
-_qbt._share_cache['scanned_at'] = 0.0
-_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 5)
-_d2 = {}
-_hot2 = _qbt._paths_from_share(_d2)
-check("two same-family files active -> both reported", len(_hot2) == 2)
-check("...and the ambiguous title ABSTAINS rather than guessing a parish",
-      _qbt._resolve_active(_hot2, "St. Mary's Church") is None)
-check("...but a title naming the town still resolves",
-      _qbt._resolve_active(_hot2, "St. Mary's Church Hamilton").endswith(
-          "St. Mary's Church_Hamilton_QB2024.QBW"))
+print("\n=== title that names the town still resolves outright ===")
+_hot3, _d3 = _rescan("St. Mary's Church Minoa")
+check("only one candidate matches -> no comparison needed", len(_hot3) == 1)
+check("...and it is Minoa",
+      _hot3 and _hot3[0].endswith("St. Mary's Church_Minoa_QB2024.QBW"))
 
 print("\n=== safety ===")
+_hot4, _d4 = _rescan(None)
+check("no company name in the title -> nothing to compare, abstains", _hot4 == [])
+_hot5, _d5 = _rescan("Nonexistent Client")
+check("company matching no file -> abstains", _hot5 == [])
+check("...and records that it had zero candidates", _d5.get('cands') == 0)
 _qbt._share_cache.update({'dirs': [], 'discovered_at': _time.monotonic(),
-                          'paths': [], 'scanned_at': 0.0})
-_d3 = {}
-check("no company directory found -> returns nothing, does not raise",
-      _qbt._paths_from_share(_d3) == [])
-check("and records that it found no directories", _d3.get('share') == 0)
+                          'files': {}, 'scanned_at': 0.0})
+check("no company directory -> returns nothing, does not raise",
+      _qbt._paths_from_share({}, "St. Mary's Church") == [])
 import shutil as _shutil  # noqa: E402
 _shutil.rmtree(_tmp, ignore_errors=True)
 

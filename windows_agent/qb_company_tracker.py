@@ -665,7 +665,9 @@ def _record_environment(diag: dict):
 # A company file counts as in-use if it or a sidecar changed this recently.
 # Generous on purpose: QuickBooks writes the transaction log on activity, so an
 # idle-but-open file can go quiet for a while.
-SHARE_HOT_SECONDS = 15 * 60
+# The winner must lead the runner-up by this much. Sibling files sit idle for
+# hours, so a real edit stands out easily; anything closer is a coin flip.
+SHARE_MIN_GAP_SECONDS = 90
 
 # Directory discovery is the expensive part, and the answer never changes.
 SHARE_DISCOVERY_INTERVAL = 30 * 60
@@ -681,7 +683,7 @@ _SHARE_SKIP_DIRS = {
     'node_modules', '.git', 'onedrive', 'perflogs', 'recovery',
 }
 
-_share_cache = {'dirs': [], 'discovered_at': 0.0, 'paths': [], 'scanned_at': 0.0}
+_share_cache = {'dirs': [], 'discovered_at': 0.0, 'files': {}, 'scanned_at': 0.0}
 
 
 def _candidate_roots() -> list[str]:
@@ -753,70 +755,113 @@ def _discover_company_dirs(diag: dict) -> list[str]:
     return found
 
 
-def _paths_from_share(diag: dict) -> list[str]:
-    """Company files on the share that something is currently working in.
+def _paths_from_share(diag: dict, company: str | None = None) -> list[str]:
+    """Which company file matching `company` is being worked in right now.
 
-    One directory listing per scan (os.scandir carries mtime on Windows, so
-    this is a single SMB round trip, not one stat per file), rate-limited, and
-    cached between scans.
+    WHY RELATIVE, NOT ABSOLUTE. The first version asked "was this file touched
+    in the last 15 minutes?" and every one of 1,099 files answered no, on
+    machines where people were demonstrably working in QuickBooks. Two ordinary
+    causes, neither of which we can rule out remotely: SMB serves directory
+    metadata from a client-side cache, so enumerated timestamps can be stale;
+    and the file server's clock need not agree with the workstation's, so an
+    absolute age is measured against the wrong zero.
+
+    Both distort every file on the share by roughly the same amount — so the
+    ORDERING survives even when the absolute ages are wrong. Among the handful
+    of files whose name matches the company already in the title, the one the
+    user is actually in is the most recently touched. That comparison needs no
+    trustworthy clock and no fresh cache.
+
+    Narrowing by company name first also makes a direct stat() affordable: a
+    dozen candidates instead of 1,099, so we can bypass the cached directory
+    entry and ask the server for each one.
     """
-    now = time.monotonic()
-    if (_share_cache['paths']
-            and (now - _share_cache['scanned_at']) < SHARE_SCAN_INTERVAL):
-        diag['share'] = len(_share_cache['paths'])
-        diag['sharedirs'] = len(_share_cache['dirs'])
-        return list(_share_cache['paths'])
-
     dirs = _discover_company_dirs(diag)
+    diag['sharedirs'] = len(dirs)
     if not dirs:
         diag['share'] = 0
         return []
 
-    import time as _t
-    wall = _t.time()
-    companies, newest = {}, {}
-    try:
-        for d in dirs:
-            try:
-                with os.scandir(d) as it:
-                    for entry in it:
-                        try:
-                            if not entry.is_file():
+    now = time.monotonic()
+    if not _share_cache['files'] or (now - _share_cache['scanned_at']) >= SHARE_SCAN_INTERVAL:
+        listing = {}
+        try:
+            for d in dirs:
+                try:
+                    with os.scandir(d) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_file() and entry.name.lower().endswith(QB_COMPANY_EXT):
+                                    listing[entry.path] = entry.name
+                            except Exception:
                                 continue
-                            name = entry.name
-                            low = name.lower()
-                            if low.endswith(QB_COMPANY_EXT):
-                                companies[low] = entry.path
-                            # '<company>.qbw', '<company>.qbw.TLG', '<company>.ND',
-                            # '<company>.qbw.ND', '<company>.lgb' all key back to
-                            # the same company once the tail is stripped.
-                            base = low
-                            for tail in ('.tlg', '.nd', '.lgb', '.dsn', '.sds'):
-                                if base.endswith(tail):
-                                    base = base[:-len(tail)]
-                            if not base.endswith(QB_COMPANY_EXT):
-                                base = base + QB_COMPANY_EXT
-                            mt = entry.stat().st_mtime
-                            if mt > newest.get(base, 0):
-                                newest[base] = mt
-                        except Exception:
-                            continue
-            except Exception as e:
-                diag.setdefault('share_err', type(e).__name__)
+                except Exception as e:
+                    diag.setdefault('share_err', type(e).__name__)
+        except Exception as e:
+            diag.setdefault('share_err', type(e).__name__)
+        _share_cache['files'] = listing
+        _share_cache['scanned_at'] = now
+    listing = _share_cache['files']
+    diag['sharefiles'] = len(listing)
+    if not listing:
+        diag['share'] = 0
+        return []
+
+    # Narrow to the company already named in the title. Without a company we
+    # cannot compare like with like, so there is nothing useful to do here.
+    cnorm = _norm_for_pairing(re.sub(r'\s*\([^)]*\)\s*$', '', company or ''))
+    if len(cnorm) < 4:
+        diag['share'] = 0
+        diag['cands'] = 0
+        return []
+    candidates = [p for p in listing
+                  if cnorm in _norm_for_pairing(clean_company_file_stem(p))]
+    diag['cands'] = len(candidates)
+    if not candidates:
+        diag['share'] = 0
+        return []
+
+    # Direct stat, not the cached directory entry — and include the sidecars,
+    # since QuickBooks writes the transaction log far more often than the
+    # company file itself.
+    scored = []
+    for path in candidates[:40]:
+        newest = 0.0
+        for probe in (path, path + '.TLG', path + '.tlg',
+                      path + '.ND', path + '.nd'):
+            try:
+                mt = os.stat(probe).st_mtime
+                if mt > newest:
+                    newest = mt
+            except Exception:
                 continue
-    except Exception as e:
-        diag.setdefault('share_err', type(e).__name__)
+        if newest:
+            scored.append((newest, path))
+    if not scored:
+        diag['share'] = 0
+        return []
 
-    hot = [companies[k] for k, mt in newest.items()
-           if k in companies and (wall - mt) <= SHARE_HOT_SECONDS]
-    diag['sharefiles'] = len(companies)
-    diag['share'] = len(hot)
-    _share_cache['paths'] = hot
-    _share_cache['scanned_at'] = now
-    return hot
+    scored.sort(reverse=True)
+    import time as _t
+    # How stale is the freshest candidate, in minutes? If this is large while
+    # someone is demonstrably working, the transaction log is not reaching the
+    # server and no timing signal exists to read.
+    diag['freshmin'] = int(max(0, (_t.time() - scored[0][0]) / 60))
+    if len(scored) > 1:
+        diag['gapmin'] = int(max(0, (scored[0][0] - scored[1][0]) / 60))
+
+    # A clear winner needs daylight between it and the runner-up; otherwise two
+    # parishes are equally plausible and guessing is the failure mode this
+    # whole feature exists to remove.
+    if len(scored) > 1 and (scored[0][0] - scored[1][0]) < SHARE_MIN_GAP_SECONDS:
+        diag['share'] = 0
+        return []
+
+    diag['share'] = 1
+    return [scored[0][1]]
 
 
-def _enumerate_open_company_files() -> list[str]:
+def _enumerate_open_company_files(company: str | None = None) -> list[str]:
     """Company file paths, by whichever mechanism can see them.
 
     Also records HOW it went in _last_diag, which the agent ships in ctx even
@@ -848,7 +893,7 @@ def _enumerate_open_company_files() -> list[str]:
 
     # Nothing about the PROCESS is readable from a normal-integrity agent when
     # QuickBooks runs elevated. The share is.
-    paths = _paths_from_share(diag)
+    paths = _paths_from_share(diag, company)
     diag['src'] = 'share' if paths else 'none'
     if not paths:
         # Nothing worked — spend the extra calls to report WHY, so the next
@@ -889,7 +934,7 @@ def get_open_company_files(company_hint: str | None = None) -> list[str]:
         return list(_files_cache['paths'])
 
     try:
-        paths = _enumerate_open_company_files()
+        paths = _enumerate_open_company_files(company_hint)
         _files_cache['paths'] = paths
         _files_cache['enumerated_at'] = now
         _files_cache['company'] = company_hint

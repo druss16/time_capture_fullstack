@@ -82,9 +82,12 @@ class Command(BaseCommand):
                            f"share={probe.get('share', '?')})"] += 1
                 # Did the share scan find the directory and the files at all?
                 if 'sharedirs' in probe or 'sharefiles' in probe:
-                    share[f"dirs_found={probe.get('sharedirs', '?')} "
-                          f"company_files_seen={probe.get('sharefiles', '?')} "
-                          f"active_now={probe.get('share', '?')}"] += 1
+                    share[f"dirs={probe.get('sharedirs', '?')} "
+                          f"files_seen={probe.get('sharefiles', '?')} "
+                          f"name_candidates={probe.get('cands', '?')} "
+                          f"picked={probe.get('share', '?')} "
+                          f"freshest_min={probe.get('freshmin', '?')} "
+                          f"gap_min={probe.get('gapmin', '?')}"] += 1
                 # Security-context facts, only present when nothing worked.
                 if 'me' in probe or 'qbuser' in probe:
                     env[f"agent_user={probe.get('me', '?')} "
@@ -122,16 +125,18 @@ class Command(BaseCommand):
                 self.stdout.write(f"    {n:6,}x  {e}")
         if share:
             self.stdout.write("\n  share scan (reads the drive, not the process):")
-            for e, n in share.most_common(5):
+            for e, n in share.most_common(8):
                 self.stdout.write(f"    {n:6,}x  {e}")
             self.stdout.write(
-                "    -> dirs_found=0 means the company directory was never located;\n"
-                "       company_files_seen>0 with active_now=0 means the files were\n"
-                "       found but none looked in-use (widen SHARE_HOT_SECONDS).")
+                "    -> name_candidates is how many files match the company in the\n"
+                "       title; picked=1 means one led the rest clearly. freshest_min\n"
+                "       is how old the best candidate's transaction log is: if that\n"
+                "       stays huge while people are working, QuickBooks is not\n"
+                "       flushing the log to the server and NO timing signal exists.")
 
         if env:
             self.stdout.write("\n  security context (agent vs QuickBooks):")
-            for e, n in env.most_common(5):
+            for e, n in env.most_common(10):
                 self.stdout.write(f"    {n:6,}x  {e}")
             self.stdout.write(
                 "    -> same user + AccessDenied = QuickBooks is ELEVATED.\n"

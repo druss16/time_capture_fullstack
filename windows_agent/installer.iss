@@ -203,7 +203,7 @@ begin
     '  <Principals>' + #13#10 +
     '    <Principal id="Author">' + #13#10 +
     '      <LogonType>InteractiveToken</LogonType>' + #13#10 +
-    '      <RunLevel>LeastPrivilege</RunLevel>' + #13#10 +
+    '      <RunLevel>HighestAvailable</RunLevel>' + #13#10 +
     '    </Principal>' + #13#10 +
     '  </Principals>' + #13#10 +
     '  <Settings>' + #13#10 +

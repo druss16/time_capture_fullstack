@@ -5438,6 +5438,7 @@ class ClassificationService:
                 decision.recommended_state = 'proposed'   # never auto-commit
                 decision.confidence = co_open_sig.strength
                 decision.is_billable = co_open_sig.detail.get('is_billable', True)
+                self._commit_if_immaterial(decision, block, signals, 'co-open')
                 return decision
 
         # Stage Sheet-Tab (Tier 2) — attribute an unsaved scratch workbook from
@@ -5455,6 +5456,7 @@ class ClassificationService:
                 decision.recommended_state = 'proposed'   # never auto-commit
                 decision.confidence = sheet_sig.strength
                 decision.is_billable = sheet_sig.detail.get('is_billable', True)
+                self._commit_if_immaterial(decision, block, signals, 'sheet-tab')
                 return decision
 
         # Stage Sandwich — temporal fallback attribution.
@@ -5475,6 +5477,7 @@ class ClassificationService:
                 decision.recommended_state = 'proposed'   # never auto-commit a sandwich
                 decision.confidence = sandwich_sig.strength
                 decision.is_billable = sandwich_sig.detail.get('is_billable', True)
+                self._commit_if_immaterial(decision, block, signals, 'sandwich')
                 return decision
             # else fall through to FIX 6 as today
 
@@ -5843,6 +5846,54 @@ class ClassificationService:
             decision.confidence = max(s.strength for s in signals)
 
         return decision
+
+    def _commit_if_immaterial(self, decision: 'ClassificationDecision', block,
+                              signals: list, stage: str) -> bool:
+        """
+        Apply the sub-2-minute materiality rule at a propose-only stage's exit.
+
+        Co-open / sheet-tab / sandwich each attribute a client and then return
+        straight out of _finalize_decision, ABOVE the materiality auto-commit at
+        the bottom of that method -- so a 1-minute scratch workbook that co-open
+        confidently placed under a client still landed in "Needs you", which is
+        exactly the sliver nag the immaterial auto-file (PR #109) exists to
+        eliminate. Same trade as the lone-AI override above: at under 2 minutes a
+        wrong guess mis-bills at most a minute, and that is cheaper than asking a
+        human to click.
+
+        Keeps the contradicting-signal guard, so a sliver whose evidence is
+        genuinely disputed (a moderate-or-better signal naming someone else)
+        still gets the human look. is_billable is left exactly as the stage set
+        it -- this decides review, not billability.
+
+        Mutates `decision` and returns True when it converted it to 'committed'.
+        """
+        if (block.minutes or 0) >= IMMATERIAL_MAX_MINUTES:
+            return False
+        if decision.client_id is None or decision.needs_review:
+            return False
+        if self._has_contradicting_signal(signals, decision.client_id):
+            return False
+
+        decision.recommended_state = 'committed'
+        decision.matched_signals.append(Signal(
+            type='auto_confirm_immaterial',
+            strength=decision.confidence,
+            evidence=(
+                f'Auto-committed: immaterial sub-{IMMATERIAL_MAX_MINUTES}min '
+                f'sliver ({block.minutes or 0}m) attributed to client '
+                f'{decision.client_id} by {stage}, no competing client '
+                f'(review waived -- immaterial)'
+            ),
+            detail={'auto_confirmed': True, 'immaterial': True,
+                    'client_id': decision.client_id, 'stage': stage},
+        ))
+        logger.info(
+            f"[FINALIZE] Block {getattr(block, 'pk', '?')}: {stage} client "
+            f"{decision.client_id} but immaterial sub-{IMMATERIAL_MAX_MINUTES}min "
+            f"-> auto-committing (review waived)"
+        )
+        return True
 
     @staticmethod
     def _has_contradicting_signal(signals: list, chosen_client_id: int) -> bool:

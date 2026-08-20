@@ -883,6 +883,50 @@ class Client(models.Model):
         return f"{self.name}{source}"
 
 
+class QBVendorClient(models.Model):
+    """Which client a QuickBooks vendor identifies, when the company name cannot.
+
+    QuickBooks Desktop shows only its Company Name, and this firm has two
+    parishes whose files both answer to "St. Mary's Church" — the town that
+    tells them apart lives in the filename, which QuickBooks never displays and
+    the agent cannot read (QuickBooks runs elevated; six agent releases
+    established that conclusively).
+
+    But QuickBooks does show the open screen:
+
+        "St. Mary's Church - QuickBooks ... - [Vendor Center: Clinton Agway]"
+
+    A vendor belongs to one parish's books. Clinton Agway means the Clinton
+    file, whatever the title claims. One row here teaches that permanently, so
+    the classifier can resolve every future block that touches the same vendor.
+
+    Deliberately NOT stored in Client.aliases: aliases are matched against
+    window titles, so a vendor there would claim any window mentioning it —
+    which is exactly the alias that once swallowed 204 billable minutes.
+    """
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                            related_name='qb_vendor_clients')
+    vendor = models.CharField(
+        max_length=200, db_index=True,
+        help_text="Vendor/customer/employee name as QuickBooks shows it in the "
+                  "window title bracket.")
+    client = models.ForeignKey(Client, on_delete=models.CASCADE,
+                               related_name='qb_vendors')
+    company_name = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="The ambiguous QuickBooks company name this vendor was seen "
+                  "under, for context when reviewing.")
+    source = models.CharField(max_length=20, default='group')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('org', 'vendor')
+        indexes = [models.Index(fields=['org', 'vendor'])]
+
+    def __str__(self):
+        return f"{self.vendor} -> {self.client_id}"
+
+
 class ClientBillingProfile(models.Model):
     """
     Per-client billing arrangement — the coordination layer the timesheet→billing

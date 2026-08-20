@@ -31,7 +31,7 @@ from django.utils import timezone
 from django.db import transaction
 
 from tracker.models import (Organization, RawEvent, Client, Block,
-                            ClassificationAudit)
+                            ClassificationAudit, QBVendorClient)
 from tracker.services.qb_vendor_fingerprint import (
     split_title, is_identifying, find_generic_vendors, group_sessions,
     suggest_town, classify_groups,
@@ -147,6 +147,7 @@ class Command(BaseCommand):
                 raise CommandError(f'client {cid} not in org {org.id}')
             assigns[vendor.strip()] = client
         planned = []   # (block_id, before_client, after_client, minutes, anchor)
+        learn = []     # (vendors, client, company_name)
 
         wanted = opts.get('company')
         for company in sorted(company_titles, key=lambda c: -company_titles[c]):
@@ -194,6 +195,11 @@ class Command(BaseCommand):
                         continue
                     self.stdout.write(self.style.SUCCESS(
                         f"      ASSIGN  : {anchor!r} -> {client.name!r}"))
+                    # Teach the classifier every vendor in this group, not just
+                    # the anchor. Fixing the past and fixing the future are the
+                    # same action: any future block touching any of these
+                    # vendors resolves without anyone running a command.
+                    learn.append((sorted(vend), client, company))
                     for k in g:
                         for b in sess_blocks[k]:
                             before = block_client.get(b, '(none)')
@@ -209,20 +215,32 @@ class Command(BaseCommand):
         if not assigns:
             return
 
-        if not planned:
+        if not planned and not learn:
             self.stdout.write(self.style.WARNING(
-                "\nNothing to reassign — no group contained an --assign vendor, "
-                "or every block is already on that client."))
+                "\nNothing to do — no group contained an --assign vendor."))
             return
+        if not planned:
+            # Blocks are already on the right client — but the classifier may
+            # still not KNOW why, so teaching must not be skipped just because
+            # the past happens to be clean.
+            self.stdout.write(
+                "\nNo blocks need reassigning; teaching the classifier only.")
 
         total = sum(p[3] for p in planned)
-        self.stdout.write(self.style.WARNING(
-            f"\n\n{len(planned)} block(s), {total/60:.1f}h to reassign:"))
+        if planned:
+            self.stdout.write(self.style.WARNING(
+                f"\n\n{len(planned)} block(s), {total/60:.1f}h to reassign:"))
         moves = Counter()
         for _bid, before, client, mins, _a in planned:
             moves[(before, client.name)] += mins
         for (before, after), mins in moves.most_common():
             self.stdout.write(f"   {mins/60:6.1f}h   {before!r}  ->  {after!r}")
+
+        if learn:
+            n_v = sum(len(v) for v, _c, _n in learn)
+            self.stdout.write(
+                f"\n{n_v} vendor(s) would be taught to the classifier, so future "
+                f"blocks touching them resolve automatically.")
 
         if not opts['confirm']:
             self.stdout.write(self.style.WARNING(
@@ -291,8 +309,17 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.WARNING(
                         f"   (audit row failed for block {bid}: {e})"))
                 changed += 1
+        taught = 0
+        for vendors, client, company in learn:
+            for v in vendors:
+                _row, created = QBVendorClient.objects.update_or_create(
+                    org=org, vendor=v[:200],
+                    defaults={'client': client, 'company_name': (company or '')[:255],
+                              'source': 'group'},
+                )
+                taught += 1 if created else 0
         self.stdout.write(self.style.SUCCESS(
-            f"\nReassigned {changed} block(s)."))
+            f"\nReassigned {changed} block(s); taught {taught} new vendor(s)."))
         if protected:
             self.stdout.write(self.style.WARNING(
                 f"\n{len(protected)} block(s) left untouched — a person already "

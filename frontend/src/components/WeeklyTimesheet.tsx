@@ -332,7 +332,6 @@ const ClientDot: React.FC<{ agg: Pick<ClientAgg, 'allBillable' | 'allNonBillable
 // ── Design language (shared by Summary + By-day drills) ─────────────────────────
 // Faint teal ground + quiet dotted rows + calm billable/non-billable badges,
 // matching the refreshed Daily Review "Lightning" look.
-const GROUND      = '#eef4f3';                         // faint teal canvas
 const DOT_BILL    = 'w-2 h-2 rounded-full bg-primary shrink-0';
 const DOT_NON     = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
 const BADGE_BILL  = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/10 text-primary';
@@ -1338,7 +1337,7 @@ const ClientRow: React.FC<{
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-3 pt-1.5" style={{ background: GROUND }}>
+        <div className="px-4 pb-3 pt-1.5 bg-muted/40">
           <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
           <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
             {agg.entries.map(e => (
@@ -1529,7 +1528,7 @@ const ByDayClientRow: React.FC<{
         <span className={HOURS_CELL}>{fmtHours(dc.dayTotal)}</span>
       </button>
       {isOpen && (
-        <div className="px-4 pb-3 pt-1.5" style={{ background: GROUND }}>
+        <div className="px-4 pb-3 pt-1.5 bg-muted/40">
           <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
           <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
             {dc.entries.map(e => (

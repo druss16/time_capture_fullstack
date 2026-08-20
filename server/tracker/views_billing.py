@@ -1911,6 +1911,71 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 
+def _clio_integration_for(org):
+    """The org's connected Clio integration, or None. Never raises."""
+    try:
+        from tracker.models import Integration
+        return Integration.objects.filter(
+            organization=org, provider='clio', is_connected=True,
+        ).first()
+    except Exception:
+        return None
+
+
+def clio_plan_for_timesheet(timesheet, org):
+    """
+    What submitting this timesheet would send to Clio.
+
+    Returns None when the org has no Clio connection, so every non-legal firm
+    sees no change at all. Reused by both the preview and the submit itself, so
+    the number shown in the confirm dialog is the number that gets pushed.
+    """
+    integration = _clio_integration_for(org)
+    if not integration:
+        return None
+
+    from tracker.integrations.clio.push import build_push_plan
+
+    week_end = timesheet.week_start + timedelta(days=6)
+    return build_push_plan(
+        integration, timesheet.week_start, week_end, user_ids=[timesheet.user_id],
+    )
+
+
+class TimesheetClioPreviewView(APIView):
+    """
+    GET /api/billing/timesheets/<id>/clio-preview/
+
+    Powers the submit confirm dialog: what would go to Clio, and what would be
+    held back and why. Reads only — nothing is written to Clio here.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+
+        timesheet = get_object_or_404(
+            Timesheet, pk=pk, org=membership.organization, user=request.user,
+        )
+
+        try:
+            plan = clio_plan_for_timesheet(timesheet, membership.organization)
+        except Exception as e:
+            # A preview that cannot be built must never block submission — the
+            # timesheet matters more than the integration.
+            logger.warning('Clio preview failed for timesheet %s: %s', pk, e, exc_info=True)
+            return Response({'connected': True, 'available': False, 'error': str(e)[:200]})
+
+        if plan is None:
+            return Response({'connected': False})
+
+        return Response({'connected': True, 'available': True, **plan})
+
+
 class TimesheetSubmitView(APIView):
     """POST /api/billing/timesheets/<id>/submit/"""
     permission_classes = [IsAuthenticated]
@@ -1962,7 +2027,41 @@ class TimesheetSubmitView(APIView):
         # Use model method - this recalculates totals and sets status
         notes = request.data.get('notes', '')
         timesheet.submit(notes=notes)
-        
+
+        # Submitting IS the approval, so this is where time reaches the firm's
+        # billing system. Deliberately after submit() and deliberately guarded:
+        # a Clio problem must never leave the timesheet unsubmitted, because the
+        # timesheet is the record of work and the push is a copy of it.
+        #
+        # Safe to re-run. push is a delta against what Clio already holds, so a
+        # double submit cannot double-bill — which is what makes pushing on
+        # submit defensible rather than reckless.
+        clio_result = None
+        try:
+            plan = clio_plan_for_timesheet(timesheet, membership.organization)
+            if plan and plan.get('entries'):
+                from tracker.integrations.clio.push import execute_push
+                integration = _clio_integration_for(membership.organization)
+                pushed = execute_push(integration, plan)
+                clio_result = {
+                    'pushed': True,
+                    'entries': pushed['totals']['entries'],
+                    'hours': pushed['totals']['hours'],
+                    'errors': pushed['errors'],
+                    'skipped': pushed['skipped'],
+                }
+            elif plan is not None:
+                clio_result = {
+                    'pushed': False,
+                    'entries': 0,
+                    'hours': 0,
+                    'errors': [],
+                    'skipped': plan.get('skipped', []),
+                }
+        except Exception as e:
+            logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
+            clio_result = {'pushed': False, 'error': str(e)[:200]}
+
         return Response({
             'id': timesheet.id,
             'status': timesheet.status,
@@ -1971,6 +2070,7 @@ class TimesheetSubmitView(APIView):
             'billable_hours': float(timesheet.billable_hours),
             'total_amount': float(timesheet.total_amount),
             'submitted_at': timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
+            'clio': clio_result,
         })
 
 
@@ -4428,6 +4528,9 @@ path('billing/realization/', realization_with_editable, name='realization-editab
 
 from django.http import StreamingHttpResponse
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class _Echo:

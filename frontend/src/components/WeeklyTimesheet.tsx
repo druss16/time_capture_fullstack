@@ -364,6 +364,10 @@ const WeeklyTimesheet: React.FC = () => {
   const [submitting, setSubmitting]         = useState(false);
   const [submitNotes, setSubmitNotes]       = useState('');
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  // What submitting would send to Clio. Null for firms with no Clio connection,
+  // so nothing about this appears for them.
+  const [clioPreview, setClioPreview] = useState<any | null>(null);
+  const [clioResult, setClioResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
   const [view, setView]                     = useState<ViewMode>('summary');
   const [expanded, setExpanded]             = useState<Set<string>>(new Set());
@@ -531,17 +535,32 @@ const WeeklyTimesheet: React.FC = () => {
     setExpanded(prev => (prev.has(key) ? new Set() : new Set([key])));
   };
 
+  // Loaded when the confirm dialog opens, not on every render: it calls Clio,
+  // and the answer is only worth having at the moment someone is deciding.
+  useEffect(() => {
+    if (!showSubmitModal || !timesheetData?.timesheet_id) return;
+    let alive = true;
+    setClioPreview(null);
+    safeFetchJson(`${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/clio-preview/`)
+      .then((d: any) => { if (alive) setClioPreview(d); })
+      .catch(() => { if (alive) setClioPreview({ connected: false }); });
+    return () => { alive = false; };
+  }, [showSubmitModal, timesheetData?.timesheet_id]);
+
   const handleSubmit = async () => {
     if (!timesheetData?.timesheet_id) return;
     setSubmitting(true);
     setError(null);
     try {
-      await safeFetchJson(
+      const res: any = await safeFetchJson(
         `${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/submit/`,
         { method: 'POST', body: JSON.stringify({ notes: submitNotes }) }
       );
       setShowSubmitModal(false);
       setSubmitNotes('');
+      // Confirm what actually reached Clio. The submit succeeded either way —
+      // this only reports the copy that went to billing.
+      if (res?.clio) setClioResult(res.clio);
       fetchTimesheet();
     } catch (err: any) {
       const d = err?.data || {};
@@ -717,6 +736,31 @@ const WeeklyTimesheet: React.FC = () => {
       {(error || timesheetData?.status === 'rejected') && (
         <div className="space-y-2 mt-4">
           {error && <Banner type="error" title="Error" message={error} />}
+
+          {/* What actually reached Clio. The timesheet submitted either way —
+              this reports the copy that went to billing, including anything
+              held back, so nobody discovers missing hours at invoicing. */}
+          {clioResult && (
+            <Banner
+              type={clioResult.error || clioResult.errors?.length ? 'error' : 'info'}
+              title={
+                clioResult.error || clioResult.errors?.length
+                  ? 'Submitted — but Clio did not accept everything'
+                  : clioResult.entries > 0
+                    ? `Sent ${clioResult.hours}h to Clio`
+                    : 'Submitted — nothing new for Clio'
+              }
+              message={
+                clioResult.error
+                  ? `Your timesheet is submitted. Clio reported: ${clioResult.error}`
+                  : clioResult.errors?.length
+                    ? `Your timesheet is submitted. ${clioResult.errors.length} entr${clioResult.errors.length === 1 ? 'y' : 'ies'} were rejected by Clio.`
+                    : clioResult.skipped?.length
+                      ? `${clioResult.entries} matter${clioResult.entries !== 1 ? 's' : ''} updated. ${clioResult.skipped.length} item${clioResult.skipped.length !== 1 ? 's' : ''} were not sent — open the timesheet to see why.`
+                      : `${clioResult.entries} matter${clioResult.entries !== 1 ? 's' : ''} updated in Clio.`
+              }
+            />
+          )}
           {timesheetData?.status === 'rejected' && (
             <Banner
               type="error"
@@ -880,6 +924,46 @@ const WeeklyTimesheet: React.FC = () => {
                   rows={3}
                 />
               </div>
+              {/* What submitting sends to Clio. Absent entirely for firms
+                  with no Clio connection. */}
+              {clioPreview?.connected && clioPreview?.available && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                  <p className="text-xs font-bold text-indigo-800">
+                    {clioPreview.totals?.entries > 0
+                      ? `Submitting sends ${clioPreview.totals.hours}h across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} to Clio.`
+                      : 'Nothing new to send to Clio — everything here is already there.'}
+                  </p>
+                  {clioPreview.entries?.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5">
+                      {clioPreview.entries.slice(0, 6).map((e: any, i: number) => (
+                        <li key={i} className="text-[11px] text-indigo-700 flex justify-between gap-3">
+                          <span className="truncate">{e.matter}</span>
+                          <span className="tabular-nums shrink-0">{e.push_hours}h</span>
+                        </li>
+                      ))}
+                      {clioPreview.entries.length > 6 && (
+                        <li className="text-[11px] text-indigo-600">
+                          + {clioPreview.entries.length - 6} more
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                  {clioPreview.skipped?.length > 0 && (
+                    <details className="mt-1.5">
+                      <summary className="text-[11px] font-semibold text-indigo-700 cursor-pointer">
+                        {clioPreview.skipped.length} not being sent
+                      </summary>
+                      <ul className="mt-1 space-y-0.5">
+                        {clioPreview.skipped.slice(0, 6).map((sk: any, i: number) => (
+                          <li key={i} className="text-[11px] text-indigo-600">
+                            {sk.matter || sk.block_id}: {sk.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
               {!weekHasEnded && (
                 <p className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-500" />

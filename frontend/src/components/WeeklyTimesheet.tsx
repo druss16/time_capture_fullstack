@@ -1088,10 +1088,9 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
         title={agg.count > 1 ? `Move these ${agg.count} blocks to another category` : 'Move this block to another category'}
-        className="flex items-center gap-1 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15 transition-colors disabled:opacity-50"
+        className="shrink-0 rounded-md px-1.5 py-0.5 font-sans text-[12px] font-medium text-primary underline-offset-2 hover:underline disabled:opacity-50"
       >
-        {busy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderInput className="w-3 h-3" />}
-        Move
+        {busy ? '…' : 'Move'}
       </button>
       {open && !busy && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={224}>
@@ -1178,10 +1177,9 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         title={agg.count > 1
           ? `Set the matter for these ${agg.count} activities`
           : 'Set the matter this work belongs to'}
-        className="flex items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors disabled:opacity-50"
+        className="shrink-0 rounded-md px-1.5 py-0.5 font-sans text-[12px] font-medium text-indigo-600 underline-offset-2 hover:underline disabled:opacity-50"
       >
-        {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Briefcase className="w-3 h-3" />}
-        Matter
+        {saving ? '…' : 'Matter'}
       </button>
       {open && !saving && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={288}>
@@ -1264,13 +1262,13 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
 // product's Plus Jakarta Sans UI voice. `title` exposes the full (untruncated)
 // label on hover so long window titles stay readable.
 const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withDay }) => (
-  <div className="group flex items-center gap-2.5 pl-[52px] pr-3 py-1.5 min-w-0">
-    <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(agg.firstStart, withDay)}</span>
-    <span className="flex-1 font-mono text-[12px] text-slate-500 truncate" title={agg.label}>{agg.label}</span>
+  <div className="group flex items-center gap-2 pl-6 pr-1 py-0.5 min-w-0">
+    <span className="font-mono text-[11px] text-muted-foreground/60 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(agg.firstStart, withDay)}</span>
+    <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={agg.label}>{agg.label}</span>
     {agg.count > 1 && (
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
-    <span className="font-mono text-[11.5px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
+    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
     <BlockMatterMenu agg={agg} />
     <BlockMoveMenu agg={agg} />
   </div>
@@ -1339,7 +1337,7 @@ const ClientRow: React.FC<{
       {isExpanded && (
         <div className="px-4 pb-3 pt-1.5 bg-muted/40">
           <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
-          <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
+          <div className="ml-[26px] flex flex-col">
             {agg.entries.map(e => (
               <CategoryRow
                 key={`${e.client_id}-${e.task_type_id}`}
@@ -1530,7 +1528,7 @@ const ByDayClientRow: React.FC<{
       {isOpen && (
         <div className="px-4 pb-3 pt-1.5 bg-muted/40">
           <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
-          <div className="ml-[26px] rounded-lg border border-border/50 bg-white overflow-hidden divide-y divide-border/40">
+          <div className="ml-[26px] flex flex-col">
             {dc.entries.map(e => (
               <CategoryRow
                 key={`${e.client_id}-${e.task_type_id}`}

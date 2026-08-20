@@ -39,7 +39,9 @@ def check(label, cond):
 
 
 try:
-    from tracker.integrations.clio.push import decide_entry, _note_for, MIN_PUSH_MINUTES
+    from tracker.integrations.clio.push import (
+        decide_entry, _note_for, _describe, MIN_PUSH_MINUTES,
+    )
     _ok = True
 except Exception as e:
     _ok = False
@@ -49,8 +51,9 @@ except Exception as e:
 
 
 class _FakeBlock:
-    def __init__(self, notes='', title='', minutes=0):
+    def __init__(self, notes='', title='', minutes=0, window_title=''):
         self.notes, self.title, self.minutes = notes, title, minutes
+        self.window_title = window_title
 
 
 if _ok:
@@ -127,6 +130,24 @@ if _ok:
           decide_entry(120, 120, requires_utbms=True)[2] == 'requires_utbms')
 
     # ── Notes ────────────────────────────────────────────────────────────
+    print("Clio push — a bill line must not read like an app name:")
+    check("bare app chrome is refused",
+          _describe(_FakeBlock(title='Explorer')) == '')
+    check("window title is preferred over app-only title",
+          _describe(_FakeBlock(title='Explorer', window_title='Marta Vance - File Explorer'))
+          == 'Marta Vance - File Explorer')
+    check("a human note beats everything captured",
+          _describe(_FakeBlock(notes='Reviewed lease', title='Word',
+                               window_title='lease.docx - Word')) == 'Reviewed lease')
+    check("app chrome match is case-insensitive",
+          _describe(_FakeBlock(title='EXPLORER')) == '')
+    check("real title survives", _describe(_FakeBlock(title='Smith MSJ draft')) == 'Smith MSJ draft')
+    check("all-chrome block yields the generic fallback note",
+          _note_for([_FakeBlock(title='Explorer')]) == 'Captured by TimeTracker')
+    check("the real regression: Explorer no longer reaches a bill",
+          _note_for([_FakeBlock(title='Explorer', window_title='Marta Vance - File Explorer')])
+          == 'Marta Vance - File Explorer')
+
     print("Clio push — the note a client will read on their bill:")
     check("prefers notes over title",
           _note_for([_FakeBlock(notes='Drafted MSJ', title='Word')]) == 'Drafted MSJ')

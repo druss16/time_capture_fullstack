@@ -1088,9 +1088,10 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
         title={agg.count > 1 ? `Move these ${agg.count} blocks to another category` : 'Move this block to another category'}
-        className="shrink-0 rounded-md px-1.5 py-0.5 font-sans text-[12px] font-medium text-primary underline-offset-2 hover:underline disabled:opacity-50"
+        className="flex shrink-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
       >
-        {busy ? '…' : 'Move'}
+        {busy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderInput className="w-3 h-3" />}
+        Move
       </button>
       {open && !busy && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={224}>
@@ -1177,9 +1178,10 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         title={agg.count > 1
           ? `Set the matter for these ${agg.count} activities`
           : 'Set the matter this work belongs to'}
-        className="shrink-0 rounded-md px-1.5 py-0.5 font-sans text-[12px] font-medium text-indigo-600 underline-offset-2 hover:underline disabled:opacity-50"
+        className="flex shrink-0 items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50"
       >
-        {saving ? '…' : 'Matter'}
+        {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Briefcase className="w-3 h-3" />}
+        Matter
       </button>
       {open && !saving && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={288}>
@@ -1287,21 +1289,20 @@ const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: num
       <div
         role={hasBlocks ? 'button' : undefined}
         onClick={hasBlocks ? () => setOpen(o => !o) : undefined}
-        className={cn('flex items-center gap-2.5 px-3 py-2 min-w-0', hasBlocks && 'cursor-pointer hover:bg-black/[0.02]')}
+        className={cn('flex items-center gap-2 py-2 min-w-0', hasBlocks && 'cursor-pointer')}
       >
         {hasBlocks
-          ? <ChevronRight className={cn('w-3 h-3 text-slate-300 shrink-0 transition-transform', open && 'rotate-90')} />
-          : <span className="w-3 shrink-0" />}
-        <span className={MIN_CHIP}>{fmtHours(mins)}</span>
+          ? <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+          : <span className="w-3.5 shrink-0" />}
         <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
-        <span className="flex-1 font-sans text-[12.5px] text-slate-600 truncate">{entry.task_type_name}</span>
-        {pctOf != null && (
-          <span className="font-mono text-[10.5px] tabular-nums text-slate-400 shrink-0 hidden sm:inline">{pctOfLabel(mins, pctOf)}%</span>
-        )}
-        <Badge billable={entry.is_billable} />
+        <span className="min-w-0 flex-1 truncate font-sans text-[13px] text-foreground">{entry.task_type_name}</span>
+        <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
+          {entry.is_billable ? 'billable' : 'non-bill'}
+        </span>
+        <span className="shrink-0 font-mono text-[12px] tabular-nums font-semibold text-foreground">{fmtHours(mins)}</span>
       </div>
       {hasBlocks && open && (
-        <div className="border-t border-black/[0.04] bg-slate-50/50">
+        <div className="mb-1 flex flex-col pb-1 pl-6">
           {aggregateBlocks(blocks!).map(ab => <AggBlockRow key={ab.key} agg={ab} withDay={blocksWithDay} />)}
         </div>
       )}
@@ -1336,7 +1337,6 @@ const ClientRow: React.FC<{
 
       {isExpanded && (
         <div className="px-4 pb-3 pt-1.5 bg-muted/40">
-          <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
           <div className="ml-[26px] flex flex-col">
             {agg.entries.map(e => (
               <CategoryRow
@@ -1527,7 +1527,6 @@ const ByDayClientRow: React.FC<{
       </button>
       {isOpen && (
         <div className="px-4 pb-3 pt-1.5 bg-muted/40">
-          <div className={cn(UPPER_LABEL, 'mb-1.5 pl-[26px]')}>Where the time went</div>
           <div className="ml-[26px] flex flex-col">
             {dc.entries.map(e => (
               <CategoryRow

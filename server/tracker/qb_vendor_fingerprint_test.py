@@ -118,5 +118,37 @@ print("\n=== sessions with no vendor are not grouped at all ===")
 check("empty session is excluded rather than merged with anything",
       group_sessions({('x', 'p', 'd'): set()}) == [])
 
+
+print("\n=== absence of overlap is only evidence when overlap was LIKELY ===")
+from tracker.services.qb_vendor_fingerprint import classify_groups  # noqa: E402
+
+# The real shape: two rich sets that share nothing. If they were one file,
+# 21 and 24 vendors would certainly have collided.
+rich = {
+    ('m', 'a', 1): {f'vendor A{i}' for i in range(8)},
+    ('m', 'a', 2): {f'vendor A{i}' for i in range(4, 12)},
+    ('m', 'b', 3): {f'vendor B{i}' for i in range(8)},
+    ('m', 'b', 4): {f'vendor B{i}' for i in range(4, 12)},
+}
+conf, frag = classify_groups(group_sessions(rich), rich)
+check("two well-evidenced groups are called distinct files", len(conf) == 2)
+check("...and nothing is written off as a fragment", frag == [])
+
+# The bug this guards: one session with one vendor overlaps nothing, so naive
+# grouping called it a separate company file. It reported the firm's OWN books
+# as four companies and one cemetery's five sessions as four.
+sparse = dict(rich)
+sparse[('m', 'c', 5)] = {'a lone vendor'}
+conf2, frag2 = classify_groups(group_sessions(sparse), sparse)
+check("a one-vendor session is NOT a new company file", len(conf2) == 2)
+check("...it is reported as a fragment instead", len(frag2) == 1)
+check("...and the fragment keeps its session so its time is visible",
+      frag2[0][0] == [('m', 'c', 5)])
+
+thin = {('m', 'd', 6): {'v1', 'v2'}}       # 1 session, 2 vendors
+conf3, frag3 = classify_groups(group_sessions(thin), thin)
+check("too few sessions AND too few vendors -> fragment",
+      conf3 == [] and len(frag3) == 1)
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

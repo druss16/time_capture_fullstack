@@ -31,7 +31,7 @@ from django.utils import timezone
 from tracker.models import Organization, RawEvent, Client
 from tracker.services.qb_vendor_fingerprint import (
     split_title, is_identifying, find_generic_vendors, group_sessions,
-    suggest_town,
+    suggest_town, classify_groups,
 )
 
 
@@ -109,11 +109,15 @@ class Command(BaseCommand):
             'savior', 'evangelist', 'baptist', 'episcopal', 'lutheran',
             'silver', 'first', 'north', 'south', 'east', 'west', 'incorporated',
         }
-        towns = sorted({
-            t for c in Client.objects.filter(org=org, is_active=True)
-            for t in re.split(r'[^A-Za-z]+', c.name or '')
-            if len(t) >= 5 and t.lower() not in NOT_A_PLACE
-        })
+        # Towns of the parishes this firm keeps books for. Client names are
+        # full of saints and suffixes, and mining them for towns produced
+        # "looks like Theresa" and "looks like Accounting".
+        towns = [
+            'Clinton', 'Hamilton', 'Baldwinsville', 'Bville', 'Minoa', 'Rome',
+            'Oswego', 'Boonville', 'Cazenovia', 'Pulaski', 'Cicero', 'Utica',
+            'Jordan', 'Taberg', 'Chittenango', 'Chadwick', 'Sherrill', 'Homer',
+            'Syracuse', 'Camillus', 'Manlius', 'Fulton', 'Auburn', 'Liverpool',
+        ]
 
         self.stdout.write(
             f"\norg {org.id} {org.name!r} — {total:,} QuickBooks titles in "
@@ -130,25 +134,23 @@ class Command(BaseCommand):
             if len(all_keys) < opts['min_sessions']:
                 continue
             groups = group_sessions(keyed)
-            if len(groups) < 2:
-                continue    # one group = one file = nothing to disentangle
+            confident, fragments = classify_groups(groups, keyed)
+            if len(confident) < 2:
+                continue    # fewer than two well-evidenced files: nothing proven
 
             def mins(keys):
                 return sum(block_minutes.get(b, 0)
                            for k in keys for b in sess_blocks[k])
 
             tot_min = mins(all_keys)
-            cov_min = mins([k for g in groups for k in g])
+            cov_min = mins([k for g, _ in confident for k in g])
             self.stdout.write(self.style.WARNING(
-                f"\n{company!r}  —  {len(groups)} DISTINCT company files behind "
-                f"one name"))
+                f"\n{company!r}  —  at least {len(confident)} DISTINCT company "
+                f"files behind one name"))
             self.stdout.write(
-                f"   {tot_min/60:.1f}h total, {cov_min/60:.1f}h identifiable "
-                f"({100*cov_min//max(tot_min,1)}% of the time)")
-            for i, g in enumerate(groups, 1):
-                vend = set()
-                for k in g:
-                    vend |= keyed[k]
+                f"   {tot_min/60:.1f}h total, {cov_min/60:.1f}h with solid "
+                f"vendor evidence ({100*cov_min//max(tot_min,1)}%)")
+            for i, (g, vend) in enumerate(confident, 1):
                 booked = Counter()
                 for k in g:
                     for b in sess_blocks[k]:
@@ -157,9 +159,15 @@ class Command(BaseCommand):
                 label = (self.style.SUCCESS(f"looks like {town}") if town
                          else "needs one answer")
                 self.stdout.write(
-                    f"\n   GROUP {i}: {len(g)} session(s), {mins(g)/60:.1f}h — {label}")
+                    f"\n   FILE {i}: {len(g)} session(s), {mins(g)/60:.1f}h, "
+                    f"{len(vend)} vendors — {label}")
                 self.stdout.write(
                     f"      vendors : {', '.join(sorted(vend)[:6])}")
                 self.stdout.write(
                     "      booked  : " + ', '.join(
                         f"{c} {m/60:.1f}h" for c, m in booked.most_common(3)))
+            if fragments:
+                fmin = sum(mins(g) for g, _ in fragments)
+                self.stdout.write(
+                    f"\n   ({len(fragments)} fragment(s), {fmin/60:.1f}h — too "
+                    f"little evidence to place; NOT counted as separate files)")

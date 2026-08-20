@@ -37,7 +37,9 @@ def check(label, cond):
 try:
     from tracker.services.matter_attribution import (
         candidate_tokens, build_matter_index, match_matter_in_text, attribute_block,
+        folder_key, neighbour_matter,
     )
+    from datetime import datetime, timedelta
     _ok = True
 except Exception as e:
     _ok = False
@@ -59,6 +61,7 @@ class _B:
         self.file_path, self.title = file_path, title
         self.window_title, self.url, self.client_id = window_title, url, client_id
         self.hints = hints or {}
+        self.start = self.end = None
 
 
 if _ok:
@@ -134,6 +137,63 @@ if _ok:
     check("blank hints are safe", attribute_block(_B(hints={}), idx2, sole, anchors)[0] is None)
     check("numeric-typed id still matches its string key",
           attribute_block(_B(hints={'clio_matter_id': 1925394507}), idx2, sole, anchors)[0] == 63)
+
+    print("Matter attribution — folders are the unit that repeats:")
+    check("windows path -> folder",
+          folder_key(r'S:\Clients\Ridgeline\Estate Planning\motion.docx')
+          == folder_key('S:/Clients/Ridgeline/Estate Planning/x.docx'))
+    check("filename is excluded from the key",
+          'motion' not in folder_key(r'S:\Clients\Ridgeline\Estate\motion.docx'))
+    check("bare filename has no folder", folder_key('motion.docx') == '')
+    check("empty path is safe", folder_key('') == '')
+
+    folders = {folder_key('S:/Clients/Ridgeline/Estate Planning/a.docx'): 64}
+    check("a learned folder attributes a new file in it",
+          attribute_block(_B(file_path='S:/Clients/Ridgeline/Estate Planning/brand-new.docx'),
+                          idx2, sole, None, folder_index=folders)[:2] == (64, 'folder'))
+    check("learned folder beats a matter number in the filename",
+          attribute_block(_B(file_path='S:/Clients/Ridgeline/Estate Planning/00123 x.docx'),
+                          idx2, sole, None, folder_index=folders)[0] == 64)
+    check("the Clio anchor still outranks a learned folder",
+          attribute_block(_B(file_path='S:/Clients/Ridgeline/Estate Planning/a.docx',
+                             hints={'clio_matter_id': '1925394507'}),
+                          idx2, sole, {'1925394507': 63}, folder_index=folders)[0] == 63)
+
+    print("Matter attribution — temporal propagation needs both sides to agree:")
+    base = datetime(2026, 8, 20, 10, 0)
+
+    def blk(start_min, end_min):
+        b = _B(title='untitled.docx')
+        b.start = base + timedelta(minutes=start_min)
+        b.end = base + timedelta(minutes=end_min)
+        return b
+
+    both_agree = [(base, base + timedelta(minutes=10), 64),
+                  (base + timedelta(minutes=60), base + timedelta(minutes=70), 64)]
+    check("both neighbours agree -> propagate",
+          neighbour_matter(blk(20, 50), both_agree) == 64)
+
+    disagree = [(base, base + timedelta(minutes=10), 64),
+                (base + timedelta(minutes=60), base + timedelta(minutes=70), 65)]
+    check("neighbours DISAGREE -> abstain", neighbour_matter(blk(20, 50), disagree) is None)
+
+    one_side = [(base, base + timedelta(minutes=10), 64)]
+    check("one-sided evidence -> abstain (this is the matter-switch case)",
+          neighbour_matter(blk(20, 50), one_side) is None)
+
+    far = [(base, base + timedelta(minutes=10), 64),
+           (base + timedelta(minutes=600), base + timedelta(minutes=610), 64)]
+    check("agreeing but hours away -> abstain", neighbour_matter(blk(20, 50), far) is None)
+
+    check("temporal is off unless the org opted in",
+          attribute_block(blk(20, 50), idx2, sole, None,
+                          neighbours=both_agree, allow_temporal=False)[0] is None)
+    check("temporal fires when opted in",
+          attribute_block(blk(20, 50), idx2, sole, None,
+                          neighbours=both_agree, allow_temporal=True)[:2] == (64, 'temporal'))
+    check("temporal sits BELOW the sole-matter inference",
+          attribute_block(_B(title='x.docx', client_id=77), idx2, sole, None,
+                          neighbours=both_agree, allow_temporal=True)[:2] == (5, 'sole_matter'))
 
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")
 sys.exit(1 if _failed else 0)

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
+import { useTerminology } from '@/lib/terminology';
 import type { RoleType } from './types';
 import {
   SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
@@ -48,6 +49,7 @@ const COLOR_PRESETS = [
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Props) {
+  const terms = useTerminology();
   const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [showAdd,   setShowAdd]   = useState(false);
@@ -161,14 +163,14 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
   // ── Render ──
   return (
     <SettingsPage
-      title="Task Types"
+      title={terms.task_types}
       subtitle="Firm-wide categories used to classify time blocks. These appear in your team's timesheet picker and feed billing rates."
       actions={canManage ? (
         <button
           onClick={() => { resetForm(); setShowAdd(true); }}
           className={primaryBtnClass}
         >
-          <Plus className="w-3.5 h-3.5" /> Add Task Type
+          <Plus className="w-3.5 h-3.5" /> Add {terms.task_type}
         </button>
       ) : undefined}
     >
@@ -216,7 +218,7 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
 
       {/* Add/edit form */}
       {showAdd && canManage && (
-        <SettingsSection tint className="mb-5" title={editingId ? 'Edit Task Type' : 'New Task Type'}>
+        <SettingsSection tint className="mb-5" title={editingId ? `Edit ${terms.task_type}` : `New ${terms.task_type}`}>
           <div className="grid grid-cols-12 gap-4 mb-4">
             <div className="col-span-5">
               <label className={labelClass}>Name *</label>
@@ -312,7 +314,7 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
               className={primaryBtnClass}
             >
               {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              {editingId ? 'Update' : 'Add Task Type'}
+              {editingId ? 'Update' : `Add ${terms.task_type}`}
             </button>
             <button
               onClick={resetForm}
@@ -369,7 +371,7 @@ export default function TaskTypesTab({ currentUserRole, onSuccess, onError }: Pr
                             onClick={() => setShowAdd(true)}
                             className={`${primaryBtnClass} mt-3`}
                           >
-                            <Plus className="w-3.5 h-3.5" />Add Task Type
+                            <Plus className="w-3.5 h-3.5" />Add {terms.task_type}
                           </button>
                         )}
                       </>

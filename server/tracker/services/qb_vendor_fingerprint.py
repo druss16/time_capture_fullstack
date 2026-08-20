@@ -165,3 +165,41 @@ def suggest_town(vendors, towns):
             if len(t) >= 4 and re.search(r'\b' + re.escape(t) + r'\b', low):
                 hits.add(town)
     return hits.pop() if len(hits) == 1 else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# How much evidence makes two groups DIFFERENT FILES rather than two fragments.
+#
+# The first version of this treated "these sessions share no vendor" as proof of
+# a different company file. It is not. A session where someone opened one vendor
+# screen has one vendor and will overlap with nothing, so it splits off as its
+# own "file" — which reported the firm's OWN books (T.L. Wall Accounting) as
+# four separate companies, and one cemetery's five sessions as four.
+#
+# Absence of overlap is only meaningful when overlap was LIKELY: two sets of six
+# vendors that share none is a real signal; one vendor against six is silence.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A group must reach one of these before it is called a distinct file. Below it,
+# the honest label is "not enough evidence", and its time stays unattributed
+# rather than being assigned to an invented parish.
+MIN_SESSIONS_FOR_FILE = 2
+MIN_VENDORS_FOR_FILE = 3
+
+
+def classify_groups(groups, session_vendors):
+    """Split groups into (confident, fragments).
+
+    A group is confident when it has enough independent observations that
+    sharing nothing with another confident group is meaningful. Everything else
+    is a fragment: it may belong to any of them, and we do not guess which.
+    """
+    confident, fragments = [], []
+    for g in groups:
+        vendors = set()
+        for k in g:
+            vendors |= session_vendors.get(k, set())
+        strong = (len(g) >= MIN_SESSIONS_FOR_FILE
+                  and len(vendors) >= MIN_VENDORS_FOR_FILE)
+        (confident if strong else fragments).append((g, vendors))
+    return confident, fragments

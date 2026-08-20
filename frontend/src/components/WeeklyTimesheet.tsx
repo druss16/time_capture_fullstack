@@ -441,6 +441,24 @@ const WeeklyTimesheet: React.FC = () => {
     return { weekBlocks: week, dayBlocks: day };
   }, [detail]);
 
+  // Time that cannot reach a bill until someone picks a matter. Only counts
+  // blocks whose client actually HAS matters to choose between — a client with
+  // none is not a task, and counting it would make the number un-actionable.
+  const matterGap = useMemo(() => {
+    let minutes = 0;
+    const clients = new Set<string>();
+    for (const d of detail?.days ?? []) {
+      for (const b of d.blocks) {
+        if (!b.duration_minutes) continue;
+        if (b.matter_label) continue;
+        if ((b.matter_options ?? 0) < 1) continue;
+        minutes += b.duration_minutes;
+        clients.add(blockClientKey(b.client_name));
+      }
+    }
+    return { minutes, clientKeys: clients };
+  }, [detail]);
+
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
 
@@ -818,8 +836,28 @@ const WeeklyTimesheet: React.FC = () => {
       {/* ── Lane card: the week's clients ─────────────────────────────── */}
       <div className={cn('mt-4', LANE_CARD)}>
 
+        {/* Time held back for want of a matter. Surfaced here so nobody has to
+            open rows one by one looking for it — the whole point of the amber
+            state on the row is defeated if you must first find the row. */}
+        {matterGap.minutes > 0 && (
+          <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+            <span className="font-mono text-[12px] text-amber-900">
+              <b className="tabular-nums">{fmtHours(matterGap.minutes)}</b> needs a matter
+              <span className="hidden sm:inline"> — it will not reach Clio until you choose one</span>
+            </span>
+            <span className="flex-1" />
+            <button
+              onClick={() => { setLaneOpen(true); setExpanded(new Set(matterGap.clientKeys)); }}
+              className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-sans text-[12px] font-medium text-amber-800 shadow-[0_1px_2px_rgba(16,27,46,0.05)] hover:bg-amber-100"
+            >
+              Show these
+            </button>
+          </div>
+        )}
+
         {/* Lane header: collapse toggle / search / view toggle */}
-        <div className={cn('flex items-center gap-3 px-4 h-12', bodyOpen && 'border-b border-border/70')}>
+        <div className={cn('flex items-center gap-3 px-4 py-3.5', bodyOpen && 'border-b border-border/70')}>
           <button
             onClick={() => setLaneOpen(o => !o)}
             className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md hover:bg-primary/[0.06] transition-colors"
@@ -831,11 +869,9 @@ const WeeklyTimesheet: React.FC = () => {
             <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
               {totalClients} client{totalClients !== 1 ? 's' : ''} · {fmtHours(grandTotal)}
             </span>
-            {!bodyOpen && (
-              <span className="ml-1 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 font-sans text-[10.5px] font-bold text-primary">
-                View detail
-              </span>
-            )}
+            <span className="ml-1 shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)]">
+              {bodyOpen ? 'Hide' : 'Browse these'}
+            </span>
           </button>
           <div className="relative w-44 ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />

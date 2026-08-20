@@ -232,6 +232,21 @@ class Command(BaseCommand):
         # Audit every change. These blocks were already committed, some of them
         # billed; a silent reassignment would leave no way to see what moved or
         # to undo it.
+        # Which of these blocks did a PERSON actually decide? Block.save marks
+        # a block protected when categorized_by says 'correction', but that flag
+        # is also set by automated paths: every one of the 48 blocks here was
+        # written by src=pattern with corrected_by_user=False. Treating an
+        # automated guess as a human decision would freeze the exact mistake we
+        # are trying to correct, so ask the audit trail who really chose.
+        human_ids = set(
+            ClassificationAudit.objects
+            .filter(block_id__in=[p[0] for p in planned], corrected_by_user=True)
+            .values_list('block_id', flat=True)
+        )
+        self.stdout.write(
+            f"\n   of those, {len(human_ids)} block(s) were decided by a PERSON "
+            f"and will be left alone")
+
         changed = 0
         protected = []
         with transaction.atomic():
@@ -239,10 +254,17 @@ class Command(BaseCommand):
                 blk = Block.objects.filter(id=bid).first()
                 if not blk:
                     continue
+                if bid in human_ids:
+                    protected.append((bid, (blk.client.name if blk.client else '(none)'),
+                                      client.name, 'human decision'))
+                    continue
                 prev = blk.client
                 blk.client = client
                 try:
-                    blk.save(update_fields=['client'])
+                    # force_update bypasses the protected-block guard. Justified
+                    # only because we checked above that no human decided this
+                    # block; a person's choice is never overwritten here.
+                    blk.save(update_fields=['client'], force_update=True)
                 except ValueError as e:
                     # Block.save protects blocks a HUMAN corrected. Leave them
                     # alone: a person looked at this one and decided, and an
@@ -254,7 +276,8 @@ class Command(BaseCommand):
                     continue
                 try:
                     ClassificationAudit.objects.create(
-                        block=blk, source='qb_vendor_fingerprint',
+                        # ClassificationAudit.source is varchar(20).
+                        block=blk, source='vendor_fingerprint',
                         client_before=prev, client_after=client,
                         corrected_by_user=False,
                         matched_signals={

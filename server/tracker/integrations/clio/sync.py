@@ -141,6 +141,15 @@ def full_sync(integration: Integration) -> dict:
         stats['matters'] = sync_matters(api, integration, client_by_external_id)
         stats['staff'] = sync_staff(api, integration)
 
+        # Matters have just landed; use them. Best-effort — an attribution
+        # problem must never fail the sync that succeeded.
+        try:
+            from tracker.services.matter_attribution import attribute_matters_for_org
+            stats['attribution'] = attribute_matters_for_org(integration.organization)
+        except Exception as e:
+            logger.warning('Matter attribution after Clio sync failed: %s', e, exc_info=True)
+            stats['attribution'] = {'error': str(e)[:200]}
+
         integration.last_synced_at = timezone.now()
         integration.last_sync_status = 'success' if not stats['errors'] else 'partial'
         integration.last_sync_error = ''

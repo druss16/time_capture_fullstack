@@ -88,11 +88,38 @@ def _day_bounds(day, tz):
     return start, start + timedelta(days=1)
 
 
+# Bare application chrome. On its own none of these describes work, and a bill
+# line reading "Explorer" or "Word" tells a client nothing they would pay for.
+_APP_CHROME = {
+    'explorer', 'file explorer', 'windows explorer', 'finder',
+    'word', 'microsoft word', 'excel', 'microsoft excel', 'outlook',
+    'microsoft outlook', 'powerpoint', 'acrobat', 'adobe acrobat',
+    'chrome', 'google chrome', 'edge', 'microsoft edge', 'firefox', 'safari',
+    'new tab', 'untitled', 'document1', 'book1', '(no title)',
+}
+
+
+def _describe(block) -> str:
+    """
+    The best available description of one block's work, for a client's bill.
+
+    Order matters. A human note beats anything captured. Failing that the
+    window title carries the subject — "Marta Vance - File Explorer" — where
+    `title` is often reduced to the application alone. Preferring `title`, as
+    this did, put the word "Explorer" on a real invoice line.
+    """
+    for candidate in (block.notes, block.window_title, block.title):
+        text = (candidate or '').strip()
+        if text and text.lower() not in _APP_CHROME:
+            return text
+    return ''
+
+
 def _note_for(blocks):
     """A human-readable note built from what was actually worked on."""
     seen, titles = set(), []
     for b in blocks:
-        text = (b.notes or b.title or '').strip()
+        text = _describe(b)
         if text and text.lower() not in seen:
             seen.add(text.lower())
             titles.append(text)

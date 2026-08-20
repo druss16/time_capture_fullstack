@@ -6,6 +6,7 @@
 // adjustments happen in Daily Review.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { fetchWhoAmI } from '@/lib/whoami';
 import {
@@ -1032,16 +1033,59 @@ const WeeklyTimesheet: React.FC = () => {
 
 // ── Summary View ──────────────────────────────────────────────────────────────
 
+// Row popovers have to escape their container.
+//
+// The activity rows live in a wrapper with `overflow-hidden` (for the rounded
+// corners and dividers), which clips any absolutely-positioned child. When a
+// category group holds a single row that wrapper is about one row tall, so a
+// menu opened from it was clipped to near-invisibility — it looked like the
+// button did nothing.
+//
+// Rendering into a portal with fixed coordinates from the button's own rect
+// sidesteps every clipping ancestor. Flips above the button when there is not
+// room below.
+const RowMenuPortal: React.FC<{
+  anchorEl: HTMLElement | null;
+  onClose: () => void;
+  width: number;
+  children: React.ReactNode;
+}> = ({ anchorEl, onClose, width, children }) => {
+  if (!anchorEl) return null;
+  const r = anchorEl.getBoundingClientRect();
+  const MAX_H = 288;
+  const openUp = r.bottom + MAX_H > window.innerHeight && r.top > MAX_H;
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)),
+    width,
+    maxHeight: MAX_H,
+    ...(openUp ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+  };
+  return createPortal(
+    <>
+      <button className="fixed inset-0 z-[60] cursor-default"
+              onClick={(e) => { e.stopPropagation(); onClose(); }} aria-label="Close" />
+      <div style={style}
+           className="z-[61] overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+};
+
 // Popover menu to move a block to a different category (task type).
 const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   const ctx = React.useContext(MoveContext);
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
   if (!ctx) return null;
   const busy = ctx.movingId != null && agg.ids.includes(ctx.movingId);
   const currentName = agg.taskTypeName || 'General';
   return (
     <span className="relative shrink-0">
       <button
+        ref={btnRef}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
         title={agg.count > 1 ? `Move these ${agg.count} blocks to another category` : 'Move this block to another category'}
@@ -1051,10 +1095,8 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         Move
       </button>
       {open && !busy && (
-        <>
-          <button className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false); }} aria-label="Close" />
-          <div className="absolute right-0 top-7 z-50 w-56 max-h-64 overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
-            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Move to category</p>
+        <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={224}>
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Move to category</p>
             {ctx.taskTypes.map(tt => {
               const isCurrent = tt.name === currentName;
               return (
@@ -1071,8 +1113,7 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
                 </button>
               );
             })}
-          </div>
-        </>
+        </RowMenuPortal>
       )}
     </span>
   );
@@ -1092,6 +1133,7 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   if (!ctx?.clioEnabled || !ctx.onSetMatter) return null;
 
@@ -1117,6 +1159,7 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   return (
     <span className="relative shrink-0">
       <button
+        ref={btnRef}
         onClick={(e) => {
           e.stopPropagation();
           const next = !open;
@@ -1133,18 +1176,16 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         Matter
       </button>
       {open && !saving && (
-        <>
-          <button className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false); }} aria-label="Close" />
-          <div className="absolute right-0 top-7 z-50 w-72 max-h-72 overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
-            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={288}>
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
               {data?.client_name ? `Matters for ${data.client_name}` : 'Set matter'}
             </p>
             {loading && <p className="px-3 py-2 text-[12px] text-slate-400">Loading…</p>}
             {!loading && data && data.options?.length === 0 && (
               <p className="px-3 py-2 text-[12px] text-slate-500">
                 {data.client_id
-                  ? 'No open matters for this client in Clio.'
-                  : 'Assign a client first — matters belong to a client.'}
+                  ? `${data.client_name || 'This client'} has no open matters in Clio. Open one there, then sync from Settings → Integrations.`
+                  : 'Assign a client first — a matter belongs to a client.'}
               </p>
             )}
             {!loading && data?.options?.map((o: any) => {
@@ -1172,13 +1213,12 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
                 </button>
               );
             })}
-            {!loading && data?.options?.length > 0 && (
-              <p className="px-3 pt-1.5 pb-1 text-[10px] text-slate-400 border-t border-border/50 mt-1">
-                Future work in the same folder goes here automatically.
-              </p>
-            )}
-          </div>
-        </>
+          {!loading && data?.options?.length > 0 && (
+            <p className="px-3 pt-1.5 pb-1 text-[10px] text-slate-400 border-t border-border/50 mt-1">
+              Future work in the same folder goes here automatically.
+            </p>
+          )}
+        </RowMenuPortal>
       )}
     </span>
   );

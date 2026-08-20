@@ -117,7 +117,6 @@ def full_sync(integration: Integration) -> dict:
     populate the id → Client map that matters then reuse.
     """
     started_at = timezone.now()
-    api = ClioClient(integration)
 
     stats = {
         'started_at': started_at.isoformat(),
@@ -130,6 +129,14 @@ def full_sync(integration: Integration) -> dict:
     }
 
     try:
+        # Constructed INSIDE the try on purpose. It raises when the process is
+        # missing CLIO_CLIENT_ID/SECRET — which is what happens when the Celery
+        # worker is deployed without the same environment as the web service.
+        # Built outside, that exception escaped before anything recorded a
+        # status, so the UI showed a connected integration with a blank sync
+        # state and no way to tell "misconfigured" from "never ran".
+        api = ClioClient(integration)
+
         stats['contacts'], client_by_external_id = sync_contacts(api, integration)
         stats['matters'] = sync_matters(api, integration, client_by_external_id)
         stats['staff'] = sync_staff(api, integration)
@@ -141,9 +148,13 @@ def full_sync(integration: Integration) -> dict:
             'last_synced_at', 'last_sync_status', 'last_sync_error', 'updated_at',
         ])
 
-    except ClioError as e:
+    except Exception as e:
+        # Deliberately broad. This runs on a worker, so an unrecorded exception
+        # is invisible to the person who pressed Sync — they get a success toast
+        # and a counter that never moves. Whatever went wrong, it gets written
+        # somewhere the UI can show it.
         integration.last_sync_status = 'failed'
-        integration.last_sync_error = str(e)[:500]
+        integration.last_sync_error = f'{type(e).__name__}: {e}'[:500]
         integration.save(update_fields=[
             'last_sync_status', 'last_sync_error', 'updated_at',
         ])

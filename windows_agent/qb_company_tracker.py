@@ -669,6 +669,11 @@ def _record_environment(diag: dict):
 # hours, so a real edit stands out easily; anything closer is a coin flip.
 SHARE_MIN_GAP_SECONDS = 90
 
+# Beyond this the share's timestamps are not tracking activity at all, so
+# ordering by them is ordering noise. Generous — a genuinely active file
+# should be minutes old, not days.
+SHARE_SIGNAL_MAX_AGE_SECONDS = 24 * 60 * 60
+
 # Directory discovery is the expensive part, and the answer never changes.
 SHARE_DISCOVERY_INTERVAL = 30 * 60
 SHARE_SCAN_INTERVAL = 60.0
@@ -683,7 +688,13 @@ _SHARE_SKIP_DIRS = {
     'node_modules', '.git', 'onedrive', 'perflogs', 'recovery',
 }
 
-_share_cache = {'dirs': [], 'discovered_at': 0.0, 'files': {}, 'scanned_at': 0.0}
+# 'files' and 'recent' are SEPARATE on purpose: _paths_from_share stores
+# {path: name} and _recent_company_files stores {base: (mtime, base)}.
+# They shared one key once, and whichever ran last poisoned the other with
+# an incompatible shape — an unpack ValueError on 957 field events.
+_share_cache = {'dirs': [], 'discovered_at': 0.0,
+                'files': {}, 'scanned_at': 0.0,
+                'recent': {}, 'recent_at': 0.0}
 
 
 def _candidate_roots() -> list[str]:
@@ -861,7 +872,7 @@ def _recent_company_files(diag: dict) -> list:
         return []
 
     now = time.monotonic()
-    if not _share_cache['files'] or (now - _share_cache['scanned_at']) >= SHARE_SCAN_INTERVAL:
+    if not _share_cache['recent'] or (now - _share_cache['recent_at']) >= SHARE_SCAN_INTERVAL:
         seen = {}
         for d in dirs:
             try:
@@ -886,10 +897,10 @@ def _recent_company_files(diag: dict) -> list:
                             continue
             except Exception as e:
                 diag.setdefault('share_err', type(e).__name__)
-        _share_cache['files'] = seen
-        _share_cache['scanned_at'] = now
+        _share_cache['recent'] = seen
+        _share_cache['recent_at'] = now
 
-    seen = _share_cache['files']
+    seen = _share_cache['recent']
     diag['sharefiles'] = len(seen)
     if not seen:
         return []
@@ -991,6 +1002,21 @@ def _paths_from_share(diag: dict, company: str | None = None) -> list[str]:
         return []
 
     scored.sort(reverse=True)
+
+    # If the freshest candidate is ANCIENT, these timestamps carry no
+    # information about what anyone is doing now, and ranking by them is
+    # ranking noise. Observed in the field: a pick made because one file was 15
+    # days less stale than the next — both over five years old, both in a
+    # folder named "MaryLou's Old QB files". That happened to land on the right
+    # client only because the name filter had already narrowed it; for an
+    # ambiguous name like "St. Mary's Church" the same coin flip would choose
+    # between two parishes and report it at full confidence.
+    import time as _tt
+    if (_tt.time() - scored[0][0]) > SHARE_SIGNAL_MAX_AGE_SECONDS:
+        diag['stale'] = 1
+        diag['share'] = 0
+        diag['freshmin'] = int(max(0, (_tt.time() - scored[0][0]) / 60))
+        return []
     import time as _t
     # How stale is the freshest candidate, in minutes? If this is large while
     # someone is demonstrably working, the transaction log is not reaching the

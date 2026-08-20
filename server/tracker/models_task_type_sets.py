@@ -335,6 +335,24 @@ class ExternalMatterMapping(models.Model):
                   'without them is a 422.',
     )
 
+    # Two matters for one client routinely share a description — "Estate
+    # Planning" twice for the same family is normal practice. Without something
+    # else on the row, a picker offers two identical-looking options and the
+    # person choosing is guessing. These are the fields that make it a decision.
+    open_date = models.DateField(
+        null=True, blank=True,
+        help_text='When the matter was opened. Usually the fastest way to tell '
+                  'two same-named matters apart.',
+    )
+    responsible_attorney = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Name of the attorney responsible for the matter in Clio.',
+    )
+    practice_area = models.CharField(
+        max_length=128, blank=True, default='',
+        help_text='Clio practice area, when the firm uses them.',
+    )
+
     last_synced_at = models.DateTimeField(null=True, blank=True)
     last_seen_in_source = models.DateTimeField(
         null=True, blank=True,

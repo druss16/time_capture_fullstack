@@ -29,6 +29,97 @@ INDUSTRY_TYPES = [
 INDUSTRY_CHOICES = [(k, v) for k, v in INDUSTRY_TYPES]
 
 
+# ============================================================================
+# Vertical terminology
+# ============================================================================
+#
+# A law firm reading "Engagement" or "Project" concludes the tool was built for
+# somebody else. The underlying records are identical — only the words differ.
+#
+# This is the ONLY sanctioned way a vertical changes the product: configuration
+# and copy. Business logic must never branch on industry_type. The moment a
+# classifier, matcher, or billing path contains `if industry == 'legal'`, the
+# codebase has begun forking by accident and every later fix costs double.
+#
+# Keys are canonical internal names. Values are what a given vertical calls the
+# same thing. Anything unspecified falls back to DEFAULT_TERMS, so adding a
+# vertical never requires filling in the whole table.
+
+DEFAULT_TERMS = {
+    'client': 'Client',
+    'clients': 'Clients',
+    'project': 'Project',
+    'projects': 'Projects',
+    'engagement': 'Engagement',
+    'engagements': 'Engagements',
+    'task_type': 'Task Type',
+    'task_types': 'Task Types',
+    'timesheet': 'Timesheet',
+    'billable_work': 'Billable Work',
+}
+
+INDUSTRY_TERMS = {
+    'legal': {
+        # In Clio and in every law firm, the unit work attaches to is a matter.
+        # Time cannot be billed without one, so this is the load-bearing word.
+        'project': 'Matter',
+        'projects': 'Matters',
+        'engagement': 'Matter',
+        'engagements': 'Matters',
+        'task_type': 'Activity Type',
+        'task_types': 'Activity Types',
+        'billable_work': 'Billable Time',
+    },
+    'cpa': {
+        'project': 'Engagement',
+        'projects': 'Engagements',
+        'task_type': 'Service',
+        'task_types': 'Services',
+    },
+    'marketing': {
+        'project': 'Campaign',
+        'projects': 'Campaigns',
+        'task_type': 'Deliverable',
+        'task_types': 'Deliverables',
+    },
+    'ai_consulting': {
+        'task_type': 'Workstream',
+        'task_types': 'Workstreams',
+    },
+}
+
+
+# Which integrations lead for a vertical. A law firm should not have to scroll
+# past QuickBooks and Xero to find Clio.
+#
+# Deliberately "primary", not "allowed". Plenty of law firms bill through Clio
+# and still keep the firm's own books in QuickBooks, so hiding it outright would
+# block a real setup. Anything not listed here stays reachable behind a
+# disclosure rather than being removed.
+INDUSTRY_PRIMARY_INTEGRATIONS = {
+    'legal': ['clio'],
+    'cpa': ['quickbooks', 'xero'],
+    'ai_consulting': ['quickbooks', 'xero'],
+    'marketing': ['quickbooks', 'xero'],
+    'general': ['quickbooks', 'xero'],
+}
+
+
+def get_primary_integrations(industry_type: str) -> list:
+    """Integration keys to surface first for this vertical."""
+    return list(INDUSTRY_PRIMARY_INTEGRATIONS.get(
+        industry_type or 'general',
+        INDUSTRY_PRIMARY_INTEGRATIONS['general'],
+    ))
+
+
+def get_terminology(industry_type: str) -> dict:
+    """Canonical term -> this vertical's word for it. Always fully populated."""
+    terms = dict(DEFAULT_TERMS)
+    terms.update(INDUSTRY_TERMS.get(industry_type or 'general', {}))
+    return terms
+
+
 # =============================================================================
 # UNIVERSAL CATEGORIES (added to every industry)
 # =============================================================================

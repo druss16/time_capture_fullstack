@@ -429,6 +429,12 @@ class ClassificationService:
         # guesses a town that appears nowhere in its input.
         self._stage_4_5_qb_company_file(block, decision)
 
+        # Stage 4.6 — QuickBooks vendor fingerprint. Runs after 4.5 because a
+        # direct read of the company FILE is better evidence than an inference
+        # from the file's contents; this is the fallback for the (currently
+        # every) case where the file path cannot be read.
+        self._stage_4_6_qb_vendor(block, decision)
+
         # Stage 5 — URL domain match
         # SKIPPED in foundation: Stage 3 already handles URL domain matching.
         # Stage 5 was originally planned for Client.email_domain matching but
@@ -3103,6 +3109,88 @@ class ClassificationService:
             },
         ))
 
+    def _stage_4_6_qb_vendor(self, block, decision: 'ClassificationDecision'):
+        """Stage 4.6 — identify a QuickBooks parish by the vendors in its titles.
+
+        QuickBooks shows only its Company Name, and two of this firm's parishes
+        both answer to "St. Mary's Church". The town lives in the filename,
+        which QuickBooks never displays and the agent cannot read — QuickBooks
+        runs elevated and refuses the handle read on every machine.
+
+        But QuickBooks does show the open screen:
+
+            "St. Mary's Church - QuickBooks ... - [Vendor Center: Clinton Agway]"
+
+        A vendor belongs to one parish's books. Once QBVendorClient records that
+        Clinton Agway means the Clinton file, every future block that touches
+        that vendor resolves — no filename, no elevation, no permissions.
+
+        Emitted at 0.91: below a direct company-file read (Stage 4.5, 0.93)
+        because that is the file itself rather than an inference from its
+        contents, and above Stage 4's folder match. Being >= 0.65 it also stops
+        Stage 10 spending an AI call guessing a town it cannot see.
+
+        ABSTAINS when the block's vendors point at two different clients. A
+        wrong parish is worse than none — that is the lesson of the learned
+        pattern this replaces, which sent eight hours to a parish eight miles
+        from the right one.
+        """
+        from tracker.models import RawEvent, QBVendorClient
+        from tracker.services.qb_vendor_fingerprint import (
+            split_title, is_identifying)
+
+        app = (block.app_name or '').lower()
+        if not app.startswith('qbw'):
+            return
+
+        try:
+            vendors = set()
+            titles = [block.window_title or '']
+            for wt in (RawEvent.objects.filter(block=block)
+                       .values_list('window_title', flat=True)):
+                titles.append(wt or '')
+            for t in titles:
+                _company, screen, party = split_title(t)
+                if is_identifying(screen, party):
+                    vendors.add(party)
+            if not vendors:
+                return
+
+            rows = list(QBVendorClient.objects
+                        .filter(org=self.org, vendor__in=vendors)
+                        .select_related('client'))
+        except Exception:
+            return
+        if not rows:
+            return
+
+        by_client = {}
+        for r in rows:
+            by_client.setdefault(r.client_id, (r.client, []))[1].append(r.vendor)
+        if len(by_client) > 1:
+            # Vendors from two parishes in one block: either the block spans two
+            # files or a vendor is mapped wrongly. Say nothing rather than pick.
+            logger.info(
+                f"[STAGE4.6] Block {getattr(block, 'pk', '?')}: vendors point at "
+                f"{len(by_client)} clients — abstaining")
+            return
+
+        client, matched = next(iter(by_client.values()))
+        decision.matched_signals.append(Signal(
+            type='qb_vendor_fingerprint',
+            strength=0.91,
+            evidence=(
+                f"QuickBooks vendor {', '.join(sorted(matched)[:3])!r} belongs to "
+                f"{client.name!r}'s books. The company name in the title is "
+                f"shared by several parishes and cannot identify which."
+            ),
+            detail={
+                'client_id': client.id,
+                'client_name': client.name,
+                'matched_vendors': sorted(matched)[:6],
+            },
+        ))
+
     def _match_co_open_office(self, block):
         """Deterministic co-open-file attribution (Tier 1 consumer).
 
@@ -5181,6 +5269,7 @@ class ClassificationService:
             'title_match_domain', 'file_path_structure',
             'calendar', 'mail', 'learned_pattern',
             'org_rule', 'tax_software', 'qb_company_file',
+            'qb_vendor_fingerprint',
         }
         verified_signals = []
         for sig in signals:

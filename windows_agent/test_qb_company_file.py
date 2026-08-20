@@ -156,7 +156,7 @@ check("environment probe never raises", _env_ok)
 check("environment probe reports the agent user", 'me' in _e)
 
 
-print("\n=== v1.7.18: share scan, RELATIVE mtime ===")
+print("\n=== share scan: relative ordering, but only on a LIVE signal ===")
 import tempfile, time as _time, os as _os  # noqa: E402
 import qb_company_tracker as _qbt  # noqa: E402
 
@@ -179,26 +179,43 @@ def _rescan(company):
     return _qbt._paths_from_share(d, company), d
 
 
-# Three St. Mary parishes. EVERY timestamp is ancient — this is the case the
-# absolute-threshold version got wrong in the field, where 1,099 files were
-# found and none looked recent enough to count.
-for _town, _age in (('Clinton', 86_400), ('Hamilton', 90_000), ('Minoa', 95_000)):
+# Three St. Mary parishes. Clinton is being worked in right now; the others
+# were touched earlier today. All well inside the live-signal window.
+_mk("St. Mary's Church_Clinton_QB2024.QBW", 3_600)
+_mk("St. Mary's Church_Clinton_QB2024.QBW.TLG", 20)
+for _town, _age in (('Hamilton', 7_200), ('Minoa', 9_000)):
     _mk(f"St. Mary's Church_{_town}_QB2024.QBW", _age + 500)
     _mk(f"St. Mary's Church_{_town}_QB2024.QBW.TLG", _age)
-_mk("Cadd Systems_QB2024.QBW", 200)          # unrelated client, freshest of all
+_mk("Cadd Systems_QB2024.QBW", 5)          # unrelated client, freshest of all
 
 _hot, _d = _rescan("St. Mary's Church")
-check("picks a winner even when EVERY file is a day stale (relative, not absolute)",
-      len(_hot) == 1)
-check("...and it is the least-stale St. Mary file, Clinton",
+check("picks the file being written right now", len(_hot) == 1)
+check("...and it is Clinton",
       _hot and _hot[0].endswith("St. Mary's Church_Clinton_QB2024.QBW"))
 check("narrows to the company named in the title", _d.get('cands') == 3)
 check("a fresher UNRELATED client cannot win — it is not a candidate",
       not any('Cadd' in p for p in _hot))
-check("reports how stale the freshest candidate is", _d.get('freshmin', 0) >= 1400)
 
-print("\n=== abstains rather than guessing between siblings ===")
-_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 86_400 + 30)   # ~30s from Clinton
+print("\n=== THE FIELD BUG: ancient timestamps must not be ranked ===")
+# Verbatim from production: every candidate years old, one slightly less so,
+# out of a folder called "MaryLou's Old QB files". Ranking that is ranking
+# noise, and for an ambiguous name it picks a parish at random.
+_old = tempfile.mkdtemp()
+for _town, _age in (('Clinton', 175_385_280), ('Hamilton', 176_670_000)):
+    fp = _os.path.join(_old, f"St. Mary's Church_{_town}_QB2024.QBW")
+    open(fp, 'w').write('x')
+    _os.utime(fp, (_now - _age, _now - _age))
+_qbt._share_cache.update({'dirs': [_old], 'discovered_at': _time.monotonic(),
+                          'files': {}, 'scanned_at': 0.0})
+_d_old = {}
+_res_old = _qbt._paths_from_share(_d_old, "St. Mary's Church")
+check("five-year-old candidates -> ABSTAIN, never a coin flip", _res_old == [])
+check("...and it reports the signal as stale", _d_old.get('stale') == 1)
+check("...and still reports how old, so the cause is visible",
+      _d_old.get('freshmin', 0) > 1_000_000)
+
+print("\n=== abstains between two live siblings ===")
+_mk("St. Mary's Church_Hamilton_QB2024.QBW.TLG", 50)   # ~30s from Clinton
 _hot2, _d2 = _rescan("St. Mary's Church")
 check("two candidates within the margin -> abstain", _hot2 == [])
 check("...and the margin is reported", _d2.get('gapmin') is not None)
@@ -219,8 +236,25 @@ _qbt._share_cache.update({'dirs': [], 'discovered_at': _time.monotonic(),
                           'files': {}, 'scanned_at': 0.0})
 check("no company directory -> returns nothing, does not raise",
       _qbt._paths_from_share({}, "St. Mary's Church") == [])
+
+print("\n=== the two share caches cannot poison each other ===")
+# _paths_from_share stores {path: name}; _recent_company_files stores
+# {base: (mtime, base)}. One shared key made whichever ran last raise a
+# ValueError in the other — 957 field events.
+_qbt._share_cache.update({'dirs': [_tmp], 'discovered_at': _time.monotonic(),
+                          'files': {}, 'scanned_at': 0.0,
+                          'recent': {}, 'recent_at': 0.0})
+_qbt._paths_from_share({}, "St. Mary's Church")
+_d6 = {}
+_rec = _qbt._recent_company_files(_d6)
+check("recent listing works after a share scan ran", isinstance(_rec, list))
+check("...and returns usable entries",
+      all(isinstance(x, dict) and 'f' in x and 'age' in x for x in _rec))
+check("...and records no error", 'share_err' not in _d6)
+
 import shutil as _shutil  # noqa: E402
 _shutil.rmtree(_tmp, ignore_errors=True)
+_shutil.rmtree(_old, ignore_errors=True)
 
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

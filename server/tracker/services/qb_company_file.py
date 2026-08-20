@@ -260,6 +260,15 @@ RECENT_LEAD_SECONDS = 120
 # was going on.
 RECENT_MAX_AGE_SECONDS = 60 * 60
 
+# Observed in the field: an agent picked a company file because it was 15 days
+# less stale than the next candidate — both over FIVE YEARS old, both in a
+# folder named "MaryLou's Old QB files". It landed on the right client only
+# because the name filter had already narrowed the field; with an ambiguous
+# name like "St. Mary's Church" the same coin flip chooses between two
+# parishes. So when every candidate is ancient, the timestamps are not tracking
+# anything and ranking by them is ranking noise.
+SIGNAL_MAX_AGE_SECONDS = 24 * 60 * 60
+
 
 def pick_recent_company_file(reports, companies):
     """Choose the company file this block was working in, or None.
@@ -302,6 +311,11 @@ def pick_recent_company_file(reports, companies):
 
     fresh = sorted(((a, n) for n, a in best_age.items() if a <= RECENT_MAX_AGE_SECONDS))
     if not fresh:
+        # Nothing recent. If the freshest thing on the whole share is ancient,
+        # say so distinctly — that is "this share has no timing signal", not
+        # "this block had no activity", and the two want different responses.
+        if best_age and min(best_age.values()) > SIGNAL_MAX_AGE_SECONDS:
+            return None, 'stale_share'
         return None, 'none'
 
     cnorms = [norm(c) for c in (companies or []) if len(norm(c)) >= 4]

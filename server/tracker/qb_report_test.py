@@ -102,5 +102,16 @@ check("company matching nothing on the share -> abstain",
 check("malformed report -> abstain, does not raise",
       pick([{'recent': [{'nope': 1}]}, None, 'junk'], set())[0] is None)
 
+
+print("\n=== ancient timestamps are noise, not evidence ===")
+# The field case: every candidate over five years old, one 15 days "fresher".
+ancient = [{'recent': [{'f': CLINTON, 'age': 175_385_280},
+                       {'f': BVILLE, 'age': 176_670_000}]}]
+picked7, via7 = pick(ancient, {"St. Mary's Church"})
+check("does NOT pick between two ancient files", picked7 is None)
+check("...and says the share has no timing signal", via7 == 'stale_share')
+check("a genuinely recent file is still accepted",
+      pick([{'recent': [{'f': CLINTON, 'age': 30}]}], {"St. Mary's Church"})[0] == CLINTON)
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

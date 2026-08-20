@@ -87,6 +87,34 @@ async function resetStats() {
 // one cookie via chrome.cookies (no page content, no DOM) so the agent always
 // knows WHICH client a QBO session is working on. Requires the "cookies"
 // permission + host access to qbo.intuit.com.
+// Clio Manage is a single-page app whose route lives in the URL FRAGMENT:
+// https://app.clio.com/nc/#/matters/12345. sanitizeUrl deliberately drops the
+// fragment before anything is stored — fragments can carry sensitive state —
+// but tab.url still has it here, so the matter id can be read without keeping
+// the fragment itself, and without any new permission: this is `tabs`, not
+// cookies or scripting like the QBO lookup below.
+//
+// This is the legal equivalent of the QBO realmId: a lawyer's working documents
+// never name the matter, but Clio states it exactly whenever they are in it.
+// Clio runs four regional hosts and matter ids are per-region, which is why the
+// backend pairs this with the org's stored region.
+const CLIO_HOST_RE = /(^|\.)(app\.clio\.com)$/i;
+const CLIO_MATTER_RE = /#\/matters\/(\d+)/;
+
+function clioMatterId(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const u = new URL(rawUrl);
+    if (!CLIO_HOST_RE.test(u.host)) return null;
+    // Match only /matters/<id>. Clio routes contacts, bills and activities the
+    // same way, and attributing a contact id as a matter would mis-bill.
+    const m = CLIO_MATTER_RE.exec(u.hash || "");
+    return m ? m[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 const QBO_HOST_RE = /(^|\.)qbo\.intuit\.com$/i;
 const QBO_COMPANY_COOKIE = "qbo.currentcompanyid";
 
@@ -272,6 +300,14 @@ async function reportActiveTab() {
     };
     if (qboId) payload.qbo_company_id = qboId;
     if (qboName) payload.qbo_company_name = qboName;
+
+    // Which Clio matter is open, when the tab is Clio. Definitive — beats every
+    // filename heuristic the backend would otherwise fall back on.
+    const clioMatter = clioMatterId(rawUrl);
+    if (clioMatter) {
+      payload.clio_matter_id = clioMatter;
+      stats.lastClioMatterId = clioMatter;
+    }
 
     const ok = await postToAgent(payload);
 

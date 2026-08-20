@@ -140,13 +140,25 @@ def match_matter_in_text(text: str, index: dict):
     return None
 
 
-def attribute_block(block, index, sole_matter_by_client):
+def attribute_block(block, index, sole_matter_by_client, project_by_external_id=None):
     """
     (project_id, tier, reason) for one block, or (None, None, reason).
 
-    Tier 2 outranks tier 3: an explicit matter number in the filename beats an
-    inference from the client having only one matter.
+    Tier order is confidence order:
+
+      0. The Clio matter id the browser extension saw. Not a heuristic — Clio
+         stated which matter was open — so it beats everything below it.
+      2. A matter number in the file path, title or URL.
+      3. The client has exactly one open matter.
+
+    An explicit signal always outranks an inference.
     """
+    anchor = (getattr(block, 'hints', None) or {}).get('clio_matter_id')
+    if anchor and project_by_external_id:
+        project_id = project_by_external_id.get(str(anchor).strip())
+        if project_id:
+            return project_id, 'clio_anchor', 'Clio had this matter open'
+
     for field in ('file_path', 'title', 'window_title', 'url'):
         matched = match_matter_in_text(getattr(block, field, '') or '', index)
         if matched:
@@ -177,12 +189,14 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     )
     stats = {
         'org_id': org.id, 'matters': len(mappings), 'scanned': 0,
-        'by_number': 0, 'by_sole_matter': 0, 'unmatched': 0, 'dry_run': dry_run,
+        'by_clio_anchor': 0, 'by_number': 0, 'by_sole_matter': 0,
+        'unmatched': 0, 'dry_run': dry_run,
     }
     if not mappings:
         return stats
 
     index = build_matter_index(mappings)
+    project_by_external_id = {str(m.external_id): m.project_id for m in mappings}
 
     # Only open matters can absorb new time.
     open_projects = defaultdict(list)
@@ -198,7 +212,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         Block.objects
         .filter(org=org, project__isnull=True, start__gte=since)
         .exclude(classification_state='suppressed')
-        .only('id', 'client_id', 'file_path', 'title', 'window_title', 'url')
+        .only('id', 'client_id', 'file_path', 'title', 'window_title', 'url', 'hints')
         .order_by('-start')
     )
     if limit:
@@ -207,11 +221,14 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     updates = defaultdict(list)
     for block in qs:
         stats['scanned'] += 1
-        project_id, tier, _reason = attribute_block(block, index, sole_matter_by_client)
+        project_id, tier, _reason = attribute_block(
+            block, index, sole_matter_by_client, project_by_external_id,
+        )
         if not project_id:
             stats['unmatched'] += 1
             continue
-        stats['by_number' if tier == 'number' else 'by_sole_matter'] += 1
+        stats[{'clio_anchor': 'by_clio_anchor', 'number': 'by_number'}
+              .get(tier, 'by_sole_matter')] += 1
         updates[project_id].append(block.id)
 
     if not dry_run:

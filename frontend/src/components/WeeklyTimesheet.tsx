@@ -1119,6 +1119,15 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   );
 };
 
+// "opened Mar 2026" — month and year is enough to separate two matters and
+// short enough to sit on one line.
+const fmtMatterDate = (iso: string): string => {
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+};
+
 // Pick the matter this work belongs to, for the rows attribution abstained on.
 //
 // Only rendered for firms on Clio. Options are fetched when the menu opens
@@ -1188,29 +1197,55 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
                   : 'Assign a client first — a matter belongs to a client.'}
               </p>
             )}
-            {!loading && data?.options?.map((o: any) => {
+            {!loading && data?.options?.map((o: any, i: number) => {
               const isCurrent = o.project_id === data.current_project_id;
+              // Matters this person has actually worked come first; the divider
+              // marks where that run ends so the ordering is legible rather
+              // than mysterious.
+              const prev = data.options[i - 1];
+              const startsRest = !o.last_worked && (i === 0 || prev?.last_worked);
+              // Same description on two matters is ordinary practice, so the
+              // row has to carry something that separates them.
+              const facts = [
+                o.open_date ? `opened ${fmtMatterDate(o.open_date)}` : null,
+                o.responsible_attorney || null,
+                o.practice_area || null,
+              ].filter(Boolean);
               return (
-                <button
-                  key={o.project_id}
-                  onClick={(e) => { e.stopPropagation(); if (!isCurrent) choose(o.project_id); }}
-                  className={cn('w-full flex items-start gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
-                    isCurrent ? 'text-slate-400' : 'text-slate-700')}
-                >
-                  <span className="flex-1 min-w-0">
-                    <span className="block truncate font-semibold">{o.display_number}</span>
-                    {o.description && (
-                      <span className="block truncate text-[11px] text-slate-400">{o.description}</span>
-                    )}
-                    {o.requires_utbms && (
-                      <span className="block text-[10px] text-amber-600">needs UTBMS codes — will not push</span>
-                    )}
-                    {(o.billing_method === 'flat' || o.billing_method === 'contingency') && (
-                      <span className="block text-[10px] text-amber-600">{o.billing_method} fee — tracked, not pushed</span>
-                    )}
-                  </span>
-                  {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300 mt-0.5 shrink-0" />}
-                </button>
+                <React.Fragment key={o.project_id}>
+                  {i === 0 && o.last_worked && (
+                    <p className="px-3 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Recently worked
+                    </p>
+                  )}
+                  {startsRest && i > 0 && (
+                    <p className="px-3 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-t border-border/50 mt-1">
+                      Other matters
+                    </p>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (!isCurrent) choose(o.project_id); }}
+                    className={cn('w-full flex items-start gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
+                      isCurrent ? 'text-slate-400' : 'text-slate-700')}
+                  >
+                    <span className="flex-1 min-w-0">
+                      <span className="block truncate font-semibold">{o.display_number}</span>
+                      {o.description && (
+                        <span className="block truncate text-[11px] text-slate-500">{o.description}</span>
+                      )}
+                      {facts.length > 0 && (
+                        <span className="block truncate text-[10px] text-slate-400">{facts.join(' · ')}</span>
+                      )}
+                      {o.requires_utbms && (
+                        <span className="block text-[10px] text-amber-600">needs UTBMS codes — will not push</span>
+                      )}
+                      {(o.billing_method === 'flat' || o.billing_method === 'contingency') && (
+                        <span className="block text-[10px] text-amber-600">{o.billing_method} fee — tracked, not pushed</span>
+                      )}
+                    </span>
+                    {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300 mt-0.5 shrink-0" />}
+                  </button>
+                </React.Fragment>
               );
             })}
           {!loading && data?.options?.length > 0 && (

@@ -6618,8 +6618,34 @@ def block_matter_options(request, block_id):
         ExternalMatterMapping.objects
         .filter(integration__organization=block.org, project__client_id=block.client_id)
         .select_related('project')
-        .order_by('display_number')
     )
+    candidates = [
+        m for m in mappings
+        if (m.external_status or '').lower() in ('open', 'pending', '')
+        or m.project_id == block.project_id
+    ]
+
+    # When did THIS user last work each of these matters. Lawyers live in a
+    # handful of active matters, so putting those first turns most picks into
+    # hitting the top row instead of reading a list.
+    from django.db.models import Max
+    last_worked = dict(
+        Block.objects
+        .filter(user=request.user, org=block.org,
+                project_id__in=[m.project_id for m in candidates])
+        .values_list('project_id')
+        .annotate(last=Max('start'))
+    )
+
+    def sort_key(m):
+        # Recently worked first, then newest matter — a matter opened last week
+        # is likelier to be the one in hand than one opened three years ago.
+        return (
+            last_worked.get(m.project_id) is None,
+            -(last_worked[m.project_id].timestamp() if last_worked.get(m.project_id) else 0),
+            -(m.open_date.toordinal() if m.open_date else 0),
+            m.display_number or '',
+        )
 
     options = [
         {
@@ -6629,10 +6655,14 @@ def block_matter_options(request, block_id):
             'status': m.external_status,
             'billing_method': m.billing_method,
             'requires_utbms': m.requires_utbms,
+            # The fields that make two same-named matters distinguishable.
+            'open_date': m.open_date.isoformat() if m.open_date else None,
+            'responsible_attorney': m.responsible_attorney,
+            'practice_area': m.practice_area,
+            'last_worked': (last_worked[m.project_id].isoformat()
+                            if last_worked.get(m.project_id) else None),
         }
-        for m in mappings
-        if (m.external_status or '').lower() in ('open', 'pending', '')
-        or m.project_id == block.project_id
+        for m in sorted(candidates, key=sort_key)
     ]
 
     return Response({

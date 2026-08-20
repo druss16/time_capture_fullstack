@@ -31,6 +31,7 @@ payload is logged at DEBUG for the first record of each collection.
 """
 
 import logging
+from datetime import datetime
 
 from celery import shared_task
 from django.contrib.auth import get_user_model
@@ -54,7 +55,8 @@ User = get_user_model()
 CONTACT_FIELDS = 'id,name,first_name,last_name,type,primary_email_address'
 MATTER_FIELDS = (
     'id,display_number,description,status,billable,billing_method,'
-    'require_utbms_codes,client{id,name}'
+    'require_utbms_codes,client{id,name},open_date,'
+    'responsible_attorney{id,name},practice_area{id,name}'
 )
 USER_FIELDS = 'id,name,first_name,last_name,email,enabled'
 
@@ -382,11 +384,25 @@ def sync_matters(api: ClioClient, integration: Integration, client_by_external_i
                 mapping.external_status = status[:32]
                 mapping.billing_method = str(_pick(record, 'billing_method'))[:32]
                 mapping.requires_utbms = bool(record.get('require_utbms_codes'))
+
+                # What lets a person tell two same-named matters apart.
+                raw_open = str(_pick(record, 'open_date'))[:10]
+                mapping.open_date = None
+                if raw_open:
+                    try:
+                        mapping.open_date = datetime.strptime(raw_open, '%Y-%m-%d').date()
+                    except ValueError:
+                        pass
+                attorney = record.get('responsible_attorney') or {}
+                mapping.responsible_attorney = str(attorney.get('name') or '')[:255]
+                area = record.get('practice_area') or {}
+                mapping.practice_area = str(area.get('name') or '')[:128]
                 mapping.last_synced_at = now
                 mapping.last_seen_in_source = now
                 mapping.save(update_fields=[
                     'display_number', 'external_name', 'external_status',
                     'billing_method', 'requires_utbms',
+                    'open_date', 'responsible_attorney', 'practice_area',
                     'last_synced_at', 'last_seen_in_source', 'updated_at',
                 ])
 

@@ -806,6 +806,7 @@ class Client(models.Model):
         ('', 'Manual'),
         ('quickbooks', 'QuickBooks'),
         ('xero', 'Xero'),
+        ('clio', 'Clio'),
     ]
     imported_from = models.CharField(
         max_length=20,
@@ -1290,6 +1291,7 @@ class Integration(models.Model):
         ('xero', 'Xero'),
         ('karbon', 'Karbon'),
         ('cch_axcess', 'CCH Axcess Practice'),
+        ('clio', 'Clio Manage'),
     ]
     
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='integrations')
@@ -1303,6 +1305,22 @@ class Integration(models.Model):
     # Provider-specific
     realm_id = models.CharField(max_length=100, blank=True)  # QuickBooks
     tenant_id = models.CharField(max_length=100, blank=True)  # Xero
+
+    # Clio runs four independent data regions and tokens are not portable
+    # between them — a token minted against app.clio.com 401s on
+    # eu.app.clio.com. Captured during OAuth; every Clio URL derives from it.
+    API_REGION_CHOICES = [
+        ('us', 'United States'),
+        ('ca', 'Canada'),
+        ('eu', 'European Union'),
+        ('au', 'Australia'),
+    ]
+    api_region = models.CharField(
+        max_length=8, blank=True, default='',
+        choices=API_REGION_CHOICES,
+        help_text='Data region for region-partitioned providers (Clio). '
+                  'Blank means the provider is not region-partitioned.',
+    )
     
     oauth_state = models.CharField(max_length=100, blank=True)  # For OAuth flow
     

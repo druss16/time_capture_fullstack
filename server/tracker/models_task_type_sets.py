@@ -285,6 +285,81 @@ class ExternalClientMapping(models.Model):
         return f'{self.integration.provider}: {self.client.name} ↔ {self.external_code or self.external_id}'
 
 
+class ExternalMatterMapping(models.Model):
+    """
+    Maps an internal Project to an external system's matter/job identifier.
+
+    This exists because legal practice management is matter-centric in a way
+    accounting systems are not: a Clio TimeEntry is rejected without a matter
+    id, so client-level attribution is not enough to push time. Every Clio
+    matter mirrors to exactly one Project — the structure is guaranteed by
+    Clio, so the mapping is a reflection, not a per-firm configuration.
+
+    The cached `billing_method` / `requires_utbms` columns are what make push
+    affordable at scale. Clio allows 50 requests/minute per firm; re-fetching
+    a matter to discover it needs UTBMS codes would double the request count
+    of every push and halve throughput.
+    """
+    integration = models.ForeignKey(
+        'tracker.Integration',
+        on_delete=models.CASCADE,
+        related_name='matter_mappings',
+    )
+    project = models.ForeignKey(
+        'tracker.Project',
+        on_delete=models.CASCADE,
+        related_name='external_mappings',
+    )
+
+    external_id = models.CharField(max_length=128, db_index=True)
+    display_number = models.CharField(
+        max_length=128, blank=True, default='',
+        help_text='Human-facing matter number, e.g. "00123-Smith". Appears in '
+                  'filenames and window titles, so it is prime alias material.',
+    )
+    external_name = models.CharField(max_length=500, blank=True, default='')
+    external_status = models.CharField(
+        max_length=32, blank=True, default='',
+        help_text='Open / Pending / Closed. Closed matters reject new time.',
+    )
+
+    # Cached push preconditions — refreshed on sync, read on every push.
+    billing_method = models.CharField(
+        max_length=32, blank=True, default='',
+        help_text='hourly / flat / contingency. Time on a flat-fee matter is '
+                  'tracked for realization but must not create a billable line.',
+    )
+    requires_utbms = models.BooleanField(
+        default=False,
+        help_text='Matter mandates UTBMS/LEDES activity + task codes. Pushing '
+                  'without them is a 422.',
+    )
+
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_seen_in_source = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Last time this matter was returned by the source API. '
+                  'Stale records are candidates for archival.',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [
+            ['integration', 'external_id'],
+            ['integration', 'project'],
+        ]
+        indexes = [
+            models.Index(fields=['integration', 'external_id']),
+            models.Index(fields=['project']),
+        ]
+
+    def __str__(self):
+        label = self.display_number or self.external_id
+        return f'{self.integration.provider}: {self.project.name} ↔ {label}'
+
+
 class ExternalTaskTypeMapping(models.Model):
     """
     Maps internal TaskType to an external system's service/activity code.

@@ -141,6 +141,19 @@ def full_sync(integration: Integration) -> dict:
         stats['matters'] = sync_matters(api, integration, client_by_external_id)
         stats['staff'] = sync_staff(api, integration)
 
+        # Derive aliases for the clients we just pulled. Without this a firm has
+        # to name folders with the full legal entity — "Ridgeline Holdings LLC"
+        # rather than "Ridgeline" — because the matcher only ever saw the exact
+        # Clio name. QuickBooks and Xero imports have always done this; Clio was
+        # missing it, which made every synced client invisible to file and window
+        # matching.
+        if stats['contacts'].get('created') or stats['contacts'].get('updated'):
+            try:
+                from tracker.views_integrations import run_post_import_alias_derivation
+                run_post_import_alias_derivation(integration.organization)
+            except Exception as e:
+                logger.warning('Clio alias derivation failed: %s', e, exc_info=True)
+
         # Matters have just landed; use them. Best-effort — an attribution
         # problem must never fail the sync that succeeded.
         try:

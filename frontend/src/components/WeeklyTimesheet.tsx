@@ -65,6 +65,8 @@ interface DetailBlock {
   window_title: string | null;
   application: string | null;
   taxpayer_name: string | null;
+  matter_label?: string | null;
+  matter_options?: number;
 }
 
 interface TimesheetDetail {
@@ -116,6 +118,11 @@ interface AggBlock {
   is_billable: boolean;
   taskTypeName: string | null;
   ids: number[];
+  // Matter state, so the row can show it rather than the user having to open a
+  // menu to find out. `matterLabel` null with matterOptions > 1 is the only
+  // case that actually needs a person.
+  matterLabel: string | null;
+  matterOptions: number;
 }
 const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
   const map = new Map<string, AggBlock>();
@@ -126,6 +133,11 @@ const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
       ex.minutes += b.duration_minutes || 0;
       ex.count += 1;
       ex.ids.push(b.id);
+      // Merged rows share a title but can sit on different matters. Only claim
+      // a matter when every block in the row agrees; otherwise the row is mixed
+      // and saying "00003-Vance" would be a lie about some of its time.
+      if ((b.matter_label ?? null) !== ex.matterLabel) ex.matterLabel = null;
+      ex.matterOptions = Math.max(ex.matterOptions, b.matter_options ?? 0);
       if (b.started_at && (!ex.firstStart || b.started_at < ex.firstStart)) ex.firstStart = b.started_at;
     } else {
       map.set(label, {
@@ -137,6 +149,8 @@ const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
         is_billable: b.is_billable,
         taskTypeName: b.task_type_name,
         ids: [b.id],
+        matterLabel: b.matter_label ?? null,
+        matterOptions: b.matter_options ?? 0,
       });
     }
   }
@@ -1135,7 +1149,11 @@ const fmtMatterDate = (iso: string): string => {
 //
 // The note about future files is not decoration: assigning a matter teaches the
 // folder, so the same choice never has to be made twice for that folder.
-const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
+const BlockMatterMenu: React.FC<{
+  agg: AggBlock;
+  label?: string;
+  tone?: 'resolved' | 'needed';
+}> = ({ agg, label = 'Matter', tone = 'needed' }) => {
   const ctx = React.useContext(MoveContext);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1178,10 +1196,18 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
         title={agg.count > 1
           ? `Set the matter for these ${agg.count} activities`
           : 'Set the matter this work belongs to'}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+        className={cn(
+          'flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50',
+          tone === 'resolved'
+            // Settled: legible but recessive. It is information, not a task.
+            ? 'border-transparent bg-transparent text-muted-foreground hover:bg-muted'
+            // Unresolved and actionable: amber, because this is the row that
+            // will silently fail to reach a bill if nobody touches it.
+            : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100',
+        )}
       >
         {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Briefcase className="w-3 h-3" />}
-        Matter
+        {label}
       </button>
       {open && !saving && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={288}>
@@ -1258,6 +1284,34 @@ const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   );
 };
 
+// What the row says about its matter, without anyone opening a menu.
+//
+// Three states, and only one of them needs a person:
+//   * already on a matter  — show which, quietly. Clicking still changes it.
+//   * no matter, but the client has several — this is the ONLY case a human can
+//     resolve, so it is the only one that draws the eye.
+//   * no matter and nothing to pick — say nothing. A client with no matters in
+//     Clio is not a task, and an amber prompt there would be noise on every row.
+//
+// The single-matter case never reaches here: attribution assigns it
+// automatically (the sole_matter tier), which is why it shows as resolved.
+const MatterState: React.FC<{ agg: AggBlock }> = ({ agg }) => {
+  const ctx = React.useContext(MoveContext);
+  if (!ctx?.clioEnabled) return null;
+
+  if (agg.matterLabel) {
+    return <BlockMatterMenu agg={agg} label={agg.matterLabel} tone="resolved" />;
+  }
+  if (agg.matterOptions > 1) {
+    return <BlockMatterMenu agg={agg} label="Choose matter" tone="needed" />;
+  }
+  if (agg.matterOptions === 1) {
+    // One option but unassigned — attribution has not run over this block yet.
+    return <BlockMatterMenu agg={agg} label="Set matter" tone="needed" />;
+  }
+  return null;
+};
+
 // One merged captured-activity row (all blocks sharing a title), listed under
 // its category. Read-only info + a move menu. Captured title + time render in
 // mono — the Daily Review signal for "text we read off the screen", vs the
@@ -1271,7 +1325,7 @@ const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withD
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
     <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
-    <BlockMatterMenu agg={agg} />
+    <MatterState agg={agg} />
     <BlockMoveMenu agg={agg} />
   </div>
 );

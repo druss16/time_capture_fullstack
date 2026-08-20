@@ -2502,6 +2502,57 @@ def repair_device():
 
 
 # ---------------- Main Agent ----------------
+
+
+# How long before another elevation attempt is allowed. Long, because the only
+# reason to retry is a machine whose admin rights changed.
+_ELEVATION_RETRY_HOURS = 12
+_ELEVATION_MARKER = os.path.join(APPDATA, "TimeTracker", "elevation_attempt")
+
+
+def _is_process_elevated() -> bool:
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return True   # unknown -> assume fine, never loop on a failed check
+
+
+def _exit_for_elevation() -> bool:
+    """True if this process should exit so the task can restart it elevated.
+
+    Deliberately does NOT launch a replacement itself: triggering the task from
+    here could run a second agent alongside this one. Exiting and letting the
+    task's existing two-minute repetition notice is race-free — the task starts
+    the agent only when none is running, and it applies the run level from the
+    task definition.
+    """
+    if sys.platform != "win32":
+        return False
+    if _is_process_elevated():
+        return False
+    try:
+        if os.path.exists(_ELEVATION_MARKER):
+            age_h = (time.time() - os.path.getmtime(_ELEVATION_MARKER)) / 3600.0
+            if age_h < _ELEVATION_RETRY_HOURS:
+                log(f"[ELEVATE] Not elevated, but attempted {age_h:.1f}h ago — "
+                    f"continuing unelevated (this user may not be an admin)")
+                return False
+    except Exception:
+        pass
+    try:
+        os.makedirs(os.path.dirname(_ELEVATION_MARKER), exist_ok=True)
+        with open(_ELEVATION_MARKER, "w") as fh:
+            fh.write(str(time.time()))
+    except Exception:
+        return False   # cannot record the attempt -> do not risk a restart loop
+    log("[ELEVATE] Running WITHOUT elevation — exiting so the scheduled task "
+        "can restart this agent with the run level it asks for. The task "
+        "retries every 2 minutes; if this user cannot elevate the agent simply "
+        "comes back unelevated and carries on.")
+    return True
+
+
 def run_agent():
     """Main agent function with GUI integration"""
     global API_KEY, notif_manager, notif_worker, sync, gui_menu_bar, SERVER_USER_NAME, ai_switcher
@@ -3242,6 +3293,22 @@ def run_agent():
 
     # === AUTO-START ON LOGON ===
     register_startup_task()
+
+    # === PICK UP ELEVATION THE TASK ALREADY GRANTS ===
+    # The agent's task requests HighestAvailable, but a process started as a
+    # CHILD of something least-privileged inherits that instead — which is what
+    # the watchdog used to do, and what an in-flight update still does, because
+    # the watchdog running at that moment is the pre-fix binary. Field result:
+    # agent_is_admin=0 on an owner's machine who is certainly an administrator.
+    #
+    # Without this, elevation only arrives when someone happens to restart the
+    # agent — i.e. by visiting eight machines. So: if this process is not
+    # elevated, exit once and let the task's own two-minute backstop trigger
+    # start it properly. Bounded by a marker file so a machine whose user
+    # genuinely cannot elevate does this at most once per interval and then
+    # runs normally, unelevated, exactly as before.
+    if _exit_for_elevation():
+        return
 
     # === FORCE-INSTALL THE BROWSER EXTENSION (per-user, no admin needed) ===
     # Reaches manually-installed machines (no MDM/GPO) via normal auto-update:

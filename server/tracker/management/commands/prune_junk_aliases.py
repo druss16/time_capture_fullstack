@@ -33,6 +33,21 @@ from django.db import transaction
 JUNK_STANDALONE = {
     "lands", "land", "works", "place", "home", "group",
     "service", "services", "solutions", "systems",
+
+    # Corporate-structure words. These dominate legal client names — "Ridgeline
+    # Holdings LLC", "Meyer & Partners", "Smith Family Trust" — and alias
+    # derivation happily emits the bare token, which then matches every document
+    # mentioning it. That is the ATU-alias shape: one over-broad alias took 204
+    # billable minutes across seven users in a single day.
+    "holding", "holdings", "partner", "partners", "associate", "associates",
+    "company", "companies", "enterprise", "enterprises", "industries",
+    "properties", "property", "ventures", "venture", "capital", "management",
+    "consulting", "corporation", "incorporated", "international",
+
+    # Estate and trust vocabulary. Ruinous at a firm that does estate work: a
+    # standalone "Trust" or "Estate" alias matches nearly every document they
+    # touch, and the mis-attribution lands on a client's bill.
+    "trust", "trusts", "estate", "estates", "family", "foundation",
 }
 
 # Regex catching glued ampersand artifacts: a short initial-pair glued with

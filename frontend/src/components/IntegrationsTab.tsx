@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson } from '@/lib/api';
+import { fetchWhoAmI } from '@/lib/whoami';
 import {
   Link2,
   Unlink,
@@ -655,6 +656,11 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   // there is no way to detect the firm's region after the fact.
   const [clioRegion, setClioRegion] = useState<string>('us');
   const [clioSyncing, setClioSyncing] = useState(false);
+  // Which providers lead for this org's vertical. A law firm should not have to
+  // scroll past QuickBooks and Xero to find Clio. Null until whoami resolves,
+  // which renders every provider — never fewer than today.
+  const [primaryProviders, setPrimaryProviders] = useState<string[] | null>(null);
+  const [showOtherProviders, setShowOtherProviders] = useState(false);
 
   const fetchIntegrations = useCallback(async () => {
     try {
@@ -678,6 +684,18 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   useEffect(() => {
     fetchIntegrations();
   }, [fetchIntegrations]);
+
+  useEffect(() => {
+    let alive = true;
+    fetchWhoAmI()
+      .then((me) => {
+        if (alive && Array.isArray(me?.primary_integrations)) {
+          setPrimaryProviders(me.primary_integrations as string[]);
+        }
+      })
+      .catch(() => {/* fall through to showing everything */});
+    return () => { alive = false; };
+  }, []);
 
   // Listen for OAuth callback postMessage
   useEffect(() => {
@@ -824,38 +842,72 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
         </div>
       )}
 
-      {/* Provider Cards */}
-      <div className="space-y-4">
-        <ProviderCard
-          provider="quickbooks"
-          status={qbStatus}
-          clientCount={clientStats.from_quickbooks}
-          onConnect={handleConnect}
-          onDisconnect={handleDisconnect}
-          onImportClients={setImportProvider}
-        />
-        <ProviderCard
-          provider="xero"
-          status={xeroStatus}
-          clientCount={clientStats.from_xero}
-          onConnect={handleConnect}
-          onDisconnect={handleDisconnect}
-          onImportClients={setImportProvider}
-        />
-        <ProviderCard
-          provider="clio"
-          status={clioStatus}
-          clientCount={clientStats.from_clio ?? 0}
-          matterCount={clientStats.clio_matters ?? 0}
-          onConnect={handleConnect}
-          onDisconnect={handleDisconnect}
-          onImportClients={setImportProvider}
-          onSync={handleClioSync}
-          syncing={clioSyncing}
-          region={clioRegion}
-          onRegionChange={setClioRegion}
-        />
-      </div>
+      {/* Provider Cards — ordered by what this vertical actually uses */}
+      {(() => {
+        const cardFor = (key: ProviderKey) => {
+          const common = {
+            key,
+            provider: key,
+            onConnect: handleConnect,
+            onDisconnect: handleDisconnect,
+            onImportClients: setImportProvider,
+          };
+          if (key === 'clio') {
+            return (
+              <ProviderCard
+                {...common}
+                status={clioStatus}
+                clientCount={clientStats.from_clio ?? 0}
+                matterCount={clientStats.clio_matters ?? 0}
+                onSync={handleClioSync}
+                syncing={clioSyncing}
+                region={clioRegion}
+                onRegionChange={setClioRegion}
+              />
+            );
+          }
+          return (
+            <ProviderCard
+              {...common}
+              status={key === 'quickbooks' ? qbStatus : xeroStatus}
+              clientCount={key === 'quickbooks' ? clientStats.from_quickbooks : clientStats.from_xero}
+            />
+          );
+        };
+
+        const all = Object.keys(PROVIDERS) as ProviderKey[];
+        // A provider already connected is always primary, whatever the vertical
+        // says — hiding a live connection behind a disclosure would be worse
+        // than showing one the firm does not need.
+        const isConnected = (k: ProviderKey) =>
+          k === 'clio' ? clioStatus.connected
+            : k === 'quickbooks' ? qbStatus.connected : xeroStatus.connected;
+
+        const primary = primaryProviders === null
+          ? all
+          : all.filter((k) => primaryProviders.includes(k) || isConnected(k));
+        const others = all.filter((k) => !primary.includes(k));
+
+        return (
+          <>
+            <div className="space-y-4">{primary.map(cardFor)}</div>
+            {others.length > 0 && (
+              <div className="mt-4">
+                {showOtherProviders ? (
+                  <div className="space-y-4">{others.map(cardFor)}</div>
+                ) : (
+                  <button
+                    onClick={() => setShowOtherProviders(true)}
+                    className="text-sm font-semibold text-slate-500 hover:text-slate-700 transition-colors"
+                  >
+                    Show {others.length} other integration{others.length !== 1 ? 's' : ''}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* A failed Clio sync is otherwise invisible — it happens on a worker,
           long after the click that started it. */}

@@ -12,6 +12,8 @@ from django.db.models import Count, Max, Sum, Q
 from collections import defaultdict
 from datetime import timedelta
 
+import logging
+
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
 from tracker.models import (
     AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag,
@@ -21,6 +23,8 @@ from tracker.models import (
 from django.db import transaction
  
 from tracker.utils.client_name_match import build_token_index, detect_mismatch, detect_title_client
+
+logger = logging.getLogger(__name__)
 
 # The category that reassigned tax work should carry so it lands billable under
 # the client. SET THIS to your system's actual value (e.g. "Tax Prep" / "Tax" /
@@ -211,6 +215,7 @@ def mavops_orgs(request):
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
             'show_client_widget': getattr(org, 'show_client_widget', False),
+            'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
@@ -582,6 +587,84 @@ def mavops_set_org_show_client_widget(request, org_id):
     org.save(update_fields=['show_client_widget', 'updated_at'])
 
     return Response({'ok': True, 'id': org.id, 'show_client_widget': org.show_client_widget})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_industry(request, org_id):
+    """
+    Set an org's vertical (MavOps staff only).
+    POST /api/mavops/orgs/<org_id>/industry/
+        body: {"industry_type": "legal", "seed_task_types": true}
+
+    Changing the vertical re-labels the product (Matter vs Engagement vs
+    Project) and changes which task types and tool-detection patterns apply.
+    It does NOT alter any existing record — this is configuration and copy, not
+    business logic, which is the whole point of keeping one app across verticals.
+
+    `seed_task_types` additively creates the vertical's standard task types that
+    the org does not already have. Nothing is renamed or deleted: a firm that
+    has been running for months keeps every task type its history points at.
+    """
+    from tracker.industry_categories import (
+        INDUSTRY_CHOICES, get_terminology, get_task_types_for_industry,
+    )
+    from tracker.models import TaskType
+
+    try:
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    industry_type = (request.data.get('industry_type') or '').strip()
+    valid = {k for k, _ in INDUSTRY_CHOICES}
+    if industry_type not in valid:
+        return Response(
+            {'error': f'industry_type must be one of: {", ".join(sorted(valid))}'},
+            status=400,
+        )
+
+    previous = getattr(org, 'industry_type', None) or 'general'
+    org.industry_type = industry_type
+    org.save(update_fields=['industry_type', 'updated_at'])
+
+    created = []
+    if request.data.get('seed_task_types', True):
+        existing = {
+            (t.name or '').strip().lower()
+            for t in TaskType.objects.filter(org=org)
+        }
+        for spec in (get_task_types_for_industry(industry_type) or []):
+            name = (spec.get('name') or '').strip()
+            if not name or name.lower() in existing:
+                continue
+            try:
+                TaskType.objects.create(
+                    org=org,
+                    name=name,
+                    code=spec.get('code', '') or '',
+                    color=spec.get('color', '') or '',
+                    is_billable=spec.get('is_billable', True),
+                )
+                created.append(name)
+                existing.add(name.lower())
+            except Exception as e:
+                logger.warning('Seeding task type %r for org %s failed: %s', name, org.id, e)
+
+    logger.info(
+        'MavOps set org %s industry %s -> %s (seeded %d task types)',
+        org.id, previous, industry_type, len(created),
+    )
+
+    return Response({
+        'ok': True,
+        'id': org.id,
+        'industry_type': org.industry_type,
+        'previous_industry_type': previous,
+        'terminology': get_terminology(industry_type),
+        'task_types_created': created,
+    })
 
 
 @api_view(['POST'])

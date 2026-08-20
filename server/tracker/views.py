@@ -2922,6 +2922,12 @@ def whoami(request):
                 organization=org,
                 is_active=True
             ).exists()
+
+        # Vertical labelling. Resolved here because whoami is the one payload
+        # every page already loads, so no screen needs its own fetch to know
+        # whether to say "Matter" or "Engagement".
+        from tracker.industry_categories import get_terminology, get_primary_integrations
+        industry_type = (getattr(org, 'industry_type', None) or 'general') if org else 'general'
         
         return {
             "is_authenticated": True,
@@ -2936,6 +2942,9 @@ def whoami(request):
             "org_id": org.id if org else None,
             "org_name": org.name if org else None,
             "mdm_managed": mdm_managed,
+            "industry_type": industry_type,
+            "terminology": get_terminology(industry_type),
+            "primary_integrations": get_primary_integrations(industry_type),
         }
     
     # 1) Check Authorization header (Bearer token)
@@ -8688,12 +8697,27 @@ def get_org_categories(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_industry_options(request):
-    """Get available industry types for signup form."""
-    from tracker.industry_categories import INDUSTRY_TYPES
-    
+    """
+    Available verticals, with what each one changes.
+
+    Shared by the signup form and MavOps admin so there is one source of truth
+    for what picking a vertical does. `terminology` and `primary_integrations`
+    let a caller preview the effect before committing to it.
+    """
+    from tracker.industry_categories import (
+        INDUSTRY_TYPES, get_terminology, get_primary_integrations,
+        get_task_types_for_industry,
+    )
+
     return Response({
         'industries': [
-            {'value': k, 'label': v}
+            {
+                'value': k,
+                'label': v,
+                'terminology': get_terminology(k),
+                'primary_integrations': get_primary_integrations(k),
+                'task_type_count': len(get_task_types_for_industry(k) or []),
+            }
             for k, v in INDUSTRY_TYPES
         ]
     })

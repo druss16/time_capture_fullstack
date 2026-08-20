@@ -15,6 +15,7 @@ interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
   deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; health?: OrgHealth;
+  industry_type?: string;
   seat_grace_deadline?: string | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
@@ -80,6 +81,16 @@ interface TestResult {
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
+// Verticals an org can be set to. Mirrors INDUSTRY_TYPES server-side; the
+// server validates, this is only for display order and wording.
+const INDUSTRY_LABELS: Record<string, string> = {
+  general: "General",
+  cpa: "CPA / Accounting",
+  legal: "Law Firm",
+  ai_consulting: "AI / Tech Consulting",
+  marketing: "Marketing Agency",
+};
+
 const T = {
   bg:        "#0f1419",   // was "#111827" — slightly deeper, warmer black
   surface:   "#1a2231",   // was "#1e2533" — touch warmer, more depth from bg
@@ -1685,6 +1696,7 @@ export default function MavOpsAdmin() {
   const [showArchived, setShowArchived] = useState(false);
   const [archivingOrg, setArchivingOrg] = useState<number | null>(null);
   const [widgetOrg, setWidgetOrg] = useState<number | null>(null);
+  const [industryOrg, setIndustryOrg] = useState<number | null>(null);
 
   const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
   const [viewAsPickerOrg, setViewAsPickerOrg] = useState<number | null>(null);
@@ -1739,6 +1751,26 @@ export default function MavOpsAdmin() {
       await loadOrgs();
     } catch { flash("Failed to update archive state.", "err"); }
     finally { setArchivingOrg(null); }
+  }, [apiFetch, loadOrgs]);
+
+  const setOrgIndustry = useCallback(async (org: Org, industry: string) => {
+    if (industry === (org.industry_type || "general")) return;
+    setIndustryOrg(org.id);
+    try {
+      const res = await apiFetch(`/mavops/orgs/${org.id}/industry/`, {
+        method: "POST",
+        body: JSON.stringify({ industry_type: industry, seed_task_types: true }),
+      });
+      const seeded = (res?.task_types_created || []).length;
+      // Say what the firm will actually SEE, not the enum we stored.
+      flash(
+        `"${org.name}" is now ${INDUSTRY_LABELS[industry] || industry}` +
+        ` — work is called "${res?.terminology?.project || "Project"}"` +
+        (seeded ? `, ${seeded} task type(s) added.` : ".")
+      );
+      await loadOrgs();
+    } catch { flash("Failed to change vertical.", "err"); }
+    finally { setIndustryOrg(null); }
   }, [apiFetch, loadOrgs]);
 
   const setShowWidget = useCallback(async (org: Org, show: boolean) => {
@@ -2234,6 +2266,25 @@ export default function MavOpsAdmin() {
                           tiny
                         />
                       ))}
+                      <select
+                        value={org.industry_type || "general"}
+                        disabled={industryOrg === org.id}
+                        onChange={(e) => setOrgIndustry(org, e.target.value)}
+                        title="Vertical — changes task types, wording (Matter vs Engagement) and which integrations lead"
+                        style={{
+                          background: "transparent",
+                          color: (org.industry_type && org.industry_type !== "general") ? T.teal : T.textMuted,
+                          border: `1px solid ${T.border}`,
+                          borderRadius: 6,
+                          fontSize: 11,
+                          padding: "2px 6px",
+                          cursor: industryOrg === org.id ? "wait" : "pointer",
+                        }}
+                      >
+                        {Object.entries(INDUSTRY_LABELS).map(([v, label]) => (
+                          <option key={v} value={v}>{label}</option>
+                        ))}
+                      </select>
                       <Btn
                         label={widgetOrg === org.id ? "…" : org.show_client_widget ? "ticker on" : "ticker off"}
                         onClick={() => setShowWidget(org, !org.show_client_widget)}

@@ -378,6 +378,7 @@ urlpatterns = [
     path('mavops/orgs/',                  views_mavops.mavops_orgs,          name='mavops-orgs'),
     path('mavops/orgs/<int:org_id>/archive/', views_mavops.mavops_set_org_archived, name='mavops-set-org-archived'),
     path('mavops/orgs/<int:org_id>/show-client-widget/', views_mavops.mavops_set_org_show_client_widget, name='mavops-set-org-show-client-widget'),
+    path('mavops/orgs/<int:org_id>/industry/', views_mavops.mavops_set_org_industry, name='mavops-set-org-industry'),
     path('mavops/qbo-mappings/',          views_mavops.mavops_qbo_mappings,  name='mavops-qbo-mappings'),
     path('mavops/qbo-map/',               views_mavops.mavops_qbo_map,       name='mavops-qbo-map'),
     path('mavops/devices/',               views_mavops.mavops_devices,       name='mavops-devices'),

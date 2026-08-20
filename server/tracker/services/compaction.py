@@ -1443,11 +1443,25 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
                 _nm = _bx.get('qbo_company_name')
                 _qbo_company_name = str(_nm).strip() if _nm is not None else ""
                 break
+        # Same idea for Clio: a lawyer's working documents never name the matter,
+        # but Clio states it exactly whenever they are looking at it. Carried
+        # separately from the QBO loop above, which stops at its first hit.
+        _clio_matter_id = ""
+        for _ev in reversed(block_data.get('source_events', []) or []):
+            _bx = (getattr(_ev, 'ctx', {}) or {}).get('browser_extension') or {}
+            _cand = _bx.get('clio_matter_id')
+            _cand = str(_cand).strip() if _cand is not None else ""
+            if _cand:
+                _clio_matter_id = _cand
+                break
+
         _normal_hints = {}
         if _qbo_company_id:
             _normal_hints['qbo_company_id'] = _qbo_company_id
             if _qbo_company_name:
                 _normal_hints['qbo_company_name'] = _qbo_company_name
+        if _clio_matter_id:
+            _normal_hints['clio_matter_id'] = _clio_matter_id
 
         new_block = Block.objects.create(
             org=org,

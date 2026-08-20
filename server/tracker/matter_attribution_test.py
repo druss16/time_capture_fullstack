@@ -54,9 +54,11 @@ class _M:
 
 
 class _B:
-    def __init__(self, file_path='', title='', window_title='', url='', client_id=None):
+    def __init__(self, file_path='', title='', window_title='', url='',
+                 client_id=None, hints=None):
         self.file_path, self.title = file_path, title
         self.window_title, self.url, self.client_id = window_title, url, client_id
+        self.hints = hints or {}
 
 
 if _ok:
@@ -111,6 +113,27 @@ if _ok:
           attribute_block(_B(title='notes.docx'), idx2, sole)[0] is None)
     check("url is searched too",
           attribute_block(_B(url='https://portal/00456/doc', client_id=None), idx2, sole)[:2] == (2, 'number'))
+
+    print("Matter attribution — the Clio anchor outranks every heuristic:")
+    anchors = {'1925394507': 63, '1925394508': 64}
+    check("anchor alone attributes",
+          attribute_block(_B(hints={'clio_matter_id': '1925394507'}), idx2, sole, anchors)[:2]
+          == (63, 'clio_anchor'))
+    check("anchor BEATS a conflicting matter number in the filename",
+          attribute_block(_B(file_path='00123 Estate.docx',
+                             hints={'clio_matter_id': '1925394508'}), idx2, sole, anchors)[0] == 64)
+    check("anchor beats the sole-matter inference",
+          attribute_block(_B(title='notes.docx', client_id=77,
+                             hints={'clio_matter_id': '1925394507'}), idx2, sole, anchors)[0] == 63)
+    check("unknown matter id falls through, never invents a project",
+          attribute_block(_B(file_path='00123 Estate.docx',
+                             hints={'clio_matter_id': '999999'}), idx2, sole, anchors)[:2]
+          == (1, 'number'))
+    check("no anchor map (org never synced Clio) is safe",
+          attribute_block(_B(hints={'clio_matter_id': '1925394507'}), idx2, sole, None)[0] is None)
+    check("blank hints are safe", attribute_block(_B(hints={}), idx2, sole, anchors)[0] is None)
+    check("numeric-typed id still matches its string key",
+          attribute_block(_B(hints={'clio_matter_id': 1925394507}), idx2, sole, anchors)[0] == 63)
 
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")
 sys.exit(1 if _failed else 0)

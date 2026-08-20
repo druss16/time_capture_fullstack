@@ -1394,7 +1394,7 @@ def integrations_status(request):
         return error_response('No organization found', 404)
 
     integrations = {}
-    for provider in ('quickbooks', 'xero'):
+    for provider in ('quickbooks', 'xero', 'clio'):
         try:
             i = Integration.objects.get(organization=org, provider=provider)
             integrations[provider] = {
@@ -1405,16 +1405,30 @@ def integrations_status(request):
                 integrations[provider]['realm_id'] = i.realm_id if i.is_connected else None
             elif provider == 'xero':
                 integrations[provider]['tenant_id'] = i.tenant_id if i.is_connected else None
+            elif provider == 'clio':
+                # Clio's identity is its data region — tokens are not portable
+                # across regions, so this is the field that has to be visible.
+                integrations[provider]['region'] = i.api_region if i.is_connected else None
+                integrations[provider]['last_sync_status'] = i.last_sync_status or None
+                integrations[provider]['last_sync_error'] = i.last_sync_error or None
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 
     client_stats = {
         'from_quickbooks': Client.objects.filter(org=org, imported_from='quickbooks').count(),
         'from_xero': Client.objects.filter(org=org, imported_from='xero').count(),
+        'from_clio': Client.objects.filter(org=org, imported_from='clio').count(),
         'manual': Client.objects.filter(org=org).filter(
             Q(imported_from='') | Q(imported_from__isnull=True)
         ).count(),
     }
+
+    # Matters are the unit that matters for legal work — a client count alone
+    # says nothing about whether time can actually be pushed.
+    from tracker.models_task_type_sets import ExternalMatterMapping
+    client_stats['clio_matters'] = ExternalMatterMapping.objects.filter(
+        integration__organization=org, integration__provider='clio',
+    ).count()
 
     return Response({'integrations': integrations, 'client_stats': client_stats})
 

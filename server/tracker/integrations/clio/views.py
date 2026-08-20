@@ -161,24 +161,48 @@ def clio_callback(request):
 @permission_classes([IsAuthenticated])
 def clio_sync(request):
     """
-    Kick off a full contacts/matters/staff sync.
+    Run a full contacts/matters/staff sync and return what it did.
 
-    Queued rather than run inline: a large firm's sync sits behind
-    rate-limit pauses for minutes, which no request cycle should hold.
+    Deliberately INLINE, not queued. Someone pressing Sync is watching, and a
+    queued task can only ever answer "started" — which is indistinguishable
+    from "silently dropped" when the worker is misconfigured or running older
+    code. Both happened during rollout, and the button reported success each
+    time while importing nothing.
+
+    Running it here means the response carries real counts, and any failure is
+    raised to the person who asked for it instead of a worker log they will
+    never read. A typical firm's sync is three paginated scans and takes
+    seconds; `sync_clio_full` remains for the scheduled sweep, where nobody is
+    waiting on the answer.
     """
     org = get_user_org(request.user)
     integration, err = get_integration(org, 'clio')
     if err:
         return err
 
-    from tracker.integrations.clio.sync import sync_clio_full
+    from tracker.integrations.clio.sync import full_sync
 
-    sync_clio_full.delay(integration.id)
-    logger.info('Clio sync queued for org %s by user %s', org.id, request.user.id)
+    stats = full_sync(integration)
+
+    if stats.get('errors'):
+        logger.warning('Clio sync failed for org %s: %s', org.id, stats['errors'])
+        return error_response(
+            f"Sync failed: {stats['errors'][0]}"[:300], 502, 'sync_failed',
+        )
+
+    contacts = stats.get('contacts', {})
+    matters = stats.get('matters', {})
+    staff = stats.get('staff', {})
+    logger.info('Clio sync complete for org %s by user %s: %s', org.id, request.user.id, stats)
 
     return Response({
-        'queued': True,
-        'message': 'Sync started. Matters and clients will appear as they import.',
+        'synced': True,
+        'message': (
+            f"Synced {contacts.get('fetched', 0)} clients and "
+            f"{matters.get('fetched', 0)} matters. "
+            f"{staff.get('matched', 0)} team member(s) matched."
+        ),
+        'stats': stats,
     })
 
 

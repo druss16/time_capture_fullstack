@@ -740,13 +740,18 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const handleClioSync = async () => {
     setClioSyncing(true);
     try {
-      await safeFetchJson(`${API_BASE}/integrations/clio/sync/`, { method: 'POST' });
-      onSuccess('Clio sync started. Clients and matters will appear as they import.');
-      // The sync runs on a worker, so results land after this returns. Give it
-      // a moment before refreshing counts rather than showing a stale zero.
-      setTimeout(fetchIntegrations, 4000);
+      // Runs inline server-side, so the response carries real counts rather
+      // than "started" — which was indistinguishable from silently dropped.
+      const res = await safeFetchJson<{ message?: string }>(
+        `${API_BASE}/integrations/clio/sync/`, { method: 'POST' },
+      );
+      onSuccess(res?.message || 'Clio sync complete.');
+      await fetchIntegrations();
     } catch (err: any) {
-      onError(err?.message || 'Failed to start Clio sync');
+      onError(err?.message || 'Clio sync failed');
+      // Refresh anyway: a failed sync writes last_sync_error, and the card's
+      // banner is where the reason becomes visible.
+      await fetchIntegrations();
     } finally {
       setClioSyncing(false);
     }

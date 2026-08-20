@@ -28,7 +28,10 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from tracker.models import Organization, RawEvent, Client
+from django.db import transaction
+
+from tracker.models import (Organization, RawEvent, Client, Block,
+                            ClassificationAudit)
 from tracker.services.qb_vendor_fingerprint import (
     split_title, is_identifying, find_generic_vendors, group_sessions,
     suggest_town, classify_groups,
@@ -44,6 +47,15 @@ class Command(BaseCommand):
         parser.add_argument('--days', type=int, default=90)
         parser.add_argument('--company', help='limit to one company name')
         parser.add_argument('--min-sessions', type=int, default=2)
+        parser.add_argument(
+            '--assign', action='append', default=[], metavar='VENDOR=CLIENT_ID',
+            help='Assign every session whose vendor set contains VENDOR to '
+                 'CLIENT_ID. An anchor vendor is used rather than a group '
+                 'number because group numbers shift between runs while '
+                 '"the file that pays Clinton Agway" does not. Repeatable.')
+        parser.add_argument(
+            '--confirm', action='store_true',
+            help='Actually write the reassignments (otherwise a dry run).')
 
     def handle(self, *args, **opts):
         val = opts['org']
@@ -125,6 +137,17 @@ class Command(BaseCommand):
             f"({100*bracketed//max(total,1)}%), "
             f"{len(generic)} vendor(s) filtered as shared\n")
 
+        assigns = {}
+        for spec in opts.get('assign') or []:
+            if '=' not in spec:
+                raise CommandError(f'--assign wants VENDOR=CLIENT_ID, got {spec!r}')
+            vendor, _, cid = spec.rpartition('=')
+            client = Client.objects.filter(org=org, id=int(cid)).first()
+            if not client:
+                raise CommandError(f'client {cid} not in org {org.id}')
+            assigns[vendor.strip()] = client
+        planned = []   # (block_id, before_client, after_client, minutes, anchor)
+
         wanted = opts.get('company')
         for company in sorted(company_titles, key=lambda c: -company_titles[c]):
             if wanted and wanted.lower() not in company.lower():
@@ -166,8 +189,98 @@ class Command(BaseCommand):
                 self.stdout.write(
                     "      booked  : " + ', '.join(
                         f"{c} {m/60:.1f}h" for c, m in booked.most_common(3)))
+                for anchor, client in assigns.items():
+                    if anchor not in vend:
+                        continue
+                    self.stdout.write(self.style.SUCCESS(
+                        f"      ASSIGN  : {anchor!r} -> {client.name!r}"))
+                    for k in g:
+                        for b in sess_blocks[k]:
+                            before = block_client.get(b, '(none)')
+                            if before != client.name:
+                                planned.append((b, before, client,
+                                                block_minutes.get(b, 0), anchor))
             if fragments:
                 fmin = sum(mins(g) for g, _ in fragments)
                 self.stdout.write(
                     f"\n   ({len(fragments)} fragment(s), {fmin/60:.1f}h — too "
                     f"little evidence to place; NOT counted as separate files)")
+
+        if not assigns:
+            return
+
+        if not planned:
+            self.stdout.write(self.style.WARNING(
+                "\nNothing to reassign — no group contained an --assign vendor, "
+                "or every block is already on that client."))
+            return
+
+        total = sum(p[3] for p in planned)
+        self.stdout.write(self.style.WARNING(
+            f"\n\n{len(planned)} block(s), {total/60:.1f}h to reassign:"))
+        moves = Counter()
+        for _bid, before, client, mins, _a in planned:
+            moves[(before, client.name)] += mins
+        for (before, after), mins in moves.most_common():
+            self.stdout.write(f"   {mins/60:6.1f}h   {before!r}  ->  {after!r}")
+
+        if not opts['confirm']:
+            self.stdout.write(self.style.WARNING(
+                "\nDRY RUN — nothing written. Re-run with --confirm to apply."))
+            return
+
+        # Audit every change. These blocks were already committed, some of them
+        # billed; a silent reassignment would leave no way to see what moved or
+        # to undo it.
+        changed = 0
+        protected = []
+        with transaction.atomic():
+            for bid, before, client, _mins, anchor in planned:
+                blk = Block.objects.filter(id=bid).first()
+                if not blk:
+                    continue
+                prev = blk.client
+                blk.client = client
+                try:
+                    blk.save(update_fields=['client'])
+                except ValueError as e:
+                    # Block.save protects blocks a HUMAN corrected. Leave them
+                    # alone: a person looked at this one and decided, and an
+                    # inference from vendor names does not outrank that. Where
+                    # their answer differs from ours it is reported below —
+                    # that disagreement is information, not an obstacle.
+                    protected.append((bid, prev.name if prev else '(none)',
+                                      client.name, str(e)[:60]))
+                    continue
+                try:
+                    ClassificationAudit.objects.create(
+                        block=blk, source='qb_vendor_fingerprint',
+                        client_before=prev, client_after=client,
+                        corrected_by_user=False,
+                        matched_signals={
+                            'anchor_vendor': anchor,
+                            'why': ('QuickBooks company name is shared by several '
+                                    'parishes; the vendors inside this file '
+                                    'identify which one.'),
+                        },
+                    )
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(
+                        f"   (audit row failed for block {bid}: {e})"))
+                changed += 1
+        self.stdout.write(self.style.SUCCESS(
+            f"\nReassigned {changed} block(s)."))
+        if protected:
+            self.stdout.write(self.style.WARNING(
+                f"\n{len(protected)} block(s) left untouched — a person already "
+                f"corrected them, and a human decision outranks this inference:"))
+            disagree = [p for p in protected if p[1] != p[2]]
+            for bid, was, would, _why in protected[:10]:
+                flag = '   <-- disagrees with the vendor evidence' if was != would else ''
+                self.stdout.write(f"   block {bid}: human said {was!r}, "
+                                  f"vendors say {would!r}{flag}")
+            if disagree:
+                self.stdout.write(
+                    f"   ({len(disagree)} disagreement(s) — worth checking: either "
+                    f"the person knew something the vendors do not, or the vendor "
+                    f"grouping is wrong.)")

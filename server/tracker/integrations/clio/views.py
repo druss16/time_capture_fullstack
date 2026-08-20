@@ -195,15 +195,27 @@ def clio_sync(request):
     staff = stats.get('staff', {})
     logger.info('Clio sync complete for org %s by user %s: %s', org.id, request.user.id, stats)
 
-    return Response({
-        'synced': True,
-        'message': (
-            f"Synced {contacts.get('fetched', 0)} clients and "
-            f"{matters.get('fetched', 0)} matters. "
-            f"{staff.get('matched', 0)} team member(s) matched."
-        ),
-        'stats': stats,
-    })
+    # Attribution is best-effort so it cannot fail a sync that worked — but
+    # "cannot fail the sync" became "fails invisibly forever": a pooler
+    # incompatibility broke every run and the only trace was a log line. If it
+    # errored, say so here, where the person who pressed Sync will see it.
+    attribution = stats.get('attribution') or {}
+    message = (
+        f"Synced {contacts.get('fetched', 0)} clients and "
+        f"{matters.get('fetched', 0)} matters. "
+        f"{staff.get('matched', 0)} team member(s) matched."
+    )
+    if attribution.get('error'):
+        message += ' Matter attribution failed — see integration status.'
+    elif attribution:
+        attributed = sum(
+            v for k, v in attribution.items()
+            if k.startswith('by_') and isinstance(v, int)
+        )
+        if attributed:
+            message += f' {attributed} activit(ies) matched to a matter.'
+
+    return Response({'synced': True, 'message': message, 'stats': stats})
 
 
 @api_view(['POST'])

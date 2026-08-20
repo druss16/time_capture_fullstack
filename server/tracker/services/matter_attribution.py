@@ -177,12 +177,20 @@ def build_folder_index(org, since, exclude_block_ids=None) -> dict:
         .filter(org=org, project__isnull=False, start__gte=since)
         .exclude(file_path='')
         .only('id', 'file_path', 'project_id')
+        .order_by('pk')          # keyset paging pages by pk; be explicit
     )
     if exclude_block_ids:
         qs = qs.exclude(id__in=exclude_block_ids)
 
+    # keyset_iter, not .iterator(): server-side cursors do not survive the Neon
+    # connection pooler, and this failed with InvalidCursorName on every run.
+    # The failure was invisible — full_sync catches attribution errors so a
+    # problem here cannot break a sync that worked — so matter attribution
+    # silently did nothing at all rather than reporting a fault.
+    from tracker.utils.db_iter import keyset_iter
+
     seen = defaultdict(set)
-    for b in qs.iterator(chunk_size=2000):
+    for b in keyset_iter(qs, chunk_size=2000):
         key = folder_key(b.file_path)
         if key:
             seen[key].add(b.project_id)

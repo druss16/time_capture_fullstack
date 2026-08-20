@@ -45,28 +45,44 @@ const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+
 // TYPES — match actual backend response from integrations_status()
 // ===============================
 
+// Every provider the Settings tab can render. Clio is region-partitioned in a
+// way the accounting providers are not, which is why identity below is a
+// per-provider concept rather than a shared "company id".
+type ProviderKey = 'quickbooks' | 'xero' | 'clio';
+
+// Providers whose clients are imported by picking them from a list. Clio is
+// excluded on purpose: matters, not clients, are what legal time attaches to,
+// so Clio syncs contacts and matters together rather than offering a picker.
+type ImportableProviderKey = 'quickbooks' | 'xero';
+
 interface ProviderStatus {
   connected: boolean;
   last_synced?: string | null;
   realm_id?: string | null;   // QuickBooks
   tenant_id?: string | null;  // Xero
+  region?: string | null;     // Clio — tokens are not portable across regions
+  last_sync_status?: string | null;  // Clio: success / partial / failed
+  last_sync_error?: string | null;
 }
 
 interface IntegrationStatusResponse {
   integrations: {
     quickbooks: ProviderStatus;
     xero: ProviderStatus;
+    clio?: ProviderStatus;
   };
   client_stats: {
     from_quickbooks: number;
     from_xero: number;
+    from_clio?: number;
+    clio_matters?: number;
     manual: number;
   };
 }
 
 // Normalized integration for UI
 interface Integration {
-  provider: 'quickbooks' | 'xero';
+  provider: ProviderKey;
   is_connected: boolean;
   last_synced: string | null;
   company_id: string | null;  // realm_id or tenant_id
@@ -120,7 +136,40 @@ const PROVIDERS = {
     customersEndpoint: 'contacts',   // /integrations/xero/contacts/
     importEndpoint: 'import',        // /integrations/xero/import/
   },
+  clio: {
+    name: 'Clio Manage',
+    short: 'Clio',
+    icon: '⚖️',
+    color: 'indigo',
+    description: 'Sync clients and matters from Clio, and file captured time against the right matter.',
+    features: ['Import clients and matters', 'File time to the right matter', 'Keep matter status in sync', 'Pull bills for realization'],
+    bgClass: 'bg-indigo-50 border-indigo-200',
+    accentClass: 'text-indigo-700',
+    btnClass: 'bg-indigo-600 hover:bg-indigo-700',
+    badgeClass: 'bg-indigo-100 text-indigo-800',
+    iconBgClass: 'bg-indigo-100',
+    customersEndpoint: '',           // Clio has no picker — see ImportableProviderKey
+    importEndpoint: '',
+  },
 } as const;
+
+// Clio runs four independent data regions. A token issued in one is rejected
+// by the others, so the firm has to say which one they are on BEFORE consent —
+// there is no way to detect it afterwards.
+const CLIO_REGIONS = [
+  { value: 'us', label: 'United States (app.clio.com)' },
+  { value: 'ca', label: 'Canada (ca.app.clio.com)' },
+  { value: 'eu', label: 'European Union (eu.app.clio.com)' },
+  { value: 'au', label: 'Australia (au.app.clio.com)' },
+] as const;
+
+/** The identity field worth showing for a connected provider. */
+function providerIdentity(provider: ProviderKey, status: ProviderStatus): { label: string; value: string } {
+  if (provider === 'quickbooks') return { label: 'Realm ID', value: status.realm_id || '—' };
+  if (provider === 'xero') return { label: 'Tenant ID', value: status.tenant_id || '—' };
+  const region = CLIO_REGIONS.find((r) => r.value === status.region);
+  return { label: 'Data Region', value: region ? region.label : (status.region || '—') };
+}
 
 // ===============================
 // IMPORT CLIENTS MODAL
@@ -129,7 +178,7 @@ const PROVIDERS = {
 interface ImportClientsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  provider: 'quickbooks' | 'xero';
+  provider: ImportableProviderKey;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }
@@ -391,25 +440,40 @@ const ImportClientsModal: React.FC<ImportClientsModalProps> = ({ isOpen, onClose
 // ===============================
 
 interface ProviderCardProps {
-  provider: 'quickbooks' | 'xero';
+  provider: ProviderKey;
   status: ProviderStatus;
   clientCount: number;
-  onConnect: (provider: 'quickbooks' | 'xero') => void;
-  onDisconnect: (provider: 'quickbooks' | 'xero') => void;
-  onImportClients: (provider: 'quickbooks' | 'xero') => void;
+  /** Clio only: matters mirrored as Projects. Time cannot be pushed without one. */
+  matterCount?: number;
+  onConnect: (provider: ProviderKey) => void;
+  onDisconnect: (provider: ProviderKey) => void;
+  onImportClients: (provider: ImportableProviderKey) => void;
+  /** Clio only: queue a contacts/matters/staff sync. */
+  onSync?: () => void;
+  syncing?: boolean;
+  /** Clio only: chosen before consent, since region cannot be detected after. */
+  region?: string;
+  onRegionChange?: (region: string) => void;
 }
 
 const ProviderCard: React.FC<ProviderCardProps> = ({
   provider,
   status,
   clientCount,
+  matterCount,
   onConnect,
   onDisconnect,
   onImportClients,
+  onSync,
+  syncing,
+  region,
+  onRegionChange,
 }) => {
   const [showDetails, setShowDetails] = useState(false);
   const config = PROVIDERS[provider];
   const connected = status.connected;
+  const isClio = provider === 'clio';
+  const identity = providerIdentity(provider, status);
 
   return (
     <SettingsSection tint={connected} className="overflow-hidden">
@@ -458,18 +522,20 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
                 <Building2 className="w-3.5 h-3.5" />
-                {provider === 'quickbooks' ? 'Realm ID' : 'Tenant ID'}
+                {identity.label}
               </div>
-              <p className="font-bold text-slate-900 text-sm font-mono truncate">
-                {(provider === 'quickbooks' ? status.realm_id : status.tenant_id) || '—'}
+              <p className="font-bold text-slate-900 text-sm font-mono truncate" title={identity.value}>
+                {identity.value}
               </p>
             </div>
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
                 <Users className="w-3.5 h-3.5" />
-                Imported Clients
+                {isClio ? 'Clients / Matters' : 'Imported Clients'}
               </div>
-              <p className="font-bold text-slate-900 text-sm">{clientCount}</p>
+              <p className="font-bold text-slate-900 text-sm">
+                {isClio ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
+              </p>
             </div>
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
@@ -497,13 +563,22 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
       <div className="mt-4">
         {connected ? (
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => onImportClients(provider)}
-              className={primaryBtnClass}
-            >
-              <Download className="w-4 h-4" />
-              Import Clients
-            </button>
+            {isClio ? (
+              <button onClick={onSync} disabled={syncing} className={primaryBtnClass}>
+                {syncing
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <RefreshCw className="w-4 h-4" />}
+                {syncing ? 'Syncing…' : 'Sync Clients & Matters'}
+              </button>
+            ) : (
+              <button
+                onClick={() => onImportClients(provider as ImportableProviderKey)}
+                className={primaryBtnClass}
+              >
+                <Download className="w-4 h-4" />
+                Import Clients
+              </button>
+            )}
             <div className="flex-1" />
             <button
               onClick={() => setShowDetails(!showDetails)}
@@ -521,14 +596,30 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => onConnect(provider)}
-            className={primaryBtnClass}
-          >
-            <Link2 className="w-4 h-4" />
-            Connect {config.name}
-            <ExternalLink className="w-4 h-4 ml-1" />
-          </button>
+          <div className="flex items-center gap-3 flex-wrap">
+            {isClio && (
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+                Data region
+                <select
+                  value={region}
+                  onChange={(e) => onRegionChange?.(e.target.value)}
+                  className={cn(inputClass, 'w-auto')}
+                >
+                  {CLIO_REGIONS.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              onClick={() => onConnect(provider)}
+              className={primaryBtnClass}
+            >
+              <Link2 className="w-4 h-4" />
+              Connect {config.name}
+              <ExternalLink className="w-4 h-4 ml-1" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -541,10 +632,8 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
               <p className="text-slate-900 font-bold">{config.name}</p>
             </div>
             <div>
-              <p className="text-slate-500 font-semibold">{provider === 'quickbooks' ? 'Realm ID' : 'Tenant ID'}</p>
-              <p className="text-slate-900 font-mono font-bold">
-                {(provider === 'quickbooks' ? status.realm_id : status.tenant_id) || '—'}
-              </p>
+              <p className="text-slate-500 font-semibold">{identity.label}</p>
+              <p className="text-slate-900 font-mono font-bold">{identity.value}</p>
             </div>
           </div>
         </div>
@@ -560,8 +649,12 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
 const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError }) => {
   const [loading, setLoading] = useState(true);
   const [statusData, setStatusData] = useState<IntegrationStatusResponse | null>(null);
-  const [importProvider, setImportProvider] = useState<'quickbooks' | 'xero' | null>(null);
+  const [importProvider, setImportProvider] = useState<ImportableProviderKey | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
+  // Region must be chosen before consent — Clio tokens are region-bound and
+  // there is no way to detect the firm's region after the fact.
+  const [clioRegion, setClioRegion] = useState<string>('us');
+  const [clioSyncing, setClioSyncing] = useState(false);
 
   const fetchIntegrations = useCallback(async () => {
     try {
@@ -590,7 +683,8 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'oauth_callback' && event.data?.success) {
-        onSuccess(`${event.data.integration === 'quickbooks' ? 'QuickBooks' : 'Xero'} connected successfully!`);
+        const key = event.data.integration as ProviderKey;
+        onSuccess(`${PROVIDERS[key]?.name ?? key} connected successfully!`);
         fetchIntegrations();
       }
     };
@@ -607,19 +701,28 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     } else if (params.get('xero_connected') === 'true') {
       onSuccess('Xero connected successfully!');
       fetchIntegrations();
+    } else if (params.get('clio_connected') === 'true') {
+      onSuccess('Clio Manage connected successfully!');
+      fetchIntegrations();
     } else if (params.get('integration_error')) {
       onError(`Connection failed: ${params.get('integration_error')}`);
     }
     // Clean URL
-    if (params.has('quickbooks_connected') || params.has('xero_connected') || params.has('integration_error')) {
+    if (params.has('quickbooks_connected') || params.has('xero_connected')
+        || params.has('clio_connected') || params.has('integration_error')) {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
 
-  const handleConnect = async (provider: 'quickbooks' | 'xero') => {
+  const handleConnect = async (provider: ProviderKey) => {
     try {
+      // Clio's connect takes the region in the body; QBO/Xero are plain GETs.
+      const init: RequestInit | undefined = provider === 'clio'
+        ? { method: 'POST', body: JSON.stringify({ region: clioRegion }) }
+        : undefined;
       const data = await safeFetchJson<{ auth_url: string }>(
-        `${API_BASE}/integrations/${provider}/connect/`
+        `${API_BASE}/integrations/${provider}/connect/`,
+        init,
       );
       if (data.auth_url) {
         // Open in popup for OAuth flow
@@ -634,7 +737,22 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     }
   };
 
-  const handleDisconnect = async (provider: 'quickbooks' | 'xero') => {
+  const handleClioSync = async () => {
+    setClioSyncing(true);
+    try {
+      await safeFetchJson(`${API_BASE}/integrations/clio/sync/`, { method: 'POST' });
+      onSuccess('Clio sync started. Clients and matters will appear as they import.');
+      // The sync runs on a worker, so results land after this returns. Give it
+      // a moment before refreshing counts rather than showing a stale zero.
+      setTimeout(fetchIntegrations, 4000);
+    } catch (err: any) {
+      onError(err?.message || 'Failed to start Clio sync');
+    } finally {
+      setClioSyncing(false);
+    }
+  };
+
+  const handleDisconnect = async (provider: ProviderKey) => {
     const name = PROVIDERS[provider].name;
     if (!confirm(`Disconnect ${name}? This will remove the connection but won't delete any imported data.`)) return;
 
@@ -659,12 +777,13 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
 
   const qbStatus = statusData?.integrations?.quickbooks || { connected: false };
   const xeroStatus = statusData?.integrations?.xero || { connected: false };
+  const clioStatus = statusData?.integrations?.clio || { connected: false };
   const clientStats = statusData?.client_stats || { from_quickbooks: 0, from_xero: 0, manual: 0 };
 
   return (
     <SettingsPage
       title="Integrations"
-      subtitle="Connect QuickBooks or Xero to sync invoices, push approved time entries, and import clients."
+      subtitle="Connect QuickBooks, Xero, or Clio to sync invoices, push approved time entries, and import clients and matters."
     >
       {/* Security note */}
       <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
@@ -718,7 +837,34 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
           onDisconnect={handleDisconnect}
           onImportClients={setImportProvider}
         />
+        <ProviderCard
+          provider="clio"
+          status={clioStatus}
+          clientCount={clientStats.from_clio ?? 0}
+          matterCount={clientStats.clio_matters ?? 0}
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
+          onImportClients={setImportProvider}
+          onSync={handleClioSync}
+          syncing={clioSyncing}
+          region={clioRegion}
+          onRegionChange={setClioRegion}
+        />
       </div>
+
+      {/* A failed Clio sync is otherwise invisible — it happens on a worker,
+          long after the click that started it. */}
+      {clioStatus.connected && clioStatus.last_sync_status === 'failed' && (
+        <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-red-800">Last Clio sync failed</p>
+            <p className="text-sm text-red-700 mt-0.5 break-words">
+              {clioStatus.last_sync_error || 'No details recorded.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Import Clients Modal */}
       {importProvider && (

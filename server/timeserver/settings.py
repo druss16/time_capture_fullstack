@@ -379,6 +379,13 @@ XERO_CLIENT_ID = os.environ.get('XERO_CLIENT_ID', default='')
 XERO_CLIENT_SECRET = os.environ.get('XERO_CLIENT_SECRET', default='')
 XERO_REDIRECT_URI = os.environ.get('XERO_REDIRECT_URI', default='')
 
+# Clio Manage (legal practice management)
+# One app registration serves every firm; the firm's data region is stored
+# per-Integration, so no region host belongs here.
+CLIO_CLIENT_ID = os.environ.get('CLIO_CLIENT_ID', default='')
+CLIO_CLIENT_SECRET = os.environ.get('CLIO_CLIENT_SECRET', default='')
+CLIO_REDIRECT_URI = os.environ.get('CLIO_REDIRECT_URI', default='')
+
 # Microsoft Graph (Calendar Integration)
 MS_GRAPH_CLIENT_ID = os.environ.get('MS_GRAPH_CLIENT_ID', '')
 MS_GRAPH_CLIENT_SECRET = os.environ.get('MS_GRAPH_CLIENT_SECRET', '')

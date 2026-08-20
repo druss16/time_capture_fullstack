@@ -3,6 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
+from .integrations.clio import views as clio_views
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements
 
 # ========================================
@@ -290,6 +291,13 @@ urlpatterns = [
     path('integrations/xero/import/', views_integrations.xero_import, name='xero-import'),
     path('integrations/xero/push-time/', views_integrations.xero_push_time, name='xero-push-time'),
     path('integrations/xero/invoices/', views_integrations.xero_pull_invoices, name='xero-invoices'),
+
+    # Clio Manage
+    path('integrations/clio/connect/', clio_views.clio_connect, name='clio-connect'),
+    path('integrations/clio/callback/', clio_views.clio_callback, name='clio-callback'),
+    path('integrations/clio/sync/', clio_views.clio_sync, name='clio-sync'),
+    path('integrations/clio/status/', clio_views.clio_status, name='clio-status'),
+    path('integrations/clio/disconnect/', clio_views.clio_disconnect, name='clio-disconnect'),
     path('clients/bulk-assign/', views_bulk_assignments.bulk_assign_clients, name='bulk-assign-clients'),
     path('clients/bulk-unassign/', views_bulk_assignments.bulk_unassign_clients, name='bulk-unassign-clients'),
     path('clients/copy-assignments/', views_bulk_assignments.copy_assignments, name='copy-assignments'),

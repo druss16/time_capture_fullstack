@@ -666,6 +666,23 @@ def timesheet_detail_view(request, pk):
  
     days_map = {d: [] for d in day_strings}
  
+    # One query, not one per block: which matter each block sits on, and how
+    # many open matters its client has. The second is what separates "you must
+    # choose" from "there is nothing to choose".
+    from tracker.models_task_type_sets import ExternalMatterMapping
+    _mappings = list(
+        ExternalMatterMapping.objects
+        .filter(integration__organization=org)
+        .select_related('project')
+    )
+    _matter_labels = {m.project_id: (m.display_number or m.project.name) for m in _mappings}
+    _matter_option_counts = {}
+    for _m in _mappings:
+        if (_m.external_status or '').lower() in ('open', 'pending', ''):
+            _matter_option_counts[_m.project.client_id] = (
+                _matter_option_counts.get(_m.project.client_id, 0) + 1
+            )
+
     for block in blocks_qs:
         if not block.start:
             continue
@@ -707,6 +724,11 @@ def timesheet_detail_view(request, pk):
             'classification_source': classification_source,
             'ai_confidence':         ai_confidence,
             'taxpayer_name':         getattr(block, 'taxpayer_name', None),
+            # Matter state, so the ROW can say what it needs instead of hiding it
+            # behind a button nobody knows to press. Both blank for firms with no
+            # matter mappings, i.e. every non-legal org.
+            'matter_label':          _matter_labels.get(block.project_id),
+            'matter_options':        _matter_option_counts.get(block.client_id, 0),
         })
  
     days_list = [

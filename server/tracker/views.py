@@ -6596,6 +6596,108 @@ def recategorize_block(request, block_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def block_matter_options(request, block_id):
+    """
+    GET /api/blocks/<id>/matter-options/
+
+    Matters this block could belong to — its client's open matters, plus
+    whichever one is already set. Scoped to the client rather than the whole
+    firm: picking from three matters is a decision, picking from four hundred
+    is a search.
+    """
+    from tracker.models_task_type_sets import ExternalMatterMapping
+
+    try:
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    mappings = (
+        ExternalMatterMapping.objects
+        .filter(integration__organization=block.org, project__client_id=block.client_id)
+        .select_related('project')
+        .order_by('display_number')
+    )
+
+    options = [
+        {
+            'project_id': m.project_id,
+            'display_number': m.display_number,
+            'description': m.external_name,
+            'status': m.external_status,
+            'billing_method': m.billing_method,
+            'requires_utbms': m.requires_utbms,
+        }
+        for m in mappings
+        if (m.external_status or '').lower() in ('open', 'pending', '')
+        or m.project_id == block.project_id
+    ]
+
+    return Response({
+        'block_id': block.id,
+        'client_id': block.client_id,
+        'client_name': block.client.name if block.client else None,
+        'current_project_id': block.project_id,
+        'options': options,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def set_block_matter(request, block_id):
+    """
+    POST /api/blocks/<id>/set-matter/   body: {"project_id": 63}
+
+    Assign a block to a matter by hand, for work the resolver abstained on.
+
+    Worth more than fixing one row. Matter attribution learns from blocks that
+    already carry a project, so a correction here teaches every future document
+    in the same folder — the person trains the system by doing the thing they
+    wanted to do anyway. `learns_folder` says whether that will happen, so the
+    UI can tell them.
+
+    project_id=null clears it, for a pick made in error.
+    """
+    from tracker.services.matter_attribution import folder_key
+
+    try:
+        block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
+    except Block.DoesNotExist:
+        return Response({"error": "Block not found"}, status=404)
+
+    project_id = request.data.get("project_id")
+
+    if project_id in (None, '', 0):
+        block.project = None
+        block.save(update_fields=['project'])
+        return Response({'ok': True, 'block_id': block.id, 'project_id': None})
+
+    try:
+        project = Project.objects.get(id=project_id, org=block.org)
+    except Project.DoesNotExist:
+        return Response({"error": "Matter not found for this organization"}, status=404)
+
+    # A matter belongs to one client. A block pointing at another client's
+    # matter would push its time onto the wrong client's bill.
+    if block.client_id and project.client_id != block.client_id:
+        return Response(
+            {"error": "That matter belongs to a different client."}, status=400,
+        )
+
+    block.project = project
+    block.save(update_fields=['project'])
+
+    return Response({
+        'ok': True,
+        'block_id': block.id,
+        'project_id': project.id,
+        'project_name': project.name,
+        'learns_folder': bool(folder_key(block.file_path or '')),
+    })
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def move_block_task_type(request, block_id):

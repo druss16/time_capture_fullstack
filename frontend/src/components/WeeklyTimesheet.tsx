@@ -7,10 +7,12 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
+import { fetchWhoAmI } from '@/lib/whoami';
 import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, CheckCircle2, Lock,
   AlertTriangle, Info, RefreshCw, Search, X, Layers, CalendarDays, Sparkles, Copy,
   FolderInput, Check,
+  Briefcase,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -77,7 +79,11 @@ interface TaskTypeOption {
 
 // Lets a deeply-nested BlockRow move a block without threading callbacks through
 // four component levels. Null when moves aren't available (e.g. detail failed).
+// Matter picking rides on the same context as category moves: both are "fix
+// this row" actions on a block, with the same busy/refresh plumbing.
 const MoveContext = React.createContext<{
+  clioEnabled?: boolean;
+  onSetMatter?: (blockIds: number[], projectId: number) => Promise<void>;
   taskTypes: TaskTypeOption[];
   movingId: number | null;
   onMove: (blockIds: number[], taskTypeId: number) => void;
@@ -366,6 +372,7 @@ const WeeklyTimesheet: React.FC = () => {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   // What submitting would send to Clio. Null for firms with no Clio connection,
   // so nothing about this appears for them.
+  const [clioEnabled, setClioEnabled] = useState(false);
   const [clioPreview, setClioPreview] = useState<any | null>(null);
   const [clioResult, setClioResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
@@ -523,9 +530,32 @@ const WeeklyTimesheet: React.FC = () => {
     );
   }, [tailClients]);
 
+  useEffect(() => {
+    let alive = true;
+    fetchWhoAmI()
+      .then((me: any) => {
+        if (alive) setClioEnabled(!!me?.primary_integrations?.includes?.('clio'));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // Assigning a matter also teaches the folder, so one correction fixes every
+  // future document filed alongside it — see matter_attribution.build_folder_index.
+  const setMatterForBlocks = useCallback(async (blockIds: number[], projectId: number) => {
+    for (const id of blockIds) {
+      await safeFetchJson(`${API_BASE}/blocks/${id}/set-matter/`, {
+        method: 'POST', body: JSON.stringify({ project_id: projectId }),
+      });
+    }
+    fetchTimesheet();
+  }, [fetchTimesheet]);
+
   const moveValue = useMemo(
-    () => (taskTypes.length ? { taskTypes, movingId, onMove: moveBlocks } : null),
-    [taskTypes, movingId, moveBlocks]
+    () => (taskTypes.length
+      ? { taskTypes, movingId, onMove: moveBlocks, clioEnabled, onSetMatter: setMatterForBlocks }
+      : null),
+    [taskTypes, movingId, moveBlocks, clioEnabled, setMatterForBlocks]
   );
 
   // Accordion: one client open at a time. Opening a client collapses any other
@@ -1048,6 +1078,112 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   );
 };
 
+// Pick the matter this work belongs to, for the rows attribution abstained on.
+//
+// Only rendered for firms on Clio. Options are fetched when the menu opens
+// rather than per row, because most rows already have a matter and a fetch per
+// row would be one request per line of the timesheet.
+//
+// The note about future files is not decoration: assigning a matter teaches the
+// folder, so the same choice never has to be made twice for that folder.
+const BlockMatterMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
+  const ctx = React.useContext(MoveContext);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [data, setData] = useState<any | null>(null);
+
+  if (!ctx?.clioEnabled || !ctx.onSetMatter) return null;
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await safeFetchJson(`${API_BASE}/blocks/${agg.ids[0]}/matter-options/`);
+      setData(d);
+    } catch {
+      setData({ options: [] });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const choose = async (projectId: number) => {
+    setOpen(false);
+    setSaving(true);
+    try { await ctx.onSetMatter!(agg.ids, projectId); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <span className="relative shrink-0">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          const next = !open;
+          setOpen(next);
+          if (next && !data) load();
+        }}
+        disabled={saving}
+        title={agg.count > 1
+          ? `Set the matter for these ${agg.count} activities`
+          : 'Set the matter this work belongs to'}
+        className="flex items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors disabled:opacity-50"
+      >
+        {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Briefcase className="w-3 h-3" />}
+        Matter
+      </button>
+      {open && !saving && (
+        <>
+          <button className="fixed inset-0 z-40 cursor-default" onClick={(e) => { e.stopPropagation(); setOpen(false); }} aria-label="Close" />
+          <div className="absolute right-0 top-7 z-50 w-72 max-h-72 overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
+            <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              {data?.client_name ? `Matters for ${data.client_name}` : 'Set matter'}
+            </p>
+            {loading && <p className="px-3 py-2 text-[12px] text-slate-400">Loading…</p>}
+            {!loading && data && data.options?.length === 0 && (
+              <p className="px-3 py-2 text-[12px] text-slate-500">
+                {data.client_id
+                  ? 'No open matters for this client in Clio.'
+                  : 'Assign a client first — matters belong to a client.'}
+              </p>
+            )}
+            {!loading && data?.options?.map((o: any) => {
+              const isCurrent = o.project_id === data.current_project_id;
+              return (
+                <button
+                  key={o.project_id}
+                  onClick={(e) => { e.stopPropagation(); if (!isCurrent) choose(o.project_id); }}
+                  className={cn('w-full flex items-start gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
+                    isCurrent ? 'text-slate-400' : 'text-slate-700')}
+                >
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate font-semibold">{o.display_number}</span>
+                    {o.description && (
+                      <span className="block truncate text-[11px] text-slate-400">{o.description}</span>
+                    )}
+                    {o.requires_utbms && (
+                      <span className="block text-[10px] text-amber-600">needs UTBMS codes — will not push</span>
+                    )}
+                    {(o.billing_method === 'flat' || o.billing_method === 'contingency') && (
+                      <span className="block text-[10px] text-amber-600">{o.billing_method} fee — tracked, not pushed</span>
+                    )}
+                  </span>
+                  {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300 mt-0.5 shrink-0" />}
+                </button>
+              );
+            })}
+            {!loading && data?.options?.length > 0 && (
+              <p className="px-3 pt-1.5 pb-1 text-[10px] text-slate-400 border-t border-border/50 mt-1">
+                Future work in the same folder goes here automatically.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </span>
+  );
+};
+
 // One merged captured-activity row (all blocks sharing a title), listed under
 // its category. Read-only info + a move menu. Captured title + time render in
 // mono — the Daily Review signal for "text we read off the screen", vs the
@@ -1061,6 +1197,7 @@ const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withD
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
     <span className="font-mono text-[11.5px] text-slate-400 tabular-nums shrink-0 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
+    <BlockMatterMenu agg={agg} />
     <BlockMoveMenu agg={agg} />
   </div>
 );

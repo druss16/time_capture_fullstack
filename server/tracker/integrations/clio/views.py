@@ -182,6 +182,61 @@ def clio_sync(request):
     })
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def clio_push_time(request):
+    """
+    Push captured time to Clio as TimeEntry activities.
+
+    Body: {"start_date": "2026-08-01", "end_date": "2026-08-20",
+           "user_ids": [], "dry_run": true}
+
+    `dry_run` defaults to TRUE. This endpoint writes into a firm's billing
+    system, so the safe outcome is the one you get by forgetting a parameter.
+    The preview and the write are built from the same plan, so what a firm
+    confirms is what lands.
+    """
+    from datetime import datetime as _dt
+    from tracker.integrations.clio.push import build_push_plan, execute_push
+
+    org = get_user_org(request.user)
+    integration, err = get_integration(org, 'clio')
+    if err:
+        return err
+
+    start_raw = request.data.get('start_date')
+    end_raw = request.data.get('end_date')
+    if not start_raw or not end_raw:
+        return error_response('start_date and end_date are required')
+    try:
+        start_date = _dt.strptime(start_raw, '%Y-%m-%d').date()
+        end_date = _dt.strptime(end_raw, '%Y-%m-%d').date()
+    except ValueError:
+        return error_response('Dates must be YYYY-MM-DD')
+    if end_date < start_date:
+        return error_response('end_date must not precede start_date')
+
+    dry_run = request.data.get('dry_run', True)
+    user_ids = request.data.get('user_ids') or None
+
+    try:
+        plan = build_push_plan(integration, start_date, end_date, user_ids=user_ids)
+    except ClioError as e:
+        logger.warning('Clio push planning failed for org %s: %s', org.id, e)
+        return error_response(str(e)[:300], 502, 'clio_error')
+
+    if dry_run:
+        return Response({'dry_run': True, **plan})
+
+    try:
+        result = execute_push(integration, plan)
+    except ClioError as e:
+        logger.warning('Clio push failed for org %s: %s', org.id, e)
+        return error_response(str(e)[:300], 502, 'clio_error')
+
+    return Response({'dry_run': False, 'window': plan['window'], **result})
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def clio_status(request):

@@ -1776,6 +1776,17 @@ class Block(models.Model):
         db_index=True,
         help_text="True once categories are assigned - block becomes immutable"
     )
+
+    # Deliberately NOT indexed: Block is a large, hot table and this column is
+    # only ever read inside an org+date-window slice that existing indexes
+    # already cover. An index here would cost a lock on deploy for no gain.
+    clio_activity_id = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text='Clio Activity (TimeEntry) this block has been reflected in. '
+                  'Audit trail only — push computes a delta from day totals '
+                  'rather than from this flag, so a day that was partly pushed '
+                  'stays correct on the next run.',
+    )
     categorized_at = models.DateTimeField(
         null=True,
         blank=True,

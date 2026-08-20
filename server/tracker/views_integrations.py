@@ -1411,6 +1411,15 @@ def integrations_status(request):
                 integrations[provider]['region'] = i.api_region if i.is_connected else None
                 integrations[provider]['last_sync_status'] = i.last_sync_status or None
                 integrations[provider]['last_sync_error'] = i.last_sync_error or None
+                # Report when a sync actually RAN, not when the row was last
+                # touched. `updated_at` moves on connect and on every token
+                # refresh, so reusing it (as QBO/Xero must, lacking a better
+                # field) would show "synced 34m ago" to a firm that has never
+                # synced at all — the integration looking healthy while doing
+                # nothing is precisely the failure we need to be able to see.
+                integrations[provider]['last_synced'] = (
+                    i.last_synced_at.isoformat() if i.last_synced_at else None
+                )
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 

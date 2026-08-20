@@ -15,6 +15,7 @@ import { safeFetchJson } from '@/lib/api';
 
 // Tab components
 import OrganizationTab      from '@/pages/settings/OrganizationTab';
+import { useTerminology } from '@/lib/terminology';
 import TeamTab              from '@/pages/settings/TeamTab';
 import ClientsTab           from '@/pages/settings/ClientsTab';
 import EconomicsTab         from '@/pages/settings/EconomicsTab';
@@ -70,6 +71,7 @@ function UpgradePrompt({ featureName }: { featureName: string }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Settings() {
+  const terms = useTerminology();
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
@@ -196,8 +198,8 @@ export default function Settings() {
     { id: 'clients',      label: 'Clients',       icon: <Briefcase className="w-4 h-4" /> },
     { id: 'assignments',  label: 'Client Access', icon: <Shield className="w-4 h-4" />, requiredRole: ['owner','admin','manager'] },
     { id: 'groups',       label: 'Client Groups', icon: <Folder className="w-4 h-4" />, requiredRole: ['owner','admin','manager'] },
-    { id: 'task-types',     label: 'Task Types',     icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
-    { id: 'task-type-sets', label: 'Task Type Sets', icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
+    { id: 'task-types',     label: terms.task_types,             icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
+    { id: 'task-type-sets', label: `${terms.task_type} Sets`,     icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'economics',    label: 'Economics',     icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
     { id: 'devices',      label: 'Devices',       icon: <Monitor className="w-4 h-4" /> },

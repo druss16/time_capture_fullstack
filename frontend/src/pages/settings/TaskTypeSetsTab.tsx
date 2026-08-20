@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { RoleType } from './types';
+import { useTerminology } from '@/lib/terminology';
 import {
   SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
 } from './ui';
@@ -65,6 +66,7 @@ const BLANK_TT_FORM = {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function TaskTypeSetsTab({ currentUserRole, onSuccess, onError }: Props) {
+  const terms = useTerminology();
   const [sets,          setSets]          = useState<TaskTypeSet[]>([]);
   const [allTypes,      setAllTypes]      = useState<TaskType[]>([]);
   const [selectedId,    setSelectedId]    = useState<number | null>(null);
@@ -220,7 +222,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
 
   return (
     <SettingsPage
-      title="Task Type Sets"
+      title={`${terms.task_type} Sets`}
       subtitle='Bundle task types into named lists (e.g. "Standard", "Audit-Only"). One set is your firm default; others can be assigned per client.'
       actions={canManage ? (
         <button
@@ -343,7 +345,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
               {/* Members */}
               <div className="flex items-center justify-between mb-3">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                  Task Types in this set
+                  {terms.task_types} in this set
                 </p>
                 {!isReadOnly && (
                   <button
@@ -351,14 +353,14 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
                     className={secondaryBtnClass}
                   >
                     {showTTForm ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                    {showTTForm ? 'Cancel' : 'New Task Type'}
+                    {showTTForm ? 'Cancel' : `New ${terms.task_type}`}
                   </button>
                 )}
               </div>
 
               {/* Quick-create form */}
               {showTTForm && !isReadOnly && (
-                <SettingsSection tint className="mb-4" title={`New Task Type — added to ${detail.name}`}>
+                <SettingsSection tint className="mb-4" title={`New ${terms.task_type} — added to ${detail.name}`}>
                   <div className="grid grid-cols-12 gap-3 mb-3">
                     <div className="col-span-7">
                       <label className={labelClass}>Name *</label>
@@ -439,7 +441,7 @@ const canManage = ['owner', 'admin'].includes(currentUserRole) || !currentUserRo
               {allTypes.length === 0 ? (
                 <div className="text-center py-10 border border-dashed border-slate-200 rounded-xl">
                   <p className="text-sm text-slate-400">No task types exist yet</p>
-                  <p className="text-xs text-slate-400 mt-1">Create task types first in the Task Types tab</p>
+                  <p className="text-xs text-slate-400 mt-1">Create {terms.task_types.toLowerCase()} first in the {terms.task_types} tab</p>
                 </div>
               ) : (
                 <div className="rounded-2xl border border-slate-200/70 overflow-hidden divide-y divide-border/30">

@@ -23,6 +23,7 @@ from tracker.models import (
 from django.db import transaction
  
 from tracker.utils.client_name_match import build_token_index, detect_mismatch, detect_title_client
+from tracker.utils.db_iter import keyset_iter
 
 logger = logging.getLogger(__name__)
 
@@ -1536,7 +1537,14 @@ def mavops_client_mismatches(request):
     for o in org_qs.only('id', 'name'):
         firm_by_org[o.id] = o.name
 
-    # Committed blocks with a client assigned + a usable window title.
+    # Every block with a client assigned + a usable window title — no
+    # classification_state filter, so the auto-filed "Certain" lane (committed,
+    # never re-examined after the classifier's verdict) is scanned alongside the
+    # proposed ones still sitting in Needs-you. Certain is where the silent
+    # mis-attributions live, so it's the bucket that most needs the sweep.
+    #
+    # No .order_by() here: keyset_iter pages by pk and imposes its own. Rows are
+    # sorted newest-first on the way out instead.
     blocks = (
         Block.objects
         .filter(
@@ -1547,7 +1555,6 @@ def mavops_client_mismatches(request):
         .exclude(window_title__isnull=True)
         .exclude(window_title='')
         .select_related('client', 'user', 'org')
-        .order_by('-start')
     )
     if org_id:
         blocks = blocks.filter(org_id=org_id)
@@ -1560,7 +1567,12 @@ def mavops_client_mismatches(request):
     counts = {"client": 0, "internal": 0}
     scanned = 0
 
-    for b in blocks.iterator(chunk_size=1000):
+    # NOT .iterator(): that opens a named server-side cursor, and Neon's
+    # transaction pooler can hand the next FETCH to a different backend session
+    # ("cursor _django_curs_... does not exist"), which 500s this endpoint
+    # intermittently. keyset_iter pages by pk instead. Descending so the `limit`
+    # truncation below keeps the most recent rows, as -start used to.
+    for b in keyset_iter(blocks, 1000, descending=True):
         scanned += 1
         oid = b.org_id
         index = index_by_org.get(oid)
@@ -1602,6 +1614,11 @@ def mavops_client_mismatches(request):
                     'top_token_weight': m['top_token_weight'],
                 },
             })
+
+    # pk-desc paging is only ~chronological (backfills and late syncs land out
+    # of order), so sort the sample the UI shows by the block's own date.
+    for rows in flagged.values():
+        rows.sort(key=lambda r: (r['date'], r['block_id']), reverse=True)
 
     def _histogram(bucket):
         d = by_day[bucket]

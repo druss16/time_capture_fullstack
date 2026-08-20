@@ -31,13 +31,19 @@ from django.db.models import QuerySet
 DEFAULT_CHUNK = 1000
 
 
-def keyset_chunks(qs: QuerySet, chunk_size: int = DEFAULT_CHUNK) -> Iterator[list]:
-    """Yield successive lists of objects, paging by primary key."""
+def keyset_chunks(
+    qs: QuerySet, chunk_size: int = DEFAULT_CHUNK, descending: bool = False
+) -> Iterator[list]:
+    """Yield successive lists of objects, paging by primary key.
+
+    `descending=True` walks newest-pk-first, for callers that keep only the
+    first N rows they see and want those to be the most recent ones.
+    """
     last_pk = None
     while True:
-        page = qs.order_by("pk")
+        page = qs.order_by("-pk" if descending else "pk")
         if last_pk is not None:
-            page = page.filter(pk__gt=last_pk)
+            page = page.filter(pk__lt=last_pk) if descending else page.filter(pk__gt=last_pk)
         rows = list(page[:chunk_size])
         if not rows:
             return
@@ -47,7 +53,9 @@ def keyset_chunks(qs: QuerySet, chunk_size: int = DEFAULT_CHUNK) -> Iterator[lis
             return
 
 
-def keyset_iter(qs: QuerySet, chunk_size: int = DEFAULT_CHUNK) -> Iterator:
+def keyset_iter(
+    qs: QuerySet, chunk_size: int = DEFAULT_CHUNK, descending: bool = False
+) -> Iterator:
     """Flat row-by-row version of keyset_chunks — a drop-in for .iterator()."""
-    for rows in keyset_chunks(qs, chunk_size):
+    for rows in keyset_chunks(qs, chunk_size, descending=descending):
         yield from rows

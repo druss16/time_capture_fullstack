@@ -1704,7 +1704,13 @@ export default function MavOpsAdmin() {
   const [membersLoading, setMembersLoading] = useState<number | null>(null);
 
   const handleUnlock = () => { sessionStorage.setItem("mavops_admin", "1"); setUnlocked(true); };
-  const flash = (m: string, type: "ok" | "err" = "ok") => { setMsg(m); setMsgType(type); setTimeout(() => setMsg(""), 5000); };
+  // Memoized: tabs put `flash` in their load() dep array, so an unstable
+  // identity made every parent render (including this banner's own setMsg,
+  // and its 5s clear) refire their fetch effect — a refetch loop that turned
+  // one failed scan into a permanent red banner.
+  const flash = useCallback((m: string, type: "ok" | "err" = "ok") => {
+    setMsg(m); setMsgType(type); setTimeout(() => setMsg(""), 5000);
+  }, []);
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any || {}) };

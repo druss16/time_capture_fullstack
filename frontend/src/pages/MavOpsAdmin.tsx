@@ -1682,14 +1682,19 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     // The card is UPDATED, never removed. One-at-a-time review needs stable
     // indices — dropping the judged card would slide the next one under the
     // cursor mid-click and make "back" meaningless. Position moves instead.
-    let complete = false;
-    setRows(prev => prev.map(r => {
-      if (r.sample_id !== sampleId) return r;
-      const next = { ...r, [field]: verdict };
-      complete = next.verdict !== "pending" && next.verdict_category !== "pending"
-        && next.verdict_billable !== "pending";
-      return next;
-    }));
+    //
+    // `complete` is computed from current state BEFORE the update, never
+    // inside the setRows updater: React defers that callback, so a flag set
+    // in there is still false by the time the next line reads it. That was
+    // the bug that left a fully-judged card sitting on screen with nothing
+    // to press — all three verdicts saved, and no advance.
+    const cur = rows.find(r => r.sample_id === sampleId);
+    const after = { ...cur, [field]: verdict } as AccuracyRow;
+    const complete = after.verdict !== "pending"
+      && after.verdict_category !== "pending"
+      && after.verdict_billable !== "pending";
+
+    setRows(prev => prev.map(r => (r.sample_id === sampleId ? { ...r, [field]: verdict } : r)));
     // Advance only once all three are answered, so answering the client does
     // not snatch the card away before the other two can be judged.
     if (complete) setIdx(i => i + 1);
@@ -1706,7 +1711,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
       setRows(prev => prev.map(r => (r.sample_id === sampleId ? { ...r, [field]: "pending" } : r)));
       if (complete) setIdx(i => Math.max(0, i - 1));
     }
-  }, [apiFetch, flash]);
+  }, [apiFetch, flash, rows]);
 
   if (!filterOrg) {
     return <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>

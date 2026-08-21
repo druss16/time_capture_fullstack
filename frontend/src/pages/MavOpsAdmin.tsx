@@ -925,15 +925,33 @@ interface MismatchesTabProps {
 // never reconciled). `clientFilter` narrows the flagged list to one booked
 // client name (or "" for all).
 function BucketDetail({
-  bucket, tone, clientFilter, onReconcile, reconcileBusy, hideBulkButton,
+  bucket, tone, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
 }: {
   bucket: MismatchBucket;
   tone: string;
-  clientFilter?: string;
-  onReconcile?: (blockIds: number[], label: string) => void;
-  reconcileBusy?: boolean;
-  hideBulkButton?: boolean;
+  // Explicitly `| undefined`: under exactOptionalPropertyTypes, passing a
+  // conditional (`filterOrg ? fn : undefined`) is not assignable to a plain
+  // optional prop.
+  clientFilter?: string | undefined;
+  onReconcile?: ((blockIds: number[], label: string) => void) | undefined;
+  reconcileBusy?: boolean | undefined;
+  hideBulkButton?: boolean | undefined;
+  // Only the "target unclear" bucket passes this: those rows can't be fixed
+  // automatically, so a person picks the client or says it was right already.
+  resolve?: {
+    clients: { id: number; name: string }[];
+    busy: boolean;
+    assign: (blockIds: number[], clientId: number, clientName: string) => void;
+    dismiss: (blockIds: number[]) => void;
+  } | undefined;
 }) {
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [bulkClient, setBulkClient] = useState<number | "">("");
+  const toggle = (id: number) => setPicked(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const peak = bucket.histogram.length ? Math.max(...bucket.histogram.map(h => h.count)) : 1;
   const rows = clientFilter
     ? bucket.mismatches.filter(m => m.booked_client_name === clientFilter)
@@ -994,9 +1012,60 @@ function BucketDetail({
               </button>
             )}
           </div>
+          {resolve && (
+            <div style={{
+              ...card, marginBottom: 12, display: "flex", alignItems: "center", gap: 10,
+              flexWrap: "wrap" as const,
+              borderColor: picked.size ? tone + "88" : T.border,
+              background: picked.size ? tone + "0e" : T.surface,
+            }}>
+              <button
+                onClick={() => setPicked(picked.size === rows.length
+                  ? new Set()
+                  : new Set(rows.map(r => r.block_id)))}
+                style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textSub, padding: "5px 12px", fontSize: 11, cursor: "pointer", borderRadius: 4, ...mono }}>
+                {picked.size === rows.length ? "clear all" : `select all ${rows.length}`}
+              </button>
+              <span style={{ fontSize: 12, color: picked.size ? T.text : T.textMuted, ...mono, fontWeight: picked.size ? 700 : 400 }}>
+                {picked.size} selected
+              </span>
+              <div style={{ flex: 1 }} />
+              <select value={bulkClient} disabled={!picked.size || resolve.busy}
+                onChange={e => setBulkClient(e.target.value ? Number(e.target.value) : "")}
+                style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "6px 10px", fontSize: 12, borderRadius: 4, ...mono, maxWidth: 280 }}>
+                <option value="">move selected to…</option>
+                {resolve.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button
+                disabled={!picked.size || !bulkClient || resolve.busy}
+                onClick={() => {
+                  const c = resolve.clients.find(x => x.id === bulkClient);
+                  if (!c) return;
+                  resolve.assign([...picked], c.id, c.name);
+                  setPicked(new Set()); setBulkClient("");
+                }}
+                style={{ background: tone, border: "none", color: "#fff", padding: "6px 14px", fontSize: 12, cursor: (picked.size && bulkClient && !resolve.busy) ? "pointer" : "default", borderRadius: 4, ...mono, fontWeight: 700, opacity: (picked.size && bulkClient && !resolve.busy) ? 1 : 0.45 }}>
+                move
+              </button>
+              <button
+                disabled={!picked.size || resolve.busy}
+                onClick={() => { resolve.dismiss([...picked]); setPicked(new Set()); }}
+                style={{ background: "transparent", border: `1px solid ${T.green}`, color: T.green, padding: "6px 14px", fontSize: 12, cursor: (picked.size && !resolve.busy) ? "pointer" : "default", borderRadius: 4, ...mono, fontWeight: 600, opacity: (picked.size && !resolve.busy) ? 1 : 0.45 }}>
+                ✓ these are right
+              </button>
+            </div>
+          )}
           {rows.map(m => (
-            <div key={m.block_id} style={{ ...card, padding: "14px 20px" }}>
+            <div key={m.block_id} style={{
+              ...card, padding: "14px 20px",
+              borderColor: picked.has(m.block_id) ? tone + "88" : T.border,
+            }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                {resolve && (
+                  <input type="checkbox" checked={picked.has(m.block_id)}
+                    onChange={() => toggle(m.block_id)}
+                    style={{ cursor: "pointer", accentColor: tone }} />
+                )}
                 {m.org_name && <OrgPill name={m.org_name} />}
                 <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {m.block_id}</span>
                 <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{m.date}</span>
@@ -1053,6 +1122,23 @@ function BucketDetail({
                 {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
                 {m.window_title}
               </code>
+              {resolve && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" as const, alignItems: "center" }}>
+                  <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>move to</span>
+                  {(m.candidates || []).map(c => (
+                    <button key={c.client_id} disabled={resolve.busy}
+                      onClick={() => resolve.assign([m.block_id], c.client_id, c.client_name)}
+                      style={{ background: tone + "18", border: `1px solid ${tone}`, color: tone, padding: "4px 12px", fontSize: 11, cursor: resolve.busy ? "default" : "pointer", borderRadius: 4, ...mono, fontWeight: 600, opacity: resolve.busy ? 0.5 : 1 }}>
+                      {c.client_name}
+                    </button>
+                  ))}
+                  <button disabled={resolve.busy}
+                    onClick={() => resolve.dismiss([m.block_id])}
+                    style={{ background: "transparent", border: `1px solid ${T.green}55`, color: T.green, padding: "4px 12px", fontSize: 11, cursor: resolve.busy ? "default" : "pointer", borderRadius: 4, ...mono, opacity: resolve.busy ? 0.5 : 1 }}>
+                    ✓ it's right
+                  </button>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
                 <span>coverage {((m.confidence.looks_like_coverage ?? m.confidence.top_candidate_coverage ?? 0) * 100).toFixed(0)}%</span>
                 <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
@@ -1071,7 +1157,11 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(120);
   const [showInternal, setShowInternal] = useState(false);
-  const [showUnsure, setShowUnsure] = useState(false);
+  // Open by default: these rows are the ones a person can actually settle, so
+  // hiding them behind a disclosure buried the only actionable pile on the tab.
+  const [showUnsure, setShowUnsure] = useState(true);
+  const [orgClients, setOrgClients] = useState<{ id: number; name: string }[]>([]);
+  const [resolveBusy, setResolveBusy] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -1089,6 +1179,55 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   }, [apiFetch, flash, filterOrg, days]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!filterOrg) { setOrgClients([]); return; }
+    let live = true;
+    apiFetch(`/mavops/orgs/${filterOrg}/clients/`)
+      .then(d => { if (live) setOrgClients(d.clients || []); })
+      .catch(() => { /* the per-row candidate buttons still work without it */ });
+    return () => { live = false; };
+  }, [apiFetch, filterOrg]);
+
+  // Assign to a client a PERSON chose. Dry-run first for the count, then
+  // confirm — the same two-step the automatic reconcile uses, because this
+  // writes to billable time.
+  const assignTo = useCallback(async (blockIds: number[], clientId: number, clientName: string) => {
+    if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
+    setResolveBusy(true);
+    try {
+      const dry = await apiFetch(`/mavops/mismatches/assign/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, client_id: clientId, confirm: false }),
+      });
+      const n = dry.would_reassign || 0;
+      if (!n) { flash(`Nothing to move (${dry.skipped} skipped).`); return; }
+      const plural = n === 1 ? "block" : "blocks";
+      if (!window.confirm(`Move ${n} ${plural} to "${clientName}"?` +
+        (dry.skipped ? `\n\n${dry.skipped} skipped (already there, or invoiced).` : ""))) return;
+      const res = await apiFetch(`/mavops/mismatches/assign/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, client_id: clientId, confirm: true }),
+      });
+      flash(`Moved ${res.reassigned} to "${res.to_client_name}".`);
+      await load();
+    } catch { flash("Failed to move those blocks.", "err"); }
+    finally { setResolveBusy(false); }
+  }, [apiFetch, flash, filterOrg, load]);
+
+  const dismissRows = useCallback(async (blockIds: number[]) => {
+    if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
+    setResolveBusy(true);
+    try {
+      const res = await apiFetch(`/mavops/mismatches/dismiss/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds }),
+      });
+      flash(`Marked ${res.dismissed} as correctly booked — they won't come back.`);
+      await load();
+    } catch { flash("Failed to clear those.", "err"); }
+    finally { setResolveBusy(false); }
+  }, [apiFetch, flash, filterOrg, load]);
 
   // Reconcile: dry-run first (server re-derives the target client from each
   // block's title), show the plan, confirm, then commit. Requires an org
@@ -1263,6 +1402,47 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
+          {/* TARGET-UNCLEAR bucket — placed directly under the money bucket and
+              open by default. These are the only rows a person can settle by
+              hand, so burying them under the internal noise made the one
+              actionable pile the hardest to reach. */}
+          {(data.unsure?.total ?? 0) > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <div style={{
+                ...card, marginBottom: showUnsure ? 16 : 10,
+                borderColor: T.yellow + "88", background: T.yellow + "12",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 16, flexWrap: "wrap" as const,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, color: T.yellow, ...mono, fontWeight: 700 }}>
+                    ⚠ {data.unsure?.total ?? 0} on the wrong client — you pick which
+                  </div>
+                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
+                    The title doesn't name the booked client, but two same-family clients tie,
+                    so nothing can be auto-applied. Choose the right one, or clear it if it was right.
+                  </div>
+                </div>
+                <button onClick={() => setShowUnsure(v => !v)}
+                  style={{ background: showUnsure ? "transparent" : T.yellow, border: `1px solid ${T.yellow}`, color: showUnsure ? T.yellow : "#0b1220", padding: "8px 18px", fontSize: 12, cursor: "pointer", borderRadius: 5, ...mono, fontWeight: 700, whiteSpace: "nowrap" as const }}>
+                  {showUnsure ? "hide" : `review ${data.unsure?.total ?? 0}`}
+                </button>
+              </div>
+              {showUnsure && data.unsure && (
+                <BucketDetail
+                  bucket={data.unsure}
+                  tone={T.yellow}
+                  resolve={filterOrg ? {
+                    clients: orgClients,
+                    busy: resolveBusy,
+                    assign: assignTo,
+                    dismiss: dismissRows,
+                  } : undefined}
+                />
+              )}
+            </div>
+          )}
+
           {/* INTERNAL bucket — collapsed, secondary */}
           {data.internal.total > 0 && (
             <div style={{ marginTop: 24 }}>
@@ -1280,36 +1460,6 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* UNSURE bucket — the booked client is absent from its own title,
-              but same-family rivals tie so no single replacement can be named.
-              Read-only by construction: no onReconcile is passed, and the
-              server's reconcile path abstains on these titles anyway. */}
-          {(data.unsure?.total ?? 0) > 0 && (
-            <div style={{ marginTop: 24 }}>
-              <button onClick={() => setShowUnsure(v => !v)}
-                style={{ width: "100%", ...card, marginBottom: showUnsure ? 20 : 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.yellow}44` }}>
-                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
-                  {showUnsure ? "▾" : "▸"} Wrong client, target unclear ({data.unsure?.total ?? 0})
-                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
-                    — title doesn't name the booked client, but two same-family clients tie
-                  </span>
-                </span>
-                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showUnsure ? "hide" : "show"}</span>
-              </button>
-              {showUnsure && data.unsure && (
-                <>
-                  <div style={{ ...card, marginBottom: 20, borderColor: T.yellow + "44", background: T.yellow + "0e" }}>
-                    <div style={{ fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.6 }}>
-                      These are certainly booked wrong — the title covers almost none of the booked
-                      client's own name — but the replacement can't be picked automatically, so there
-                      is no reconcile action. Resolve each one in Daily Review.
-                    </div>
-                  </div>
-                  <BucketDetail bucket={data.unsure} tone={T.yellow} />
-                </>
-              )}
-            </div>
-          )}
         </>
       )}
     </div>

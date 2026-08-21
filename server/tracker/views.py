@@ -6767,9 +6767,13 @@ def set_block_matter(request, block_id):
 
     project_id = request.data.get("project_id")
 
+    # `project` is one of Block.save's protected fields, so a categorized block
+    # rejects the write with ValueError — which surfaced as a 500 and a picker
+    # that silently did nothing. force_classifier is the sanctioned bypass for a
+    # user-accepted correction, the same one move_block_task_type uses.
     if project_id in (None, '', 0):
         block.project = None
-        block.save(update_fields=['project'])
+        block.save(update_fields=['project'], force_classifier=True)
         return Response({'ok': True, 'block_id': block.id, 'project_id': None})
 
     try:
@@ -6785,7 +6789,7 @@ def set_block_matter(request, block_id):
         )
 
     block.project = project
-    block.save(update_fields=['project'])
+    block.save(update_fields=['project'], force_classifier=True)
 
     return Response({
         'ok': True,

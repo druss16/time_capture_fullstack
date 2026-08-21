@@ -76,6 +76,7 @@ export const MatterPicker: React.FC<{
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const btnRef = React.useRef<HTMLButtonElement>(null);
 
   const load = async () => {
@@ -92,6 +93,7 @@ export const MatterPicker: React.FC<{
   const choose = async (projectId: number) => {
     setOpen(false);
     setSaving(true);
+    setError(null);
     try {
       // Every block in the row, not just the one the options came from.
       for (const id of blockIds) {
@@ -100,6 +102,11 @@ export const MatterPicker: React.FC<{
         });
       }
       onAssigned?.(projectId);
+    } catch (e: any) {
+      // Without this the request failed, the row stayed unchanged, and nothing
+      // said why — which is exactly how a server-side 500 looked like a button
+      // that did not work. A failed correction has to be visible.
+      setError(e?.message || 'Could not set the matter');
     } finally {
       setSaving(false);
     }
@@ -124,8 +131,13 @@ export const MatterPicker: React.FC<{
         )}
       >
         {saving ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Briefcase className="h-3 w-3" />}
-        {label}
+        {error ? 'Failed — retry' : label}
       </button>
+      {error && (
+        <span className="ml-1 hidden text-[10px] text-red-600 sm:inline" title={error}>
+          {error.slice(0, 40)}
+        </span>
+      )}
 
       {open && !saving && (
         <MenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)}>

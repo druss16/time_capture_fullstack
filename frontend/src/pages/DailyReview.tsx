@@ -288,7 +288,15 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
               </span>
               <MatterPicker
                 blockIds={[r.id]}
-                onAssigned={() => { load(); onChanged(); }}
+                onAssigned={() => {
+                  // The row leaves immediately. Reloading the lane here meant a
+                  // visible flicker and, worse, the list re-ordering under
+                  // someone working down it. The lane refetches on the next date
+                  // change or natural refresh.
+                  setRows((prev) => prev.filter((x) => x.id !== r.id));
+                  setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
+                  onChanged();
+                }}
               />
             </div>
           ))}

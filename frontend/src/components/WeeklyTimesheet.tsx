@@ -389,6 +389,11 @@ const WeeklyTimesheet: React.FC = () => {
   // so nothing about this appears for them.
   const [clioEnabled, setClioEnabled] = useState(false);
   const [matterGapOpen, setMatterGapOpen] = useState(false);
+  // Rows resolved in this session. Assigning a matter used to refetch the whole
+  // timesheet, so the page flickered and the list re-rendered underneath the
+  // person mid-triage. The row simply leaves instead; the next natural reload
+  // carries the server's version, and this set is cleared when it arrives.
+  const [assignedBlockIds, setAssignedBlockIds] = useState<Set<number>>(new Set());
   const [clioPreview, setClioPreview] = useState<any | null>(null);
   const [clioResult, setClioResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
@@ -454,17 +459,23 @@ const WeeklyTimesheet: React.FC = () => {
         if (!b.duration_minutes) continue;
         if (b.matter_label) continue;
         if ((b.matter_options ?? 0) < 1) continue;
+        if (assignedBlockIds.has(b.id)) continue;  // just resolved, here
         minutes += b.duration_minutes;
         clients.add(blockClientKey(b.client_name));
       }
     }
     return { minutes, clientKeys: clients };
-  }, [detail]);
+  }, [detail, assignedBlockIds]);
 
   // The rows themselves, flat. Expanding the tree cannot reach them: a client
   // may sit inside the collapsed "under 15 min" tail, and the activity rows
   // live behind CategoryRow's own local state, which nothing outside can open.
   // So this lists them directly instead of asking anyone to navigate.
+  // Server data replaced the optimistic view — drop the local overrides so a
+  // row the server still considers unassigned reappears rather than staying
+  // hidden on a stale assumption.
+  useEffect(() => { setAssignedBlockIds(new Set()); }, [detail]);
+
   const matterGapRows = useMemo(() => {
     const needs: DetailBlock[] = [];
     for (const d of detail?.days ?? []) {
@@ -475,11 +486,13 @@ const WeeklyTimesheet: React.FC = () => {
         needs.push(b);
       }
     }
-    return aggregateBlocks(needs).map(a => ({
-      ...a,
-      clientName: needs.find(b => b.id === a.ids[0])?.client_name ?? null,
-    }));
-  }, [detail]);
+    return aggregateBlocks(needs)
+      .filter(a => !a.ids.every(id => assignedBlockIds.has(id)))
+      .map(a => ({
+        ...a,
+        clientName: needs.find(b => b.id === a.ids[0])?.client_name ?? null,
+      }));
+  }, [detail, assignedBlockIds]);
 
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
@@ -905,7 +918,11 @@ const WeeklyTimesheet: React.FC = () => {
                 <MatterPicker
                   blockIds={row.ids}
                   label="Choose matter"
-                  onAssigned={fetchTimesheet}
+                  onAssigned={() => setAssignedBlockIds(prev => {
+                    const next = new Set(prev);
+                    row.ids.forEach(id => next.add(id));
+                    return next;
+                  })}
                 />
               </div>
             ))}

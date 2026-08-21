@@ -227,6 +227,14 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
             'totals': {'entries': 0, 'minutes': 0, 'hours': 0.0},
         }
 
+    # Activities we pushed before, so a re-run never treats our own work as a
+    # conflict needing a human decision.
+    our_activity_ids = set(
+        Block.objects
+        .filter(org=org, clio_activity_id__gt='')
+        .values_list('clio_activity_id', flat=True)
+    )
+
     # ── One scan of what Clio already holds ─────────────────────────────
     existing_seconds = defaultdict(int)
     # What Clio already holds, kept rather than just counted. A person can tell
@@ -265,14 +273,6 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
             # re-running a week must not re-ask about time we sent ourselves.
             'ours': str(act.get('id') or '') in our_activity_ids,
         })
-
-    # Activities we pushed before, so a re-run never treats our own work as a
-    # conflict needing a human decision.
-    our_activity_ids = set(
-        Block.objects
-        .filter(org=org, clio_activity_id__gt='')
-        .values_list('clio_activity_id', flat=True)
-    )
 
     # ── Net our totals against theirs ───────────────────────────────────
     entries = []

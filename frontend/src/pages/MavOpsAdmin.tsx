@@ -1641,6 +1641,9 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showDefs, setShowDefs] = useState(false);
+  // Which card is on screen. One at a time, because a wall of fifty is a wall
+  // of fifty and there is no way to tell how far in you are.
+  const [idx, setIdx] = useState(0);
 
   const load = useCallback(async () => {
     if (!filterOrg) { setSum(null); setRows([]); return; }
@@ -1651,7 +1654,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
         apiFetch(`/mavops/accuracy/?${q}`),
         apiFetch(`/mavops/accuracy/queue/?${q}&state=pending`),
       ]);
-      setSum(s); setRows(q2.rows || []);
+      setSum(s); setRows(q2.rows || []); setIdx(0);
     } catch { flash("Failed to load accuracy.", "err"); }
     finally { setLoading(false); }
   }, [apiFetch, flash, filterOrg, days]);
@@ -1676,16 +1679,20 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   // answered, so a judge who is sure about the client and unsure about the
   // category can say exactly that and come back to the rest.
   const judge = useCallback(async (sampleId: number, field: string, verdict: string) => {
-    // Leaves the queue when the CLIENT verdict lands — the same rule the
-    // server's pending filter uses. The other two are answered in the same
-    // visit if the judge wants them; they are never a reason to hold a row.
-    let cleared = false;
-    setRows(prev => prev.flatMap(r => {
-      if (r.sample_id !== sampleId) return [r];
+    // The card is UPDATED, never removed. One-at-a-time review needs stable
+    // indices — dropping the judged card would slide the next one under the
+    // cursor mid-click and make "back" meaningless. Position moves instead.
+    let complete = false;
+    setRows(prev => prev.map(r => {
+      if (r.sample_id !== sampleId) return r;
       const next = { ...r, [field]: verdict };
-      if (field === "verdict" && verdict !== "pending") { cleared = true; return []; }
-      return [next];
+      complete = next.verdict !== "pending" && next.verdict_category !== "pending"
+        && next.verdict_billable !== "pending";
+      return next;
     }));
+    // Advance only once all three are answered, so answering the client does
+    // not snatch the card away before the other two can be judged.
+    if (complete) setIdx(i => i + 1);
     try {
       const r = await apiFetch(`/mavops/accuracy/adjudicate/`, {
         method: "POST",
@@ -1694,9 +1701,12 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
       setSum(s => (s ? { ...s, sampled: r.summary, by_signal: r.by_signal } : s));
     } catch {
       flash("Failed to record that verdict.", "err");
-      if (cleared) await load();
+      // Put the card's old state back rather than leaving a verdict on screen
+      // that never reached the server.
+      setRows(prev => prev.map(r => (r.sample_id === sampleId ? { ...r, [field]: "pending" } : r)));
+      if (complete) setIdx(i => Math.max(0, i - 1));
     }
-  }, [apiFetch, flash, load]);
+  }, [apiFetch, flash]);
 
   if (!filterOrg) {
     return <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
@@ -1887,72 +1897,107 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* Adjudication queue */}
-          {rows.length > 0 ? (
-            <>
-              <div style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600, marginBottom: 10 }}>
-                {rows.length} to judge — was this filed to the right client?
-              </div>
-              {rows.map(r => (
-                // Capped rather than full-bleed: on a wide monitor an
-                // uncapped row throws the title across 1900px and every line
-                // becomes a head turn. Everything needed to judge fits here.
-                <div key={r.sample_id} style={{ ...card, padding: "14px 20px", marginBottom: 10, maxWidth: 1100 }}>
-                  {/* Reference only — block id, date, who, how long. The "filed
-                      as" badge that used to lead this line is gone: it repeated
-                      the client verdict row below it word for word, and the
-                      value belongs next to the buttons that judge it. */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const, fontSize: 11, color: T.textMuted, ...mono }}>
-                    <span>block {r.block_id}</span>
-                    <span>{r.date}</span>
-                    {r.user && <span style={{ color: T.textSub }}>{r.user}</span>}
-                    <span>{hrs(r.minutes)}</span>
+          {/* One card at a time. Fifty rows in a list gives no sense of
+              progress and no natural stopping point; a single card with a
+              position counter turns an unbounded chore into a countdown. The
+              card is updated rather than removed as it is judged, so indices
+              stay stable and "back" can undo a mis-click on the spot. */}
+          {rows.length > 0 && idx < rows.length ? (
+            (() => {
+              const r = rows[idx]!;
+              const done = rows.filter(x => x.verdict !== "pending"
+                && x.verdict_category !== "pending" && x.verdict_billable !== "pending").length;
+              return (
+                <div style={{ maxWidth: 1100 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10, flexWrap: "wrap" as const }}>
+                    <span style={{ fontSize: 20, color: T.text, ...mono, fontWeight: 800 }}>
+                      {idx + 1}<span style={{ color: T.textMuted, fontSize: 14, fontWeight: 400 }}> / {rows.length}</span>
+                    </span>
+                    <span style={{ fontSize: 13, color: T.textSub, ...mono }}>was this filed right?</span>
+                    <div style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{done} fully judged</span>
+                    <button disabled={idx === 0} onClick={() => setIdx(i => Math.max(0, i - 1))}
+                      style={{ background: "transparent", border: `1px solid ${T.border}`, color: idx === 0 ? T.textMuted : T.textSub, padding: "5px 14px", fontSize: 12, cursor: idx === 0 ? "default" : "pointer", borderRadius: 4, ...mono, opacity: idx === 0 ? 0.4 : 1 }}>
+                      ← back
+                    </button>
+                    <button onClick={() => setIdx(i => i + 1)}
+                      style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textSub, padding: "5px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>
+                      skip →
+                    </button>
                   </div>
-                  <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
-                    {r.app_name && <span style={{ color: T.textMuted }}>{r.app_name} — </span>}
-                    {r.window_title || <span style={{ color: T.textMuted }}>(no title)</span>}
-                    {r.file_path && <div style={{ color: T.textMuted, marginTop: 4 }}>{r.file_path}</div>}
-                  </code>
-                  {/* Three questions, same block, same glance.
-                      Value and buttons sit TOGETHER: what you read and what you
-                      click must be within one fixation, or judging fifty blocks
-                      is a hundred and fifty round trips across the window. The
-                      value column is a fixed width rather than shrink-to-fit so
-                      the buttons land at the same x on every row and every
-                      block — clicking becomes muscle memory instead of aiming. */}
-                  {([
-                    ["verdict", "client", r.booked_client_name || "No client", r.verdict],
-                    ["verdict_category", "category", r.booked_category || "—", r.verdict_category],
-                    ["verdict_billable", "billable",
-                     r.booked_is_billable == null ? "—" : (r.booked_is_billable ? "yes" : "no"),
-                     r.verdict_billable],
-                  ] as const).map(([field, label, filed, current]) => (
-                    <div key={field} style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" as const }}>
-                      <span style={{ fontSize: 11, color: T.textMuted, ...mono, width: 58, flexShrink: 0 }}>{label}</span>
-                      <span style={{ width: 300, flexShrink: 0, overflow: "hidden" }}>
-                        <Badge label={String(filed)} color={current === "pending" ? T.yellow : T.textMuted} />
-                      </span>
-                      {([["correct", "✓ right", T.green],
-                         ["wrong", "✗ wrong", T.red],
-                         ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, blabel, colour]) => {
-                        const on = current === v;
-                        return (
-                          <button key={v} onClick={() => judge(r.sample_id, field, v)}
-                            style={{
-                              background: on ? colour : colour + "18",
-                              border: `1px solid ${colour}`, color: on ? "#0b1220" : colour,
-                              padding: "5px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4,
-                              ...mono, fontWeight: on ? 800 : 600,
-                            }}>
-                            {blabel}
-                          </button>
-                        );
-                      })}
+
+                  {/* Progress bar: judged, then where you are, so a half-finished
+                      session shows both how much is done and how much is left. */}
+                  <div style={{ height: 5, background: T.bg, borderRadius: 3, overflow: "hidden", marginBottom: 16, display: "flex" }}>
+                    <div style={{ width: `${(done / rows.length) * 100}%`, background: T.green }} />
+                    <div style={{ width: `${(Math.max(0, idx - done) / rows.length) * 100}%`, background: T.border }} />
+                  </div>
+
+                  <div style={{ ...card, padding: "18px 22px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" as const, fontSize: 11, color: T.textMuted, ...mono }}>
+                      <span>block {r.block_id}</span>
+                      <span>{r.date}</span>
+                      {r.user && <span style={{ color: T.textSub }}>{r.user}</span>}
+                      <span>{hrs(r.minutes)}</span>
+                      {r.filed_by_signal && (
+                        <span style={{ color: T.textMuted }}>· filed by {prettySignal(r.filed_by_signal)}</span>
+                      )}
                     </div>
-                  ))}
+                    <code style={{ display: "block", fontSize: 13, color: T.text, ...mono, background: T.bg, padding: "12px 14px", borderRadius: 4, wordBreak: "break-all" as const, lineHeight: 1.6 }}>
+                      {r.app_name && <span style={{ color: T.textMuted }}>{r.app_name} — </span>}
+                      {r.window_title || <span style={{ color: T.textMuted }}>(no title)</span>}
+                      {r.file_path && <div style={{ color: T.textMuted, marginTop: 6, fontSize: 12 }}>{r.file_path}</div>}
+                    </code>
+                    {([
+                      ["verdict", "client", r.booked_client_name || "No client", r.verdict],
+                      ["verdict_category", "category", r.booked_category || "—", r.verdict_category],
+                      ["verdict_billable", "billable",
+                       r.booked_is_billable == null ? "—" : (r.booked_is_billable ? "yes" : "no"),
+                       r.verdict_billable],
+                    ] as const).map(([field, label, filed, current]) => (
+                      <div key={field} style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" as const }}>
+                        <span style={{ fontSize: 11, color: T.textMuted, ...mono, width: 58, flexShrink: 0 }}>{label}</span>
+                        <span style={{ width: 300, flexShrink: 0, overflow: "hidden" }}>
+                          <Badge label={String(filed)} color={current === "pending" ? T.yellow : T.textMuted} />
+                        </span>
+                        {([["correct", "✓ right", T.green],
+                           ["wrong", "✗ wrong", T.red],
+                           ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, blabel, colour]) => {
+                          const on = current === v;
+                          return (
+                            <button key={v} onClick={() => judge(r.sample_id, field, v)}
+                              style={{
+                                background: on ? colour : colour + "18",
+                                border: `1px solid ${colour}`, color: on ? "#0b1220" : colour,
+                                padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4,
+                                ...mono, fontWeight: on ? 800 : 600,
+                              }}>
+                              {blabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </>
+              );
+            })()
+          ) : rows.length > 0 ? (
+            /* Walked past the last card. Skipped ones are still here, so say so
+               rather than claiming the sample is finished. */
+            <div style={{ ...card, textAlign: "center" as const, padding: 30, maxWidth: 1100 }}>
+              <div style={{ color: T.green, fontSize: 15, ...mono, fontWeight: 700, marginBottom: 8 }}>
+                end of the stack ✓
+              </div>
+              <div style={{ color: T.textMuted, fontSize: 12, ...mono, marginBottom: 14 }}>
+                {rows.filter(x => x.verdict === "pending" || x.verdict_category === "pending"
+                  || x.verdict_billable === "pending").length} of {rows.length} still have an unanswered question.
+              </div>
+              <button onClick={() => setIdx(0)}
+                style={{ background: T.teal, border: "none", color: "#fff", padding: "8px 18px", fontSize: 12, cursor: "pointer", borderRadius: 5, ...mono, fontWeight: 700 }}>
+                back to the start
+              </button>
+            </div>
           ) : (
             <div style={{ ...card, textAlign: "center" as const, padding: 30 }}>
               <div style={{ color: T.textMuted, fontSize: 13, ...mono }}>

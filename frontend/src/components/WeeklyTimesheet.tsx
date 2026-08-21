@@ -570,11 +570,16 @@ const WeeklyTimesheet: React.FC = () => {
     });
   }, [searchedEntries]);
 
-  const { mainClients, tailClients } = useMemo(() => {
-    const main = clients.filter(c => c.total >= TAIL_THRESHOLD_HOURS);
-    const tail = clients.filter(c => c.total < TAIL_THRESHOLD_HOURS);
-    return { mainClients: main, tailClients: tail };
-  }, [clients]);
+  // Every client is listed. Folding the small ones into "N more clients under
+  // 15 min" hid exactly the rows most likely to need attention — a two-minute
+  // block on a client with two matters is still a billing decision, and it was
+  // the one row you could not reach. Short entries are the norm in legal work,
+  // not an edge case worth collapsing. The sort already sinks "No client" to
+  // the bottom, so it lands there naturally once nothing renders after it.
+  const { mainClients, tailClients } = useMemo(
+    () => ({ mainClients: clients, tailClients: [] as ClientAgg[] }),
+    [clients],
+  );
 
   const tailTotals = useMemo(() => {
     return tailClients.reduce(
@@ -1599,7 +1604,7 @@ const SummaryView: React.FC<{
 }> = ({ mainClients, tailClients, tailTotals, expanded, tailOpen, onToggle, onToggleTail, weekBlocks }) => {
   const fmtHours = useFmtHours();
   return (
-  <div className="divide-y divide-border/30">
+  <div className="divide-y divide-border/60">
     {mainClients.map(agg => (
       <ClientRow key={agg.key} agg={agg} isExpanded={expanded.has(agg.key)} onToggle={onToggle} weekBlocks={weekBlocks} />
     ))}

@@ -1879,6 +1879,13 @@ def mavops_client_mismatches(request):
                 'looks_like_client_id': m['looks_like_client_id'],
                 'looks_like_client_name': m['looks_like_client_name'],
                 'bucket': bucket,
+                # Carried here as well as on the target-unclear rows: this
+                # bucket has a one-click fix, so it is the one where NOT
+                # knowing a person chose the client is expensive. Block 59099
+                # is booked to First Baptist by a staff edit and reads as a
+                # clean auto-fixable mismatch without this.
+                'set_by': 'user' if (b.state_changed_by in ('user', 'user_edit', 'correction')
+                                     or b.categorized_by == 'manual') else 'classifier',
                 'confidence': {
                     'looks_like_coverage': m['looks_like_coverage'],
                     'abs_hit': m['looks_like_abs_hit'],

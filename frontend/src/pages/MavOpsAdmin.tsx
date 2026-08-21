@@ -1124,7 +1124,12 @@ function BucketDetail({
               </code>
               {resolve && (
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" as const, alignItems: "center" }}>
-                  <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>move to</span>
+                  {/* Only the target-unclear rows carry ranked candidates. A
+                      mismatch row has one named target and its own fix button,
+                      so it gets the clear action and the bulk bar, nothing more. */}
+                  {!!(m.candidates || []).length && (
+                    <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>move to</span>
+                  )}
                   {(m.candidates || []).map(c => (
                     <button key={c.client_id} disabled={resolve.busy}
                       onClick={() => resolve.assign([m.block_id], c.client_id, c.client_name)}
@@ -1350,64 +1355,13 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* CLIENT bucket — the money bucket. Scope is driven by the top org
-              selector (filterOrg); no per-client dropdown needed. */}
-          {data.client.total > 0 ? (
-            <>
-              {/* ── Prominent reconcile action bar (top of the money bucket) ── */}
-              <div style={{
-                ...card, marginBottom: 20,
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                gap: 16, flexWrap: "wrap" as const,
-                borderColor: filterOrg ? T.red + "55" : T.border,
-                background: filterOrg ? T.red + "0e" : T.surface,
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>
-                    {data.client.total} client mismatch{data.client.total === 1 ? "" : "es"} to reconcile
-                  </div>
-                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
-                    Reassigns each block to the client its title names, and logs an audit.
-                  </div>
-                </div>
-                {filterOrg ? (
-                  <button
-                    disabled={reconcileBusy}
-                    onClick={() => reconcile(data.client.mismatches.map(m => m.block_id), "all client mismatches")}
-                    style={{
-                      background: T.red, border: `1px solid ${T.red}`, color: "#fff",
-                      padding: "10px 20px", fontSize: 13, cursor: reconcileBusy ? "default" : "pointer",
-                      borderRadius: 6, ...mono, fontWeight: 700, opacity: reconcileBusy ? 0.5 : 1, whiteSpace: "nowrap" as const,
-                    }}>
-                    {reconcileBusy ? "reconciling…" : `⟲ Reconcile all ${data.client.mismatches.length}`}
-                  </button>
-                ) : (
-                  <span style={{ color: T.yellow, fontSize: 12, ...mono, fontWeight: 600, whiteSpace: "nowrap" as const }}>
-                    ↑ pick a single org above to reconcile
-                  </span>
-                )}
-              </div>
-
-              <BucketDetail
-                bucket={data.client}
-                tone={T.red}
-                onReconcile={filterOrg ? reconcile : undefined}
-                reconcileBusy={reconcileBusy}
-                hideBulkButton
-              />
-            </>
-          ) : (
-            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
-              <div style={{ color: T.green, fontSize: 14, ...mono }}>no client-name mismatches in this window ✓</div>
-            </div>
-          )}
-
-          {/* TARGET-UNCLEAR bucket — placed directly under the money bucket and
-              open by default. These are the only rows a person can settle by
-              hand, so burying them under the internal noise made the one
-              actionable pile the hardest to reach. */}
+          {/* TARGET-UNCLEAR bucket — FIRST, above the auto-fixable ones.
+              Ordered by how much of a person's attention each pile needs, not
+              by severity: these cannot be auto-applied, so they are the only
+              rows that will sit here untouched unless someone works them. The
+              red bucket below is one click each. */}
           {(data.unsure?.total ?? 0) > 0 && (
-            <div style={{ marginTop: 24 }}>
+            <div style={{ marginBottom: 24 }}>
               <div style={{
                 ...card, marginBottom: showUnsure ? 16 : 10,
                 borderColor: T.yellow + "88", background: T.yellow + "12",
@@ -1440,6 +1394,73 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                   } : undefined}
                 />
               )}
+            </div>
+          )}
+
+          {/* CLIENT bucket — the money bucket. Scope is driven by the top org
+              selector (filterOrg); no per-client dropdown needed. */}
+          {data.client.total > 0 ? (
+            <>
+              {/* ── Prominent reconcile action bar (top of the money bucket) ── */}
+              <div style={{
+                ...card, marginBottom: 20,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 16, flexWrap: "wrap" as const,
+                borderColor: filterOrg ? T.red + "55" : T.border,
+                background: filterOrg ? T.red + "0e" : T.surface,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>
+                    {data.client.total} client mismatch{data.client.total === 1 ? "" : "es"} to reconcile
+                  </div>
+                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
+                    Reassigns each block to the client its title names, and logs an audit.
+                  </div>
+                  {/* The bulk button is where overwriting a deliberate human
+                      allocation is cheapest to do by accident, so the count is
+                      stated before the click, not just badged per row. */}
+                  {data.client.mismatches.some(m => m.set_by === "user") && (
+                    <div style={{ fontSize: 12, color: T.yellow, ...mono, marginTop: 5, fontWeight: 600 }}>
+                      ⚠ {data.client.mismatches.filter(m => m.set_by === "user").length} of these were put
+                      there by a person — reconciling overwrites their choice.
+                    </div>
+                  )}
+                </div>
+                {filterOrg ? (
+                  <button
+                    disabled={reconcileBusy}
+                    onClick={() => reconcile(data.client.mismatches.map(m => m.block_id), "all client mismatches")}
+                    style={{
+                      background: T.red, border: `1px solid ${T.red}`, color: "#fff",
+                      padding: "10px 20px", fontSize: 13, cursor: reconcileBusy ? "default" : "pointer",
+                      borderRadius: 6, ...mono, fontWeight: 700, opacity: reconcileBusy ? 0.5 : 1, whiteSpace: "nowrap" as const,
+                    }}>
+                    {reconcileBusy ? "reconciling…" : `⟲ Reconcile all ${data.client.mismatches.length}`}
+                  </button>
+                ) : (
+                  <span style={{ color: T.yellow, fontSize: 12, ...mono, fontWeight: 600, whiteSpace: "nowrap" as const }}>
+                    ↑ pick a single org above to reconcile
+                  </span>
+                )}
+              </div>
+
+              <BucketDetail
+                bucket={data.client}
+                tone={T.red}
+                onReconcile={filterOrg ? reconcile : undefined}
+                reconcileBusy={reconcileBusy}
+                hideBulkButton
+                resolve={filterOrg ? {
+                  clients: orgClients,
+                  busy: resolveBusy,
+                  assign: assignTo,
+                  dismiss: dismissRows,
+                } : undefined}
+              />
+            </>
+          ) : (
+            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
+              <div style={{ color: T.green, fontSize: 14, ...mono }}>no client-name mismatches in this window ✓</div>
             </div>
           )}
 

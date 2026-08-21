@@ -1681,6 +1681,71 @@ def mavops_dismiss_mismatches(request):
     return Response({'dismissed': dismissed})
 
 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_cleared_mismatches(request):
+    """GET /api/mavops/mismatches/cleared/?org_id=&limit=
+
+    What has been waved away, newest first. "It's right" is one click on a
+    dense list and it is going to get mis-clicked; without somewhere to see and
+    reverse it, the only route back is a hand-written database delete.
+    """
+    from tracker.models import MismatchFlag
+
+    org_id = request.GET.get('org_id')
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    try:
+        limit = min(max(int(request.GET.get('limit', 50)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+
+    rows = (MismatchFlag.objects
+            .filter(org_id=org_id, resolved_reason='confirmed_correct')
+            .select_related('booked_client', 'block')
+            .order_by('-resolved_at')[:limit])
+    return Response({'cleared': [{
+        'flag_id': f.id,
+        'block_id': f.block_id,
+        'cleared_at': f.resolved_at.isoformat() if f.resolved_at else None,
+        'booked_client_name': f.booked_client.name if f.booked_client_id else None,
+        'window_title': (f.window_title or '')[:200],
+    } for f in rows]})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_undismiss_mismatches(request):
+    """
+    POST /api/mavops/mismatches/undismiss/  {"org_id": 21, "block_ids": [...]}
+
+    Undo "it's right". Deletes the confirmed_correct flag so the scan stops
+    skipping the block and the row comes back on the next load.
+
+    Deleting rather than reopening is deliberate: the dismiss created this row
+    (it never resolved a scan-opened one, or it would have kept that row's
+    detected_at), so removing it restores the state exactly as it was. Nothing
+    about the block itself is touched here, because nothing about the block was
+    touched when it was cleared.
+    """
+    from tracker.models import MismatchFlag
+
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    if not isinstance(block_ids, list) or not block_ids:
+        return Response({'error': 'block_ids (non-empty list) is required.'}, status=400)
+
+    deleted, _ = (MismatchFlag.objects
+                  .filter(org_id=org_id, block_id__in=block_ids,
+                          resolved_reason='confirmed_correct')
+                  .delete())
+    return Response({'restored': deleted})
+
+
 def _confirmed_correct_block_ids(org_id):
     """Blocks a human has already declared correctly booked.
 

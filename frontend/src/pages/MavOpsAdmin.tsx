@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
 
 import {
   TemplatePickerModal,
@@ -1158,7 +1158,17 @@ function BucketDetail({
 }
 
 function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
-  const [data, setData] = useState<MismatchResponse | null>(null);
+  const [raw, setRaw] = useState<MismatchResponse | null>(null);
+  // Rows acted on since the last fetch, hidden locally instead of refetched.
+  const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
+
+  const hide = useCallback((ids: number[]) => {
+    setHiddenIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
+  }, []);
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(120);
   const [showInternal, setShowInternal] = useState(false);
@@ -1167,6 +1177,8 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [showUnsure, setShowUnsure] = useState(true);
   const [orgClients, setOrgClients] = useState<{ id: number; name: string }[]>([]);
   const [resolveBusy, setResolveBusy] = useState(false);
+  const [cleared, setCleared] = useState<{ flag_id: number; block_id: number; cleared_at: string | null; booked_client_name: string | null; window_title: string }[]>([]);
+  const [showCleared, setShowCleared] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -1175,7 +1187,8 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
       const p = new URLSearchParams({ days: String(days) });
       if (filterOrg) p.set("org_id", String(filterOrg));
       const d = await apiFetch(`/mavops/mismatches/?${p}`);
-      setData(d);
+      setRaw(d);
+      setHiddenIds(new Set());   // fresh scan — the local hides are now stale
     } catch {
       flash("Failed to load mismatches.", "err");
     } finally {
@@ -1184,6 +1197,29 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   }, [apiFetch, flash, filterOrg, days]);
 
   useEffect(() => { load(); }, [load]);
+
+  // What the page renders: the last scan minus anything acted on since. A full
+  // rescan takes 8-14 seconds, so reloading after every click made working the
+  // list feel broken — the same problem the Needs-You lane solved by hiding the
+  // row locally and trusting the write.
+  const data = useMemo<MismatchResponse | null>(() => {
+    if (!raw) return null;
+    if (!hiddenIds.size) return raw;
+    const strip = (b: MismatchBucket): MismatchBucket => {
+      const rows = b.mismatches.filter(m => !hiddenIds.has(m.block_id));
+      const removed = b.mismatches.length - rows.length;
+      // Subtract rather than recount: `total` can exceed the rows returned
+      // (the `limit` cap), so recounting would collapse it to the page size.
+      return { ...b, mismatches: rows, returned: rows.length,
+               total: Math.max(0, b.total - removed) };
+    };
+    return {
+      ...raw,
+      client: strip(raw.client),
+      internal: strip(raw.internal),
+      ...(raw.unsure ? { unsure: strip(raw.unsure) } : {}),
+    };
+  }, [raw, hiddenIds]);
 
   useEffect(() => {
     if (!filterOrg) { setOrgClients([]); return; }
@@ -1194,45 +1230,83 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     return () => { live = false; };
   }, [apiFetch, filterOrg]);
 
-  // Assign to a client a PERSON chose. Dry-run first for the count, then
-  // confirm — the same two-step the automatic reconcile uses, because this
-  // writes to billable time.
+  // Assign to a client a PERSON chose.
+  //
+  // A single row goes straight through: the button carries the client's name,
+  // so the click IS the confirmation, and a dialog per row makes working a list
+  // of twenty unbearable. Bulk keeps the dry-run and the dialog, because that
+  // is where one click moves a lot of billable time at once.
   const assignTo = useCallback(async (blockIds: number[], clientId: number, clientName: string) => {
     if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
+    const bulk = blockIds.length > 1;
     setResolveBusy(true);
     try {
-      const dry = await apiFetch(`/mavops/mismatches/assign/`, {
-        method: "POST",
-        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, client_id: clientId, confirm: false }),
-      });
-      const n = dry.would_reassign || 0;
-      if (!n) { flash(`Nothing to move (${dry.skipped} skipped).`); return; }
-      const plural = n === 1 ? "block" : "blocks";
-      if (!window.confirm(`Move ${n} ${plural} to "${clientName}"?` +
-        (dry.skipped ? `\n\n${dry.skipped} skipped (already there, or invoiced).` : ""))) return;
+      if (bulk) {
+        const dry = await apiFetch(`/mavops/mismatches/assign/`, {
+          method: "POST",
+          body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, client_id: clientId, confirm: false }),
+        });
+        const n = dry.would_reassign || 0;
+        if (!n) { flash(`Nothing to move (${dry.skipped} skipped).`); return; }
+        if (!window.confirm(`Move ${n} blocks to "${clientName}"?` +
+          (dry.skipped ? `\n\n${dry.skipped} skipped (already there, or invoiced).` : ""))) return;
+      }
       const res = await apiFetch(`/mavops/mismatches/assign/`, {
         method: "POST",
         body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, client_id: clientId, confirm: true }),
       });
+      if (!res.reassigned) {
+        flash(`Nothing moved — already there, or invoiced.`, "err");
+        return;
+      }
+      hide(blockIds);
       flash(`Moved ${res.reassigned} to "${res.to_client_name}".`);
-      await load();
     } catch { flash("Failed to move those blocks.", "err"); }
     finally { setResolveBusy(false); }
+  }, [apiFetch, flash, filterOrg, hide]);
+
+  const loadCleared = useCallback(async () => {
+    if (!filterOrg) { setCleared([]); return; }
+    try {
+      const d = await apiFetch(`/mavops/mismatches/cleared/?org_id=${filterOrg}`);
+      setCleared(d.cleared || []);
+    } catch { /* the list is a safety net, not load-bearing */ }
+  }, [apiFetch, filterOrg]);
+
+  useEffect(() => { loadCleared(); }, [loadCleared]);
+
+  const undoClear = useCallback(async (blockIds: number[]) => {
+    if (!filterOrg) return;
+    try {
+      const r = await apiFetch(`/mavops/mismatches/undismiss/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds }),
+      });
+      flash(`Restored ${r.restored} — reloading the scan to bring ${blockIds.length > 1 ? "them" : "it"} back.`);
+      setCleared(prev => prev.filter(c => !blockIds.includes(c.block_id)));
+      await load();   // the row has to be re-derived, so this one earns its reload
+    } catch { flash("Failed to restore.", "err"); }
   }, [apiFetch, flash, filterOrg, load]);
 
   const dismissRows = useCallback(async (blockIds: number[]) => {
     if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
+    // Hidden first, confirmed after: clearing is the fastest action on the tab
+    // and the one most likely to be done twenty times in a row.
+    hide(blockIds);
     setResolveBusy(true);
     try {
       const res = await apiFetch(`/mavops/mismatches/dismiss/`, {
         method: "POST",
         body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds }),
       });
-      flash(`Marked ${res.dismissed} as correctly booked — they won't come back.`);
-      await load();
-    } catch { flash("Failed to clear those.", "err"); }
+      flash(`Cleared ${res.dismissed}. Undo from the "cleared" list below.`);
+      loadCleared();
+    } catch {
+      flash("Failed to clear those.", "err");
+      await load();   // put them back — the write did not land
+    }
     finally { setResolveBusy(false); }
-  }, [apiFetch, flash, filterOrg, load]);
+  }, [apiFetch, flash, filterOrg, hide, load, loadCleared]);
 
   // Reconcile: dry-run first (server re-derives the target client from each
   // block's title), show the plan, confirm, then commit. Requires an org
@@ -1273,13 +1347,13 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
         body: JSON.stringify({ org_id: org, block_ids: blockIds, confirm: true }),
       });
       flash(`Reconciled ${res.reassigned} block${res.reassigned !== 1 ? "s" : ""}.`, "ok");
-      await load();
+      hide(blockIds);
     } catch {
       flash("Reconcile failed.", "err");
     } finally {
       setReconcileBusy(false);
     }
-  }, [apiFetch, flash, filterOrg, load]);
+  }, [apiFetch, flash, filterOrg, hide]);
 
   // Verdict runs on the CLIENT bucket only — the money bucket. Internal noise
   // must never trigger the "ongoing" alarm.
@@ -1461,6 +1535,37 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
           ) : (
             <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
               <div style={{ color: T.green, fontSize: 14, ...mono }}>no client-name mismatches in this window ✓</div>
+            </div>
+          )}
+
+          {/* Cleared list — the way back from a mis-click. "It's right" is one
+              click on a dense list and will be hit by accident; without this
+              the only route back is editing the database by hand. */}
+          {cleared.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <button onClick={() => setShowCleared(v => !v)}
+                style={{ width: "100%", ...card, marginBottom: showCleared ? 12 : 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.border}` }}>
+                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
+                  {showCleared ? "▾" : "▸"} Cleared as correct ({cleared.length})
+                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
+                    — hidden from the lists above; undo any of them here
+                  </span>
+                </span>
+                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showCleared ? "hide" : "show"}</span>
+              </button>
+              {showCleared && cleared.map(c => (
+                <div key={c.flag_id} style={{ ...card, padding: "10px 16px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" as const }}>
+                  <Badge label={c.booked_client_name || "No client"} color={T.textMuted} />
+                  <code style={{ fontSize: 11, color: T.textMuted, ...mono, flex: 1, minWidth: 200, wordBreak: "break-all" as const }}>
+                    {c.window_title || "(no title)"}
+                  </code>
+                  <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>block {c.block_id}</span>
+                  <button onClick={() => undoClear([c.block_id])}
+                    style={{ background: "transparent", border: `1px solid ${T.yellow}`, color: T.yellow, padding: "4px 12px", fontSize: 11, cursor: "pointer", borderRadius: 4, ...mono, fontWeight: 600 }}>
+                    ↶ undo
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 

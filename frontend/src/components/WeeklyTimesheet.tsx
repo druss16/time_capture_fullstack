@@ -843,7 +843,7 @@ const WeeklyTimesheet: React.FC = () => {
           <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5">
             <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
             <span className="font-mono text-[12px] text-amber-900">
-              <b className="tabular-nums">{fmtHours(matterGap.minutes)}</b> needs a matter
+              <b className="tabular-nums">{formatMinutes(matterGap.minutes)}</b> needs a matter
               <span className="hidden sm:inline"> — it will not reach Clio until you choose one</span>
             </span>
             <span className="flex-1" />

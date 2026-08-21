@@ -1316,6 +1316,221 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   );
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Accuracy Tab (the sampled audit behind the number) ────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface AccuracySummary {
+  period: { start: string; end: string };
+  coverage: {
+    filed_minutes: number; asked_minutes: number; human_filed_minutes: number;
+    discarded_minutes: number; total_minutes: number; autonomy: number | null;
+  };
+  sampled: {
+    drawn: number; pending: number; correct: number; wrong: number; unverifiable: number;
+    precision: number | null; ci_low: number | null; ci_high: number | null;
+    worst_case: number | null; wrong_minutes: number;
+  };
+  human_corrections: { corrected: number; population: number; floor_error_rate: number | null };
+  self_corrections: number;
+  headline: string;
+}
+interface AccuracyRow {
+  sample_id: number; block_id: number; date: string | null; user: string | null;
+  minutes: number; app_name: string; window_title: string; file_path: string;
+  booked_client_id: number | null; booked_client_name: string | null;
+  verdict: string; correct_client_name: string | null; note: string;
+}
+
+const hrs = (m: number) => {
+  const h = Math.floor((m || 0) / 60), mm = (m || 0) % 60;
+  return h && mm ? `${h}h ${mm}m` : h ? `${h}h` : `${mm}m`;
+};
+
+function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
+  const [sum, setSum] = useState<AccuracySummary | null>(null);
+  const [rows, setRows] = useState<AccuracyRow[]>([]);
+  const [days, setDays] = useState(30);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!filterOrg) { setSum(null); setRows([]); return; }
+    setLoading(true);
+    try {
+      const q = `org_id=${filterOrg}&days=${days}`;
+      const [s, q2] = await Promise.all([
+        apiFetch(`/mavops/accuracy/?${q}`),
+        apiFetch(`/mavops/accuracy/queue/?${q}&state=pending`),
+      ]);
+      setSum(s); setRows(q2.rows || []);
+    } catch { flash("Failed to load accuracy.", "err"); }
+    finally { setLoading(false); }
+  }, [apiFetch, flash, filterOrg, days]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const draw = useCallback(async () => {
+    if (!filterOrg) return;
+    setBusy(true);
+    try {
+      const r = await apiFetch(`/mavops/accuracy/draw/?org_id=${filterOrg}&days=${days}`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, n: 50 }),
+      });
+      flash(`Drew ${r.drawn} blocks at random from ${r.population.toLocaleString()} filed.`);
+      await load();
+    } catch { flash("Failed to draw a sample.", "err"); }
+    finally { setBusy(false); }
+  }, [apiFetch, flash, filterOrg, days, load]);
+
+  const judge = useCallback(async (sampleId: number, verdict: string) => {
+    // Optimistic: the row leaves the pending queue immediately. Adjudicating
+    // 50 blocks is the whole cost of this method, so it must not feel slow.
+    setRows(prev => prev.filter(r => r.sample_id !== sampleId));
+    try {
+      const r = await apiFetch(`/mavops/accuracy/adjudicate/`, {
+        method: "POST",
+        body: JSON.stringify({ sample_id: sampleId, verdict }),
+      });
+      setSum(s => (s ? { ...s, sampled: r.summary } : s));
+    } catch { flash("Failed to record that verdict.", "err"); await load(); }
+  }, [apiFetch, flash, load]);
+
+  if (!filterOrg) {
+    return <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
+      <div style={{ color: T.yellow, fontSize: 13, ...mono }}>
+        ↑ pick a single org above — an accuracy number is only meaningful per firm
+      </div>
+    </div>;
+  }
+
+  const cov = sum?.coverage, sm = sum?.sampled;
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20, flexWrap: "wrap" as const }}>
+        <span style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>Accuracy</span>
+        <OrgPill name={`org ${filterOrg}`} />
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: T.textMuted, ...mono }}>window</span>
+        <select value={days} onChange={e => setDays(Number(e.target.value))}
+          style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "6px 10px", fontSize: 12, borderRadius: 4, ...mono }}>
+          <option value={30}>30d</option><option value={90}>90d</option><option value={120}>120d</option>
+        </select>
+        <button disabled={busy} onClick={draw}
+          style={{ background: T.teal, border: "none", color: "#fff", padding: "8px 16px", fontSize: 12, cursor: busy ? "default" : "pointer", borderRadius: 5, ...mono, fontWeight: 700, opacity: busy ? 0.5 : 1 }}>
+          {busy ? "drawing…" : "⚄ Draw 50 at random"}
+        </button>
+      </div>
+
+      {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13 }}>loading…</div>}
+
+      {sum && !loading && (
+        <>
+          {/* The sentence. Leads with what we filed, then what a random sample
+              says about it, then what we caught ourselves — a track record
+              rather than a bare percentage. */}
+          <div style={{ ...card, marginBottom: 20, borderColor: T.teal + "55", background: T.teal + "0e" }}>
+            <div style={{ fontSize: 14, color: T.text, ...mono, lineHeight: 1.7 }}>{sum.headline}</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+            <StatCard label="Filed Without Asking" value={hrs(cov!.filed_minutes)} color={T.text} />
+            <StatCard label="Autonomy"
+              value={cov!.autonomy != null ? `${(cov!.autonomy * 100).toFixed(0)}%` : "—"} color={T.teal} />
+            <StatCard label="Sampled Precision"
+              value={sm!.precision != null ? `${(sm!.precision * 100).toFixed(0)}%` : "no sample"}
+              color={sm!.precision == null ? T.textMuted : sm!.precision >= 0.95 ? T.green : T.yellow} />
+            <StatCard label="We Caught Ourselves" value={sum.self_corrections} color={T.green} />
+          </div>
+
+          {/* Both estimators, side by side with the honest caveat that they are
+              floors — the sample is the only unbiased one. */}
+          <div style={{ ...card, marginBottom: 20 }}>
+            <div style={{ fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.9 }}>
+              {sm!.precision != null ? (
+                <>
+                  <div>
+                    <strong style={{ color: T.text }}>Random sample</strong> (the only unbiased signal) —
+                    {" "}{sm!.correct} correct, {sm!.wrong} wrong
+                    {sm!.unverifiable ? `, ${sm!.unverifiable} unverifiable` : ""}
+                    {sm!.pending ? `, ${sm!.pending} still to judge` : ""}.
+                    {" "}95% confidence: {(sm!.ci_low! * 100).toFixed(0)}–{(sm!.ci_high! * 100).toFixed(0)}%.
+                    {sm!.unverifiable > 0 && sm!.worst_case != null && (
+                      <> If every unverifiable block were wrong, the floor is {(sm!.worst_case * 100).toFixed(0)}%.</>
+                    )}
+                    {sm!.wrong_minutes > 0 && <> Errors found carry {hrs(sm!.wrong_minutes)}.</>}
+                  </div>
+                </>
+              ) : (
+                <div><strong style={{ color: T.yellow }}>No sample drawn for this window yet</strong> — the two
+                  lines below are lower bounds only, biased by what their detectors can see.</div>
+              )}
+              <div style={{ marginTop: 6 }}>
+                <strong style={{ color: T.text }}>People caught</strong> {sum.human_corrections.corrected} errors
+                in {sum.human_corrections.population.toLocaleString()} filed blocks
+                {sum.human_corrections.floor_error_rate != null &&
+                  ` (${(sum.human_corrections.floor_error_rate * 100).toFixed(2)}% floor)`}
+                {" "}— a floor, not a rate: nobody re-reads what looks fine.
+              </div>
+              <div>
+                <strong style={{ color: T.text }}>We caught</strong> {sum.self_corrections} of our own and re-filed them.
+              </div>
+              <div style={{ color: T.textMuted, marginTop: 6 }}>
+                {hrs(cov!.discarded_minutes)} was discarded as not-real-activity — counted on neither side.
+              </div>
+            </div>
+          </div>
+
+          {/* Adjudication queue */}
+          {rows.length > 0 ? (
+            <>
+              <div style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600, marginBottom: 10 }}>
+                {rows.length} to judge — was this filed to the right client?
+              </div>
+              {rows.map(r => (
+                <div key={r.sample_id} style={{ ...card, padding: "14px 20px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {r.block_id}</span>
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{r.date}</span>
+                    {r.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{r.user}</span>}
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{hrs(r.minutes)}</span>
+                    <div style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>filed as</span>
+                    <Badge label={r.booked_client_name || "No client"} color={T.yellow} />
+                  </div>
+                  <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
+                    {r.app_name && <span style={{ color: T.textMuted }}>{r.app_name} — </span>}
+                    {r.window_title || <span style={{ color: T.textMuted }}>(no title)</span>}
+                    {r.file_path && <div style={{ color: T.textMuted, marginTop: 4 }}>{r.file_path}</div>}
+                  </code>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    {([["correct", "✓ right", T.green],
+                       ["wrong", "✗ wrong", T.red],
+                       ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, label, colour]) => (
+                      <button key={v} onClick={() => judge(r.sample_id, v)}
+                        style={{ background: colour + "18", border: `1px solid ${colour}`, color: colour, padding: "5px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono, fontWeight: 600 }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div style={{ ...card, textAlign: "center" as const, padding: 30 }}>
+              <div style={{ color: T.textMuted, fontSize: 13, ...mono }}>
+                {sm!.drawn > 0 ? "nothing left to judge in this window ✓" : "draw a sample to start"}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1742,7 +1957,7 @@ export default function MavOpsAdmin() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "daily-review" | "qbo-mapping">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping">("orgs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -1979,7 +2194,7 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "daily-review", "qbo-mapping"] as const;
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "accuracy", "daily-review", "qbo-mapping"] as const;
   const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping" };
 
   return (
@@ -2539,6 +2754,10 @@ export default function MavOpsAdmin() {
 
         {tab === "mismatches" && (
           <MismatchesTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} />
+        )}
+
+        {tab === "accuracy" && (
+          <AccuracyTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} />
         )}
 
         {tab === "qbo-mapping" && (

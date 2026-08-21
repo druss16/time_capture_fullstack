@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
 from .integrations.clio import views as clio_views
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -539,6 +539,13 @@ urlpatterns = [
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),
 
     path("mavops/mismatches/reconcile/", views_mavops.mavops_reconcile_mismatches, name="mavops_reconcile_mismatches"),
+
+    # Accuracy — the sampled audit behind the number, plus its two lower-bound
+    # estimators. Read the module docstring before changing what gets sampled.
+    path("mavops/accuracy/", views_accuracy.accuracy_summary, name="mavops_accuracy_summary"),
+    path("mavops/accuracy/draw/", views_accuracy.accuracy_draw, name="mavops_accuracy_draw"),
+    path("mavops/accuracy/queue/", views_accuracy.accuracy_queue, name="mavops_accuracy_queue"),
+    path("mavops/accuracy/adjudicate/", views_accuracy.accuracy_adjudicate, name="mavops_accuracy_adjudicate"),
 
     path("reports/matrix/",        views_reports_matrix.reports_matrix,        name="reports_matrix"),
     path("reports/matrix/export/", views_reports_matrix.reports_matrix_export, name="reports_matrix_export"),

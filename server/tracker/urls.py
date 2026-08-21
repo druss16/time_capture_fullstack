@@ -539,6 +539,9 @@ urlpatterns = [
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),
 
     path("mavops/mismatches/reconcile/", views_mavops.mavops_reconcile_mismatches, name="mavops_reconcile_mismatches"),
+    path("mavops/orgs/<int:org_id>/clients/", views_mavops.mavops_org_clients, name="mavops_org_clients"),
+    path("mavops/mismatches/assign/", views_mavops.mavops_assign_mismatches, name="mavops_assign_mismatches"),
+    path("mavops/mismatches/dismiss/", views_mavops.mavops_dismiss_mismatches, name="mavops_dismiss_mismatches"),
 
     # Accuracy — the sampled audit behind the number, plus its two lower-bound
     # estimators. Read the module docstring before changing what gets sampled.

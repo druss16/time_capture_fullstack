@@ -1489,6 +1489,213 @@ def mavops_copy_routing_rules(request, org_id):
     })
 
 
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_org_clients(request, org_id):
+    """GET /api/mavops/orgs/<org_id>/clients/ — id + name, for the "it's
+    actually some other client" picker. The ranked candidates on a row cover
+    the common case; this covers the rest."""
+    from tracker.models import Client
+    return Response({'clients': [
+        {'id': c.id, 'name': c.name}
+        for c in Client.objects.filter(org_id=org_id).only('id', 'name').order_by('name')
+    ]})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_assign_mismatches(request):
+    """
+    POST /api/mavops/mismatches/assign/
+      body: {"org_id": 21, "block_ids": [...], "client_id": 169, "confirm": false}
+
+    Move blocks to a client a PERSON picked.
+
+    Deliberately different from /reconcile/, which re-derives the target from
+    the title and ignores any client id sent to it. That is the right rule when
+    a machine is deciding, and exactly the wrong one here: these rows exist
+    BECAUSE the title cannot pick between same-family clients, so the detector
+    abstains and reconcile would skip every one of them. A human looking at the
+    row can resolve the tie, so the id they choose is the authority.
+
+    The reassigned block is stamped as human-set, which takes it out of the
+    accuracy sample (we measure our own filing, not someone's judgement) and
+    stops the scan re-flagging what a person already settled.
+    """
+    from tracker.models import Block, Client, ClassificationAudit
+
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    client_id = request.data.get('client_id')
+    confirm = bool(request.data.get('confirm', False))
+
+    if not org_id:
+        return Response({"error": "org_id is required."}, status=400)
+    if not isinstance(block_ids, list) or not block_ids:
+        return Response({"error": "block_ids (non-empty list) is required."}, status=400)
+    if len(block_ids) > 1000:
+        return Response({"error": "Too many block_ids (max 1000 per call)."}, status=400)
+    if not client_id:
+        return Response({"error": "client_id is required — this endpoint does not guess."}, status=400)
+
+    target = Client.objects.filter(id=client_id, org_id=org_id).only('id', 'name').first()
+    if not target:
+        return Response({"error": "client_id does not belong to this org."}, status=404)
+
+    blocks = (Block.objects
+              .filter(id__in=block_ids, org_id=org_id, deleted_at__isnull=True)
+              .select_related('client'))
+
+    planned, skipped = [], []
+    for b in blocks:
+        # Same refusal as splitting: once time is invoiced or pushed to a
+        # billing system, moving it here would silently disagree with what the
+        # client was already billed.
+        if b.invoiced or getattr(b, 'qb_time_activity_id', None) or getattr(b, 'xero_invoice_id', None):
+            skipped.append({'block_id': b.id, 'reason': 'already invoiced or synced to billing'})
+            continue
+        if b.client_id == target.id:
+            skipped.append({'block_id': b.id, 'reason': 'already on that client'})
+            continue
+        planned.append({
+            'block_id': b.id,
+            'from_client_id': b.client_id,
+            'from_client_name': b.client.name if b.client_id else None,
+            'window_title': (b.window_title or '')[:160],
+        })
+
+    if not confirm:
+        return Response({
+            'dry_run': True, 'org_id': int(org_id),
+            'would_reassign': len(planned), 'skipped': len(skipped),
+            'to_client_name': target.name,
+            'plan': planned, 'skips': skipped[:100],
+        })
+
+    from django.db import transaction
+    from tracker.services.classification_service import ClassificationService
+
+    changed = 0
+    with transaction.atomic():
+        by_id = {p['block_id']: p for p in planned}
+        for b in Block.objects.select_for_update().filter(id__in=list(by_id.keys())):
+            p = by_id.get(b.id)
+            if not p:
+                continue
+            old_client = b.client_id
+            cat_before = ClassificationService._extract_dominant_category(b)
+
+            b.client_id = target.id
+            update_fields = ['client_id']
+            # A person settled this, so record it as such: the heal commands,
+            # the mismatch scan and the accuracy sampler all key off these.
+            b.state_changed_by = 'correction'
+            b.state_changed_at = timezone.now()
+            b.categorized_by = 'correction'
+            update_fields += ['state_changed_by', 'state_changed_at', 'categorized_by']
+            b.save(update_fields=update_fields, force_classifier=True)
+
+            ClassificationAudit.objects.create(
+                block=b, source='manual',
+                client_before_id=old_client, client_after_id=target.id,
+                category_before=cat_before,
+                category_after=ClassificationService._extract_dominant_category(b),
+                confidence_client=1.0, confidence_category=1.0, overall_confidence=1.0,
+                matched_signals=[{
+                    'type': 'mismatch_manual_assign',
+                    'strength': 1.0,
+                    'evidence': (f"Staff picked {target.name!r} for a row the matcher could not "
+                                 f"resolve; reassigned from {p['from_client_name']!r}."),
+                    'detail': (b.window_title or '')[:200],
+                }],
+                corrected_by_user=True,
+            )
+
+            _open = MismatchFlag.objects.filter(block=b, resolved_at__isnull=True).first()
+            if _open:
+                _open.resolved_at = timezone.now()
+                _open.resolved_reason = 'reconciled'
+                _open.save(update_fields=['resolved_at', 'resolved_reason'])
+            else:
+                MismatchFlag.objects.create(
+                    org_id=int(org_id), block=b,
+                    booked_client_id=old_client, title_client_id=target.id,
+                    title_client_name=target.name, bucket='client', match_score=1.0,
+                    window_title=(b.window_title or '')[:512],
+                    resolved_at=timezone.now(), resolved_reason='reconciled',
+                )
+            changed += 1
+
+    return Response({'dry_run': False, 'org_id': int(org_id),
+                     'reassigned': changed, 'skipped': len(skipped),
+                     'to_client_name': target.name})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_dismiss_mismatches(request):
+    """
+    POST /api/mavops/mismatches/dismiss/
+      body: {"org_id": 21, "block_ids": [...]}
+
+    "This one is actually right — stop showing it."
+
+    Records a RESOLVED MismatchFlag with reason 'confirmed_correct' and does
+    not touch the block. The scan reads these back and skips the block, so a
+    judgement call made once does not have to be made again every time the tab
+    is opened. Nothing is deleted: the flag stays as history, which is also how
+    we learn which pairs keep being false alarms.
+    """
+    from tracker.models import Block
+
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    if not org_id:
+        return Response({"error": "org_id is required."}, status=400)
+    if not isinstance(block_ids, list) or not block_ids:
+        return Response({"error": "block_ids (non-empty list) is required."}, status=400)
+    if len(block_ids) > 1000:
+        return Response({"error": "Too many block_ids (max 1000 per call)."}, status=400)
+
+    dismissed = 0
+    for b in (Block.objects.filter(id__in=block_ids, org_id=org_id, deleted_at__isnull=True)
+                           .only('id', 'client_id', 'window_title')):
+        _open = MismatchFlag.objects.filter(block=b, resolved_at__isnull=True).first()
+        if _open:
+            _open.resolved_at = timezone.now()
+            _open.resolved_reason = 'confirmed_correct'
+            _open.save(update_fields=['resolved_at', 'resolved_reason'])
+        else:
+            MismatchFlag.objects.create(
+                org_id=int(org_id), block=b,
+                booked_client_id=b.client_id,
+                title_client_name='', bucket='client', match_score=0.0,
+                window_title=(b.window_title or '')[:512],
+                resolved_at=timezone.now(), resolved_reason='confirmed_correct',
+            )
+        dismissed += 1
+
+    return Response({'dismissed': dismissed})
+
+
+def _confirmed_correct_block_ids(org_id):
+    """Blocks a human has already declared correctly booked.
+
+    Read once per scan and used to skip, so "yes I checked, it's right" is a
+    decision that sticks instead of one the tab asks for again tomorrow.
+    """
+    if not org_id:
+        return set()
+    return set(
+        MismatchFlag.objects
+        .filter(org_id=org_id, resolved_reason='confirmed_correct')
+        .values_list('block_id', flat=True)
+    )
+
+
 def _record_absent(b, oid, absent, names, flagged, by_day, by_pair, counts, limit):
     """Record one "booked client isn't in its own title" row.
 
@@ -1617,6 +1824,10 @@ def mavops_client_mismatches(request):
     by_pair = {b: defaultdict(int) for b in _BUCKETS}
     counts = {b: 0 for b in _BUCKETS}
     scanned = 0
+    # Rows a human already looked at and declared correct. Skipped rather than
+    # re-derived, so the judgement holds until someone reopens it.
+    dismissed_ids = _confirmed_correct_block_ids(org_id)
+    dismissed_hits = 0
 
     # NOT .iterator(): that opens a named server-side cursor, and Neon's
     # transaction pooler can hand the next FETCH to a different backend session
@@ -1629,6 +1840,10 @@ def mavops_client_mismatches(request):
         index = index_by_org.get(oid)
         names = names_by_org.get(oid)
         if not index or not names or b.client_id not in names:
+            continue
+
+        if b.id in dismissed_ids:
+            dismissed_hits += 1
             continue
 
         firm = firm_by_org.get(oid)
@@ -1690,6 +1905,10 @@ def mavops_client_mismatches(request):
     return Response({
         'params': {'org_id': int(org_id) if org_id else None, 'days': days},
         'scanned_blocks': scanned,
+        # Surfaced rather than silent: a growing number here means either the
+        # detector keeps raising the same false alarm, or someone is waving
+        # away real errors. Both are worth being able to see.
+        'dismissed_blocks': dismissed_hits,
         # The money bucket — real client<->client mismatches (e.g. UltraTax
         # forward-fill). The verdict/histogram the UI leads with is THIS one.
         'client': {

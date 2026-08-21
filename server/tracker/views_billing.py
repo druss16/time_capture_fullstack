@@ -1964,6 +1964,35 @@ def clio_plan_for_timesheet(timesheet, org):
     )
 
 
+def push_timesheet_to_clio(timesheet, org):
+    """
+    Send a timesheet's time to Clio. Returns a result dict, or None when the org
+    has no Clio connection.
+
+    Fully guarded by the caller: a Clio problem must never undo the submit or
+    approval that just succeeded. Safe to call more than once — push is a delta
+    against what Clio already holds, so a re-run cannot double-bill.
+    """
+    plan = clio_plan_for_timesheet(timesheet, org)
+    if plan is None:
+        return None
+    if not plan.get('entries'):
+        return {'pushed': False, 'entries': 0, 'hours': 0,
+                'errors': [], 'skipped': plan.get('skipped', [])}
+
+    from tracker.integrations.clio.push import execute_push
+
+    integration = _clio_integration_for(org)
+    result = execute_push(integration, plan)
+    return {
+        'pushed': True,
+        'entries': result['totals']['entries'],
+        'hours': result['totals']['hours'],
+        'errors': result['errors'],
+        'skipped': result['skipped'],
+    }
+
+
 class TimesheetClioPreviewView(APIView):
     """
     GET /api/billing/timesheets/<id>/clio-preview/
@@ -1995,7 +2024,12 @@ class TimesheetClioPreviewView(APIView):
         if plan is None:
             return Response({'connected': False})
 
-        return Response({'connected': True, 'available': True, **plan})
+        return Response({
+            'connected': True,
+            'available': True,
+            'push_trigger': getattr(membership.organization, 'clio_push_trigger', 'approve'),
+            **plan,
+        })
 
 
 class TimesheetSubmitView(APIView):
@@ -2058,31 +2092,17 @@ class TimesheetSubmitView(APIView):
         # Safe to re-run. push is a delta against what Clio already holds, so a
         # double submit cannot double-bill — which is what makes pushing on
         # submit defensible rather than reckless.
+        # Manager approval is the firm's control over what gets billed, so by
+        # default nothing reaches Clio until it is approved. An org can opt into
+        # pushing at submit — right for a solo practitioner, who is both roles.
         clio_result = None
-        try:
-            plan = clio_plan_for_timesheet(timesheet, membership.organization)
-            if plan and plan.get('entries'):
-                from tracker.integrations.clio.push import execute_push
-                integration = _clio_integration_for(membership.organization)
-                pushed = execute_push(integration, plan)
-                clio_result = {
-                    'pushed': True,
-                    'entries': pushed['totals']['entries'],
-                    'hours': pushed['totals']['hours'],
-                    'errors': pushed['errors'],
-                    'skipped': pushed['skipped'],
-                }
-            elif plan is not None:
-                clio_result = {
-                    'pushed': False,
-                    'entries': 0,
-                    'hours': 0,
-                    'errors': [],
-                    'skipped': plan.get('skipped', []),
-                }
-        except Exception as e:
-            logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
-            clio_result = {'pushed': False, 'error': str(e)[:200]}
+        trigger = getattr(membership.organization, 'clio_push_trigger', 'approve')
+        if trigger == 'submit':
+            try:
+                clio_result = push_timesheet_to_clio(timesheet, membership.organization)
+            except Exception as e:
+                logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
+                clio_result = {'pushed': False, 'error': str(e)[:200]}
 
         return Response({
             'id': timesheet.id,
@@ -2127,7 +2147,22 @@ class TimesheetApproveView(APIView):
         # Use model method - this marks blocks as approved and updates status
         notes = request.data.get('notes', '')
         timesheet.approve(approved_by=request.user, notes=notes)
-        
+
+        # Approval is the firm's gate on what gets billed, so by default this is
+        # the moment time reaches Clio. After approve() and fully guarded: a Clio
+        # failure must not undo an approval that succeeded, and the approval is
+        # the record — Clio holds a copy. Re-running is safe, since push is a
+        # delta against what Clio already holds.
+        clio_result = None
+        if getattr(membership.organization, 'clio_push_trigger', 'approve') == 'approve':
+            try:
+                clio_result = push_timesheet_to_clio(timesheet, membership.organization)
+            except Exception as e:
+                logger.warning(
+                    'Clio push on approve failed for timesheet %s: %s', pk, e, exc_info=True,
+                )
+                clio_result = {'pushed': False, 'error': str(e)[:200]}
+
         return Response({
             'id': timesheet.id,
             'status': timesheet.status,
@@ -2136,6 +2171,7 @@ class TimesheetApproveView(APIView):
             'total_hours': float(timesheet.total_hours),
             'billable_hours': float(timesheet.billable_hours),
             'total_amount': float(timesheet.total_amount),
+            'clio': clio_result,
         })
 
 

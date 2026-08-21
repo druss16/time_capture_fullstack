@@ -133,6 +133,27 @@ class Organization(models.Model):
         help_text="Enable Stage 6 (calendar event overlap) in classifier",
     )
 
+    # Manager approval is the firm's control over what gets billed. Pushing at
+    # submit hands unreviewed time straight to Clio and bypasses it, which is
+    # fine for a solo practitioner and wrong for a firm where a partner reviews
+    # an associate's week.
+    #
+    # Defaults to 'approve' because the safe default is the one that respects
+    # the control; firms that want speed opt out knowingly. Also avoids the
+    # retraction problem: a rejected timesheet whose time is already in Clio
+    # means deleting billing records, which is worse than waiting.
+    CLIO_PUSH_TRIGGER_CHOICES = [
+        ('approve', 'When a manager approves the timesheet'),
+        ('submit', 'As soon as the person submits it'),
+    ]
+    clio_push_trigger = models.CharField(
+        max_length=16,
+        choices=CLIO_PUSH_TRIGGER_CHOICES,
+        default='approve',
+        help_text='When captured time is written to Clio. "approve" keeps manager '
+                  'review as the gate on what reaches the billing system.',
+    )
+
     sandwich_correlation_enabled = models.BooleanField(
         default=False,
         help_text=(

@@ -880,14 +880,21 @@ interface MismatchRow {
   app_name: string;
   booked_client_id: number;
   booked_client_name: string;
-  looks_like_client_id: number;
-  looks_like_client_name: string;
-  bucket: "client" | "internal";
+  // Present on mismatch rows (a single nameable target). Absent on
+  // verdict:"booked_absent" rows, which carry `candidates` instead.
+  looks_like_client_id?: number;
+  looks_like_client_name?: string;
+  bucket: "client" | "internal" | "unsure";
+  verdict?: "booked_absent";
+  booked_is_internal?: boolean;
+  set_by?: "user" | "classifier";
+  candidates?: { client_id: number; client_name: string; coverage: number; abs_hit: number }[];
   confidence: {
-    looks_like_coverage: number;
+    looks_like_coverage?: number;
     abs_hit: number;
     booked_coverage: number;
-    top_token_weight: number;
+    top_token_weight?: number;
+    top_candidate_coverage?: number;
   };
 }
 interface MismatchBucket {
@@ -902,6 +909,9 @@ interface MismatchResponse {
   scanned_blocks: number;
   client: MismatchBucket;
   internal: MismatchBucket;
+  // Optional: frontend and backend deploy separately, so a new bundle can
+  // briefly talk to an API that predates this bucket.
+  unsure?: MismatchBucket;
 }
 
 interface MismatchesTabProps {
@@ -991,6 +1001,18 @@ function BucketDetail({
                 <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {m.block_id}</span>
                 <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{m.date}</span>
                 {m.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{m.user}</span>}
+                {m.set_by && (
+                  <span title={m.set_by === "user"
+                    ? "A person put the block on this client — likely deliberate, not a classifier error"
+                    : "The classifier chose this client"}
+                    style={{
+                      fontSize: 10, ...mono, padding: "2px 7px", borderRadius: 3,
+                      color: m.set_by === "user" ? T.yellow : T.textMuted,
+                      border: `1px solid ${(m.set_by === "user" ? T.yellow : T.textMuted)}55`,
+                    }}>
+                    {m.set_by === "user" ? "user-set" : "classifier"}
+                  </span>
+                )}
                 <div style={{ flex: 1 }} />
                 {onReconcile && (
                   <button
@@ -1009,15 +1031,30 @@ function BucketDetail({
                 <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>booked</span>
                 <Badge label={m.booked_client_name} color={T.yellow} />
                 <span style={{ color: tone, fontSize: 14 }}>→</span>
-                <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>title says</span>
-                <Badge label={m.looks_like_client_name} color={tone} />
+                {m.verdict === "booked_absent" ? (
+                  <>
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>not in title; could be</span>
+                    {(m.candidates || []).map((c, i) => (
+                      <span key={c.client_id} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        {i > 0 && <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>or</span>}
+                        <Badge label={c.client_name} color={i === 0 ? tone : T.textMuted} />
+                        <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>{(c.coverage * 100).toFixed(0)}%</span>
+                      </span>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>title says</span>
+                    <Badge label={m.looks_like_client_name || "?"} color={tone} />
+                  </>
+                )}
               </div>
               <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
                 {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
                 {m.window_title}
               </code>
               <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
-                <span>coverage {(m.confidence.looks_like_coverage * 100).toFixed(0)}%</span>
+                <span>coverage {((m.confidence.looks_like_coverage ?? m.confidence.top_candidate_coverage ?? 0) * 100).toFixed(0)}%</span>
                 <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
                 <span>strength {m.confidence.abs_hit.toFixed(1)}</span>
               </div>
@@ -1034,6 +1071,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(120);
   const [showInternal, setShowInternal] = useState(false);
+  const [showUnsure, setShowUnsure] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -1151,10 +1189,11 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
 
       {data && !loading && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 20 }}>
             <StatCard label="Blocks Scanned" value={data.scanned_blocks.toLocaleString()} color={T.text} />
             <StatCard label="Client Mismatches" value={data.client.total} color={data.client.total > 0 ? T.red : T.green} />
             <StatCard label="Internal (noise)" value={data.internal.total} color={T.textMuted} />
+            <StatCard label="Wrong, Target Unclear" value={data.unsure?.total ?? 0} color={(data.unsure?.total ?? 0) > 0 ? T.yellow : T.textMuted} />
             <StatCard label="Lookback" value={`${data.params.days}d`} color={T.teal} />
           </div>
 
@@ -1238,6 +1277,37 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showInternal ? "hide" : "show"}</span>
               </button>
               {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} />}
+            </div>
+          )}
+
+          {/* UNSURE bucket — the booked client is absent from its own title,
+              but same-family rivals tie so no single replacement can be named.
+              Read-only by construction: no onReconcile is passed, and the
+              server's reconcile path abstains on these titles anyway. */}
+          {(data.unsure?.total ?? 0) > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <button onClick={() => setShowUnsure(v => !v)}
+                style={{ width: "100%", ...card, marginBottom: showUnsure ? 20 : 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.yellow}44` }}>
+                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
+                  {showUnsure ? "▾" : "▸"} Wrong client, target unclear ({data.unsure?.total ?? 0})
+                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
+                    — title doesn't name the booked client, but two same-family clients tie
+                  </span>
+                </span>
+                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showUnsure ? "hide" : "show"}</span>
+              </button>
+              {showUnsure && data.unsure && (
+                <>
+                  <div style={{ ...card, marginBottom: 20, borderColor: T.yellow + "44", background: T.yellow + "0e" }}>
+                    <div style={{ fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.6 }}>
+                      These are certainly booked wrong — the title covers almost none of the booked
+                      client's own name — but the replacement can't be picked automatically, so there
+                      is no reconcile action. Resolve each one in Daily Review.
+                    </div>
+                  </div>
+                  <BucketDetail bucket={data.unsure} tone={T.yellow} />
+                </>
+              )}
             </div>
           )}
         </>

@@ -22,7 +22,9 @@ from tracker.models import (
 
 from django.db import transaction
  
-from tracker.utils.client_name_match import build_token_index, detect_mismatch, detect_title_client
+from tracker.utils.client_name_match import (
+    build_token_index, detect_mismatch, detect_booked_absent, detect_title_client,
+)
 from tracker.utils.db_iter import keyset_iter
 
 logger = logging.getLogger(__name__)
@@ -1487,6 +1489,51 @@ def mavops_copy_routing_rules(request, org_id):
     })
 
 
+def _record_absent(b, oid, absent, names, flagged, by_day, by_pair, counts, limit):
+    """Record one "booked client isn't in its own title" row.
+
+    Kept out of the scan loop because it books into the same tallies as a
+    mismatch but carries a different payload: `candidates` (plural, ranked)
+    where a mismatch carries one `looks_like_client_*` pair.
+    """
+    bucket = absent.get("bucket", "unsure")
+    day = timezone.localtime(b.start).date().isoformat()
+    cands = absent["candidates"]
+    by_day[bucket][day] += 1
+    # Pair on the top candidate only, so the "top pairs" summary stays readable;
+    # the row itself keeps the full ranked list.
+    by_pair[bucket][f'{names[b.client_id]} → ?{cands[0]["client_name"]}'] += 1
+    counts[bucket] += 1
+
+    if len(flagged[bucket]) >= limit:
+        return
+    flagged[bucket].append({
+        'block_id': b.id,
+        'org_id': oid,
+        'org_name': b.org.name if b.org_id else None,
+        'user': (b.user.get_full_name().strip() or b.user.username) if b.user_id else None,
+        'date': day,
+        'window_title': b.window_title[:200],
+        'app_name': getattr(b, 'app_name', '') or '',
+        'booked_client_id': b.client_id,
+        'booked_client_name': names[b.client_id],
+        'bucket': bucket,
+        'verdict': 'booked_absent',
+        'booked_is_internal': absent.get('booked_is_internal', False),
+        # Who put the block on this client. A person deliberately allocating
+        # time reads identically to a classifier error in the numbers, but the
+        # two want opposite responses, so the row says which it was.
+        'set_by': 'user' if (b.state_changed_by in ('user', 'user_edit', 'correction')
+                             or b.categorized_by == 'manual') else 'classifier',
+        'candidates': cands,
+        'confidence': {
+            'booked_coverage': absent['booked_coverage'],
+            'top_candidate_coverage': cands[0]['coverage'],
+            'abs_hit': cands[0]['abs_hit'],
+        },
+    })
+
+
 @api_view(['GET'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
@@ -1561,10 +1608,14 @@ def mavops_client_mismatches(request):
 
     # Split everything by bucket: "client" = real billing-impacting mismatches,
     # "internal" = firm/admin bucket noise (real but not a client billing error).
-    flagged = {"client": [], "internal": []}
-    by_day = {"client": defaultdict(int), "internal": defaultdict(int)}
-    by_pair = {"client": defaultdict(int), "internal": defaultdict(int)}
-    counts = {"client": 0, "internal": 0}
+    # "unsure" is a THIRD verdict, not a weaker mismatch: the booked client is
+    # absent from its own title, but same-family rivals tie so no single
+    # replacement can be named. Read-only — reconcile abstains on these.
+    _BUCKETS = ("client", "internal", "unsure")
+    flagged = {b: [] for b in _BUCKETS}
+    by_day = {b: defaultdict(int) for b in _BUCKETS}
+    by_pair = {b: defaultdict(int) for b in _BUCKETS}
+    counts = {b: 0 for b in _BUCKETS}
     scanned = 0
 
     # NOT .iterator(): that opens a named server-side cursor, and Neon's
@@ -1580,11 +1631,17 @@ def mavops_client_mismatches(request):
         if not index or not names or b.client_id not in names:
             continue
 
-        m = detect_mismatch(
-            b.window_title, b.client_id, index, names,
-            firm_name=firm_by_org.get(oid),
-        )
+        firm = firm_by_org.get(oid)
+        m = detect_mismatch(b.window_title, b.client_id, index, names, firm_name=firm)
         if not m:
+            # No nameable replacement — but the title may still not name the
+            # booked client at all, which is its own reportable verdict.
+            absent = detect_booked_absent(
+                b.window_title, b.client_id, index, names, firm_name=firm,
+            )
+            if absent:
+                _record_absent(b, oid, absent, names, flagged, by_day, by_pair,
+                               counts, limit)
             continue
 
         bucket = m.get("bucket", "client")
@@ -1650,6 +1707,15 @@ def mavops_client_mismatches(request):
             'histogram': _histogram('internal'),
             'top_pairs': _pairs('internal'),
             'mismatches': flagged['internal'],
+        },
+        # Booked-client-is-absent rows. Rows carry `candidates` instead of a
+        # single target, and no reconcile action, because the tie is the point.
+        'unsure': {
+            'total': counts['unsure'],
+            'returned': len(flagged['unsure']),
+            'histogram': _histogram('unsure'),
+            'top_pairs': _pairs('unsure'),
+            'mismatches': flagged['unsure'],
         },
     })
 

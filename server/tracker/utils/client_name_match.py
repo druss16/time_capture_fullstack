@@ -117,6 +117,12 @@ def _initialism(name: str) -> str:
     return "".join(letters)
 
 
+# Weight above which a token counts as saying something. The stopword cap in
+# build_token_index is 0.15, and real distinctive tokens land around 3-5, so
+# anything in between is noise either way.
+CORROBORATION_FLOOR = 0.5
+
+
 def build_token_index(client_names: dict[int, str]) -> dict:
     """
     client_names: {client_id: name}
@@ -161,9 +167,29 @@ def build_token_index(client_names: dict[int, str]) -> dict:
         if len(ini) >= 3:
             initialisms[ini].add(cid)
 
+    # Inverted token -> client ids. A client sharing no token with the title
+    # always scores zero, so this lets a scorer skip the roster instead of
+    # walking every client for every block.
+    token_clients: dict[str, set[int]] = defaultdict(set)
+    for cid, toks in client_tokens.items():
+        for t in toks:
+            token_clients[t].add(cid)
+
+    # Distinctive vs generic split per client, precomputed: _corroborated needs
+    # it for every (block, rival) pair, and rebuilding these sets inside that
+    # loop cost more than the scan it was filtering.
+    client_distinctive: dict[int, set[str]] = {}
+    client_generic: dict[int, set[str]] = {}
+    for cid, weights in client_weights.items():
+        client_distinctive[cid] = {t for t, w in weights.items() if w > CORROBORATION_FLOOR}
+        client_generic[cid] = {t for t, w in weights.items() if w <= CORROBORATION_FLOOR}
+
     return {
         "df": dict(df),
         "n": n,
+        "token_clients": dict(token_clients),
+        "client_distinctive": client_distinctive,
+        "client_generic": client_generic,
         "client_tokens": client_tokens,
         "client_weights": client_weights,
         "client_mass": client_mass,
@@ -197,6 +223,32 @@ def score_title_against_client(title_tokens: set[str], cid: int, index: dict) ->
     return (hit / mass if mass else 0.0), max_w, hit
 
 
+# ── Application chrome ──────────────────────────────────────────────────────
+# A window title is "<document> - <application banner>". The banner is the app
+# advertising itself, not evidence about the client, but it tokenizes just like
+# the rest of the title — and QuickBooks' banner happens to contain a word that
+# is a real client name here:
+#
+#   "St. Patrick's Church  - QuickBooks Accountant Desktop *Plus* 2024"
+#                                                           ^^^^
+#   -> scored "Inventory Plus, Inc" at abs=5.805, ABOVE the correct
+#      "St. Patrick's Church" at 4.719, and the two together tripped the
+#      ambiguity gate, so the block was silently booked to a third client.
+#
+# Stripping the banner before scoring recovered 55 mismatches over 120 days on
+# org 21 and lost none.
+#
+# Deliberately NOT stripped: the "[Vendor Center: X]" / "[Customer Center: X]"
+# segment. That is the QB vendor fingerprint Stage 4.6 uses to tell same-named
+# parishes apart, and dropping it here cost 25 detections on the same window.
+_APP_CHROME_RE = re.compile(r"\s*[-–]\s*QuickBooks\b[^-\[]*", re.I)
+
+
+def strip_app_chrome(title: str) -> str:
+    """Remove application-banner noise so only document text is scored."""
+    return _APP_CHROME_RE.sub(" ", title or "")
+
+
 # ── Tunables (strict defaults) ──────────────────────────────────────────────
 STRONG_COVERAGE = 0.55   # winner must cover >=55% of its OWN distinctive mass
 MIN_ABS_HIT = 1.6        # …and carry real absolute distinctive mass (a full
@@ -227,7 +279,7 @@ def detect_mismatch(
       "internal" — either side is an internal/admin bucket or the firm itself
                    (real, worth seeing, but not a client billing error).
     """
-    title_tokens = set(_tokenize(title))
+    title_tokens = set(_tokenize(strip_app_chrome(title)))
     if not title_tokens:
         return None
 
@@ -325,6 +377,139 @@ def detect_mismatch(
 
     return _acronym_match()
 
+# Gates for the "booked client is absent from its own title" verdict. Looser
+# than detect_mismatch on purpose: this claim is only that the booking is WRONG,
+# never which client is right, so it does not need to survive the ambiguity gate.
+ABSENT_BOOKED_COVERAGE = 0.40   # booked covers <40% of its own distinctive mass
+ABSENT_RIVAL_COVERAGE = 0.90    # …while somebody else's whole name is present
+
+
+def _corroborated(title_tokens: set[str], cid: int, index: dict) -> bool:
+    """Is this client's NAME in the title, or just one of its words?
+
+    Weighted coverage cannot tell the difference. "The New School" is 94%
+    covered by the single word "New" — because "the" and "school" are floored
+    as generic — so the QuickBooks dialog titled "New Vendor" scores it at 94%.
+    Identically, a 1040 for "MORSE, JOHN M" scores "St. John's Church" at 93%
+    off the taxpayer's first name.
+
+    A real name in a title corroborates itself, one of two ways:
+      - two or more distinctive words of it appear ("St. John the Baptist"), or
+      - its one distinctive word appears WITH its generic head noun
+        ("Assumption" + "Church" for "Assumption Church").
+
+    "New Vendor" carries neither "the" nor "school", and the 1040 carries
+    neither "st" nor "church", so both fall away — while "Franciscan Church of
+    the Assumption" still corroborates "Assumption Church".
+    """
+    pre = index.get("client_distinctive")
+    if pre is not None:
+        distinctive = pre.get(cid) or set()
+        generic = index["client_generic"].get(cid) or set()
+    else:                                # index predates the precomputed split
+        weights = index["client_weights"].get(cid) or {}
+        distinctive = {t for t, w in weights.items() if w > CORROBORATION_FLOOR}
+        generic = {t for t, w in weights.items() if w <= CORROBORATION_FLOOR}
+
+    if not distinctive or not distinctive <= title_tokens:
+        return False                     # a distinctive word of the name is missing
+    if len(distinctive) >= 2:
+        return True
+    return bool(generic & title_tokens)  # lone word needs its head noun alongside
+
+
+def detect_booked_absent(
+    title: str,
+    booked_cid: int,
+    index: dict,
+    client_names: dict[int, str],
+    firm_name: str | None = None,
+    max_candidates: int = 3,
+) -> dict | None:
+    """
+    "This block is on the wrong client, and I can't say which one is right."
+
+    detect_mismatch only fires when exactly ONE other client is fingerprinted,
+    so a title naming a client with same-family siblings — "Franciscan Church of
+    the Assumption" against both "Assumption Church" and "St. Mary's of the
+    Assumption" — trips the ambiguity gate and reports nothing, even when the
+    booked client scored 0.023 and is plainly not in the title at all.
+
+    Those are two different claims. Naming the replacement requires resolving
+    the ambiguity; saying the booking is wrong does not. This returns the
+    second claim, with the rival candidates listed rather than picked, so a
+    human resolves the tie. Nothing here feeds reconcile — detect_title_client
+    still abstains on these, which is what keeps them read-only.
+
+    Returns {booked_coverage, candidates: [...]} or None.
+    """
+    title_tokens = set(_tokenize(strip_app_chrome(title)))
+    if not title_tokens:
+        return None
+
+    booked_cov, _, booked_abs = score_title_against_client(
+        title_tokens, booked_cid, index
+    )
+    if booked_cov >= ABSENT_BOOKED_COVERAGE:
+        return None                      # the title does name the booked client
+
+    # Only clients that share a token with the title can score above zero.
+    token_clients = index.get("token_clients")
+    if token_clients is not None:
+        plausible = set()
+        for tok in title_tokens:
+            plausible.update(token_clients.get(tok, ()))
+    else:
+        plausible = client_names.keys()      # index predates token_clients
+
+    rivals = []
+    for cid in plausible:
+        if cid == booked_cid or cid not in client_names:
+            continue
+        cov, topw, abs_hit = score_title_against_client(title_tokens, cid, index)
+        if abs_hit >= MIN_ABS_HIT and topw >= MIN_TOP_TOKEN and _corroborated(
+            title_tokens, cid, index
+        ):
+            rivals.append((cov, abs_hit, cid))
+    if not rivals:
+        return None
+
+    # Ranked by COVERAGE, not absolute mass. The rest of this module ranks by
+    # mass because it is picking a winner, and mass is what separates a full
+    # name from a lucky generic token. Here the question is only "is somebody
+    # else's whole name sitting in this title", and a longer client name can
+    # carry more mass at partial coverage than a shorter one at 100%:
+    # "St. Mary's of the Assumption" (cov 0.615, abs 5.412) outranks
+    # "Assumption Church" (cov 1.000, abs 5.262) on mass and would have hidden
+    # the fully-named rival behind the gate.
+    rivals.sort(reverse=True)
+
+    best_cov, best_abs, _ = rivals[0]
+    if best_cov < ABSENT_RIVAL_COVERAGE or best_abs <= booked_abs:
+        return None                      # nobody else is clearly named either
+
+    # Always its own bucket, never folded into "internal" even when the booked
+    # client is an admin bucket: these rows carry ranked `candidates` where a
+    # mismatch row carries one named target, and the two shapes must not share
+    # a list the UI renders. `booked_is_internal` lets the UI filter instead.
+    booked_name = client_names[booked_cid]
+    return {
+        "booked_coverage": round(booked_cov, 3),
+        "booked_abs_hit": round(booked_abs, 3),
+        "bucket": "unsure",
+        "booked_is_internal": is_internal_client(booked_name, firm_name),
+        "candidates": [
+            {
+                "client_id": cid,
+                "client_name": client_names[cid],
+                "coverage": round(cov, 3),
+                "abs_hit": round(abs_hit, 3),
+            }
+            for cov, abs_hit, cid in rivals[:max_candidates]
+        ],
+    }
+
+
 def detect_title_client(
     title: str,
     index: dict,
@@ -347,7 +532,10 @@ def detect_title_client(
 
     Returns {client_id, client_name, coverage, abs_hit, top_token_weight} or None.
     """
-    title_tokens = set(_tokenize(title))
+    # Same chrome strip as detect_mismatch: the row the UI shows and the target
+    # reconcile writes must be derived from identical text, or the "fix" button
+    # sends the block somewhere other than the name on screen.
+    title_tokens = set(_tokenize(strip_app_chrome(title)))
     if not title_tokens:
         return None
 

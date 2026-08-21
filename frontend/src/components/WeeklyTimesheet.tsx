@@ -652,7 +652,16 @@ const WeeklyTimesheet: React.FC = () => {
       : '';
     safeFetchJson(`${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/clio-preview/${q}`)
       .then((d: any) => { if (alive) setClioPreview(d); })
-      .catch(() => { if (alive) setClioPreview({ connected: false }); });
+      // NOT {connected:false}. That is a legitimate state — an org with no Clio
+      // — so using it for failures made a crash in build_push_plan render as
+      // "this firm does not use Clio", and the whole section silently vanished.
+      // A failure has to look like a failure.
+      .catch((e: any) => {
+        if (alive) setClioPreview({
+          connected: true, available: false,
+          error: e?.message || 'Could not reach the server',
+        });
+      });
     return () => { alive = false; };
   }, [showSubmitModal, timesheetData?.timesheet_id, forcedConflicts]);
 
@@ -1086,6 +1095,15 @@ const WeeklyTimesheet: React.FC = () => {
               </div>
               {/* What submitting sends to Clio. Absent entirely for firms
                   with no Clio connection. */}
+              {clioPreview?.connected && clioPreview?.available === false && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <p className="text-xs font-bold text-amber-800">Couldn't check Clio</p>
+                  <p className="mt-0.5 text-[11px] text-amber-700">
+                    {clioPreview.error || 'The preview failed to load.'} You can still submit —
+                    time is sent when your manager approves, and nothing is lost.
+                  </p>
+                </div>
+              )}
               {clioPreview?.connected && clioPreview?.available && (
                 <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
                   <p className="text-xs font-bold text-indigo-800">

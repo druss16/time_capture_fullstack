@@ -395,6 +395,10 @@ const WeeklyTimesheet: React.FC = () => {
   // carries the server's version, and this set is cleared when it arrives.
   const [assignedBlockIds, setAssignedBlockIds] = useState<Set<number>>(new Set());
   const [clioPreview, setClioPreview] = useState<any | null>(null);
+  // "This is additional work" decisions, keyed user:matter:day. Empty almost
+  // always — Clio does not capture time on its own, so a firm using TimeTracker
+  // only has manual Clio entries for work we never saw: court, calls, travel.
+  const [forcedConflicts, setForcedConflicts] = useState<string[]>([]);
   const [clioResult, setClioResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
   const [view, setView]                     = useState<ViewMode>('summary');
@@ -643,11 +647,14 @@ const WeeklyTimesheet: React.FC = () => {
     if (!showSubmitModal || !timesheetData?.timesheet_id) return;
     let alive = true;
     setClioPreview(null);
-    safeFetchJson(`${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/clio-preview/`)
+    const q = forcedConflicts.length
+      ? '?' + forcedConflicts.map(k => `force=${encodeURIComponent(k)}`).join('&')
+      : '';
+    safeFetchJson(`${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/clio-preview/${q}`)
       .then((d: any) => { if (alive) setClioPreview(d); })
       .catch(() => { if (alive) setClioPreview({ connected: false }); });
     return () => { alive = false; };
-  }, [showSubmitModal, timesheetData?.timesheet_id]);
+  }, [showSubmitModal, timesheetData?.timesheet_id, forcedConflicts]);
 
   const handleSubmit = async () => {
     if (!timesheetData?.timesheet_id) return;
@@ -656,7 +663,7 @@ const WeeklyTimesheet: React.FC = () => {
     try {
       const res: any = await safeFetchJson(
         `${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/submit/`,
-        { method: 'POST', body: JSON.stringify({ notes: submitNotes }) }
+        { method: 'POST', body: JSON.stringify({ notes: submitNotes, force_conflicts: forcedConflicts }) }
       );
       setShowSubmitModal(false);
       setSubmitNotes('');
@@ -1083,7 +1090,14 @@ const WeeklyTimesheet: React.FC = () => {
                 <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
                   <p className="text-xs font-bold text-indigo-800">
                     {clioPreview.totals?.entries > 0
-                      ? `Submitting sends ${clioPreview.totals.hours}h across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} to Clio.`
+                      ? (clioPreview.push_trigger === 'submit'
+                          // Submitting IS the write, so say so.
+                          ? `Submitting sends ${fmtHours(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} to Clio.`
+                          // Approval is the gate. Promising "submitting sends" here
+                          // would be false, and someone who believes their time
+                          // reached billing will not chase the approval that
+                          // actually releases it.
+                          : `${fmtHours(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} goes to Clio once your manager approves this week.`)
                       : 'Nothing new to send to Clio — everything here is already there.'}
                   </p>
                   {clioPreview.entries?.length > 0 && (
@@ -1109,7 +1123,26 @@ const WeeklyTimesheet: React.FC = () => {
                       <ul className="mt-1 space-y-0.5">
                         {clioPreview.skipped.slice(0, 6).map((sk: any, i: number) => (
                           <li key={i} className="text-[11px] text-indigo-600">
-                            {sk.matter || sk.block_id}: {sk.detail}
+                            <span>{sk.matter || sk.block_id}: {sk.detail}</span>
+                            {/* Only an already-in-Clio skip is resolvable by a
+                                person, and only then is there anything to show.
+                                Every other reason renders exactly as before. */}
+                            {sk.conflict_key && (
+                              <span className="mt-0.5 block rounded bg-white/70 px-2 py-1">
+                                {sk.existing?.map((e: any, j: number) => (
+                                  <span key={j} className="block truncate text-[10px] text-slate-500">
+                                    already in Clio: {e.minutes}m — {e.note || '(no note)'}
+                                  </span>
+                                ))}
+                                <button
+                                  onClick={() => setForcedConflicts(prev =>
+                                    prev.includes(sk.conflict_key) ? prev : [...prev, sk.conflict_key])}
+                                  className="mt-1 rounded border border-indigo-300 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                                >
+                                  That's different work — send it too
+                                </button>
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ul>

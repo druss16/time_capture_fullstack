@@ -62,7 +62,7 @@ from tracker.models_task_type_sets import ExternalMatterMapping, ExternalStaffMa
 logger = logging.getLogger(__name__)
 
 # One level of nesting is Clio's limit; user{id}/matter{id} are what we bucket on.
-ACTIVITY_FIELDS = 'id,date,quantity,type,user{id},matter{id}'
+ACTIVITY_FIELDS = 'id,date,quantity,type,note,user{id},matter{id}'
 CREATED_FIELDS = 'id,date,quantity,type'
 
 # Below this the delta is rounding noise, not work worth a line on a bill.
@@ -152,7 +152,8 @@ def decide_entry(captured_minutes, already_minutes, *, requires_utbms=False,
     return 'push', delta, ''
 
 
-def build_push_plan(integration: Integration, start_date, end_date, user_ids=None) -> dict:
+def build_push_plan(integration: Integration, start_date, end_date, user_ids=None,
+                    force_conflicts=None) -> dict:
     """
     Work out what WOULD be pushed. Reads Clio, writes nothing.
 
@@ -228,6 +229,12 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
 
     # ── One scan of what Clio already holds ─────────────────────────────
     existing_seconds = defaultdict(int)
+    # What Clio already holds, kept rather than just counted. A person can tell
+    # "Call with client re: estate" from "Estate Planning.docx — Word" instantly;
+    # a total cannot. Nothing in the data distinguishes duplicate work from
+    # additional work — Clio entries carry a date and a duration but no start
+    # time — so the only honest resolution is to show it and let someone say.
+    existing_entries = defaultdict(list)
     for act in api.paginated_get(
         '/activities', fields=ACTIVITY_FIELDS,
         params={
@@ -248,7 +255,24 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
         except ValueError:
             continue
         key = (str(user['id']), str(matter['id']), day)
+        mins = int(act.get('quantity') or 0) // 60
         existing_seconds[key] += int(act.get('quantity') or 0)
+        existing_entries[key].append({
+            'clio_activity_id': str(act.get('id') or ''),
+            'minutes': mins,
+            'note': (act.get('note') or '').strip(),
+            # Ours or theirs. Our own previous pushes are never a conflict —
+            # re-running a week must not re-ask about time we sent ourselves.
+            'ours': str(act.get('id') or '') in our_activity_ids,
+        })
+
+    # Activities we pushed before, so a re-run never treats our own work as a
+    # conflict needing a human decision.
+    our_activity_ids = set(
+        Block.objects
+        .filter(org=org, clio_activity_id__gt='')
+        .values_list('clio_activity_id', flat=True)
+    )
 
     # ── Net our totals against theirs ───────────────────────────────────
     entries = []
@@ -258,6 +282,28 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
 
         captured_minutes = sum(b.minutes or 0 for b in block_objs)
         already_minutes = existing_seconds.get((clio_user_id, matter_id, day), 0) // 60
+
+        conflict_key = f'{clio_user_id}:{matter_id}:{day}'
+        theirs = [e for e in existing_entries.get((clio_user_id, matter_id, day), [])
+                  if not e['ours']]
+
+        # A person said this is additional work, not the same work logged twice.
+        # Send the full captured amount: netting it against entries they have
+        # just told us are unrelated would be the under-billing this exists to
+        # prevent.
+        if force_conflicts and conflict_key in force_conflicts and captured_minutes > 0:
+            entries.append({
+                'clio_user_id': clio_user_id, 'matter_id': matter_id,
+                'matter': mapping.display_number or matter_id, 'day': str(day),
+                'captured_minutes': captured_minutes,
+                'already_in_clio_minutes': already_minutes,
+                'push_minutes': captured_minutes,
+                'push_hours': round(captured_minutes / 60.0, 2),
+                'note': _note_for(block_objs),
+                'block_ids': [b.id for b in block_objs],
+                'forced_additional': True,
+            })
+            continue
 
         action, delta_minutes, reason = decide_entry(
             captured_minutes, already_minutes,
@@ -271,6 +317,10 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
                 'matter': mapping.display_number or matter_id, 'day': str(day),
                 'minutes': captured_minutes,
                 'reason': reason,
+                # Only an already_in_clio skip is resolvable by a person, and
+                # only that one carries what they need to judge it.
+                'conflict_key': conflict_key if reason == 'already_in_clio' else None,
+                'existing': theirs if reason == 'already_in_clio' else [],
                 'detail': SKIP_DETAIL[reason].format(
                     billing_method=mapping.billing_method,
                     status=mapping.external_status,

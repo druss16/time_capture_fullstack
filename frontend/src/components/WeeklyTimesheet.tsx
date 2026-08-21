@@ -9,6 +9,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { fetchWhoAmI } from '@/lib/whoami';
+import { MatterPicker } from '@/components/MatterPicker';
 import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, CheckCircle2, Lock,
   AlertTriangle, Info, RefreshCw, Search, X, Layers, CalendarDays, Sparkles, Copy,
@@ -897,7 +898,15 @@ const WeeklyTimesheet: React.FC = () => {
                 <span className="w-[52px] shrink-0 text-right font-mono text-[12px] tabular-nums text-muted-foreground/70">
                   {formatMinutes(row.minutes)}
                 </span>
-                <BlockMatterMenu agg={row} label="Choose matter" tone="needed" />
+                {/* MatterPicker, not BlockMatterMenu: this banner sits ABOVE the
+                    MoveContext.Provider, and BlockMatterMenu returns null without
+                    that context — so the rows rendered and the button silently
+                    did not. The prop-driven picker has no such dependency. */}
+                <MatterPicker
+                  blockIds={row.ids}
+                  label="Choose matter"
+                  onAssigned={fetchTimesheet}
+                />
               </div>
             ))}
           </div>

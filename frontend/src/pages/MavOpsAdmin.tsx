@@ -1492,17 +1492,22 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
 // ─── Accuracy Tab (the sampled audit behind the number) ────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
+interface AccuracyTally {
+  pending: number; correct: number; wrong: number; unverifiable: number;
+  precision: number | null; ci_low: number | null; ci_high: number | null;
+  worst_case: number | null; wrong_minutes: number;
+}
 interface AccuracySummary {
   period: { start: string; end: string };
   coverage: {
     filed_minutes: number; asked_minutes: number; human_filed_minutes: number;
     discarded_minutes: number; total_minutes: number; autonomy: number | null;
   };
-  sampled: {
-    drawn: number; pending: number; correct: number; wrong: number; unverifiable: number;
-    precision: number | null; ci_low: number | null; ci_high: number | null;
-    worst_case: number | null; wrong_minutes: number;
-  };
+  sampled: AccuracyTally & { drawn: number; category: AccuracyTally; billable: AccuracyTally };
+  by_signal?: {
+    signal: string; drawn: number; decided: number; correct: number; wrong: number;
+    precision: number | null; wrong_minutes: number; thin: boolean;
+  }[];
   human_corrections: { corrected: number; population: number; floor_error_rate: number | null };
   self_corrections: number;
   headline: string;
@@ -1511,8 +1516,13 @@ interface AccuracyRow {
   sample_id: number; block_id: number; date: string | null; user: string | null;
   minutes: number; app_name: string; window_title: string; file_path: string;
   booked_client_id: number | null; booked_client_name: string | null;
-  verdict: string; correct_client_name: string | null; note: string;
+  verdict: string; verdict_category: string; verdict_billable: string;
+  filed_by_signal: string; booked_category: string; booked_is_billable: boolean | null;
+  correct_client_name: string | null; note: string;
 }
+// Signal names are backend identifiers; shown as-is but tidied for reading.
+const prettySignal = (s: string) =>
+  (s || "unknown").replace(/^source:/, "").replace(/_/g, " ");
 
 const hrs = (m: number) => {
   const h = Math.floor((m || 0) / 60), mm = (m || 0) % 60;
@@ -1557,17 +1567,30 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     finally { setBusy(false); }
   }, [apiFetch, flash, filterOrg, days, load]);
 
-  const judge = useCallback(async (sampleId: number, verdict: string) => {
-    // Optimistic: the row leaves the pending queue immediately. Adjudicating
-    // 50 blocks is the whole cost of this method, so it must not feel slow.
-    setRows(prev => prev.filter(r => r.sample_id !== sampleId));
+  // One dimension at a time. The row only leaves the queue once all three are
+  // answered, so a judge who is sure about the client and unsure about the
+  // category can say exactly that and come back to the rest.
+  const judge = useCallback(async (sampleId: number, field: string, verdict: string) => {
+    // Leaves the queue when the CLIENT verdict lands — the same rule the
+    // server's pending filter uses. The other two are answered in the same
+    // visit if the judge wants them; they are never a reason to hold a row.
+    let cleared = false;
+    setRows(prev => prev.flatMap(r => {
+      if (r.sample_id !== sampleId) return [r];
+      const next = { ...r, [field]: verdict };
+      if (field === "verdict" && verdict !== "pending") { cleared = true; return []; }
+      return [next];
+    }));
     try {
       const r = await apiFetch(`/mavops/accuracy/adjudicate/`, {
         method: "POST",
-        body: JSON.stringify({ sample_id: sampleId, verdict }),
+        body: JSON.stringify({ sample_id: sampleId, [field]: verdict }),
       });
-      setSum(s => (s ? { ...s, sampled: r.summary } : s));
-    } catch { flash("Failed to record that verdict.", "err"); await load(); }
+      setSum(s => (s ? { ...s, sampled: r.summary, by_signal: r.by_signal } : s));
+    } catch {
+      flash("Failed to record that verdict.", "err");
+      if (cleared) await load();
+    }
   }, [apiFetch, flash, load]);
 
   if (!filterOrg) {
@@ -1704,6 +1727,61 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           </div>
 
+          {/* The work list. A single score says an afternoon is needed
+              somewhere; this says where. Worst real precision first, with
+              too-small groups pushed down and labelled rather than hidden —
+              1-of-1 is not evidence and must not read as a 100% mechanism. */}
+          {!!(sum.by_signal || []).some(x => x.decided > 0) && (
+            <div style={{ ...card, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: T.textMuted, ...mono, letterSpacing: 1, marginBottom: 12 }}>
+                WHERE THE ERRORS COME FROM — PRECISION BY WHAT FILED IT
+              </div>
+              {(sum.by_signal || []).filter(x => x.drawn > 0).map(x => (
+                <div key={x.signal} style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0", fontSize: 12, ...mono, borderBottom: `1px solid ${T.border}55` }}>
+                  <span style={{ color: T.textSub, minWidth: 210 }}>{prettySignal(x.signal)}</span>
+                  <div style={{ flex: 1, height: 6, background: T.bg, borderRadius: 3, overflow: "hidden", minWidth: 60 }}>
+                    {x.precision != null && (
+                      <div style={{
+                        width: `${x.precision * 100}%`, height: "100%",
+                        background: x.thin ? T.textMuted : x.precision >= 0.95 ? T.green : x.precision >= 0.8 ? T.yellow : T.red,
+                      }} />
+                    )}
+                  </div>
+                  <span style={{ color: x.precision == null ? T.textMuted : x.thin ? T.textMuted : x.precision >= 0.95 ? T.green : x.precision >= 0.8 ? T.yellow : T.red, minWidth: 42, textAlign: "right" as const, fontWeight: 700 }}>
+                    {x.precision != null ? `${(x.precision * 100).toFixed(0)}%` : "—"}
+                  </span>
+                  <span style={{ color: T.textMuted, minWidth: 92, textAlign: "right" as const }}>
+                    {x.decided ? `${x.correct}/${x.decided}` : `${x.drawn} drawn`}
+                  </span>
+                  {x.thin && <span style={{ color: T.textMuted, fontSize: 10 }}>too few to trust</span>}
+                  {!!x.wrong_minutes && <span style={{ color: T.red, fontSize: 10 }}>{hrs(x.wrong_minutes)} wrong</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Category and billable, judged on the same blocks in the same pass. */}
+          {(["category", "billable"] as const).some(k => sm![k].precision != null) && (
+            <div style={{ ...card, marginBottom: 20, fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.9 }}>
+              {(["category", "billable"] as const).map(k => {
+                const t = sm![k];
+                if (t.precision == null) return null;
+                return (
+                  <div key={k}>
+                    <strong style={{ color: T.text, textTransform: "capitalize" as const }}>{k}</strong>
+                    {" "}— {(t.precision * 100).toFixed(0)}% correct ({t.correct} of {t.correct + t.wrong} decided
+                    {t.unverifiable ? `, ${t.unverifiable} unverifiable` : ""}).
+                    {!!t.wrong_minutes && <span style={{ color: T.red }}> {hrs(t.wrong_minutes)} affected.</span>}
+                  </div>
+                );
+              })}
+              <div style={{ color: T.textMuted, marginTop: 4 }}>
+                Judged on the same blocks as the client number — the draw and the reading are
+                the expensive part, so these cost almost nothing extra.
+              </div>
+            </div>
+          )}
+
           {/* Adjudication queue */}
           {rows.length > 0 ? (
             <>
@@ -1732,16 +1810,38 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                     {r.window_title || <span style={{ color: T.textMuted }}>(no title)</span>}
                     {r.file_path && <div style={{ color: T.textMuted, marginTop: 4 }}>{r.file_path}</div>}
                   </code>
-                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                    {([["correct", "✓ right", T.green],
-                       ["wrong", "✗ wrong", T.red],
-                       ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, label, colour]) => (
-                      <button key={v} onClick={() => judge(r.sample_id, v)}
-                        style={{ background: colour + "18", border: `1px solid ${colour}`, color: colour, padding: "5px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono, fontWeight: 600 }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  {/* Three questions, same block, same glance. Drawing and
+                      reading the row is the expensive part; the extra two
+                      verdicts are nearly free once a person is already here. */}
+                  {([
+                    ["verdict", "client", r.booked_client_name || "No client", r.verdict],
+                    ["verdict_category", "category", r.booked_category || "—", r.verdict_category],
+                    ["verdict_billable", "billable",
+                     r.booked_is_billable == null ? "—" : (r.booked_is_billable ? "yes" : "no"),
+                     r.verdict_billable],
+                  ] as const).map(([field, label, filed, current]) => (
+                    <div key={field} style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" as const }}>
+                      <span style={{ fontSize: 11, color: T.textMuted, ...mono, width: 62, flexShrink: 0 }}>{label}</span>
+                      <Badge label={String(filed)} color={current === "pending" ? T.yellow : T.textMuted} />
+                      <div style={{ flex: 1 }} />
+                      {([["correct", "✓ right", T.green],
+                         ["wrong", "✗ wrong", T.red],
+                         ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, blabel, colour]) => {
+                        const on = current === v;
+                        return (
+                          <button key={v} onClick={() => judge(r.sample_id, field, v)}
+                            style={{
+                              background: on ? colour : colour + "18",
+                              border: `1px solid ${colour}`, color: on ? "#0b1220" : colour,
+                              padding: "5px 14px", fontSize: 12, cursor: "pointer", borderRadius: 4,
+                              ...mono, fontWeight: on ? 800 : 600,
+                            }}>
+                            {blabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               ))}
             </>

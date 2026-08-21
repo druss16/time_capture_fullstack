@@ -4608,8 +4608,27 @@ class AccuracySample(models.Model):
                                       related_name='accuracy_samples_booked')
     minutes = models.IntegerField(default=0)
 
+    # `verdict` is specifically the CLIENT verdict. It keeps the bare name
+    # because an index is built on it and the table is already live; the two
+    # dimensions added later carry explicit suffixes.
     verdict = models.CharField(max_length=14, choices=VERDICTS, default='pending',
                                db_index=True)
+    verdict_category = models.CharField(max_length=14, choices=VERDICTS, default='pending')
+    verdict_billable = models.CharField(max_length=14, choices=VERDICTS, default='pending')
+
+    # Which mechanism filed this block — title alias, vendor fingerprint,
+    # file path, a temporal neighbour, the agent's own inference. Frozen at
+    # draw time from the block's classification audit.
+    #
+    # This is what turns a score into a work list. "94% correct" says nothing
+    # about where to spend an afternoon; "title alias 74%, vendor fingerprint
+    # 97%" says exactly where.
+    filed_by_signal = models.CharField(max_length=48, blank=True, default='', db_index=True)
+
+    # Frozen alongside the client, so a verdict can be read back against what
+    # was actually on screen when it was judged.
+    booked_category = models.CharField(max_length=64, blank=True, default='')
+    booked_is_billable = models.BooleanField(null=True, blank=True)
     correct_client = models.ForeignKey(Client, null=True, blank=True,
                                        on_delete=models.SET_NULL,
                                        related_name='accuracy_samples_corrected',

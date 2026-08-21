@@ -103,7 +103,19 @@ def accuracy_queue(request):
     qs = (AccuracySample.objects
           .filter(org_id=org_id, period_start=start, period_end=end)
           .select_related('block', 'booked_client', 'correct_client', 'block__user'))
-    if state != 'all':
+    if state == 'pending':
+        # The CLIENT verdict alone governs the main queue. Category and billable
+        # were added after samples had already been judged, and defaulting them
+        # to pending would have swept 50 finished rows back into the queue and
+        # made a person's completed afternoon look undone.
+        qs = qs.filter(verdict='pending')
+    elif state == 'partial':
+        # Judged on the client before the other two dimensions existed. Offered
+        # as an explicit second pass rather than forced back into the queue.
+        from django.db.models import Q
+        qs = qs.exclude(verdict='pending').filter(
+            Q(verdict_category='pending') | Q(verdict_billable='pending'))
+    elif state != 'all':
         qs = qs.filter(verdict=state)
 
     rows = []
@@ -121,6 +133,11 @@ def accuracy_queue(request):
             'booked_client_id': s.booked_client_id,
             'booked_client_name': s.booked_client.name if s.booked_client_id else None,
             'verdict': s.verdict,
+            'verdict_category': s.verdict_category,
+            'verdict_billable': s.verdict_billable,
+            'filed_by_signal': s.filed_by_signal,
+            'booked_category': s.booked_category,
+            'booked_is_billable': s.booked_is_billable,
             'correct_client_name': s.correct_client.name if s.correct_client_id else None,
             'note': s.note,
         })
@@ -140,23 +157,58 @@ def accuracy_adjudicate(request):
     """
     from tracker.models import AccuracySample
 
+    ALLOWED = ('correct', 'wrong', 'unverifiable', 'pending')
     sample_id = request.data.get('sample_id')
-    verdict = request.data.get('verdict')
-    if verdict not in ('correct', 'wrong', 'unverifiable', 'pending'):
-        return Response({'detail': 'verdict must be correct, wrong, unverifiable or pending.'},
+
+    # Three independent dimensions on the same block: right client, right
+    # category, rightly billable. Any subset may be sent — a judge who is sure
+    # about the client and unsure about the category should be able to say
+    # exactly that, and leave the rest pending.
+    dims = {
+        'verdict': request.data.get('verdict'),
+        'verdict_category': request.data.get('verdict_category'),
+        'verdict_billable': request.data.get('verdict_billable'),
+    }
+    given = {k: v for k, v in dims.items() if v is not None}
+    if not given:
+        return Response({'detail': 'send at least one of verdict, verdict_category, verdict_billable.'},
                         status=400)
+    bad = [k for k, v in given.items() if v not in ALLOWED]
+    if bad:
+        return Response({'detail': f'{", ".join(bad)} must be one of {", ".join(ALLOWED)}.'},
+                        status=400)
+
     try:
         s = AccuracySample.objects.get(id=sample_id)
     except AccuracySample.DoesNotExist:
         return Response({'detail': 'sample not found.'}, status=404)
 
-    s.verdict = verdict
-    s.correct_client_id = request.data.get('correct_client_id') if verdict == 'wrong' else None
-    s.note = (request.data.get('note') or '')[:2000]
-    s.adjudicated_by = request.user if request.user.is_authenticated else None
-    s.adjudicated_at = timezone.now() if verdict != 'pending' else None
-    s.save(update_fields=['verdict', 'correct_client', 'note',
-                          'adjudicated_by', 'adjudicated_at'])
+    fields = []
+    for k, v in given.items():
+        setattr(s, k, v)
+        fields.append(k)
 
-    return Response({'ok': True, 'sample_id': s.id, 'verdict': s.verdict,
-                     'summary': acc.sampled_precision(s.org_id, s.period_start, s.period_end)})
+    if 'verdict' in given:
+        s.correct_client_id = (request.data.get('correct_client_id')
+                               if given['verdict'] == 'wrong' else None)
+        fields.append('correct_client')
+    if request.data.get('note') is not None:
+        s.note = (request.data.get('note') or '')[:2000]
+        fields.append('note')
+
+    # Timestamped once any dimension has been decided; cleared only when every
+    # one of them is back to pending.
+    decided = any(getattr(s, k) != 'pending'
+                  for k in ('verdict', 'verdict_category', 'verdict_billable'))
+    s.adjudicated_by = request.user if request.user.is_authenticated else None
+    s.adjudicated_at = timezone.now() if decided else None
+    fields += ['adjudicated_by', 'adjudicated_at']
+
+    s.save(update_fields=fields)
+
+    return Response({'ok': True, 'sample_id': s.id,
+                     'verdict': s.verdict,
+                     'verdict_category': s.verdict_category,
+                     'verdict_billable': s.verdict_billable,
+                     'summary': acc.sampled_precision(s.org_id, s.period_start, s.period_end),
+                     'by_signal': acc.by_signal(s.org_id, s.period_start, s.period_end)})

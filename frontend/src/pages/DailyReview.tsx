@@ -20,6 +20,7 @@ import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
+import { MatterPicker } from "@/components/MatterPicker";
 import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -228,6 +229,74 @@ const StatCell = ({
 );
 
 // ─── Main Component ───────────────────────────────────────────────────────────
+
+// Time that cannot be billed until someone says which matter it belongs to.
+//
+// Lives in Daily Review rather than the timesheet on purpose. A matter chosen
+// today is remembered; the same choice on Friday is reconstructed, and a
+// reconstruction bills a client. Each pick also teaches the folder, so the week
+// gets quieter on its own.
+//
+// Only lists blocks whose client HAS matters to choose between — a client with
+// none is not a task, and including them would make this a queue people skip.
+const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }) => {
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [open, setOpen] = useState(true);
+
+  const load = useCallback(() => {
+    safeFetchJson(`${API_BASE}/blocks/needs-matter/?date=${date}`)
+      .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
+      .catch(() => { setRows([]); setTotal(0); });
+  }, [date]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (rows.length === 0) return null;
+
+  const fmt = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
+
+  return (
+    <div className="mb-3 overflow-hidden rounded-[15px] border border-amber-200 bg-card">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-amber-50/60"
+      >
+        <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
+        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a matter</span>
+        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+          {fmt(total)} · {rows.length} {rows.length === 1 ? "activity" : "activities"}
+        </span>
+        <span className="flex-1" />
+        <span className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-muted-foreground">
+          {open ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="border-t border-amber-200/70 px-3 pb-2 pt-2">
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 py-1">
+              <span className="w-[110px] shrink-0 truncate font-sans text-[12px] font-semibold text-foreground">
+                {r.client_name || "No client"}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={r.label}>
+                {r.label}
+              </span>
+              <span className="w-[46px] shrink-0 text-right font-mono text-[12px] tabular-nums text-muted-foreground/70">
+                {fmt(r.minutes)}
+              </span>
+              <MatterPicker
+                blockIds={[r.id]}
+                onAssigned={() => { load(); onChanged(); }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function DailyReview() {
   const me = useWhoAmI();
@@ -946,6 +1015,7 @@ export default function DailyReview() {
               </div>
             )}
           </div>
+          <MatterLane date={date} onChanged={scheduleRowRefresh} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}

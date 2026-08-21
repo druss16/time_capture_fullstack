@@ -1712,14 +1712,20 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               </div>
               {rows.map(r => (
                 <div key={r.sample_id} style={{ ...card, padding: "14px 20px", marginBottom: 10 }}>
+                  {/* The client leads, hard against the left edge. Judging 50
+                      of these is one repeated eye movement — client, title,
+                      verdict — and it has to be a short vertical scan down one
+                      column, not a jump to the far right and back on every row.
+                      Block id, date and who ran it are reference, so they go to
+                      the right where they can be ignored. */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
+                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>filed as</span>
+                    <Badge label={r.booked_client_name || "No client"} color={T.yellow} />
+                    <div style={{ flex: 1 }} />
                     <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {r.block_id}</span>
                     <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{r.date}</span>
                     {r.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{r.user}</span>}
                     <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{hrs(r.minutes)}</span>
-                    <div style={{ flex: 1 }} />
-                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>filed as</span>
-                    <Badge label={r.booked_client_name || "No client"} color={T.yellow} />
                   </div>
                   <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
                     {r.app_name && <span style={{ color: T.textMuted }}>{r.app_name} — </span>}

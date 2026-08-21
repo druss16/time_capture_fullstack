@@ -1124,7 +1124,12 @@ function BucketDetail({
               </code>
               {resolve && (
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" as const, alignItems: "center" }}>
-                  <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>move to</span>
+                  {/* Only the target-unclear rows carry ranked candidates. A
+                      mismatch row has one named target and its own fix button,
+                      so it gets the clear action and the bulk bar, nothing more. */}
+                  {!!(m.candidates || []).length && (
+                    <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>move to</span>
+                  )}
                   {(m.candidates || []).map(c => (
                     <button key={c.client_id} disabled={resolve.busy}
                       onClick={() => resolve.assign([m.block_id], c.client_id, c.client_name)}
@@ -1445,6 +1450,12 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 onReconcile={filterOrg ? reconcile : undefined}
                 reconcileBusy={reconcileBusy}
                 hideBulkButton
+                resolve={filterOrg ? {
+                  clients: orgClients,
+                  busy: resolveBusy,
+                  assign: assignTo,
+                  dismiss: dismissRows,
+                } : undefined}
               />
             </>
           ) : (

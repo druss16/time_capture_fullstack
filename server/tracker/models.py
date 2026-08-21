@@ -4566,3 +4566,76 @@ from tracker.models_engagements import (  # noqa: F401, E402
 )
 
 
+
+
+class AccuracySample(models.Model):
+    """One randomly-drawn block awaiting (or carrying) a human verdict.
+
+    The point of this table is that the sample is drawn at RANDOM from the
+    blocks the system filed on its own. Every other accuracy signal we have is
+    a lower bound biased by its own detector: user corrections only cover what
+    someone happened to look at, and the mismatch scan only sees errors where
+    the title disagrees with the client — it is blind to a generic-titled block
+    sitting on the wrong one. A random sample has no such blind spot, which is
+    why it is the only number we quote as *the* accuracy figure.
+
+    Adjudication is deliberately three-way. "Unverifiable" is not a softer
+    "correct": a block titled "New Vendor" carries no evidence either way, and
+    counting unchallenged as correct is how a headline number becomes fiction.
+    """
+    VERDICTS = [
+        ('pending',      'Not yet adjudicated'),
+        ('correct',      'Filed to the right client'),
+        ('wrong',        'Filed to the wrong client'),
+        ('unverifiable', 'No evidence either way'),
+    ]
+
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                            related_name='accuracy_samples')
+    block = models.ForeignKey('Block', on_delete=models.CASCADE,
+                              related_name='accuracy_samples')
+
+    # The window the sample represents, so an estimate is always attributable
+    # to a period rather than to "whenever someone last clicked audit".
+    period_start = models.DateField()
+    period_end = models.DateField()
+    drawn_at = models.DateTimeField(auto_now_add=True)
+
+    # Frozen at draw time: the block can be re-filed later (by a person or by a
+    # self-correction), and an estimate must reflect what was true when drawn.
+    booked_client = models.ForeignKey(Client, null=True, blank=True,
+                                      on_delete=models.SET_NULL,
+                                      related_name='accuracy_samples_booked')
+    minutes = models.IntegerField(default=0)
+
+    verdict = models.CharField(max_length=14, choices=VERDICTS, default='pending',
+                               db_index=True)
+    correct_client = models.ForeignKey(Client, null=True, blank=True,
+                                       on_delete=models.SET_NULL,
+                                       related_name='accuracy_samples_corrected',
+                                       help_text='Where it should have gone, when the verdict is "wrong".')
+    note = models.TextField(blank=True, default='')
+    adjudicated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                       on_delete=models.SET_NULL,
+                                       related_name='accuracy_adjudications')
+    adjudicated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        # Named explicitly so the hand-written migration and the model state
+        # agree — an auto-named index here would make makemigrations think the
+        # table had drifted.
+        indexes = [
+            models.Index(fields=['org', 'period_start', 'verdict'],
+                         name='accsample_org_period_idx'),
+            models.Index(fields=['org', 'drawn_at'], name='accsample_org_drawn_idx'),
+        ]
+        # One verdict per block per period — re-drawing a period must not stack
+        # duplicates of the same block and silently weight it twice.
+        constraints = [
+            models.UniqueConstraint(fields=['block', 'period_start', 'period_end'],
+                                    name='uniq_accuracy_sample_block_period'),
+        ]
+        ordering = ['verdict', 'drawn_at']
+
+    def __str__(self):
+        return f'{self.verdict} — block {self.block_id} ({self.period_start}..{self.period_end})'

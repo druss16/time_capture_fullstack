@@ -1944,7 +1944,7 @@ def _clio_integration_for(org):
         return None
 
 
-def clio_plan_for_timesheet(timesheet, org):
+def clio_plan_for_timesheet(timesheet, org, force_conflicts=None):
     """
     What submitting this timesheet would send to Clio.
 
@@ -1961,10 +1961,11 @@ def clio_plan_for_timesheet(timesheet, org):
     week_end = timesheet.week_start + timedelta(days=6)
     return build_push_plan(
         integration, timesheet.week_start, week_end, user_ids=[timesheet.user_id],
+        force_conflicts=force_conflicts,
     )
 
 
-def push_timesheet_to_clio(timesheet, org):
+def push_timesheet_to_clio(timesheet, org, force_conflicts=None):
     """
     Send a timesheet's time to Clio. Returns a result dict, or None when the org
     has no Clio connection.
@@ -1973,7 +1974,7 @@ def push_timesheet_to_clio(timesheet, org):
     approval that just succeeded. Safe to call more than once — push is a delta
     against what Clio already holds, so a re-run cannot double-bill.
     """
-    plan = clio_plan_for_timesheet(timesheet, org)
+    plan = clio_plan_for_timesheet(timesheet, org, force_conflicts=force_conflicts)
     if plan is None:
         return None
     if not plan.get('entries'):
@@ -2013,8 +2014,13 @@ class TimesheetClioPreviewView(APIView):
             Timesheet, pk=pk, org=membership.organization, user=request.user,
         )
 
+        # Decisions the person has made in the dialog, so the preview reflects
+        # them before they commit rather than after.
+        force = [k for k in request.GET.getlist('force') if k]
         try:
-            plan = clio_plan_for_timesheet(timesheet, membership.organization)
+            plan = clio_plan_for_timesheet(
+                timesheet, membership.organization, force_conflicts=force,
+            )
         except Exception as e:
             # A preview that cannot be built must never block submission — the
             # timesheet matters more than the integration.
@@ -2099,7 +2105,10 @@ class TimesheetSubmitView(APIView):
         trigger = getattr(membership.organization, 'clio_push_trigger', 'approve')
         if trigger == 'submit':
             try:
-                clio_result = push_timesheet_to_clio(timesheet, membership.organization)
+                clio_result = push_timesheet_to_clio(
+                    timesheet, membership.organization,
+                    force_conflicts=request.data.get('force_conflicts') or None,
+                )
             except Exception as e:
                 logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
                 clio_result = {'pushed': False, 'error': str(e)[:200]}

@@ -6598,6 +6598,74 @@ def recategorize_block(request, block_id):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def blocks_needing_matter(request):
+    """
+    GET /api/blocks/needs-matter/?date=YYYY-MM-DD
+
+    Blocks that a person can actually resolve: committed time, no matter yet,
+    whose client HAS matters to choose between.
+
+    Deliberately excludes clients with no matters. Nobody can act on those from
+    here, and listing them would turn a short actionable queue into a long one
+    people learn to skip.
+
+    Same day by default, because a matter chosen on Tuesday is remembered and a
+    matter chosen on Friday is reconstructed — and a reconstruction bills a
+    client.
+    """
+    from datetime import datetime as _dt
+    from tracker.models_task_type_sets import ExternalMatterMapping
+
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+
+    raw = request.GET.get('date')
+    try:
+        day = _dt.strptime(raw, '%Y-%m-%d').date() if raw else timezone.localdate()
+    except ValueError:
+        return Response({'error': 'date must be YYYY-MM-DD'}, status=400)
+
+    counts = {}
+    for m in ExternalMatterMapping.objects.filter(
+        integration__organization=org
+    ).select_related('project'):
+        if (m.external_status or '').lower() in ('open', 'pending', ''):
+            counts[m.project.client_id] = counts.get(m.project.client_id, 0) + 1
+
+    if not counts:
+        return Response({'date': str(day), 'blocks': [], 'total_minutes': 0})
+
+    blocks = (
+        Block.objects
+        .filter(org=org, user=request.user, day=day,
+                project__isnull=True, client_id__in=counts.keys(),
+                deleted_at__isnull=True)
+        .exclude(classification_state='suppressed')
+        .select_related('client')
+        .order_by('start')
+    )
+
+    rows = [{
+        'id': b.id,
+        'minutes': b.minutes or 0,
+        'started_at': b.start.isoformat() if b.start else None,
+        'client_id': b.client_id,
+        'client_name': b.client.name if b.client else None,
+        # window_title carries the subject; title is often just the app.
+        'label': (b.window_title or b.title or '').strip() or '(no title)',
+        'matter_options': counts.get(b.client_id, 0),
+    } for b in blocks]
+
+    return Response({
+        'date': str(day),
+        'blocks': rows,
+        'total_minutes': sum(r['minutes'] for r in rows),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def block_matter_options(request, block_id):
     """
     GET /api/blocks/<id>/matter-options/

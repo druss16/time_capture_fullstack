@@ -88,6 +88,7 @@ urlpatterns = [
     path("today-time/", views.today_time, name="today_time"),
     path("blocks/<int:block_id>/recategorize/", views.recategorize_block, name="recategorize_block"),
     path("blocks/<int:block_id>/move-task-type/", views.move_block_task_type, name="move_block_task_type"),
+    path("blocks/needs-matter/", views.blocks_needing_matter, name="blocks_needing_matter"),
     path("blocks/<int:block_id>/matter-options/", views.block_matter_options, name="block_matter_options"),
     path("blocks/<int:block_id>/set-matter/", views.set_block_matter, name="set_block_matter"),
     path("blocks/<int:block_id>/split/", views.split_block, name="split_block"),

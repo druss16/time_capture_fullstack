@@ -387,6 +387,7 @@ const WeeklyTimesheet: React.FC = () => {
   // What submitting would send to Clio. Null for firms with no Clio connection,
   // so nothing about this appears for them.
   const [clioEnabled, setClioEnabled] = useState(false);
+  const [matterGapOpen, setMatterGapOpen] = useState(false);
   const [clioPreview, setClioPreview] = useState<any | null>(null);
   const [clioResult, setClioResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
@@ -457,6 +458,26 @@ const WeeklyTimesheet: React.FC = () => {
       }
     }
     return { minutes, clientKeys: clients };
+  }, [detail]);
+
+  // The rows themselves, flat. Expanding the tree cannot reach them: a client
+  // may sit inside the collapsed "under 15 min" tail, and the activity rows
+  // live behind CategoryRow's own local state, which nothing outside can open.
+  // So this lists them directly instead of asking anyone to navigate.
+  const matterGapRows = useMemo(() => {
+    const needs: DetailBlock[] = [];
+    for (const d of detail?.days ?? []) {
+      for (const b of d.blocks) {
+        if (!b.duration_minutes) continue;
+        if (b.matter_label) continue;
+        if ((b.matter_options ?? 0) < 1) continue;
+        needs.push(b);
+      }
+    }
+    return aggregateBlocks(needs).map(a => ({
+      ...a,
+      clientName: needs.find(b => b.id === a.ids[0])?.client_name ?? null,
+    }));
   }, [detail]);
 
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
@@ -848,11 +869,32 @@ const WeeklyTimesheet: React.FC = () => {
             </span>
             <span className="flex-1" />
             <button
-              onClick={() => { setLaneOpen(true); setExpanded(new Set(matterGap.clientKeys)); }}
+              onClick={() => setMatterGapOpen(o => !o)}
               className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-sans text-[12px] font-medium text-amber-800 shadow-[0_1px_2px_rgba(16,27,46,0.05)] hover:bg-amber-100"
             >
-              Show these
+              {matterGapOpen ? 'Hide' : 'Show these'}
             </button>
+          </div>
+        )}
+
+        {/* The rows, right here — client, what was captured, and the picker.
+            Nothing to expand, nothing to hunt for. */}
+        {matterGap.minutes > 0 && matterGapOpen && (
+          <div className="flex flex-col border-b border-amber-200 bg-amber-50/40 px-4 py-2">
+            {matterGapRows.map(row => (
+              <div key={row.key} className="flex items-center gap-2 py-1 min-w-0">
+                <span className="w-[76px] shrink-0 truncate font-sans text-[12px] font-semibold text-slate-700">
+                  {row.clientName || 'No client'}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={row.label}>
+                  {row.label}
+                </span>
+                <span className="w-[52px] shrink-0 text-right font-mono text-[12px] tabular-nums text-muted-foreground/70">
+                  {formatMinutes(row.minutes)}
+                </span>
+                <BlockMatterMenu agg={row} label="Choose matter" tone="needed" />
+              </div>
+            ))}
           </div>
         )}
 

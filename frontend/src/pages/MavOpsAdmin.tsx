@@ -1894,30 +1894,32 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 {rows.length} to judge — was this filed to the right client?
               </div>
               {rows.map(r => (
-                <div key={r.sample_id} style={{ ...card, padding: "14px 20px", marginBottom: 10 }}>
-                  {/* The client leads, hard against the left edge. Judging 50
-                      of these is one repeated eye movement — client, title,
-                      verdict — and it has to be a short vertical scan down one
-                      column, not a jump to the far right and back on every row.
-                      Block id, date and who ran it are reference, so they go to
-                      the right where they can be ignored. */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const }}>
-                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>filed as</span>
-                    <Badge label={r.booked_client_name || "No client"} color={T.yellow} />
-                    <div style={{ flex: 1 }} />
-                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>block {r.block_id}</span>
-                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{r.date}</span>
-                    {r.user && <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{r.user}</span>}
-                    <span style={{ fontSize: 11, color: T.textMuted, ...mono }}>{hrs(r.minutes)}</span>
+                // Capped rather than full-bleed: on a wide monitor an
+                // uncapped row throws the title across 1900px and every line
+                // becomes a head turn. Everything needed to judge fits here.
+                <div key={r.sample_id} style={{ ...card, padding: "14px 20px", marginBottom: 10, maxWidth: 1100 }}>
+                  {/* Reference only — block id, date, who, how long. The "filed
+                      as" badge that used to lead this line is gone: it repeated
+                      the client verdict row below it word for word, and the
+                      value belongs next to the buttons that judge it. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" as const, fontSize: 11, color: T.textMuted, ...mono }}>
+                    <span>block {r.block_id}</span>
+                    <span>{r.date}</span>
+                    {r.user && <span style={{ color: T.textSub }}>{r.user}</span>}
+                    <span>{hrs(r.minutes)}</span>
                   </div>
                   <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
                     {r.app_name && <span style={{ color: T.textMuted }}>{r.app_name} — </span>}
                     {r.window_title || <span style={{ color: T.textMuted }}>(no title)</span>}
                     {r.file_path && <div style={{ color: T.textMuted, marginTop: 4 }}>{r.file_path}</div>}
                   </code>
-                  {/* Three questions, same block, same glance. Drawing and
-                      reading the row is the expensive part; the extra two
-                      verdicts are nearly free once a person is already here. */}
+                  {/* Three questions, same block, same glance.
+                      Value and buttons sit TOGETHER: what you read and what you
+                      click must be within one fixation, or judging fifty blocks
+                      is a hundred and fifty round trips across the window. The
+                      value column is a fixed width rather than shrink-to-fit so
+                      the buttons land at the same x on every row and every
+                      block — clicking becomes muscle memory instead of aiming. */}
                   {([
                     ["verdict", "client", r.booked_client_name || "No client", r.verdict],
                     ["verdict_category", "category", r.booked_category || "—", r.verdict_category],
@@ -1925,10 +1927,11 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                      r.booked_is_billable == null ? "—" : (r.booked_is_billable ? "yes" : "no"),
                      r.verdict_billable],
                   ] as const).map(([field, label, filed, current]) => (
-                    <div key={field} style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" as const }}>
-                      <span style={{ fontSize: 11, color: T.textMuted, ...mono, width: 62, flexShrink: 0 }}>{label}</span>
-                      <Badge label={String(filed)} color={current === "pending" ? T.yellow : T.textMuted} />
-                      <div style={{ flex: 1 }} />
+                    <div key={field} style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" as const }}>
+                      <span style={{ fontSize: 11, color: T.textMuted, ...mono, width: 58, flexShrink: 0 }}>{label}</span>
+                      <span style={{ width: 300, flexShrink: 0, overflow: "hidden" }}>
+                        <Badge label={String(filed)} color={current === "pending" ? T.yellow : T.textMuted} />
+                      </span>
                       {([["correct", "✓ right", T.green],
                          ["wrong", "✗ wrong", T.red],
                          ["unverifiable", "? can't tell", T.textMuted]] as const).map(([v, blabel, colour]) => {

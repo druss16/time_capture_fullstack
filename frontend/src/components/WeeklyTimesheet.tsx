@@ -907,12 +907,12 @@ const WeeklyTimesheet: React.FC = () => {
         <div className={cn('flex items-center gap-3 px-4 py-3.5', bodyOpen && 'border-b border-border/70')}>
           <button
             onClick={() => setLaneOpen(o => !o)}
-            className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md hover:bg-primary/[0.06] transition-colors"
+            className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md transition-colors"
             title={laneOpen ? 'Collapse' : 'Expand to view clients'}
           >
             <ChevronRight className={cn('w-4 h-4 text-primary/60 shrink-0 transition-transform group-hover:text-primary', bodyOpen && 'rotate-90')} />
             <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
-            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary decoration-primary/40 underline-offset-4 group-hover:underline">This week</span>
+            <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
             <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
               {totalClients} client{totalClients !== 1 ? 's' : ''} · {fmtHours(grandTotal)}
             </span>
@@ -1400,10 +1400,26 @@ const MatterState: React.FC<{ agg: AggBlock }> = ({ agg }) => {
 // mono — the Daily Review signal for "text we read off the screen", vs the
 // product's Plus Jakarta Sans UI voice. `title` exposes the full (untruncated)
 // label on hover so long window titles stay readable.
-const AggBlockRow: React.FC<{ agg: AggBlock; withDay: boolean }> = ({ agg, withDay }) => (
+const AggBlockRow: React.FC<{
+  agg: AggBlock;
+  withDay: boolean;
+  categoryName?: string;
+  categoryBillable?: boolean;
+}> = ({ agg, withDay, categoryName, categoryBillable }) => (
   <div className="group flex items-center gap-2 pl-6 pr-1 py-0.5 min-w-0">
     <span className="font-mono text-[11px] text-muted-foreground/60 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(agg.firstStart, withDay)}</span>
     <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={agg.label}>{agg.label}</span>
+    {categoryName && (
+      <span
+        title={categoryBillable ? 'Billable' : 'Non-billable'}
+        className={cn(
+          'hidden shrink-0 rounded-full px-2 py-0.5 font-sans text-[10px] font-semibold sm:inline',
+          categoryBillable ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-500',
+        )}
+      >
+        {categoryName}
+      </span>
+    )}
     {agg.count > 1 && (
       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
@@ -1447,6 +1463,24 @@ const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: num
   );
 };
 
+// Every activity for a client, in time order, each tagged with the category it
+// came from. Flattens the client → category → activity tree by one level.
+const clientActivityRows = (
+  agg: ClientAgg,
+  weekBlocks: Map<string, DetailBlock[]>,
+): { agg: AggBlock; categoryName: string; isBillable: boolean }[] => {
+  const out: { agg: AggBlock; categoryName: string; isBillable: boolean }[] = [];
+  for (const e of agg.entries) {
+    const blocks = weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)));
+    if (!blocks?.length) continue;
+    for (const ab of aggregateBlocks(blocks)) {
+      out.push({ agg: ab, categoryName: e.task_type_name || 'General', isBillable: e.is_billable });
+    }
+  }
+  return out.sort((a, b) =>
+    (a.agg.firstStart || '').localeCompare(b.agg.firstStart || '') || b.agg.minutes - a.agg.minutes);
+};
+
 const ClientRow: React.FC<{
   agg: ClientAgg;
   isExpanded: boolean;
@@ -1475,13 +1509,17 @@ const ClientRow: React.FC<{
       {isExpanded && (
         <div className="px-4 pb-3 pt-1.5 bg-muted/40">
           <div className="ml-[26px] flex flex-col">
-            {agg.entries.map(e => (
-              <CategoryRow
-                key={`${e.client_id}-${e.task_type_id}`}
-                entry={e}
-                pctOf={agg.total}
-                blocks={weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)))}
-                blocksWithDay
+            {/* One click reaches the work. The category used to be a second
+                expansion between client and activity, which put every block two
+                clicks from the top and hid the rows that need a matter. It rides
+                on the row as a chip instead — same information, no extra level. */}
+            {clientActivityRows(agg, weekBlocks).map(({ agg: ab, categoryName, isBillable }) => (
+              <AggBlockRow
+                key={ab.key}
+                agg={ab}
+                withDay
+                categoryName={categoryName}
+                categoryBillable={isBillable}
               />
             ))}
           </div>

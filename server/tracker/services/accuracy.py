@@ -41,6 +41,85 @@ HUMAN_SET_STATES = ('user', 'user_edit', 'correction')
 DEFAULT_SAMPLE_SIZE = 50
 
 
+
+# ── Which mechanism filed a block ───────────────────────────────────────────
+# Ordered most-decisive first. A block's audit usually carries several signals
+# at once (a client one, a category one, a fallback), so the first match down
+# this list is taken as "what filed it".
+#
+# Drawn from the signal types actually present in production, not invented:
+# anything not listed is category-or-billable only and must never be reported
+# as the reason a CLIENT was chosen. fix6_default alone outnumbers every real
+# client signal ~20:1 and means "no client identified" — attributing filings to
+# it would make the busiest row in the table a non-answer.
+CLIENT_SIGNAL_PRIORITY = (
+    'org_rule',                        # deterministic firm routing rule
+    'qb_company_file',                 # the QuickBooks company file itself
+    'vendor_fingerprint',              # vendors inside the file identify the parish
+    'title_match_title_alias',
+    'title_match_file_path',
+    'title_match_domain',
+    'file_path_structure',             # the client folder the document lives in
+    'co_open_office',
+    'learned_pattern',
+    'auto_confirm_name_match',
+    'auto_confirm_client_attribution',
+    'ai_client',
+    'ai_client_batch',
+    'agent_inference',
+    'agent_current_client',
+    'prior_block',                     # temporal: the block before it
+    'sandwich_correlation',            # temporal: the blocks either side
+    'internal_work',
+    'internal_work_deferred',
+    'auto_confirm_immaterial_noclient',
+    'auto_confirm_immaterial',
+)
+
+
+def _signals_of(audit_signals):
+    """matched_signals is a list of dicts, but arrives as a repr string on some rows."""
+    ms = audit_signals
+    if isinstance(ms, str):
+        import ast
+        try:
+            ms = ast.literal_eval(ms)
+        except (ValueError, SyntaxError):
+            return []
+    return [e for e in (ms or []) if isinstance(e, dict)]
+
+
+def filed_by_signal(block_id: int, audits_by_block: dict | None = None) -> str:
+    """Best available answer to "what put this block on this client?".
+
+    Falls back to the audit's coarse `source` and finally to 'unknown' — an
+    honest bucket is better than forcing every block into a named mechanism.
+    """
+    from tracker.models import ClassificationAudit
+
+    if audits_by_block is not None:
+        rows = audits_by_block.get(block_id) or []
+    else:
+        rows = list(
+            ClassificationAudit.objects
+            .filter(block_id=block_id)
+            .order_by('-created_at')
+            .values_list('source', 'matched_signals')[:5]
+        )
+
+    present, source = set(), ''
+    for src, ms in rows:
+        source = source or (src or '')
+        for e in _signals_of(ms):
+            if e.get('type'):
+                present.add(e['type'])
+
+    for name in CLIENT_SIGNAL_PRIORITY:
+        if name in present:
+            return name
+    return f'source:{source}' if source else 'unknown'
+
+
 def auditable_blocks(org_id: int, start: date, end: date):
     """The population an accuracy claim is actually about: blocks WE filed.
 
@@ -93,14 +172,27 @@ def draw_sample(org_id: int, start: date, end: date, n: int = DEFAULT_SAMPLE_SIZ
 
     chosen_ids = rng.sample(pool, min(n, len(pool)))
 
-    from tracker.models import Block
+    from tracker.models import Block, ClassificationAudit
+    from tracker.services.classification_service import ClassificationService
+
+    # One query for every drawn block's audits rather than one per block.
+    audits_by_block = {}
+    for bid, src, ms in (ClassificationAudit.objects
+                         .filter(block_id__in=chosen_ids)
+                         .order_by('-created_at')
+                         .values_list('block_id', 'source', 'matched_signals')):
+        audits_by_block.setdefault(bid, []).append((src, ms))
+
     rows = []
-    for b in Block.objects.filter(id__in=chosen_ids).only('id', 'client_id', 'minutes', 'org_id'):
+    for b in Block.objects.filter(id__in=chosen_ids):
         rows.append(AccuracySample(
             org_id=org_id, block_id=b.id,
             period_start=start, period_end=end,
             booked_client_id=b.client_id,
             minutes=b.minutes or 0,
+            filed_by_signal=filed_by_signal(b.id, audits_by_block),
+            booked_category=(ClassificationService._extract_dominant_category(b) or '')[:64],
+            booked_is_billable=b.is_billable,
         ))
     AccuracySample.objects.bulk_create(rows, ignore_conflicts=True)
     return chosen_ids
@@ -122,6 +214,69 @@ def wilson_interval(successes: int, total: int, z: float = 1.96) -> tuple[float,
     return (max(0.0, centre - margin), min(1.0, centre + margin))
 
 
+def _tally(rows, field):
+    """Counts + precision + interval for one verdict dimension."""
+    counts = {'pending': 0, 'correct': 0, 'wrong': 0, 'unverifiable': 0}
+    wrong_minutes = 0
+    for r in rows:
+        v = r[field]
+        counts[v] = counts.get(v, 0) + 1
+        if v == 'wrong':
+            wrong_minutes += r['minutes'] or 0
+    decided = counts['correct'] + counts['wrong']
+    lo, hi = wilson_interval(counts['correct'], decided)
+    adjudicated = decided + counts['unverifiable']
+    return {
+        'correct': counts['correct'],
+        'wrong': counts['wrong'],
+        'unverifiable': counts['unverifiable'],
+        'pending': counts['pending'],
+        'precision': (counts['correct'] / decided) if decided else None,
+        'ci_low': lo if decided else None,
+        'ci_high': hi if decided else None,
+        'worst_case': (counts['correct'] / adjudicated) if adjudicated else None,
+        'wrong_minutes': wrong_minutes,
+    }
+
+
+def by_signal(org_id: int, start: date, end: date, min_decided: int = 3) -> list:
+    """Precision split by the mechanism that filed each block.
+
+    The point of the whole audit. A single score says an afternoon is needed
+    somewhere; this says where. Rows below `min_decided` are still returned but
+    flagged `thin`, because 1-of-1 is not evidence and should not be allowed to
+    look like a 100% mechanism or a 0% one.
+    """
+    from tracker.models import AccuracySample
+
+    rows = list(
+        AccuracySample.objects
+        .filter(org_id=org_id, period_start=start, period_end=end)
+        .values('filed_by_signal', 'verdict', 'minutes')
+    )
+    grouped = {}
+    for r in rows:
+        grouped.setdefault(r['filed_by_signal'] or 'unknown', []).append(r)
+
+    out = []
+    for signal, group in grouped.items():
+        t = _tally(group, 'verdict')
+        decided = t['correct'] + t['wrong']
+        out.append({
+            'signal': signal,
+            'drawn': len(group),
+            'decided': decided,
+            'correct': t['correct'],
+            'wrong': t['wrong'],
+            'precision': t['precision'],
+            'wrong_minutes': t['wrong_minutes'],
+            'thin': decided < min_decided,
+        })
+    # Worst real precision first — the work list, in order.
+    out.sort(key=lambda r: (r['thin'], r['precision'] if r['precision'] is not None else 2, -r['wrong']))
+    return out
+
+
 def sampled_precision(org_id: int, start: date, end: date) -> dict:
     """The headline: what the random sample says, with its uncertainty."""
     from tracker.models import AccuracySample
@@ -129,33 +284,17 @@ def sampled_precision(org_id: int, start: date, end: date) -> dict:
     samples = list(
         AccuracySample.objects
         .filter(org_id=org_id, period_start=start, period_end=end)
-        .values('verdict', 'minutes')
+        .values('verdict', 'verdict_category', 'verdict_billable', 'minutes')
     )
-    counts = {'pending': 0, 'correct': 0, 'wrong': 0, 'unverifiable': 0}
-    wrong_minutes = 0
-    for s in samples:
-        counts[s['verdict']] = counts.get(s['verdict'], 0) + 1
-        if s['verdict'] == 'wrong':
-            wrong_minutes += s['minutes'] or 0
-
-    decided = counts['correct'] + counts['wrong']
-    lo, hi = wilson_interval(counts['correct'], decided)
-
-    # Two readings, because "unverifiable" must not quietly count as correct.
-    # The optimistic one ignores them; the floor assumes every one is wrong.
-    # The gap between the two IS the cost of blocks that carry no evidence.
-    adjudicated = decided + counts['unverifiable']
+    # Client stays at the top level: it is the headline, and the shape the API
+    # already returns. Category and billable ride alongside as their own
+    # dimensions — same blocks, same human pass, three questions.
+    client = _tally(samples, 'verdict')
     return {
         'drawn': len(samples),
-        'pending': counts['pending'],
-        'correct': counts['correct'],
-        'wrong': counts['wrong'],
-        'unverifiable': counts['unverifiable'],
-        'precision': (counts['correct'] / decided) if decided else None,
-        'ci_low': lo if decided else None,
-        'ci_high': hi if decided else None,
-        'worst_case': (counts['correct'] / adjudicated) if adjudicated else None,
-        'wrong_minutes': wrong_minutes,
+        **client,
+        'category': _tally(samples, 'verdict_category'),
+        'billable': _tally(samples, 'verdict_billable'),
     }
 
 
@@ -269,6 +408,7 @@ def summary(org_id: int, start: date, end: date) -> dict:
         'period': {'start': start.isoformat(), 'end': end.isoformat()},
         'coverage': cov,
         'sampled': samp,
+        'by_signal': by_signal(org_id, start, end),
         'human_corrections': human,
         'self_corrections': fixed,
         'headline': _headline(cov, samp, fixed),

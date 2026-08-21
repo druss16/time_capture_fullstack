@@ -1504,6 +1504,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showDefs, setShowDefs] = useState(false);
 
   const load = useCallback(async () => {
     if (!filterOrg) { setSum(null); setRows([]); return; }
@@ -1593,6 +1594,55 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               value={sm!.precision != null ? `${(sm!.precision * 100).toFixed(0)}%` : "no sample"}
               color={sm!.precision == null ? T.textMuted : sm!.precision >= 0.95 ? T.green : T.yellow} />
             <StatCard label="We Caught Ourselves" value={sum.self_corrections} color={T.green} />
+          </div>
+
+          {/* Definitions in the product, not in a doc nobody opens. Each one
+              says what it counts AND what it does not tell you — "autonomy"
+              especially, which reads like an accuracy score and is not one:
+              a system that guessed wildly would score 100%. */}
+          <div style={{ marginBottom: 20 }}>
+            <button onClick={() => setShowDefs(v => !v)}
+              style={{ background: "none", border: "none", color: T.teal, fontSize: 12, cursor: "pointer", ...mono, padding: 0, textDecoration: "underline" }}>
+              {showDefs ? "hide" : "what do these mean, and can I trust them?"}
+            </button>
+            {showDefs && (
+              <div style={{ ...card, marginTop: 10, fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.8 }}>
+                {[
+                  ["Filed without asking",
+                   "Minutes we committed on our own, without putting them in front of anyone. Includes time filed as No-Client or non-billable — deciding something isn't billable is still a decision."],
+                  ["Autonomy",
+                   "Filed by us ÷ (filed by us + waiting on you + filed by you). How much of the sorting we did. NOT accuracy: it says nothing about being right, and a system that guessed wildly would score 100%. Time discarded as not-real-activity is excluded from both sides."],
+                  ["Sampled precision",
+                   "Of blocks drawn AT RANDOM and then judged by a person, the share filed to the right client. The only number here that measures correctness. Shown with a 95% interval, because 50 blocks cannot pin it to the point."],
+                  ["We caught ourselves",
+                   "Times we re-filed our own work after later evidence (a vendor fingerprint, a learned pattern) contradicted the first answer. A straight count, not an estimate."],
+                  ["People caught",
+                   "Client changes made by a person. A floor, never a rate: it only counts errors somebody happened to re-read, and nobody re-reads what looks fine."],
+                ].map(([term, body]) => (
+                  <div key={term} style={{ marginBottom: 10 }}>
+                    <div style={{ color: T.text, fontWeight: 700 }}>{term}</div>
+                    <div>{body}</div>
+                  </div>
+                ))}
+                <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 10, marginTop: 4 }}>
+                  <div style={{ color: T.text, fontWeight: 700 }}>Why the sampled number is trustworthy</div>
+                  <div>
+                    The blocks are chosen by a coin flip over everything we filed, not by a
+                    detector — so it cannot hide the errors our detectors are blind to, which
+                    is exactly how the other two numbers understate. Every verdict records who
+                    made it and when. Blocks with no evidence either way are counted as
+                    "unverifiable" rather than as correct, and a floor is shown assuming every
+                    one of them is wrong.
+                  </div>
+                  <div style={{ color: T.textMuted, marginTop: 8 }}>
+                    Its limits, plainly: it judges the client only, not the category or whether
+                    the time was billable; it describes the window sampled and does not predict
+                    the next one; and it is only as good as the person judging, so verdicts are
+                    attributed rather than anonymous.
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Both estimators, side by side with the honest caveat that they are

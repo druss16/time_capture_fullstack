@@ -1110,12 +1110,12 @@ const WeeklyTimesheet: React.FC = () => {
                     {clioPreview.totals?.entries > 0
                       ? (clioPreview.push_trigger === 'submit'
                           // Submitting IS the write, so say so.
-                          ? `Submitting sends ${fmtHours(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} to Clio.`
+                          ? `Submitting sends ${formatMinutes(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} to Clio.`
                           // Approval is the gate. Promising "submitting sends" here
                           // would be false, and someone who believes their time
                           // reached billing will not chase the approval that
                           // actually releases it.
-                          : `${fmtHours(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} goes to Clio once your manager approves this week.`)
+                          : `${formatMinutes(clioPreview.totals.minutes)} across ${clioPreview.totals.entries} matter${clioPreview.totals.entries !== 1 ? 's' : ''} goes to Clio once your manager approves this week.`)
                       : 'Nothing new to send to Clio — everything here is already there.'}
                   </p>
                   {clioPreview.entries?.length > 0 && (
@@ -1123,7 +1123,7 @@ const WeeklyTimesheet: React.FC = () => {
                       {clioPreview.entries.slice(0, 6).map((e: any, i: number) => (
                         <li key={i} className="text-[11px] text-indigo-700 flex justify-between gap-3">
                           <span className="truncate">{e.matter}</span>
-                          <span className="tabular-nums shrink-0">{e.push_hours}h</span>
+                          <span className="tabular-nums shrink-0">{formatMinutes(e.push_minutes)}</span>
                         </li>
                       ))}
                       {clioPreview.entries.length > 6 && (

@@ -243,14 +243,28 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
     # additional work — Clio entries carry a date and a duration but no start
     # time — so the only honest resolution is to show it and let someone say.
     existing_entries = defaultdict(list)
-    for act in api.paginated_get(
-        '/activities', fields=ACTIVITY_FIELDS,
-        params={
-            'type': 'TimeEntry',
-            'start_date': str(start_date),
-            'end_date': str(end_date),
-        },
-    ):
+    # Scoped to the people we are actually pushing for. Unscoped, every
+    # attorney's preview pulled the WHOLE firm's week: at fifty attorneys that
+    # is thousands of activities, two hundred per page, ~15 Clio calls per
+    # dialog open — against a 50/min ceiling shared by the firm. Scoped, it is
+    # one call regardless of firm size, because it is one person's week.
+    scan_params = {
+        'type': 'TimeEntry',
+        'start_date': str(start_date),
+        'end_date': str(end_date),
+    }
+    scan_user_ids = sorted({uid for uid, _mid, _d in groups.keys()})
+
+    def _activity_pages():
+        # One request per user we are pushing for — normally one, since a
+        # timesheet belongs to a single person.
+        for uid in scan_user_ids:
+            yield from api.paginated_get(
+                '/activities', fields=ACTIVITY_FIELDS,
+                params={**scan_params, 'user_id': uid},
+            )
+
+    for act in _activity_pages():
         if act.get('type') != 'TimeEntry':
             continue
         user = act.get('user') or {}

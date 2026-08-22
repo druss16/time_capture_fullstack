@@ -3235,7 +3235,7 @@ class Timesheet(models.Model):
         
         self.save(update_fields=['total_hours', 'billable_hours', 'non_billable_hours', 'total_amount', 'updated_at'])
     
-    def submit(self, notes='', auto=False):
+    def submit(self, notes='', auto=False, force_conflicts=None):
         """
         Submit timesheet for approval.
         
@@ -3265,14 +3265,22 @@ class Timesheet(models.Model):
             user=self.user, organization=self.org
         ).first()
         if membership and membership.role == 'owner':
-            self.approve(approved_by=self.user, notes='Auto-approved (owner)')
+            self.approve(
+                approved_by=self.user, notes='Auto-approved (owner)',
+                force_conflicts=force_conflicts,
+            )
+            # After approve() so the queue survives its save(); approve() has
+            # already queued if the org pushes on approval, and only one of the
+            # two triggers can match, so this cannot double-queue.
+            self._queue_clio_push('submit', force_conflicts)
             return
         
         # Lock associated blocks
         self.blocks.update(approved=False)  # Mark as pending approval
+        self._queue_clio_push('submit', force_conflicts)
 
     
-    def approve(self, approved_by, notes=''):
+    def approve(self, approved_by, notes='', force_conflicts=None):
         """Approve the timesheet"""
         if self.status != 'submitted':
             raise ValueError(f"Can only approve submitted timesheets, current status: {self.status}")
@@ -3289,7 +3297,41 @@ class Timesheet(models.Model):
             approved_at=timezone.now(),
             approved_by=approved_by
         )
-    
+        self._queue_clio_push('approve', force_conflicts)
+
+    def _queue_clio_push(self, trigger, force_conflicts=None):
+        """Queue the Clio push when the org bills at this point in the lifecycle.
+
+        This lives on the model rather than the API view because approval does
+        not always arrive through the approve endpoint: submit() auto-approves
+        an owner's own timesheet, and a view-level hook silently skips that
+        path, leaving an owner's time stranded with no way to ever reach Clio.
+        A state transition is the honest trigger; the HTTP route is not.
+
+        Always call after the transition's save() has completed — a later
+        full-instance save would otherwise overwrite the status the worker
+        writes back.
+
+        Never raises: billing is a copy of the timesheet, and a Clio problem
+        must not undo an approval that already succeeded.
+        """
+        import logging
+
+        if getattr(self.org, 'clio_push_trigger', 'approve') != trigger:
+            return
+        try:
+            from .views_billing import push_timesheet_to_clio_task
+
+            type(self).objects.filter(id=self.id).update(clio_push_status='queued')
+            self.clio_push_status = 'queued'
+            push_timesheet_to_clio_task.delay(self.id, force_conflicts or None)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                'Could not queue Clio push for timesheet %s: %s', self.id, e, exc_info=True,
+            )
+            type(self).objects.filter(id=self.id).update(clio_push_status='failed')
+            self.clio_push_status = 'failed'
+
     def reject(self, rejected_by, reason=''):
         """Reject the timesheet, allowing re-submission"""
         if self.status != 'submitted':

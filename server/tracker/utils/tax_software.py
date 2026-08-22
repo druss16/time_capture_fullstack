@@ -349,12 +349,19 @@ def is_internal_firm_work(title: str) -> Optional[str]:
         return None
     t = title.lower()
 
+    # "Billing/Admin", no spaces: that is the name in industry_categories and
+    # the name the TaskType rows carry. Emitting "Billing / Admin" here put 346
+    # blocks and 21 hours on a category string that matched no TaskType, so no
+    # billable rule, report or matrix could see them. migrate_block_categories
+    # already carried a 'Billing / Admin' -> 'Billing/Admin' mapping, which
+    # means the cleanup was written and the source of it never was.
+
     # Internal timesheets / payroll — staff admin, not client work
     if re.search(r'\b(timesheet|time\s*sheet|staff\s*hours|payroll)\b', t):
-        return "Billing / Admin"
+        return "Billing/Admin"
 
     # Generic meaningless Excel/Word sessions
     if re.search(r'\b(book\s*1|document\s*1|untitled)\b', t):
-        return "Billing / Admin"
+        return "Billing/Admin"
 
     return None

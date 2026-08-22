@@ -50,8 +50,10 @@ TASK_TYPES = [
     # ─── Overhead / Admin (billability is firm-policy; default to non-billable) ───
     ('ADMIN',   'Administration',       False, None, '#6B7280', 110,
         ['Administration', 'General']),
-    ('BILL',    'Billing / Admin',      False, None, '#9CA3AF', 120,
-        ['Billing / Admin']),
+    # Canonical name has no spaces (see industry_categories); the spaced form
+    # stays as an ALIAS so historical blocks and titles still resolve to it.
+    ('BILL',    'Billing/Admin',        False, None, '#9CA3AF', 120,
+        ['Billing / Admin', 'Billing/Admin']),
     ('IT',      'IT / Setup',           False, None, '#B5BAC1', 130,
         ['IT / Setup']),
 

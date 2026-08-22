@@ -3095,6 +3095,26 @@ class Timesheet(models.Model):
     Aggregates blocks for a given week.
     """
     org = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='timesheets')
+
+    # Pushing to Clio moved off the approval request. A fifty-attorney week is
+    # a thousand-plus writes at fifty requests a minute — twenty minutes, which
+    # no proxy will hold open. The approval returns immediately and the outcome
+    # lands here for the UI to read.
+    CLIO_PUSH_STATUS_CHOICES = [
+        ('', 'Not pushed'),
+        ('queued', 'Queued'),
+        ('running', 'Sending to Clio'),
+        ('done', 'Sent'),
+        ('failed', 'Failed'),
+    ]
+    clio_push_status = models.CharField(
+        max_length=16, blank=True, default='',
+        choices=CLIO_PUSH_STATUS_CHOICES,
+    )
+    clio_push_result = models.JSONField(
+        default=dict, blank=True,
+        help_text='Counts, skips and errors from the last push, for display.',
+    )
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='timesheets')
     
     # Week identification (always Monday)

@@ -1994,6 +1994,45 @@ def push_timesheet_to_clio(timesheet, org, force_conflicts=None):
     }
 
 
+@shared_task(name='tracker.push_timesheet_to_clio')
+def push_timesheet_to_clio_task(timesheet_id, force_conflicts=None):
+    """
+    Send a timesheet's time to Clio on a worker.
+
+    Off the request because a large firm's week is a thousand-plus writes at
+    fifty per minute — twenty minutes of rate-limited pushing, which no proxy
+    holds open. Safe to re-run: push is a delta, so a retry cannot double-bill.
+    """
+    from tracker.models import Timesheet
+
+    try:
+        ts = Timesheet.objects.select_related('org').get(id=timesheet_id)
+    except Timesheet.DoesNotExist:
+        logger.error('Clio push: timesheet %s not found', timesheet_id)
+        return {'error': 'timesheet_not_found'}
+
+    Timesheet.objects.filter(id=ts.id).update(clio_push_status='running')
+    try:
+        result = push_timesheet_to_clio(ts, ts.org, force_conflicts=force_conflicts)
+    except Exception as e:
+        logger.warning('Clio push failed for timesheet %s: %s', ts.id, e, exc_info=True)
+        Timesheet.objects.filter(id=ts.id).update(
+            clio_push_status='failed', clio_push_result={'error': str(e)[:300]},
+        )
+        return {'error': str(e)[:300]}
+
+    if result is None:
+        # No Clio connection — not a failure, just nothing to do.
+        Timesheet.objects.filter(id=ts.id).update(clio_push_status='', clio_push_result={})
+        return {'skipped': 'no_clio'}
+
+    Timesheet.objects.filter(id=ts.id).update(
+        clio_push_status='failed' if result.get('errors') else 'done',
+        clio_push_result=result,
+    )
+    return result
+
+
 class TimesheetClioPreviewView(APIView):
     """
     GET /api/billing/timesheets/<id>/clio-preview/
@@ -2105,10 +2144,11 @@ class TimesheetSubmitView(APIView):
         trigger = getattr(membership.organization, 'clio_push_trigger', 'approve')
         if trigger == 'submit':
             try:
-                clio_result = push_timesheet_to_clio(
-                    timesheet, membership.organization,
-                    force_conflicts=request.data.get('force_conflicts') or None,
+                Timesheet.objects.filter(id=timesheet.id).update(clio_push_status='queued')
+                push_timesheet_to_clio_task.delay(
+                    timesheet.id, request.data.get('force_conflicts') or None,
                 )
+                clio_result = {'queued': True}
             except Exception as e:
                 logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
                 clio_result = {'pushed': False, 'error': str(e)[:200]}
@@ -2162,15 +2202,20 @@ class TimesheetApproveView(APIView):
         # failure must not undo an approval that succeeded, and the approval is
         # the record — Clio holds a copy. Re-running is safe, since push is a
         # delta against what Clio already holds.
+        # Queued, not run here. The approval is the record and must not wait on,
+        # or be undone by, a billing system that may take twenty minutes to
+        # accept a large week.
         clio_result = None
         if getattr(membership.organization, 'clio_push_trigger', 'approve') == 'approve':
             try:
-                clio_result = push_timesheet_to_clio(timesheet, membership.organization)
-            except Exception as e:
-                logger.warning(
-                    'Clio push on approve failed for timesheet %s: %s', pk, e, exc_info=True,
+                Timesheet.objects.filter(id=timesheet.id).update(clio_push_status='queued')
+                push_timesheet_to_clio_task.delay(
+                    timesheet.id, request.data.get('force_conflicts') or None,
                 )
-                clio_result = {'pushed': False, 'error': str(e)[:200]}
+                clio_result = {'queued': True}
+            except Exception as e:
+                logger.warning('Could not queue Clio push for timesheet %s: %s', pk, e, exc_info=True)
+                clio_result = {'queued': False, 'error': str(e)[:200]}
 
         return Response({
             'id': timesheet.id,
@@ -4596,6 +4641,8 @@ path('billing/realization/', realization_with_editable, name='realization-editab
 from django.http import StreamingHttpResponse
 from collections import defaultdict
 import logging
+
+from celery import shared_task
 
 logger = logging.getLogger(__name__)
 

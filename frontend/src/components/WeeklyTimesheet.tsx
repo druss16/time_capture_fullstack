@@ -204,6 +204,7 @@ const displayClientName = (agg: Pick<ClientAgg, 'clientId' | 'clientName'>) =>
   isNoClient(agg) ? 'No client' : agg.clientName;
 
 // Clients whose whole week is under this many hours get rolled into one row.
+const GAP_PAGE = 8;   // rows shown in the needs-a-matter banner before "show more"
 const TAIL_THRESHOLD_HOURS = 0.25; // 15 minutes
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -389,6 +390,10 @@ const WeeklyTimesheet: React.FC = () => {
   // so nothing about this appears for them.
   const [clioEnabled, setClioEnabled] = useState(false);
   const [matterGapOpen, setMatterGapOpen] = useState(false);
+  // A banner is a prompt, not a workspace. Attribution can leave dozens of rows
+  // unresolved — a firm mid-rollout, or before the extension ships — and an
+  // unbounded list inside a banner pushes the actual timesheet off the screen.
+  const [gapShown, setGapShown] = useState(GAP_PAGE);
   // Rows resolved in this session. Assigning a matter used to refetch the whole
   // timesheet, so the page flickered and the list re-rendered underneath the
   // person mid-triage. The row simply leaves instead; the next natural reload
@@ -916,7 +921,7 @@ const WeeklyTimesheet: React.FC = () => {
             Nothing to expand, nothing to hunt for. */}
         {matterGap.minutes > 0 && matterGapOpen && (
           <div className="flex flex-col border-b border-amber-200 bg-amber-50/40 px-4 py-2">
-            {matterGapRows.map(row => (
+            {matterGapRows.slice(0, gapShown).map(row => (
               <div key={row.key} className="flex items-center gap-2 py-1 min-w-0">
                 <span className="w-[76px] shrink-0 truncate font-sans text-[12px] font-semibold text-slate-700">
                   {row.clientName || 'No client'}
@@ -942,6 +947,15 @@ const WeeklyTimesheet: React.FC = () => {
                 />
               </div>
             ))}
+            {matterGapRows.length > gapShown && (
+              <button
+                onClick={() => setGapShown(n => n + GAP_PAGE)}
+                className="mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 underline-offset-2 hover:underline"
+              >
+                Show {Math.min(GAP_PAGE, matterGapRows.length - gapShown)} more
+                {' '}of {matterGapRows.length}
+              </button>
+            )}
           </div>
         )}
 

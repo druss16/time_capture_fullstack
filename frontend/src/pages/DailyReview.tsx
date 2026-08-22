@@ -243,6 +243,9 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(true);
+  // Capped for the same reason as the timesheet banner: a lane is a queue you
+  // work down, not a wall you scroll past.
+  const [shown, setShown] = useState(8);
 
   const load = useCallback(() => {
     safeFetchJson(`${API_BASE}/blocks/needs-matter/?date=${date}`)
@@ -275,7 +278,7 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
 
       {open && (
         <div className="border-t border-amber-200/70 px-3 pb-2 pt-2">
-          {rows.map((r) => (
+          {rows.slice(0, shown).map((r) => (
             <div key={r.id} className="flex items-center gap-2 py-1">
               <span className="w-[110px] shrink-0 truncate font-sans text-[12px] font-semibold text-foreground">
                 {r.client_name || "No client"}
@@ -300,6 +303,14 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
               />
             </div>
           ))}
+          {rows.length > shown && (
+            <button
+              onClick={() => setShown((n) => n + 8)}
+              className="mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 underline-offset-2 hover:underline"
+            >
+              Show {Math.min(8, rows.length - shown)} more of {rows.length}
+            </button>
+          )}
         </div>
       )}
     </div>

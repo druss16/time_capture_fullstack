@@ -1084,14 +1084,14 @@ const WeeklyTimesheet: React.FC = () => {
       {/* ── Submit Modal ──────────────────────────────────────────────── */}
       {showSubmitModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full mx-4 max-h-[88vh] flex flex-col overflow-hidden">
             <div className="px-6 py-4 border-b border-border/50">
               <h3 className="text-base font-bold text-slate-800">Submit Timesheet</h3>
               <p className="text-sm text-slate-500 mt-0.5">
                 {timesheetData && formatWeekRange(timesheetData.week_start)}
               </p>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 overflow-y-auto">
               <div className="grid grid-cols-3 gap-3">
                 {[
                   { label: 'Total',    value: fmtHours(grandTotal), cls: 'text-slate-800' },
@@ -1104,6 +1104,12 @@ const WeeklyTimesheet: React.FC = () => {
                   </div>
                 ))}
               </div>
+
+              {/* Notes and the Clio summary sit side by side. Stacked, this
+                  dialog ran taller than most laptop screens and the submit
+                  button fell below the fold — the one control everything else
+                  exists to inform. */}
+              <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
                   Notes <span className="text-slate-400 normal-case font-normal">(optional)</span>
@@ -1191,17 +1197,19 @@ const WeeklyTimesheet: React.FC = () => {
                   )}
                 </div>
               )}
+              </div>
+
               {!weekHasEnded && (
                 <p className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-500" />
                   This week isn't over yet. You can submit early, but make sure your time is complete first.
                 </p>
               )}
-              <p className="text-xs text-slate-400">
-                Once submitted, you won't be able to edit until your manager reviews it.
-              </p>
             </div>
-            <div className="px-6 py-4 bg-slate-50/60 border-t border-border/50 flex justify-end gap-2">
+            <div className="px-6 py-4 bg-slate-50/60 border-t border-border/50 flex items-center gap-3">
+              <p className="hidden flex-1 text-xs text-slate-400 sm:block">
+                Once submitted, you can't edit until your manager reviews it.
+              </p>
               <button
                 onClick={() => setShowSubmitModal(false)}
                 className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"

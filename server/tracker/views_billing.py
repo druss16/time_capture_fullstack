@@ -1,3 +1,4 @@
+from celery import shared_task
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action, permission_classes, parser_classes
 from rest_framework.response import Response
@@ -4641,8 +4642,6 @@ path('billing/realization/', realization_with_editable, name='realization-editab
 from django.http import StreamingHttpResponse
 from collections import defaultdict
 import logging
-
-from celery import shared_task
 
 logger = logging.getLogger(__name__)
 

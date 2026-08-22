@@ -2078,6 +2078,19 @@ class TimesheetClioPreviewView(APIView):
         })
 
 
+def _clio_result(timesheet):
+    """What to tell the client about the Clio push queued by the transition.
+
+    Read back rather than assumed: _queue_clio_push() swallows failures on
+    purpose so a billing outage cannot undo an approval, so 'queued' is a fact
+    to look up, not one the caller gets to assert.
+    """
+    status = getattr(timesheet, 'clio_push_status', '') or ''
+    if not status:
+        return None
+    return {'queued': status == 'queued', 'status': status}
+
+
 class TimesheetSubmitView(APIView):
     """POST /api/billing/timesheets/<id>/submit/"""
     permission_classes = [IsAuthenticated]
@@ -2128,31 +2141,14 @@ class TimesheetSubmitView(APIView):
         
         # Use model method - this recalculates totals and sets status
         notes = request.data.get('notes', '')
-        timesheet.submit(notes=notes)
-
-        # Submitting IS the approval, so this is where time reaches the firm's
-        # billing system. Deliberately after submit() and deliberately guarded:
-        # a Clio problem must never leave the timesheet unsubmitted, because the
-        # timesheet is the record of work and the push is a copy of it.
-        #
-        # Safe to re-run. push is a delta against what Clio already holds, so a
-        # double submit cannot double-bill — which is what makes pushing on
-        # submit defensible rather than reckless.
-        # Manager approval is the firm's control over what gets billed, so by
-        # default nothing reaches Clio until it is approved. An org can opt into
-        # pushing at submit — right for a solo practitioner, who is both roles.
-        clio_result = None
-        trigger = getattr(membership.organization, 'clio_push_trigger', 'approve')
-        if trigger == 'submit':
-            try:
-                Timesheet.objects.filter(id=timesheet.id).update(clio_push_status='queued')
-                push_timesheet_to_clio_task.delay(
-                    timesheet.id, request.data.get('force_conflicts') or None,
-                )
-                clio_result = {'queued': True}
-            except Exception as e:
-                logger.warning('Clio push on submit failed for timesheet %s: %s', pk, e, exc_info=True)
-                clio_result = {'pushed': False, 'error': str(e)[:200]}
+        # The Clio push is queued inside submit()/approve(), not here. Submitting
+        # an owner's own timesheet auto-approves it inside the model, which never
+        # reaches the approve endpoint — so a hook on the view silently strands
+        # every owner's time. The transition is the trigger.
+        timesheet.submit(
+            notes=notes, force_conflicts=request.data.get('force_conflicts') or None,
+        )
+        clio_result = _clio_result(timesheet)
 
         return Response({
             'id': timesheet.id,
@@ -2196,27 +2192,15 @@ class TimesheetApproveView(APIView):
         
         # Use model method - this marks blocks as approved and updates status
         notes = request.data.get('notes', '')
-        timesheet.approve(approved_by=request.user, notes=notes)
-
-        # Approval is the firm's gate on what gets billed, so by default this is
-        # the moment time reaches Clio. After approve() and fully guarded: a Clio
-        # failure must not undo an approval that succeeded, and the approval is
-        # the record — Clio holds a copy. Re-running is safe, since push is a
-        # delta against what Clio already holds.
-        # Queued, not run here. The approval is the record and must not wait on,
-        # or be undone by, a billing system that may take twenty minutes to
-        # accept a large week.
-        clio_result = None
-        if getattr(membership.organization, 'clio_push_trigger', 'approve') == 'approve':
-            try:
-                Timesheet.objects.filter(id=timesheet.id).update(clio_push_status='queued')
-                push_timesheet_to_clio_task.delay(
-                    timesheet.id, request.data.get('force_conflicts') or None,
-                )
-                clio_result = {'queued': True}
-            except Exception as e:
-                logger.warning('Could not queue Clio push for timesheet %s: %s', pk, e, exc_info=True)
-                clio_result = {'queued': False, 'error': str(e)[:200]}
+        # Queued inside approve(), so it fires however approval happens — the
+        # endpoint is only one of the routes. Never run inline: the approval is
+        # the record and must not wait on, or be undone by, a billing system
+        # that may take twenty minutes to accept a large week.
+        timesheet.approve(
+            approved_by=request.user, notes=notes,
+            force_conflicts=request.data.get('force_conflicts') or None,
+        )
+        clio_result = _clio_result(timesheet)
 
         return Response({
             'id': timesheet.id,

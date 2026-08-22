@@ -397,6 +397,91 @@ def coverage(org_id: int, start: date, end: date) -> dict:
     }
 
 
+def billable_consistency(org_id: int, start: date, end: date) -> dict:
+    """Blocks whose billable flag contradicts their own category's rule.
+
+    The firm sets is_billable per TaskType — Email/Communication and
+    Billing/Admin off, Tax Preparation and Payroll on — but a block's flag is
+    set independently by the classifier and does not read that setting. Over 30
+    days on one org the two disagreed on 21% of committed blocks.
+
+    Deliberately a REPORT, not a correction. Most disagreement is legitimate:
+    internal clients are forced non-billable at the save chokepoint whatever
+    their category says, and a block with no client cannot bill. Auto-deriving
+    the flag from the category would also silently zero the client-email time
+    the classifier currently bills, which is a pricing decision for the firm
+    and not one to encode in a sweep.
+
+    What it separates out is the part nobody chose:
+
+      - non-billable category, billable block: time being billed under a
+        heading the firm marked unbillable. The money direction.
+      - billable category, non-billable block, with no internal client and no
+        missing client to explain it.
+      - categories matching no TaskType at all, where no rule can ever fire.
+        'Billing / Admin' with spaces against a registered 'Billing/Admin'
+        hid 21 hours this way.
+    """
+    from tracker.models import Block, Client, TaskType
+    from tracker.industry_categories import is_internal_client_name
+
+    rules = {t.name: t.is_billable for t in TaskType.objects.filter(org_id=org_id)}
+    if not rules:
+        return {'configured': False}
+
+    internal_ids = {
+        cid for cid, name in Client.objects.filter(org_id=org_id).values_list('id', 'name')
+        if name and is_internal_client_name(name)
+    }
+
+    over, under, orphan = {}, {}, {}
+    over_minutes = under_minutes = 0
+
+    rows = (Block.objects
+            .filter(org_id=org_id, deleted_at__isnull=True,
+                    classification_state='committed', day__gte=start, day__lte=end)
+            .values_list('client_id', 'category_hours', 'is_billable', 'minutes'))
+
+    for client_id, hours, is_billable, minutes in rows:
+        if not isinstance(hours, dict) or not hours:
+            continue
+        category = max(hours.items(), key=lambda kv: kv[1] or 0)[0]
+        minutes = minutes or 0
+
+        if category not in rules:
+            e = orphan.setdefault(category, {'category': category, 'blocks': 0, 'minutes': 0})
+            e['blocks'] += 1
+            e['minutes'] += minutes
+            continue
+
+        if rules[category] == is_billable:
+            continue
+
+        # Explained away: the two rules that legitimately outrank a category.
+        if not rules[category] or (client_id is None or client_id in internal_ids):
+            if rules[category]:
+                continue        # internal or clientless — expected, not drift
+        bucket = over if is_billable else under
+        e = bucket.setdefault(category, {'category': category, 'blocks': 0, 'minutes': 0,
+                                         'rule_says': rules[category]})
+        e['blocks'] += 1
+        e['minutes'] += minutes
+        if is_billable:
+            over_minutes += minutes
+        else:
+            under_minutes += minutes
+
+    key = lambda d: sorted(d.values(), key=lambda r: -r['minutes'])
+    return {
+        'configured': True,
+        'billed_under_unbillable_category': key(over),
+        'unbilled_under_billable_category': key(under),
+        'orphan_categories': key(orphan),
+        'over_minutes': over_minutes,
+        'under_minutes': under_minutes,
+    }
+
+
 def summary(org_id: int, start: date, end: date) -> dict:
     """Everything the Accuracy tab shows, plus the sentence it leads with."""
     cov = coverage(org_id, start, end)
@@ -409,6 +494,7 @@ def summary(org_id: int, start: date, end: date) -> dict:
         'coverage': cov,
         'sampled': samp,
         'by_signal': by_signal(org_id, start, end),
+        'billable_consistency': billable_consistency(org_id, start, end),
         'human_corrections': human,
         'self_corrections': fixed,
         'headline': _headline(cov, samp, fixed),

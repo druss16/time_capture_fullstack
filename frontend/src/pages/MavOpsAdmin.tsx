@@ -1609,6 +1609,13 @@ interface AccuracySummary {
     discarded_minutes: number; total_minutes: number; autonomy: number | null;
   };
   sampled: AccuracyTally & { drawn: number; category: AccuracyTally; billable: AccuracyTally };
+  billable_consistency?: {
+    configured: boolean;
+    billed_under_unbillable_category?: { category: string; blocks: number; minutes: number }[];
+    unbilled_under_billable_category?: { category: string; blocks: number; minutes: number }[];
+    orphan_categories?: { category: string; blocks: number; minutes: number }[];
+    over_minutes?: number; under_minutes?: number;
+  };
   by_signal?: {
     signal: string; drawn: number; decided: number; correct: number; wrong: number;
     precision: number | null; wrong_minutes: number; thin: boolean;
@@ -1901,6 +1908,71 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               </div>
             </div>
           )}
+
+          {/* Category-vs-billable contradictions. Reported, never corrected:
+              deriving the flag from the category would silently zero the
+              client-email time the classifier currently bills, and that is a
+              pricing decision for the firm to make. */}
+          {sum.billable_consistency?.configured && (() => {
+            const bc = sum.billable_consistency!;
+            const over = bc.billed_under_unbillable_category || [];
+            const under = bc.unbilled_under_billable_category || [];
+            const orphan = bc.orphan_categories || [];
+            if (!over.length && !under.length && !orphan.length) return null;
+            return (
+              <div style={{ ...card, marginBottom: 20, maxWidth: 1100 }}>
+                <div style={{ fontSize: 11, color: T.textMuted, ...mono, letterSpacing: 1, marginBottom: 4 }}>
+                  BILLABLE FLAG vs THE CATEGORY'S OWN RULE
+                </div>
+                <div style={{ fontSize: 11, color: T.textMuted, ...mono, marginBottom: 12 }}>
+                  Internal clients and blocks with no client are excluded — those override a
+                  category by design. What is left is disagreement nobody chose.
+                </div>
+                {!!over.length && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, color: T.red, ...mono, fontWeight: 700, marginBottom: 4 }}>
+                      Billed under a category the firm marked unbillable — {hrs(bc.over_minutes || 0)}
+                    </div>
+                    {over.map(x => (
+                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
+                        <span style={{ minWidth: 230 }}>{x.category}</span>
+                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
+                        <span style={{ color: T.red }}>{hrs(x.minutes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!!under.length && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, color: T.yellow, ...mono, fontWeight: 700, marginBottom: 4 }}>
+                      Not billed under a billable category, unexplained — {hrs(bc.under_minutes || 0)}
+                    </div>
+                    {under.map(x => (
+                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
+                        <span style={{ minWidth: 230 }}>{x.category}</span>
+                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
+                        <span style={{ color: T.yellow }}>{hrs(x.minutes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!!orphan.length && (
+                  <div>
+                    <div style={{ fontSize: 12, color: T.textSub, ...mono, fontWeight: 700, marginBottom: 4 }}>
+                      Category matches no task type — no billable rule can apply
+                    </div>
+                    {orphan.map(x => (
+                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
+                        <span style={{ minWidth: 230 }}>"{x.category}"</span>
+                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
+                        <span style={{ color: T.textMuted }}>{hrs(x.minutes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* One card at a time. Fifty rows in a list gives no sense of
               progress and no natural stopping point; a single card with a

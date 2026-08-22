@@ -867,20 +867,29 @@ const WeeklyTimesheet: React.FC = () => {
             <Banner
               type={clioResult.error || clioResult.errors?.length ? 'error' : 'info'}
               title={
-                clioResult.error || clioResult.errors?.length
-                  ? 'Submitted — but Clio did not accept everything'
-                  : clioResult.entries > 0
-                    ? `Sent ${clioResult.hours}h to Clio`
-                    : 'Submitted — nothing new for Clio'
+                clioResult.error
+                  ? 'Submitted — but Clio could not be reached'
+                  : clioResult.errors?.length
+                    ? 'Submitted — but Clio did not accept everything'
+                    // Push moved to a worker, so at submit time there is no
+                    // count yet. Saying "nothing new for Clio" here would be a
+                    // flat lie about time that is on its way.
+                    : clioResult.queued
+                      ? 'Submitted — sending to Clio'
+                      : clioResult.entries > 0
+                        ? `Sent ${formatMinutes(clioResult.minutes ?? 0)} to Clio`
+                        : 'Submitted — nothing new for Clio'
               }
               message={
                 clioResult.error
                   ? `Your timesheet is submitted. Clio reported: ${clioResult.error}`
                   : clioResult.errors?.length
                     ? `Your timesheet is submitted. ${clioResult.errors.length} entr${clioResult.errors.length === 1 ? 'y' : 'ies'} were rejected by Clio.`
-                    : clioResult.skipped?.length
-                      ? `${clioResult.entries} matter${clioResult.entries !== 1 ? 's' : ''} updated. ${clioResult.skipped.length} item${clioResult.skipped.length !== 1 ? 's' : ''} were not sent — open the timesheet to see why.`
-                      : `${clioResult.entries} matter${clioResult.entries !== 1 ? 's' : ''} updated in Clio.`
+                    : clioResult.queued
+                      ? 'Your time is being sent in the background, so submitting is not held up by it.'
+                      : clioResult.skipped?.length
+                        ? `${clioResult.entries ?? 0} matter${clioResult.entries !== 1 ? 's' : ''} updated. ${clioResult.skipped.length} item${clioResult.skipped.length !== 1 ? 's' : ''} were not sent — open the timesheet to see why.`
+                        : `${clioResult.entries ?? 0} matter${clioResult.entries !== 1 ? 's' : ''} updated in Clio.`
               }
             />
           )}

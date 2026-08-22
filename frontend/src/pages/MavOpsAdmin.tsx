@@ -1648,6 +1648,11 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showDefs, setShowDefs] = useState(false);
+  // Two jobs, two views. Judging needs an empty screen and one decision;
+  // analysing needs the numbers. Stacked on one page, each got in the other's
+  // way — three screens of diagnostics to scroll past before the first card.
+  const [mode, setMode] = useState<"review" | "analysis">("review");
+  const [showBillableDetail, setShowBillableDetail] = useState(false);
   // Which card is on screen. One at a time, because a wall of fifty is a wall
   // of fifty and there is no way to tell how far in you are.
   const [idx, setIdx] = useState(0);
@@ -1735,6 +1740,19 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
         <span style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>Accuracy</span>
         <OrgPill name={`org ${filterOrg}`} />
         <div style={{ flex: 1 }} />
+        {(["review", "analysis"] as const).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            style={{
+              background: mode === m ? T.teal + "22" : "transparent",
+              border: `1px solid ${mode === m ? T.teal : T.border}`,
+              color: mode === m ? T.teal : T.textMuted,
+              padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4,
+              ...mono, fontWeight: mode === m ? 700 : 400, textTransform: "capitalize" as const,
+            }}>
+            {m}{m === "review" && rows.length ? ` (${rows.length})` : ""}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: T.textMuted, ...mono }}>window</span>
         <select value={days} onChange={e => setDays(Number(e.target.value))}
           style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "6px 10px", fontSize: 12, borderRadius: 4, ...mono }}>
@@ -1750,6 +1768,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
 
       {sum && !loading && (
         <>
+          {mode === "analysis" && (<>
           {/* The sentence. Leads with what we filed, then what a random sample
               says about it, then what we caught ourselves — a track record
               rather than a bare percentage. */}
@@ -1861,7 +1880,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
           {!!(sum.by_signal || []).some(x => x.decided > 0) && (
             <div style={{ ...card, marginBottom: 20 }}>
               <div style={{ fontSize: 11, color: T.textMuted, ...mono, letterSpacing: 1, marginBottom: 12 }}>
-                WHERE THE ERRORS COME FROM — PRECISION BY WHAT FILED IT
+                PRECISION BY WHAT FILED IT
               </div>
               {(sum.by_signal || []).filter(x => x.drawn > 0).map(x => (
                 <div key={x.signal} style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0", fontSize: 12, ...mono, borderBottom: `1px solid ${T.border}55` }}>
@@ -1887,84 +1906,112 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* Category and billable, judged on the same blocks in the same pass. */}
+          {/* Category and billable precision, judged on the same blocks. Two
+              lines, no explanation — the definitions panel carries the why. */}
           {(["category", "billable"] as const).some(k => sm![k].precision != null) && (
-            <div style={{ ...card, marginBottom: 20, fontSize: 12, color: T.textSub, ...mono, lineHeight: 1.9 }}>
+            <div style={{ ...card, marginBottom: 20, maxWidth: 1100, display: "flex", gap: 28, flexWrap: "wrap" as const }}>
               {(["category", "billable"] as const).map(k => {
                 const t = sm![k];
                 if (t.precision == null) return null;
                 return (
                   <div key={k}>
-                    <strong style={{ color: T.text, textTransform: "capitalize" as const }}>{k}</strong>
-                    {" "}— {(t.precision * 100).toFixed(0)}% correct ({t.correct} of {t.correct + t.wrong} decided
-                    {t.unverifiable ? `, ${t.unverifiable} unverifiable` : ""}).
-                    {!!t.wrong_minutes && <span style={{ color: T.red }}> {hrs(t.wrong_minutes)} affected.</span>}
+                    <div style={{ fontSize: 18, ...mono, fontWeight: 800,
+                                  color: t.precision >= 0.95 ? T.green : T.yellow }}>
+                      {(t.precision * 100).toFixed(0)}%
+                    </div>
+                    <div style={{ fontSize: 11, color: T.textMuted, ...mono, textTransform: "capitalize" as const }}>
+                      {k} · {t.correct}/{t.correct + t.wrong} decided
+                      {t.unverifiable ? ` · ${t.unverifiable} unverifiable` : ""}
+                    </div>
                   </div>
                 );
               })}
-              <div style={{ color: T.textMuted, marginTop: 4 }}>
-                Judged on the same blocks as the client number — the draw and the reading are
-                the expensive part, so these cost almost nothing extra.
-              </div>
             </div>
           )}
 
-          {/* Category-vs-billable contradictions. Reported, never corrected:
-              deriving the flag from the category would silently zero the
-              client-email time the classifier currently bills, and that is a
-              pricing decision for the firm to make. */}
+          {/* Category-vs-billable contradictions. Two totals by default; the
+              per-category breakdown is behind a toggle. Reported, never
+              corrected — deriving the flag from the category would silently
+              zero the client-email time the classifier bills, and that is a
+              pricing decision for the firm. */}
           {sum.billable_consistency?.configured && (() => {
             const bc = sum.billable_consistency!;
             const over = bc.billed_under_unbillable_category || [];
             const under = bc.unbilled_under_billable_category || [];
             const orphan = bc.orphan_categories || [];
             if (!over.length && !under.length && !orphan.length) return null;
+            // Rows under five minutes are real but not worth a line each; they
+            // collapse into a tail so the eye lands on what matters.
+            const split = (xs: typeof over) => {
+              const big = xs.filter(x => x.minutes >= 5);
+              const tail = xs.filter(x => x.minutes < 5);
+              return { big, tailCount: tail.length,
+                       tailMinutes: tail.reduce((a, b) => a + b.minutes, 0) };
+            };
+            const line = (x: { category: string; blocks: number; minutes: number }, colour: string) => (
+              <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "3px 0" }}>
+                <span style={{ minWidth: 230 }}>{x.category}</span>
+                <span style={{ color: T.textMuted, minWidth: 80 }}>{x.blocks} blocks</span>
+                <span style={{ color: colour }}>{hrs(x.minutes)}</span>
+              </div>
+            );
+            const o = split(over), u = split(under);
             return (
               <div style={{ ...card, marginBottom: 20, maxWidth: 1100 }}>
-                <div style={{ fontSize: 11, color: T.textMuted, ...mono, letterSpacing: 1, marginBottom: 4 }}>
-                  BILLABLE FLAG vs THE CATEGORY'S OWN RULE
+                <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" as const }}>
+                  <span style={{ fontSize: 11, color: T.textMuted, ...mono, letterSpacing: 1 }}>
+                    BILLABLE FLAG vs CATEGORY RULE
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => setShowBillableDetail(v => !v)}
+                    style={{ background: "none", border: "none", color: T.teal, fontSize: 11, cursor: "pointer", ...mono, padding: 0, textDecoration: "underline" }}>
+                    {showBillableDetail ? "hide detail" : "detail"}
+                  </button>
                 </div>
-                <div style={{ fontSize: 11, color: T.textMuted, ...mono, marginBottom: 12 }}>
-                  Internal clients and blocks with no client are excluded — those override a
-                  category by design. What is left is disagreement nobody chose.
-                </div>
-                {!!over.length && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, color: T.red, ...mono, fontWeight: 700, marginBottom: 4 }}>
-                      Billed under a category the firm marked unbillable — {hrs(bc.over_minutes || 0)}
-                    </div>
-                    {over.map(x => (
-                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
-                        <span style={{ minWidth: 230 }}>{x.category}</span>
-                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
-                        <span style={{ color: T.red }}>{hrs(x.minutes)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!!under.length && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, color: T.yellow, ...mono, fontWeight: 700, marginBottom: 4 }}>
-                      Not billed under a billable category, unexplained — {hrs(bc.under_minutes || 0)}
-                    </div>
-                    {under.map(x => (
-                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
-                        <span style={{ minWidth: 230 }}>{x.category}</span>
-                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
-                        <span style={{ color: T.yellow }}>{hrs(x.minutes)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!!orphan.length && (
+
+                <div style={{ display: "flex", gap: 28, marginTop: 12, flexWrap: "wrap" as const }}>
                   <div>
-                    <div style={{ fontSize: 12, color: T.textSub, ...mono, fontWeight: 700, marginBottom: 4 }}>
-                      Category matches no task type — no billable rule can apply
+                    <div style={{ fontSize: 18, color: T.red, ...mono, fontWeight: 800 }}>{hrs(bc.over_minutes || 0)}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, ...mono }}>billed under an unbillable category</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 18, color: T.yellow, ...mono, fontWeight: 800 }}>{hrs(bc.under_minutes || 0)}</div>
+                    <div style={{ fontSize: 11, color: T.textMuted, ...mono }}>unbilled under a billable one</div>
+                  </div>
+                  {!!orphan.length && (
+                    <div>
+                      <div style={{ fontSize: 18, color: T.textSub, ...mono, fontWeight: 800 }}>
+                        {hrs(orphan.reduce((a, b) => a + b.minutes, 0))}
+                      </div>
+                      <div style={{ fontSize: 11, color: T.textMuted, ...mono }}>
+                        on a category no rule matches
+                      </div>
                     </div>
+                  )}
+                </div>
+
+                {showBillableDetail && (
+                  <div style={{ marginTop: 14, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+                    <div style={{ fontSize: 11, color: T.textMuted, ...mono, marginBottom: 10 }}>
+                      Internal clients and blocks with no client are excluded — they override a
+                      category by design.
+                    </div>
+                    {!!o.big.length && (
+                      <div style={{ marginBottom: 10 }}>
+                        {o.big.map(x => line(x, T.red))}
+                        {!!o.tailCount && <div style={{ fontSize: 11, color: T.textMuted, ...mono, paddingLeft: 2 }}>+{o.tailCount} smaller · {hrs(o.tailMinutes)}</div>}
+                      </div>
+                    )}
+                    {!!u.big.length && (
+                      <div style={{ marginBottom: 10 }}>
+                        {u.big.map(x => line(x, T.yellow))}
+                        {!!u.tailCount && <div style={{ fontSize: 11, color: T.textMuted, ...mono, paddingLeft: 2 }}>+{u.tailCount} smaller · {hrs(u.tailMinutes)}</div>}
+                      </div>
+                    )}
                     {orphan.map(x => (
-                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "2px 0" }}>
-                        <span style={{ minWidth: 230 }}>"{x.category}"</span>
-                        <span style={{ color: T.textMuted }}>{x.blocks} blocks</span>
+                      <div key={x.category} style={{ display: "flex", gap: 12, fontSize: 12, ...mono, color: T.textSub, padding: "3px 0" }}>
+                        <span style={{ minWidth: 230 }}>"{x.category}" — matches no task type</span>
+                        <span style={{ color: T.textMuted, minWidth: 80 }}>{x.blocks} blocks</span>
                         <span style={{ color: T.textMuted }}>{hrs(x.minutes)}</span>
                       </div>
                     ))}
@@ -1974,6 +2021,9 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             );
           })()}
 
+          </>)}
+
+          {mode === "review" && (<>
           {/* One card at a time. Fifty rows in a list gives no sense of
               progress and no natural stopping point; a single card with a
               position counter turns an unbounded chore into a countdown. The
@@ -2082,6 +2132,7 @@ function AccuracyTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               </div>
             </div>
           )}
+          </>)}
         </>
       )}
     </div>

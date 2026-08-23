@@ -243,58 +243,100 @@ def cleanup_old_notification_dismissals():
         return {'error': str(e)}
 
 
-@shared_task(name='tracker.tasks.send_approval_notification_task')
-def send_approval_notification_task(user_id: int, timesheet_id: int, status: str):
-    """
-    Send notification when a timesheet is approved/rejected.
-    Called from the approval endpoint (not scheduled).
+@shared_task(name='tracker.tasks.notify_timesheet_submitted')
+def notify_timesheet_submitted(timesheet_id: int):
+    """Tell the approvers a week is waiting on them.
 
-    Args:
-        user_id: ID of user who owns the timesheet
-        timesheet_id: ID of the timesheet
-        status: 'approved' or 'rejected'
+    A scheduled digest already existed, but it runs Tuesday morning: someone who
+    submitted on Friday sat invisible for four days, and the submitter had no
+    way to tell whether anyone had been told. This fires on the transition.
     """
-    from django.contrib.auth import get_user_model
-    from django.core.mail import send_mail
-    from django.conf import settings
-    from tracker.models import TimesheetSubmission, UserPreference
-
-    User = get_user_model()
+    from tracker.models import Timesheet, OrganizationMembership
+    from tracker.email_service import send_manager_pending_approvals
 
     try:
-        user = User.objects.get(id=user_id)
-        timesheet = TimesheetSubmission.objects.get(id=timesheet_id)
+        ts = Timesheet.objects.select_related('user', 'org').get(id=timesheet_id)
+    except Timesheet.DoesNotExist:
+        return {'error': 'not_found'}
 
-        # Check user preference
+    if ts.status != 'submitted':
+        return {'skipped': 'no longer submitted'}
+
+    who = f"{ts.user.first_name} {ts.user.last_name}".strip() or ts.user.username
+    week_str = ts.week_start.strftime('%b %d')
+    hours = float(ts.total_hours or 0)
+
+    approvers = (
+        OrganizationMembership.objects
+        .filter(organization=ts.org, role__in=['owner', 'admin', 'manager'])
+        .exclude(user_id=ts.user_id)          # never ask someone to approve themselves
+        .select_related('user')
+    )
+
+    sent = 0
+    for m in approvers:
+        if not m.user.email:
+            continue
         try:
-            pref = UserPreference.objects.get(user=user)
-            if not getattr(pref, 'email_approval_notifications', True):
-                return {'skipped': 'user preference'}
-        except UserPreference.DoesNotExist:
-            pass
+            send_manager_pending_approvals(
+                to_email=m.user.email,
+                manager_name=m.user.first_name or m.user.username,
+                week_start_str=week_str,
+                timesheet_count=1,
+                total_hours=hours,
+                summary_lines=[f"  \u2022 {who}: {hours}h"],
+            )
+            sent += 1
+        except Exception as e:
+            logger.error(f"[TIMESHEET] Could not notify approver {m.user.email}: {e}")
 
-        if not user.email:
-            return {'skipped': 'no email'}
+    logger.info(f"[TIMESHEET] {who}'s week of {week_str} submitted; notified {sent} approver(s)")
+    return {'notified': sent}
 
-        period = f"{timesheet.period_start.strftime('%b %d')} - {timesheet.period_end.strftime('%b %d')}"
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'https://app.timetracker.com')
 
-        from tracker.email_service import send_approval_notification
-        send_approval_notification(
-            to_email=user.email,
-            user_name=user.first_name or user.username,
-            period_str=period,
-            status=status,
-            total_hours=float(timesheet.total_hours),
-            reviewer_notes=getattr(timesheet, 'reviewer_notes', '') or '',
-        )
+@shared_task(name='tracker.tasks.notify_timesheet_decision')
+def notify_timesheet_decision(timesheet_id: int, kind: str, actor_name: str, reason: str = ''):
+    """Close the loop back to whoever submitted the week.
 
-        logger.info(f"[APPROVAL] Sent {status} notification to {user.email}")
-        return {'sent': True, 'status': status}
+    Without this an approval is silent, so people re-check the page for days,
+    and a rejection is worse — the work sits unrevised because nobody knows it
+    was sent back.
+    """
+    from tracker.models import Timesheet, UserPreference
+    from tracker.email_service import send_timesheet_approved, send_timesheet_rejected
 
+    try:
+        ts = Timesheet.objects.select_related('user').get(id=timesheet_id)
+    except Timesheet.DoesNotExist:
+        return {'error': 'not_found'}
+
+    user = ts.user
+    if not user.email:
+        return {'skipped': 'no email'}
+
+    pref = UserPreference.objects.filter(user=user).first()
+    if pref and not getattr(pref, 'email_approval_notifications', True):
+        return {'skipped': 'user preference'}
+
+    week_str = ts.week_start.strftime('%b %d')
+    name = user.first_name or user.username
+
+    try:
+        if kind == 'approved':
+            send_timesheet_approved(
+                to_email=user.email, user_name=name, week_str=week_str,
+                total_hours=float(ts.total_hours or 0), approved_by=actor_name,
+            )
+        else:
+            send_timesheet_rejected(
+                to_email=user.email, user_name=name, week_str=week_str,
+                rejected_by=actor_name, reason=reason,
+            )
     except Exception as e:
-        logger.error(f"[APPROVAL] Failed to send notification: {e}")
-        return {'error': str(e)}
+        logger.error(f"[TIMESHEET] Could not send {kind} notice to {user.email}: {e}")
+        return {'error': str(e)[:200]}
+
+    return {'sent': True, 'kind': kind}
 
 
 # ============================================================================

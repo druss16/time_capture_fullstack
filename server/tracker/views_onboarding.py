@@ -21,7 +21,7 @@ import secrets
 
 from .models import (
     Organization, OrganizationMembership, Client, TaskType, 
-    OrgInstallToken, AuthToken, AgentRegistration,
+    OrgInstallToken, AuthToken, AgentRegistration, Invitation,
     BillingRate, DEFAULT_CPA_TASK_TYPES
 )
 
@@ -386,52 +386,86 @@ def invite_team_bulk(request):
     })
 
 
+def _issue_invite(org, user, role, invited_by):
+    """Mint a single-use invite link for `user` and email it.
+
+    The link IS the credential, so nothing recoverable is ever put in the
+    message body. Invitation carries its own 7-day expiry and accepted_at, so
+    a forwarded email cannot be replayed after the member has used it.
+
+    Returns (invite_url, email_sent).
+    """
+    invite = Invitation.create_invite(org, user.email, role, invited_by)
+    base = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai').rstrip('/')
+    invite_url = f"{base}/invite/{invite.token}"
+
+    inviter_name = None
+    if invited_by:
+        inviter_name = invited_by.get_full_name().strip() or invited_by.email
+
+    from tracker.email_service import send_onboarding_invitation
+    email_sent = False
+    try:
+        email_sent = send_onboarding_invitation(
+            to_email=user.email,
+            org_name=org.name,
+            invite_url=invite_url,
+            invited_by=inviter_name,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            f"[INVITE] Failed to send onboarding email to {user.email}: {e}"
+        )
+
+    return invite_url, email_sent
+
+
 def _create_and_invite_user(org, email, role, name, invited_by):
-    """Create user and send invite email."""
-    
+    """Create the member's account and email them a link to set a password.
+
+    The account is created up front (not at accept time) so the seat is
+    reserved and the person shows in the team list immediately. It is created
+    WITHOUT a password: there is nothing to leak, and nothing to sign in with
+    until they have been through the invite link.
+    """
+
     username = email.split('@')[0][:30]
     base_username = username
     counter = 1
     while User.objects.filter(username=username).exists():
         username = f"{base_username}{counter}"
         counter += 1
-    
-    temp_password = secrets.token_urlsafe(12)
-    
+
     first_name = name.split()[0] if name else ''
     last_name = ' '.join(name.split()[1:]) if name and len(name.split()) > 1 else ''
-    
+
     user = User.objects.create_user(
         username=username,
         email=email,
-        password=temp_password,
+        password=None,
         first_name=first_name,
         last_name=last_name,
         is_active=True,
     )
-    
+    user.set_unusable_password()
+    user.save(update_fields=['password'])
+
     OrganizationMembership.objects.create(
         user=user,
         organization=org,
         role=role,
         invited_by=invited_by,
     )
-    
-    from tracker.email_service import send_onboarding_invitation
-    inviter_name = invited_by.get_full_name() or invited_by.email if invited_by else None
-    email_sent = send_onboarding_invitation(
-        to_email=email,
-        org_name=org.name,
-        temp_password=temp_password,
-        invited_by=inviter_name,
-    )
-    
+
+    invite_url, email_sent = _issue_invite(org, user, role, invited_by)
+
     return {
         'email': email,
         'success': True,
         'user_id': user.id,
         'username': username,
-        'temp_password': temp_password,
+        'invite_url': invite_url,
         'email_sent': email_sent,
         'role': role,
     }
@@ -543,7 +577,6 @@ def team_invite_view(request):
 
             return Response({
                 'username': existing.username,
-                'temp_password': None,  # Never expose — they already have one
                 'email_sent': email_sent,
                 'resent': False,
                 'added_existing_user': True,
@@ -552,10 +585,10 @@ def team_invite_view(request):
 
         else:
             # ── Case 2: User exists in DB but has no org (orphaned account) ──
-            # Safe to reset password and send full onboarding email.
-            temp_password = secrets.token_urlsafe(12)
-            existing.set_password(temp_password)
-            existing.save()
+            # Nobody is relying on the old password, so retire it and let them
+            # set a fresh one through the invite link like any new member.
+            existing.set_unusable_password()
+            existing.save(update_fields=['password'])
 
             OrganizationMembership.objects.get_or_create(
                 user=existing,
@@ -563,23 +596,13 @@ def team_invite_view(request):
                 defaults={'role': 'member', 'invited_by': request.user},
             )
 
-            email_sent = False
-            try:
-                email_sent = send_onboarding_invitation(
-                    to_email=email,
-                    org_name=org.name,
-                    temp_password=temp_password,
-                    invited_by=inviter,
-                )
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(
-                    f"[INVITE] Failed to send onboarding email to {email}: {e}"
-                )
+            invite_url, email_sent = _issue_invite(
+                org, existing, 'member', request.user,
+            )
 
             return Response({
                 'username': existing.username,
-                'temp_password': temp_password if not email_sent else None,
+                'invite_url': invite_url,
                 'email_sent': email_sent,
                 'resent': True,
             })
@@ -618,6 +641,182 @@ def team_status(request):
             'role': m.role,
             'is_you': m.user == request.user,
         } for m in members],
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def team_activation(request):
+    """GET /api/settings/team/activation/ — who is actually up and running.
+
+    White-glove rollout lives or dies on knowing which member is stuck and
+    where, so this reports the four things that have to be true in order, from
+    real signals rather than a checkbox someone ticked:
+
+        invited -> password set -> device paired -> time flowing
+
+    A member who never opened the invite and a member whose agent died look
+    identical on the team list. They should not look identical here.
+    """
+    from django.db.models import Count, Max, Min
+    from .models import Block, AgentDevice
+
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+    if not membership:
+        return Response({'error': 'No organization'}, status=404)
+    if membership.role not in ('owner', 'admin', 'manager'):
+        return Response({'error': 'Permission denied'}, status=403)
+
+    org = membership.organization
+    members = list(
+        OrganizationMembership.objects.filter(organization=org)
+        .select_related('user')
+        .order_by('user__first_name', 'user__username')
+    )
+    user_ids = [m.user_id for m in members]
+
+    # Three grouped queries rather than three per member — a 60-person firm
+    # would otherwise be ~180 round trips to render one page.
+    devices = {
+        r['user_id']: r for r in AgentDevice.objects
+        .filter(user_id__in=user_ids)
+        .values('user_id')
+        .annotate(count=Count('id'), last_seen=Max('last_seen_at'))
+    }
+    blocks = {
+        r['user_id']: r for r in Block.objects
+        .filter(user_id__in=user_ids, org=org)
+        .values('user_id')
+        .annotate(count=Count('id'), first=Min('start'), last=Max('start'))
+    }
+    invites = {}
+    for inv in Invitation.objects.filter(organization=org).order_by('created_at'):
+        invites[inv.email.lower()] = inv
+
+    cutoff = timezone.now() - timedelta(days=7)
+    rows = []
+    for m in members:
+        u = m.user
+        dev = devices.get(u.id) or {}
+        blk = blocks.get(u.id) or {}
+        inv = invites.get((u.email or '').lower())
+
+        has_password = u.has_usable_password()
+        # Having a password proves nothing on its own: every account created
+        # under the old temp-password flow has one whether or not the person
+        # ever opened the email. Reaching the second rung means signing IN.
+        signed_in = u.last_login is not None
+        device_count = dev.get('count') or 0
+        device_last_seen = dev.get('last_seen')
+        block_count = blk.get('count') or 0
+        last_block = blk.get('last')
+
+        # Furthest rung reached, not the first one failed.
+        if last_block and last_block >= cutoff:
+            stage = 'time_flowing'
+        elif device_count:
+            stage = 'device_paired'
+        elif signed_in:
+            stage = 'password_set'
+        else:
+            stage = 'invited'
+
+        if signed_in:
+            invite_state = 'active'
+        elif inv and not inv.accepted_at and inv.expires_at > timezone.now():
+            invite_state = 'invite_pending'
+        elif inv and not inv.accepted_at:
+            invite_state = 'invite_expired'
+        else:
+            invite_state = 'never_signed_in'
+
+        # A fresh invite only helps someone who has never got in. For anyone
+        # who has, resending would revoke a password they are using — that is
+        # a password reset, a different thing, and not offered here.
+        can_resend_invite = not signed_in
+
+        rows.append({
+            'user_id': u.id,
+            'name': f"{u.first_name} {u.last_name}".strip() or u.username,
+            'email': u.email,
+            'role': m.role,
+            'is_you': u.id == request.user.id,
+            'stage': stage,
+            'invite_state': invite_state,
+            'invite_sent_at': inv.created_at.isoformat() if inv else None,
+            'invite_expires_at': inv.expires_at.isoformat() if inv and not inv.accepted_at else None,
+            'has_password': has_password,
+            'signed_in': signed_in,
+            'can_resend_invite': can_resend_invite,
+            'last_login': u.last_login.isoformat() if u.last_login else None,
+            'device_count': device_count,
+            'device_last_seen': device_last_seen.isoformat() if device_last_seen else None,
+            'block_count': block_count,
+            'last_block_at': last_block.isoformat() if last_block else None,
+        })
+
+    order = ['invited', 'password_set', 'device_paired', 'time_flowing']
+    counts = {s: sum(1 for r in rows if r['stage'] == s) for s in order}
+
+    return Response({
+        'org_name': org.name,
+        'total': len(rows),
+        'ready': counts['time_flowing'],
+        'counts': counts,
+        # Stuck first — this page exists to surface those.
+        'members': sorted(rows, key=lambda r: (order.index(r['stage']), r['name'])),
+    })
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def resend_invite(request, user_id):
+    """POST /api/settings/team/<user_id>/resend-invite/ — mint a fresh link.
+
+    Invites expire, and the common white-glove case is a member who let one
+    lapse. Re-inviting through the normal path would collide with the account
+    that already exists, so resending is its own action.
+    """
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return Response({'error': 'Permission denied'}, status=403)
+
+    org = membership.organization
+    target = OrganizationMembership.objects.filter(
+        organization=org, user_id=user_id,
+    ).select_related('user').first()
+    if not target:
+        return Response({'error': 'Not a member of this organization'}, status=404)
+
+    if target.user.last_login is not None:
+        return Response(
+            {'error': 'This member has already signed in. Send them a password reset instead.'},
+            status=400,
+        )
+
+    # They have never been in, so nothing depends on whatever password they
+    # were issued. Retiring it here is the point as much as a side effect: it
+    # is how a password that went out in a plaintext email stops working.
+    if target.user.has_usable_password():
+        target.user.set_unusable_password()
+        target.user.save(update_fields=['password'])
+
+    # Retire any live invite so only the newest link works.
+    Invitation.objects.filter(
+        organization=org, email=target.user.email, accepted_at__isnull=True,
+    ).update(expires_at=timezone.now())
+
+    invite_url, email_sent = _issue_invite(org, target.user, target.role, request.user)
+    return Response({
+        'ok': True,
+        'email': target.user.email,
+        'invite_url': invite_url,
+        'email_sent': email_sent,
     })
 
 

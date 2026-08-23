@@ -18,8 +18,9 @@ import ManualCategorization from "@/components/ManualCategorization";
 import { safeFetchJson } from "@/lib/api";
 import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
+import NoTimeYet from "@/components/NoTimeYet";
 import { MatterPicker } from "@/components/MatterPicker";
 import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
@@ -325,7 +326,6 @@ export default function DailyReview() {
   const [err, setErr] = useState<string | null>(null);
   const [user, setUser] = useState<string>("");
   const [date, setDate] = useState<string>(todayIso());
-  const [activeTab, setActiveTab] = useState<"summary" | "categorize">("summary");
   const [timeSummary, setTimeSummary] = useState<ClientTime[]>([]);
   const [uncategorizedCount, setUncategorizedCount] = useState(0);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
@@ -860,23 +860,18 @@ export default function DailyReview() {
           {/* LEFT — underline tabs + add button */}
           <div className="flex items-center gap-4 h-full">
 
-            {/* Underline-style tabs — sits flush with toolbar bottom border */}
-            <div className="flex items-stretch h-14 gap-0.5">
-              <button
-                onClick={() => setActiveTab("summary")}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 text-sm font-semibold transition-all border-b-2 -mb-px",
-                  activeTab === "summary"
-                    ? "border-primary text-primary"
-                    : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300"
-                )}
-              >
-                <BarChart3 className="w-3.5 h-3.5" />
-                Summary
-              </button>
-              {/* Categorize tab removed — the Summary page is the single review
-                  surface (it already shows the same pending blocks inline). The
-                  one-at-a-time SimpleReview flow was a redundant second view. */}
+            {/* Page identity. Daily Review and the timesheet both show your time
+                by client, so each has to say which question it answers or they
+                read as two copies of one page. This one is about attribution:
+                is this time on the right client? The timesheet is about
+                commitment: is this week right, and can it go to my manager? */}
+            <div className="flex flex-col justify-center h-14 pr-1">
+              <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-slate-400 leading-none">
+                Daily Review
+              </span>
+              <span className="mt-1 text-[13.5px] font-semibold text-slate-700 leading-none">
+                Sort your captured time
+              </span>
             </div>
 
             {/* Divider */}
@@ -986,20 +981,34 @@ export default function DailyReview() {
           </div>
         )}
 */}
-        {/* ── Range selector: Day / Week / Month (all Lightning view) ── */}
-        <div className="mb-5 flex items-center">
+        {/* ── How far back to look for work that still needs a decision.
+               Labelled as a backlog scope, not a reporting period: firms that
+               submit monthly, and anyone catching up after time off, need to
+               reach past today, but this is never "my month's timesheet". ── */}
+        <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-[12.5px] font-medium text-slate-500">Reviewing</span>
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 text-sm font-medium">
-            {(["day", "week", "month", "quarter"] as const).map((r) => (
+            {([
+              ["day", "Today"],
+              ["week", "This week"],
+              ["month", "This month"],
+              ["quarter", "This quarter"],
+            ] as const).map(([r, label]) => (
               <button
                 key={r}
                 onClick={() => chooseRange(r)}
-                className={cn("rounded-md px-3.5 py-1.5 capitalize transition-colors",
+                className={cn("rounded-md px-3.5 py-1.5 transition-colors",
                   range === r ? "bg-card text-foreground shadow-sm" : "text-slate-500 hover:text-slate-800")}
               >
-                {r}
+                {label}
               </button>
             ))}
           </div>
+          {range !== "day" && (
+            <span className="text-[12px] text-slate-400">
+              Catching up — anything still unsorted in this stretch
+            </span>
+          )}
         </div>
 
         {/* Faint teal-tinted "canvas" — cool + trustworthy; the white lane cards float on it. */}
@@ -1010,7 +1019,7 @@ export default function DailyReview() {
               {rangeLabel(date, range)}
             </div>
             {totalMin <= 0 ? (
-              <h1 className="mt-2.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">Nothing tracked yet.</h1>
+              <NoTimeYet isToday={range === "day" && date === todayIso()} />
             ) : (
               <div className="mt-3">
                 <div className="flex items-baseline justify-between gap-3">
@@ -1031,6 +1040,19 @@ export default function DailyReview() {
                     <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
                   )}
                 </div>
+                {/* Finishing triage used to be a dead end — the page said "all
+                    caught up" and stopped, with no mention of the thing that
+                    sorted time is actually for. Name the next step and hand
+                    them to it. */}
+                {needsYouCount === 0 && (
+                  <Link
+                    to="/timesheet"
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-[13px] font-semibold text-white shadow-lg shadow-primary/20 transition-all hover:bg-primary/90"
+                  >
+                    Review &amp; submit your week
+                    <ChevronRight className="h-4 w-4" />
+                  </Link>
+                )}
               </div>
             )}
           </div>

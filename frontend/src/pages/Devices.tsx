@@ -28,8 +28,10 @@ export default function Devices() {
     setLoading(true);
     setError("");
     try {
-      const data = await safeFetchJson<{ devices: Device[] }>(`${API_BASE}/devices/`);
-      setDevices(data.devices || []);
+      // The endpoint returns a bare array; tolerate a wrapped shape too so this
+      // does not silently render "no devices" if that ever changes.
+      const data = await safeFetchJson<Device[] | { devices: Device[] }>(`${API_BASE}/devices/`);
+      setDevices(Array.isArray(data) ? data : data?.devices || []);
     } catch (e: any) {
       setError(e.message);
     } finally {

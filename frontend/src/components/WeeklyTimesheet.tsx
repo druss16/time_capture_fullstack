@@ -842,7 +842,7 @@ const WeeklyTimesheet: React.FC = () => {
       </div>
 
       {/* ── Banners: errors + rejections only ─────────────────────────── */}
-      {(error || timesheetData?.status === 'rejected') && (
+      {(error || timesheetData?.status === 'rejected' || timesheetData?.status === 'submitted' || timesheetData?.status === 'approved') && (
         <div className="space-y-2 mt-4">
           {error && <Banner type="error" title="Error" message={error} />}
 
@@ -879,11 +879,47 @@ const WeeklyTimesheet: React.FC = () => {
               }
             />
           )}
+          {/* Submitting used to end in silence: a small "Pending Approval"
+              badge and nothing about who now has it or how you would find out.
+              People re-opened the page for days. Say what happens next. */}
+          {timesheetData?.status === 'submitted' && (
+            <Banner
+              type="info"
+              title={
+                timesheetData.auto_submitted
+                  ? 'Submitted automatically — with your manager'
+                  : 'Submitted — with your manager'
+              }
+              message={
+                `Your week is waiting for approval${
+                  timesheetData.submitted_at
+                    ? ` (sent ${new Date(timesheetData.submitted_at).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+                      })})`
+                    : ''
+                }. Your approvers have been emailed, and you'll get an email the moment it's approved or sent back. Nothing else is needed from you.`
+              }
+            />
+          )}
+
+          {timesheetData?.status === 'approved' && (
+            <Banner
+              type="info"
+              title="Approved"
+              message="This week is approved and locked. It's counted as billable and, if your firm bills through an integration, it's on its way there."
+            />
+          )}
+
           {timesheetData?.status === 'rejected' && (
             <Banner
               type="error"
-              title="Timesheet Rejected"
-              message={timesheetData.rejection_reason || 'Please review and make corrections before resubmitting.'}
+              title="Sent back for changes"
+              message={
+                (timesheetData.rejection_reason
+                  ? `${timesheetData.rejection_reason} `
+                  : '') +
+                'Fix what\u2019s needed below, then resubmit \u2014 your approvers are notified again automatically.'
+              }
             />
           )}
         </div>

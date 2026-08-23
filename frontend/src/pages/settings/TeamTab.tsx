@@ -43,10 +43,12 @@ export default function TeamTab({ members, currentUserId, currentUserRole, onRef
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: inviteEmail }),
       });
-      if (response.temp_password && !response.email_sent) {
-        alert(`User created!\n\nUsername: ${response.username}\nTemp Password: ${response.temp_password}\n\nPlease share these credentials with the user.`);
+      if (response.invite_url && !response.email_sent) {
+        // Email did not go out — hand over the link instead. It is single-use
+        // and expires, so passing it along is safe in a way a password is not.
+        alert(`Invitation created, but the email didn't send.\n\nSend them this link:\n${response.invite_url}`);
       }
-      onSuccess(response.email_sent ? 'Invitation sent' : 'User created (share credentials manually)');
+      onSuccess(response.email_sent ? 'Invitation sent' : 'Invitation created (send the link manually)');
       setInviteEmail('');
       setShowInvite(false);
       onRefresh();

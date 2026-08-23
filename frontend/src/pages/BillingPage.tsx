@@ -70,8 +70,11 @@ const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 
 const SECTIONS: Record<Section, SectionConfig> = {
   timesheet: {
-    eyebrow: 'Time',
-    title: 'My Work',
+    eyebrow: 'Timesheet',
+    // Deliberately a verb: this is the page where a week stops being editable
+    // and becomes a claim. Daily Review answers "is this the right client?";
+    // this one answers "is this week right, and can it go to my manager?"
+    title: 'Review & submit your week',
     tabs: [
       {
         id: 'timesheet',

@@ -149,62 +149,10 @@ def _btn(url, gradient, text):
 # PRE-BUILT EMAIL TEMPLATES
 # ============================================================================
 
-# ---------- 1. Team invitation ----------
-
-def send_team_invitation(
-    to_email: str,
-    org_name: str,
-    username: str,
-    temp_password: str,
-    invited_by: str = None,
-    login_url: str = None,
-):
-    """Send team member invitation email."""
-    login_url = login_url or f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/login"
-    invite_line = f"{invited_by} has invited you" if invited_by else "You've been invited"
-
-    body = f'''
-        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi there!</p>
-        <p style="color:#475569;font-size:16px;line-height:1.5;">
-            {invite_line} to join <strong>{org_name}</strong> on TimeTracker.
-        </p>
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0;">
-            <p style="margin:0 0 8px;color:#64748b;font-size:13px;">Your login credentials:</p>
-            <p style="margin:0 0 4px;color:#1e293b;font-size:15px;"><strong>Username:</strong> {username}</p>
-            <p style="margin:0;color:#1e293b;font-size:15px;"><strong>Temporary Password:</strong> {temp_password}</p>
-        </div>
-        <p style="color:#94a3b8;font-size:13px;">Please change your password after logging in.</p>
-        {_btn(login_url, "#2B9D90 0%,#237F74 100%", "Log In to TimeTracker &rarr;")}
-        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
-
-    html = _wrap_html("#2B9D90 0%,#237F74 100%", "🎉", "You're Invited!", body)
-
-    plain = f"""Hi!
-
-{invite_line} to join {org_name} on TimeTracker.
-
-Login at: {login_url}
-Username: {username}
-Temporary Password: {temp_password}
-
-Please change your password after logging in.
-
-- TimeTracker by MavOps"""
-
-    return send_email(
-        to_email=to_email,
-        subject=f"You're invited to {org_name} on TimeTracker",
-        html_content=html,
-        plain_content=plain,
-        categories=["invitation", "onboarding"],
-    )
-
-# ── Add this function to tracker/email_service.py ────────────────────────────
-#
-# Paste after send_team_invitation (function #1).
-# Used when an existing user (already in another org) is added to a new org.
-# No password reset — they already have credentials.
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------- 1. Added to an existing org ----------
+# send_team_invitation was removed here: it was the last emailer that put a
+# temporary password in a message body, and nothing called it any more. New
+# members get a single-use setup link instead (send_onboarding_invitation).
 
 def send_added_to_org(
     to_email: str,
@@ -314,31 +262,39 @@ Add seats: {billing_url}
 def send_onboarding_invitation(
     to_email: str,
     org_name: str,
-    temp_password: str,
+    invite_url: str,
     invited_by: str = None,
+    expires_days: int = 7,
 ):
-    """Send rich onboarding invitation with download links."""
-    app_url = getattr(settings, 'APP_URL', 'https://timetracker.mavops.ai')
-    help_url = f"{app_url}/help"
-    mac_url = 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker.pkg'
-    win_url = 'https://github.com/druss16/timetracker-releases/releases/latest/download/TimeTracker-Windows-Setup.exe'
+    """Invite a new member with a one-time link to choose their own password.
+
+    The link is the whole credential: no password is ever put in an email, and
+    the invite is single-use and expires, so a forwarded or archived message
+    cannot be replayed into an account.
+
+    Order matters here. Set password -> land in the app -> download -> pair.
+    The download used to come first, which left people staring at an agent they
+    could not sign into yet.
+    """
+    help_url = f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/help"
     invite_line = f"{invited_by} has invited" if invited_by else "You've been invited"
 
     plain = f"""Welcome to TimeTracker!
 
 {invite_line} you to join {org_name} on TimeTracker.
 
-GET STARTED IN 2 MINUTES
+SET UP YOUR ACCOUNT
 
-1. DOWNLOAD THE APP
-   Mac: {mac_url}
-   Windows: {win_url}
+Open this link to choose a password and finish setup:
+{invite_url}
 
-2. SIGN IN
-   Email: {to_email}
-   Password: {temp_password}
+This link works once and expires in {expires_days} days.
 
-3. YOU'RE DONE! The app captures your billable time automatically.
+WHAT HAPPENS NEXT
+
+  1. Choose your password (30 seconds)
+  2. We'll walk you through installing the desktop app
+  3. Your billable time starts capturing automatically
 
 Questions? Visit {help_url} or reply to this email.
 
@@ -351,52 +307,47 @@ Questions? Visit {help_url} or reply to this email.
 <tr><td align="center" style="padding:40px 20px;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.05);">
     <tr><td style="background:linear-gradient(135deg,#2B9D90 0%,#237F74 100%);padding:40px 40px 30px;text-align:center;">
-        <div style="width:60px;height:60px;background:rgba(255,255,255,0.2);border-radius:16px;margin:0 auto 20px;line-height:60px;"><span style="font-size:28px;">⏱️</span></div>
+        <div style="width:60px;height:60px;background:rgba(255,255,255,0.2);border-radius:16px;margin:0 auto 20px;line-height:60px;"><span style="font-size:28px;">&#9201;&#65039;</span></div>
         <h1 style="margin:0;color:#fff;font-size:28px;font-weight:700;">Welcome to TimeTracker!</h1>
         <p style="margin:12px 0 0;color:rgba(255,255,255,0.9);font-size:16px;">{f"{invited_by} has invited you to join" if invited_by else "You've been invited to join"}</p>
         <p style="margin:4px 0 0;color:#fff;font-size:20px;font-weight:600;">{org_name}</p>
     </td></tr>
     <tr><td style="padding:40px;">
-        <p style="margin:0 0 30px;color:#475569;font-size:16px;line-height:1.6;">TimeTracker automatically captures your billable time so you never forget to log hours again. Get started in just 2 minutes.</p>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
+        <p style="margin:0 0 28px;color:#475569;font-size:16px;line-height:1.6;">TimeTracker automatically captures your billable time so you never forget to log hours again. Setup takes about two minutes &mdash; start by choosing a password.</p>
+
+        <div style="text-align:center;margin:0 0 12px;">
+            <a href="{invite_url}" style="display:inline-block;background:linear-gradient(135deg,#2B9D90 0%,#237F74 100%);color:#fff;padding:16px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:16px;">Set your password &rarr;</a>
+        </div>
+        <p style="margin:0 0 32px;color:#94a3b8;font-size:13px;text-align:center;">This link works once and expires in {expires_days} days.</p>
+
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 28px;">
+
+        <h3 style="margin:0 0 18px;color:#1e293b;font-size:16px;font-weight:600;">What happens next</h3>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">1</div></td>
             <td valign="top" style="padding-left:12px;">
-                <h3 style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:600;">Download the Desktop App</h3>
-                <table role="presentation" cellspacing="0" cellpadding="0"><tr>
-                    <td style="padding-right:12px;padding-bottom:8px;"><a href="{mac_url}" style="display:inline-block;background:#1e293b;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">🍎 Download for Mac</a></td>
-                    <td style="padding-bottom:8px;"><a href="{win_url}" style="display:inline-block;background:#0078d4;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;font-size:14px;">⊞ Download for Windows</a></td>
-                </tr></table>
+                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Choose your password</h4>
+                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">You pick it &mdash; we never email one.</p>
             </td>
         </tr></table>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:24px;"><tr>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">2</div></td>
             <td valign="top" style="padding-left:12px;">
-                <h3 style="margin:0 0 12px;color:#1e293b;font-size:16px;font-weight:600;">Sign in with these credentials</h3>
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;"><tr><td style="padding:16px;">
-                    <p style="margin:0 0 8px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Email</p>
-                    <p style="margin:0 0 16px;color:#1e293b;font-size:15px;font-weight:500;font-family:monospace;">{to_email}</p>
-                    <p style="margin:0 0 8px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Temporary Password</p>
-                    <p style="margin:0;color:#1e293b;font-size:15px;font-weight:500;font-family:monospace;">{temp_password}</p>
-                </td></tr></table>
+                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Install the desktop app</h4>
+                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">We'll hand you the right download for your computer and a code to connect it.</p>
             </td>
         </tr></table>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:32px;"><tr>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:8px;"><tr>
             <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">3</div></td>
             <td valign="top" style="padding-left:12px;">
-                <h3 style="margin:0 0 8px;color:#1e293b;font-size:16px;font-weight:600;">You're done! 🎉</h3>
-                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">The app runs quietly in the background and captures your billable time automatically.</p>
+                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Your time starts capturing</h4>
+                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">It runs quietly in the background and sorts your work by client.</p>
             </td>
         </tr></table>
-        <hr style="border:none;border-top:1px solid #e2e8f0;margin:32px 0;">
-        <h3 style="margin:0 0 16px;color:#1e293b;font-size:16px;font-weight:600;">What happens next?</h3>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> Your time is automatically categorized by client and task</td></tr>
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> Review and submit your timesheet each week</td></tr>
-            <tr><td style="padding:8px 0;color:#475569;font-size:14px;"><span style="color:#2B9D90;margin-right:8px;">✓</span> No more forgetting to log hours!</td></tr>
-        </table>
     </td></tr>
     <tr><td style="background:#f8fafc;padding:24px 40px;border-top:1px solid #e2e8f0;">
-        <p style="margin:0;color:#64748b;font-size:14px;text-align:center;">Questions? <a href="{help_url}" style="color:#2B9D90;text-decoration:none;font-weight:500;">Visit our Help Center</a> or reply to this email.</p>
+        <p style="margin:0 0 10px;color:#64748b;font-size:14px;text-align:center;">Questions? <a href="{help_url}" style="color:#2B9D90;text-decoration:none;font-weight:500;">Visit our Help Center</a> or reply to this email.</p>
+        <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;word-break:break-all;">Button not working? Paste this into your browser:<br>{invite_url}</p>
     </td></tr>
 </table>
 <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;text-align:center;">&copy; 2026 TimeTracker by MavOps</p>
@@ -583,7 +534,7 @@ def send_submission_reminder(
             <p style="margin:0;color:#1e293b;font-size:15px;">📊 <strong>{_fmt_hours(total_hours)}</strong> tracked &middot; {block_count} time blocks</p>
         </div>
         {auto_warn_html}
-        {_btn(frontend_url + "/billing?tab=timesheet" + (f"&week={week_start_iso}" if week_start_iso else ""), "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
+        {_btn(frontend_url + "/timesheet?tab=timesheet" + (f"&week={week_start_iso}" if week_start_iso else ""), "#2B9D90 0%,#237F74 100%", "Review &amp; Submit &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "⏰", "Submit Your Timesheet", body)
 
@@ -638,7 +589,7 @@ def send_auto_submit_notification(
             <p style="margin:0;color:#1e293b;font-size:15px;">Amount: <strong>${total_amount_fmt}</strong></p>
         </div>
         <p style="color:#64748b;font-size:14px;">Your manager will review shortly. Need changes? Ask your manager to send it back.</p>
-        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Auto-Submitted", body)
 
@@ -682,7 +633,7 @@ def send_approval_notification(
             <p style="color:#475569;font-size:16px;line-height:1.5;">
                 Your timesheet for <strong>{period_str}</strong> ({_fmt_hours(total_hours)}) has been approved.
             </p>
-            {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+            {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
         html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
         subject = f"✅ Timesheet Approved: {period_str}"
         plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({_fmt_hours(total_hours)}) has been approved.\n\n- TimeTracker"
@@ -693,7 +644,7 @@ def send_approval_notification(
             <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
             <p style="color:#475569;font-size:16px;line-height:1.5;">Your timesheet for <strong>{period_str}</strong> needs revision.</p>
             {reason_html}
-            {_btn(frontend_url + "/billing", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
+            {_btn(frontend_url + "/timesheet", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
         html = _wrap_html("#ef4444 0%,#dc2626 100%", "⚠️", "Timesheet Needs Revision", body)
         subject = f"❌ Timesheet Needs Revision: {period_str}"
         plain = f"Hi {user_name},\n\nYour timesheet for {period_str} needs revision.{feedback}\n\nEdit: {frontend_url}/timesheet\n\n- TimeTracker"
@@ -731,7 +682,7 @@ def send_manager_pending_approvals(
             <strong>{timesheet_count} timesheets</strong> are pending approval for the week of <strong>{week_start_str}</strong> ({_fmt_hours(total_hours)} total).
         </p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">{rows_html}</table>
-        {_btn(frontend_url + "/approvals", "#2B9D90 0%,#237F74 100%", "Review Timesheets &rarr;")}'''
+        {_btn(frontend_url + "/timesheet?tab=approvals", "#2B9D90 0%,#237F74 100%", "Review Timesheets &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "📋", "Approvals Pending", body)
 
@@ -803,7 +754,7 @@ def send_timesheet_approved(
         <p style="color:#475569;font-size:16px;line-height:1.5;">
             Your timesheet for <strong>{week_str}</strong> ({_fmt_hours(total_hours)}) has been approved by {approved_by}.
         </p>
-        {_btn(frontend_url + "/billing", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
 
@@ -834,7 +785,7 @@ def send_timesheet_rejected(
             Your timesheet for <strong>{week_str}</strong> was sent back by {rejected_by}.
         </p>
         {reason_html}
-        {_btn(frontend_url + "/billing", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
+        {_btn(frontend_url + "/timesheet", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
 
     html = _wrap_html("#ef4444 0%,#dc2626 100%", "⚠️", "Timesheet Needs Revision", body)
 

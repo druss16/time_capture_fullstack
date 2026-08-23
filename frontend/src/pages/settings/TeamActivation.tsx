@@ -19,6 +19,7 @@ import {
   Monitor,
   KeyRound,
   Mail,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 
@@ -105,6 +106,11 @@ export default function TeamActivation() {
   const [err, setErr] = useState<string | null>(null);
   const [resending, setResending] = useState<number | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // A link that could not be emailed. Held here so it can be handed over by
+  // hand — with no mail provider configured this is the normal path, not an
+  // error case, so the link has to be on screen rather than "in the response".
+  const [handoff, setHandoff] = useState<{ email: string; url: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -130,13 +136,16 @@ export default function TeamActivation() {
         `${API_BASE}/settings/team/${m.user_id}/resend-invite/`,
         { method: "POST" }
       );
-      setNote(
-        r?.email_sent
-          ? `New invitation sent to ${m.email}.`
-          : `Link created for ${m.email}, but the email didn't send. Copy it from the response and pass it on.`
-      );
+      if (r?.email_sent) {
+        setNote(`New invitation sent to ${m.email}.`);
+        setHandoff(null);
+      } else {
+        setNote(null);
+        setHandoff({ email: m.email, url: r?.invite_url || "" });
+      }
       load();
     } catch (e: any) {
+      setHandoff(null);
       setNote(e?.message || "Couldn't resend that invitation");
     } finally {
       setResending(null);
@@ -210,6 +219,46 @@ export default function TeamActivation() {
       {note && (
         <div className="border-b border-border/60 bg-muted/40 px-5 py-3 text-sm text-foreground">
           {note}
+        </div>
+      )}
+
+      {handoff && (
+        <div className="border-b border-amber-200 bg-amber-50 px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-amber-900">
+                Invitation created — but it could not be emailed
+              </p>
+              <p className="mt-0.5 text-[13px] text-amber-800">
+                Send this link to {handoff.email} yourself. It works once and expires in 7 days.
+              </p>
+            </div>
+            <button
+              onClick={() => setHandoff(null)}
+              className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100"
+            >
+              Dismiss
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              readOnly
+              value={handoff.url}
+              onFocus={(e) => e.currentTarget.select()}
+              className="min-w-0 flex-1 rounded-lg border border-amber-300 bg-card px-3 py-2 font-mono text-[12px] text-foreground"
+            />
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(handoff.url);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-card px-3 py-2 text-[12.5px] font-semibold text-amber-900 hover:bg-amber-100"
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
         </div>
       )}
 

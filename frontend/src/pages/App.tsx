@@ -51,6 +51,8 @@ const MavOpsAdmin = lazyWithRetry(() => import("./MavOpsAdmin"));
 const DashboardV2 = lazyWithRetry(() => import("./DashboardV2"));
 const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
 const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
+const AcceptInvite = lazyWithRetry(() => import("./AcceptInvite"));
+const Welcome = lazyWithRetry(() => import("./Welcome"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -202,17 +204,24 @@ export default function App() {
                 {/* Public / marketing */}
                 <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />
+                <Route path="/invite/:token" element={<AcceptInvite />} />
 
                 {/* Auth */}
                 {!AUTH_DISABLED && (
                   <>
                     <Route path="/login" element={<Login />} />
-                    <Route path="/signup" element={<OnboardingWizard initialStep={1} />} />
+                    {/* Self-serve signup is parked, not deleted. Onboarding is
+                        white-glove right now, so the public front door asks for
+                        a conversation instead of taking a card. The wizard is
+                        still mounted at /onboarding for when self-serve returns
+                        — swap this line back to bring it live. */}
+                    <Route path="/signup" element={<Navigate to="/request-access" replace />} />
                     <Route path="/logout" element={<Logout />} />
                   </>
                 )}
 
                 {/* Protected — all users */}
+                <Route path="/welcome" element={<MaybeProtected><AppLayout><Welcome /></AppLayout></MaybeProtected>} />
                 <Route path="/daily" element={<MaybeProtected><AppLayout><DailyReview /></AppLayout></MaybeProtected>} />
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
@@ -236,9 +245,11 @@ export default function App() {
                   <Route path="billing" element={<OwnerRoute><BillingSettingsPage /></OwnerRoute>} />
                 </Route>
 
-                {/* Onboarding */}
+                {/* Onboarding. /onboarding stays reachable so the wizard can be
+                    driven by hand when needed; only the public signup entrance
+                    is diverted. */}
                 <Route path="/onboarding" element={<OnboardingWizard />} />
-                <Route path="/onboarding/signup" element={<OnboardingWizard initialStep={1} />} />
+                <Route path="/onboarding/signup" element={<Navigate to="/request-access" replace />} />
 
                 {/* MavOps Internal Admin — standalone, no AppLayout, no auth wrapper */}
                 <Route path="/mavops-admin" element={<MavOpsAdmin />} />

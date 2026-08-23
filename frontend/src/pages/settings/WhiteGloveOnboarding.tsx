@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
 import { useReactToPrint } from "react-to-print";
 import { Shield, Users, ArrowRight } from "lucide-react";
+import TeamActivation from "./TeamActivation";
 
 const BRAND_GREEN = "#10B981";
 const BORDER = "#E2E8F0";
@@ -116,6 +117,10 @@ export default function WhiteGloveOnboarding() {
 
   return (
     <div className="space-y-6">
+      {/* Live rollout state. Deliberately outside printRef: this is the working
+          view, while everything below is the reference doc handed to IT. */}
+      <TeamActivation />
+
       {/* Top actions (not printed) */}
       <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
         <div className="flex flex-wrap gap-2">

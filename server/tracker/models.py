@@ -3279,6 +3279,7 @@ class Timesheet(models.Model):
         # Lock associated blocks
         self.blocks.update(approved=False)  # Mark as pending approval
         self._queue_clio_push('submit', force_conflicts)
+        self._queue_notify('submitted')
 
     
     def approve(self, approved_by, notes='', force_conflicts=None):
@@ -3299,6 +3300,39 @@ class Timesheet(models.Model):
             approved_by=approved_by
         )
         self._queue_clio_push('approve', force_conflicts)
+        # An owner approving their own week is bookkeeping, not news.
+        if approved_by and approved_by.id != self.user_id:
+            self._queue_notify('approved', actor=approved_by)
+
+    def _queue_notify(self, event, actor=None, reason=''):
+        """Queue the email that tells the next person it is their turn.
+
+        On the transition rather than the endpoint, for the same reason as
+        _queue_clio_push: submit() auto-approves an owner's own timesheet
+        without ever reaching the approve view, so a hook on the view misses
+        real transitions. Queued rather than sent inline because a firm can
+        have a dozen approvers and each send is a network call the submitter
+        should not wait on.
+
+        Never raises. A mail outage must not roll back an approval that has
+        already been recorded.
+        """
+        import logging
+
+        try:
+            from .tasks import notify_timesheet_submitted, notify_timesheet_decision
+
+            if event == 'submitted':
+                notify_timesheet_submitted.delay(self.id)
+            else:
+                actor_name = 'your manager'
+                if actor:
+                    actor_name = actor.get_full_name().strip() or actor.username
+                notify_timesheet_decision.delay(self.id, event, actor_name, reason or '')
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                'Timesheet %s: could not queue %s notification: %s', self.id, event, e,
+            )
 
     def _queue_clio_push(self, trigger, force_conflicts=None):
         """Queue the Clio push when the org bills at this point in the lifecycle.
@@ -3346,6 +3380,7 @@ class Timesheet(models.Model):
         
         # Unlock blocks for editing
         self.blocks.update(approved=False)
+        self._queue_notify('rejected', actor=rejected_by, reason=reason)
     
     def reopen(self):
         """Reopen a rejected timesheet as draft"""

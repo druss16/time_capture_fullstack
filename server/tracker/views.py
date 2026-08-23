@@ -155,7 +155,7 @@ from rest_framework import status
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from .auth import AgentKeyAuthentication
-from .models import RawEvent, CurrentClient, Client, BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, Organization, OrganizationMembership
+from .models import RawEvent, CurrentClient, Client, BillingRate, Timesheet, Block, BlockAuditLog, Client, TaskType, Organization, OrganizationMembership, Invitation
 
 # If you need a User class reference:
 User = get_user_model()
@@ -6082,7 +6082,7 @@ def invite_team_member(request):
     existing_invite = Invitation.objects.filter(
         organization=org,
         email=email,
-        accepted=False,
+        accepted_at__isnull=True,
         expires_at__gt=timezone.now()
     ).first()
     
@@ -6123,52 +6123,151 @@ def invite_team_member(request):
 
 
 
+def _lookup_invite(token):
+    """Resolve a live invite token, or return None."""
+    return Invitation.objects.select_related('organization', 'invited_by').filter(
+        token=token,
+        accepted_at__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).first()
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def invite_details(request, token):
+    """GET /api/invite/<token>/ — what the accept page needs before it renders.
+
+    Told apart from a bad token deliberately: an expired invite gets a "ask for
+    a new one" path, while a garbage token gets nothing, so a guessed token
+    never confirms an address exists.
+    """
+    invite = _lookup_invite(token)
+    if not invite:
+        stale = Invitation.objects.filter(token=token).first()
+        if stale:
+            return Response({
+                'valid': False,
+                'reason': 'accepted' if stale.accepted_at else 'expired',
+            }, status=410)
+        return Response({'valid': False, 'reason': 'invalid'}, status=404)
+
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    user = User.objects.filter(email__iexact=invite.email).first()
+
+    # Already has a password — the link has nothing left to do for them.
+    if user and user.has_usable_password():
+        return Response({'valid': False, 'reason': 'already_active'}, status=409)
+
+    inviter = None
+    if invite.invited_by:
+        inviter = invite.invited_by.get_full_name().strip() or invite.invited_by.email
+
+    return Response({
+        'valid': True,
+        'email': invite.email,
+        'name': f"{user.first_name} {user.last_name}".strip() if user else '',
+        'org_name': invite.organization.name,
+        'invited_by': inviter,
+        'role': invite.role,
+    })
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def accept_invitation(request, token):
-    """New user accepts invitation and creates account"""
+    """POST /api/invite/<token>/accept/ — member chooses their password.
+
+    The account was already created when the invite was sent (so the seat is
+    held and they appear in the team list), so this fills in the password
+    rather than creating anything. Falls back to creating the user for tokens
+    minted before that was true.
+    """
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+    User = get_user_model()
+
+    invite = _lookup_invite(token)
+    if not invite:
+        return Response({'error': 'This invitation is no longer valid.'}, status=400)
+
+    password = request.data.get('password') or ''
+    name = (request.data.get('name') or '').strip()
+
+    user = User.objects.filter(email__iexact=invite.email).first()
+
+    # Never let a stale invite overwrite the password of a live account.
+    if user and user.has_usable_password():
+        return Response(
+            {'error': 'This account is already active. Please sign in instead.'},
+            status=409,
+        )
+
     try:
-        invite = Invitation.objects.get(
-            token=token,
-            accepted_at__isnull=True,
-            expires_at__gt=timezone.now(),
-        )
-    except Invitation.DoesNotExist:
-        return Response({'error': 'Invalid or expired invitation'}, status=400)
-    
-    password = request.data.get('password')
-    name = request.data.get('name', '')
-    
+        validate_password(password, user=user)
+    except DjangoValidationError as e:
+        return Response({'error': ' '.join(e.messages)}, status=400)
+
     with transaction.atomic():
-        # Create user
-        username = invite.email.split('@')[0][:30]
-        if User.objects.filter(username=username).exists():
-            username = f"{username}-{uuid.uuid4().hex[:6]}"
-        
-        user = User.objects.create_user(
-            username=username,
-            email=invite.email,
-            password=password,
-            first_name=name.split()[0] if name else '',
-        )
-        
-        # Create membership
-        OrganizationMembership.objects.create(
+        if not user:
+            username = invite.email.split('@')[0][:30]
+            if User.objects.filter(username=username).exists():
+                username = f"{username}-{uuid.uuid4().hex[:6]}"
+            user = User.objects.create_user(
+                username=username,
+                email=invite.email,
+                password=password,
+            )
+        else:
+            user.set_password(password)
+
+        if name:
+            parts = name.split()
+            user.first_name = parts[0]
+            user.last_name = ' '.join(parts[1:])
+        user.is_active = True
+        user.save()
+
+        OrganizationMembership.objects.get_or_create(
             user=user,
             organization=invite.organization,
-            role=invite.role,
-            invited_by=invite.invited_by,
+            defaults={'role': invite.role, 'invited_by': invite.invited_by},
         )
-        
-        # Mark invitation as used
+
         invite.accepted_at = timezone.now()
-        invite.save()
-    
+        invite.save(update_fields=['accepted_at'])
+
     login(request, user)
-    
+
+    from tracker.models import AuthToken
+    token_value = secrets.token_urlsafe(32)
+    AuthToken.objects.create(
+        user=user,
+        token=token_value,
+        expires_at=timezone.now() + timedelta(days=14),
+    )
+
+    membership = OrganizationMembership.objects.filter(
+        user=user
+    ).select_related('organization').first()
+
     return Response({
         'success': True,
-        'organization': invite.organization.name,
+        'ok': True,
+        'token': token_value,
+        'user': {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email or '',
+            'name': f"{user.first_name} {user.last_name}".strip(),
+        },
+        'organization': {
+            'id': membership.organization.id,
+            'name': membership.organization.name,
+            'slug': membership.organization.slug,
+        } if membership else None,
+        'role': membership.role if membership else None,
     })
 
 
@@ -7655,65 +7754,27 @@ def settings_team_invite(request):
             "user_id": existing.id,
         })
     
-    # Create new user
-    username = email.split("@")[0].lower()
-    base_username = username
-    counter = 1
-    while User.objects.filter(username=username).exists():
-        username = f"{base_username}{counter}"
-        counter += 1
-    
-    # Generate temporary password
-    temp_password = secrets.token_urlsafe(12)
-    
-    user = User.objects.create_user(
-        username=username,
+    # Brand new user. Delegated rather than duplicated: this used to mint its
+    # own token_urlsafe(12) password and email it in the clear, which is the
+    # thing the link-based invite flow exists to stop. One path, one behaviour.
+    from tracker.views_onboarding import _create_and_invite_user
+
+    result = _create_and_invite_user(
+        org=org,
         email=email,
-        password=temp_password,
-        is_active=True,
-    )
-    logger.info(f"[INVITE] Created user: {username}")
-    
-    # Create OrganizationMembership with member role
-    OrganizationMembership.objects.create(
-        user=user,
-        organization=org,
         role='member',
-        invited_by=request.user
+        name='',
+        invited_by=request.user,
     )
-    logger.info(f"[INVITE] Created membership with member role")
-    
-    # Send invitation email
-    logger.info(f"[INVITE] Attempting to send email to: {email}")
-    logger.info(f"[INVITE] From: {settings.DEFAULT_FROM_EMAIL}")
-    logger.info(f"[INVITE] SMTP: {settings.EMAIL_HOST}:{settings.EMAIL_PORT}")
-    
-    email_sent = False
-    error_message = None
-    
-    try:
-        from tracker.email_service import send_team_invitation
-        email_sent = send_team_invitation(
-            to_email=email,
-            org_name=org.name,
-            username=username,
-            temp_password=temp_password,
-            invited_by=request.user.get_full_name() or request.user.username,
-        )
-        logger.info(f"[INVITE] ✅ Email sent successfully! Result: {email_sent}")
-        email_sent = True
-    except Exception as e:
-        error_message = str(e)
-        logger.error(f"[INVITE] ❌ Failed to send email: {e}")
-        logger.exception("Full email error traceback:")
-    
+    logger.info(f"[INVITE] Created {result['username']} and sent setup link to {email}")
+
     return Response({
         "success": True,
-        "message": "User invited" if email_sent else f"User created (email failed: {error_message})",
-        "user_id": user.id,
-        "username": username,
-        "temp_password": temp_password,
-        "email_sent": email_sent,
+        "message": "User invited" if result['email_sent'] else "User created (invite email failed \u2014 send the link manually)",
+        "user_id": result['user_id'],
+        "username": result['username'],
+        "invite_url": result['invite_url'],
+        "email_sent": result['email_sent'],
     }, status=201)
 
 

@@ -56,7 +56,8 @@ urlpatterns = [
     # -------------------------------
     path("firm-signup/", views.firm_signup, name="firm_signup"),
     path("invite/", views.invite_team_member, name="invite_team_member"),
-    path("invite/<str:token>/accept/", views.accept_invitation, name="accept_invitation"),
+    path("invite/<str:token>/", views.invite_details, name="invite_details"),
+    path("invite/<str:token>/accept/", csrf_exempt(views.accept_invitation), name="accept_invitation"),
 
     # -------------------------------
     # Client & Project Management
@@ -179,6 +180,8 @@ urlpatterns = [
     path('settings/client-requests/<int:request_id>/approve/', views_settings.approve_client_request),
 
     path('settings/team/invite/', views_onboarding.team_invite_view),
+    path('settings/team/activation/', views_onboarding.team_activation, name='team_activation'),
+    path('settings/team/<int:user_id>/resend-invite/', views_onboarding.resend_invite, name='resend_invite'),
 
 
     # ===============================

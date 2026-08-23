@@ -956,14 +956,19 @@ const WeeklyTimesheet: React.FC = () => {
 
         {/* Lane header: collapse toggle / search / view toggle */}
         <div className={cn('flex items-center gap-3 px-4 py-3.5', bodyOpen && 'border-b border-border/70')}>
+          {/* Fills the bar up to the search rather than hugging the label.
+              The empty stretch beside a disclosure control looks like part of
+              it, so clicking there and getting nothing reads as the page being
+              broken - and it is the easiest part of the row to hit. */}
           <button
             onClick={() => setLaneOpen(o => !o)}
-            className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md transition-colors"
+            aria-expanded={bodyOpen}
+            className="group flex flex-1 min-w-0 items-center gap-2.5 -ml-1 pl-1 pr-2 py-1 text-left rounded-md transition-colors"
           >
             <ChevronRight className={cn('w-4 h-4 text-primary/60 shrink-0 transition-transform group-hover:text-primary', bodyOpen && 'rotate-90')} />
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
           </button>
-          <div className="relative w-44 ml-auto">
+          <div className="relative w-44 shrink-0">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70 pointer-events-none" />
             <input
               ref={searchRef}

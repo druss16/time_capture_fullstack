@@ -1,0 +1,83 @@
+# Runs on every pull request. Nothing here touches the app, the database, or
+# Render — it is a throwaway container that downloads the code, tries to start
+# it, and reports back.
+#
+# It exists because a change reached main that decorated a function with
+# @shared_task 2,600 lines above the import of shared_task. A decorator runs at
+# import time, so the name did not exist yet, and because tracker/urls.py
+# imports every view module the whole URLconf failed to build — every endpoint
+# returned 500. Typechecking cannot see that and no test catches it unless the
+# suite imports the URLconf. `manage.py check` does, in about ten seconds.
+#
+# Advisory by design. GitHub shows a tick or a cross next to the merge button
+# and nothing is blocked unless someone turns these into required checks in
+# branch protection.
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR cancels the previous run rather than queueing.
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Django imports and system check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'          # matches server/Dockerfile
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install dependencies
+        working-directory: server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: manage.py check
+        working-directory: server
+        # Dummy values only. `check` imports settings and builds the URLconf; it
+        # does not open a database connection, so these never have to be real —
+        # and a CI job must never hold a credential it does not need.
+        env:
+          DJANGO_SECRET_KEY: ci-not-a-real-secret
+          POSTGRES_DB: ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: '5432'
+        run: python manage.py check
+
+  frontend:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: tsc --noEmit
+        working-directory: frontend
+        # `|| true` on purpose: main currently carries pre-existing type errors,
+        # so a hard failure here would show a red cross on every PR regardless of
+        # its contents and train everyone to ignore the result. This reports the
+        # count. Drop the `|| true` once the baseline is zero.
+        run: |
+          npx tsc --noEmit 2>&1 | tee tsc.log || true
+          echo "type errors: $(grep -c 'error TS' tsc.log || echo 0)"

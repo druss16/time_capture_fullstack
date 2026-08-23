@@ -64,6 +64,7 @@ interface ProviderStatus {
   region?: string | null;     // Clio — tokens are not portable across regions
   last_sync_status?: string | null;  // Clio: success / partial / failed
   last_sync_error?: string | null;
+  push_trigger?: 'approve' | 'submit' | null;  // Clio — when time is written
 }
 
 interface IntegrationStatusResponse {
@@ -455,6 +456,7 @@ interface ProviderCardProps {
   /** Clio only: chosen before consent, since region cannot be detected after. */
   region?: string;
   onRegionChange?: (region: string) => void;
+  onPushTriggerChange?: (value: 'approve' | 'submit') => void;
 }
 
 const ProviderCard: React.FC<ProviderCardProps> = ({
@@ -469,6 +471,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   syncing,
   region,
   onRegionChange,
+  onPushTriggerChange,
 }) => {
   const [showDetails, setShowDetails] = useState(false);
   const config = PROVIDERS[provider];
@@ -556,6 +559,31 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                   : 'Never'}
               </p>
             </div>
+          </div>
+        )}
+
+        {/* When time reaches Clio. Shown on the card rather than behind
+            Details because the wrong value here means time silently never
+            arrives — an org whose only approvers are the same people who
+            submit will wait forever for a review nobody performs. */}
+        {connected && isClio && (
+          <div className="mt-4 rounded-xl border border-slate-200/60 bg-white/70 p-3">
+            <label className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+              <span className="font-semibold text-slate-600">Send time to Clio</span>
+              <select
+                value={status.push_trigger || 'approve'}
+                onChange={(e) => onPushTriggerChange?.(e.target.value as 'approve' | 'submit')}
+                className={cn(inputClass, 'w-auto')}
+              >
+                <option value="approve">when a timesheet is approved</option>
+                <option value="submit">as soon as it is submitted</option>
+              </select>
+            </label>
+            <p className="mt-2 text-xs text-slate-500">
+              {status.push_trigger === 'submit'
+                ? 'Time is sent the moment someone submits their week. Right when the people submitting are also the only ones who would approve.'
+                : 'Approval is the gate on what gets billed. Choose the other option if no one reviews these timesheets — otherwise the time never leaves.'}
+            </p>
           </div>
         )}
       </div>
@@ -755,6 +783,26 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     }
   };
 
+  const handleClioPushTrigger = async (value: 'approve' | 'submit') => {
+    try {
+      await safeFetchJson(`${API_BASE}/integrations/clio/push-trigger/`, {
+        method: 'POST',
+        body: JSON.stringify({ push_trigger: value }),
+      });
+      onSuccess(
+        value === 'submit'
+          ? 'Time will now go to Clio as soon as a timesheet is submitted.'
+          : 'Time will now go to Clio when a timesheet is approved.',
+      );
+      await fetchIntegrations();
+    } catch (err: any) {
+      onError(err?.message || 'Could not change when time is sent to Clio');
+      // Re-read so the control snaps back to what the server actually holds
+      // rather than showing a value that was never saved.
+      await fetchIntegrations();
+    }
+  };
+
   const handleClioSync = async () => {
     setClioSyncing(true);
     try {
@@ -863,6 +911,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
                 syncing={clioSyncing}
                 region={clioRegion}
                 onRegionChange={setClioRegion}
+                onPushTriggerChange={handleClioPushTrigger}
               />
             );
           }

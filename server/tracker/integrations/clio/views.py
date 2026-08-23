@@ -26,7 +26,7 @@ from rest_framework.response import Response
 
 import requests
 
-from tracker.models import Integration
+from tracker.models import Integration, Organization, OrganizationMembership
 from tracker.integrations.clio.client import (
     ClioClient,
     ClioError,
@@ -289,7 +289,43 @@ def clio_status(request):
         'last_synced_at': integration.last_synced_at,
         'last_sync_status': integration.last_sync_status or None,
         'last_sync_error': integration.last_sync_error or None,
+        'push_trigger': org.clio_push_trigger,
+        'push_trigger_choices': [
+            {'value': v, 'label': label}
+            for v, label in Organization.CLIO_PUSH_TRIGGER_CHOICES
+        ],
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def clio_push_trigger(request):
+    """Choose when captured time is written to Clio.
+
+    A firm's own policy, not something inferable from its org chart: an org can
+    have several owners who simply never review each other, in which case
+    waiting for an approval that no one will give strands the time forever.
+    Whether anyone reviews is a decision only the firm can state.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return error_response('No organization', 404)
+
+    membership = OrganizationMembership.objects.filter(
+        user=request.user, organization=org
+    ).first()
+    if not membership or membership.role not in ['owner', 'admin']:
+        return error_response('Only an owner or admin can change this', 403)
+
+    value = (request.data.get('push_trigger') or '').strip()
+    valid = [v for v, _ in Organization.CLIO_PUSH_TRIGGER_CHOICES]
+    if value not in valid:
+        return error_response(f'push_trigger must be one of {valid}', 400)
+
+    org.clio_push_trigger = value
+    org.save(update_fields=['clio_push_trigger'])
+    logger.info('Org %s set clio_push_trigger=%s by %s', org.id, value, request.user)
+    return Response({'push_trigger': org.clio_push_trigger})
 
 
 @api_view(['POST'])

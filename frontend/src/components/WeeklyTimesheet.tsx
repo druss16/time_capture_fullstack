@@ -333,23 +333,9 @@ const Banner: React.FC<{
   );
 };
 
-const ClientDot: React.FC<{ agg: Pick<ClientAgg, 'allBillable' | 'allNonBillable'> }> = ({ agg }) => {
-  if (agg.allNonBillable) return <span className="w-2.5 h-2.5 rounded-full bg-slate-300 shrink-0" />;
-  if (agg.allBillable)    return <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />;
-  // Mixed billable + non-billable: half primary, half slate.
-  return (
-    <span className="w-2.5 h-2.5 rounded-full shrink-0 overflow-hidden flex" aria-hidden>
-      <span className="w-1/2 h-full bg-primary" />
-      <span className="w-1/2 h-full bg-slate-300" />
-    </span>
-  );
-};
-
 // ── Design language (shared by Summary + By-day drills) ─────────────────────────
 // Faint teal ground + quiet dotted rows + calm billable/non-billable badges,
 // matching the refreshed Daily Review "Lightning" look.
-const DOT_BILL    = 'w-2 h-2 rounded-full bg-primary shrink-0';
-const DOT_NON     = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
 const BADGE_BILL  = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/10 text-primary';
 const BADGE_NON   = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-slate-100 text-slate-500';
 const HOURS_CELL  = 'text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]';
@@ -973,16 +959,11 @@ const WeeklyTimesheet: React.FC = () => {
           <button
             onClick={() => setLaneOpen(o => !o)}
             className="group flex items-center gap-2.5 min-w-0 -ml-1 pl-1 pr-2 py-1 rounded-md transition-colors"
-            title={laneOpen ? 'Collapse' : 'Expand to view clients'}
           >
             <ChevronRight className={cn('w-4 h-4 text-primary/60 shrink-0 transition-transform group-hover:text-primary', bodyOpen && 'rotate-90')} />
-            <span className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
             <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
               {totalClients} client{totalClients !== 1 ? 's' : ''} · {fmtHours(grandTotal)}
-            </span>
-            <span className="ml-1 shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)]">
-              {bodyOpen ? 'Hide' : 'Browse these'}
             </span>
           </button>
           <div className="relative w-44 ml-auto">
@@ -1310,7 +1291,6 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
                   className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
                     isCurrent ? 'text-slate-400' : 'text-slate-700')}
                 >
-                  <span className={tt.is_billable ? DOT_BILL : DOT_NON} />
                   <span className="flex-1 truncate">{tt.name}</span>
                   {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300" />}
                   {!isCurrent && !tt.is_billable && <span className="text-[10px] text-slate-400">non-bill</span>}
@@ -1555,7 +1535,6 @@ const CategoryRow: React.FC<{ entry: TimesheetEntry; hours?: number; pctOf?: num
         {hasBlocks
           ? <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
           : <span className="w-3.5 shrink-0" />}
-        <span className={entry.is_billable ? DOT_BILL : DOT_NON} />
         <span className="min-w-0 flex-1 truncate font-sans text-[13px] text-foreground">{entry.task_type_name}</span>
         <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
           {entry.is_billable ? 'billable' : 'non-bill'}
@@ -1604,7 +1583,6 @@ const ClientRow: React.FC<{
         className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-black/[0.015] transition-colors"
       >
         <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
-        <ClientDot agg={agg} />
         <span className={cn('flex-1 font-sans text-[14px] font-semibold truncate leading-tight',
           noClient ? 'italic text-slate-400' : 'text-slate-800')}>
           {displayClientName(agg)}
@@ -1762,7 +1740,6 @@ const SummaryView: React.FC<{
           className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-black/[0.015] transition-colors"
         >
           <ChevronDown className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', tailOpen && 'rotate-180')} />
-          <span className="w-2.5 h-2.5 rounded-full bg-slate-200 shrink-0" />
           <span className="flex-1 font-sans text-[13px] font-semibold text-slate-500 truncate">
             {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
           </span>
@@ -1801,7 +1778,6 @@ const ByDayClientRow: React.FC<{
         className="w-full flex items-center gap-3 pl-9 pr-5 py-2.5 text-left hover:bg-black/[0.02] transition-colors"
       >
         <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isOpen && 'rotate-90')} />
-        <ClientDot agg={agg} />
         <span className={cn('flex-1 text-[13px] font-bold truncate leading-tight',
           noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
           {displayClientName(agg)}

@@ -1420,6 +1420,11 @@ def integrations_status(request):
                 integrations[provider]['last_synced'] = (
                     i.last_synced_at.isoformat() if i.last_synced_at else None
                 )
+                # When time reaches Clio. Surfaced here because it decides
+                # whether a firm's time ever arrives at all: an org whose only
+                # approvers are the people submitting will wait forever for a
+                # review nobody performs.
+                integrations[provider]['push_trigger'] = org.clio_push_trigger
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 

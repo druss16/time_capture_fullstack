@@ -302,6 +302,7 @@ urlpatterns = [
     path('integrations/clio/sync/', clio_views.clio_sync, name='clio-sync'),
     path('integrations/clio/push-time/', clio_views.clio_push_time, name='clio-push-time'),
     path('integrations/clio/status/', clio_views.clio_status, name='clio-status'),
+    path('integrations/clio/push-trigger/', clio_views.clio_push_trigger, name='clio-push-trigger'),
     path('integrations/clio/disconnect/', clio_views.clio_disconnect, name='clio-disconnect'),
     path('clients/bulk-assign/', views_bulk_assignments.bulk_assign_clients, name='bulk-assign-clients'),
     path('clients/bulk-unassign/', views_bulk_assignments.bulk_unassign_clients, name='bulk-unassign-clients'),

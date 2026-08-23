@@ -284,17 +284,17 @@ const StatusBadge: React.FC<{ status: TimesheetData['status']; autoSubmitted?: b
   status, autoSubmitted,
 }) => {
   const map: Record<string, { cls: string; label: string }> = {
-    draft:     { cls: 'bg-slate-100 text-slate-600 border-slate-200',      label: 'Draft' },
+    draft:     { cls: 'bg-muted text-muted-foreground border-border',      label: 'Draft' },
     submitted: { cls: 'bg-amber-50 text-amber-700 border-amber-200',       label: 'Pending Approval' },
     approved:  { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Approved' },
     rejected:  { cls: 'bg-red-50 text-red-600 border-red-200',             label: 'Rejected' },
-    locked:    { cls: 'bg-slate-100 text-slate-500 border-slate-200',      label: 'Locked' },
+    locked:    { cls: 'bg-muted text-muted-foreground border-border',      label: 'Locked' },
   };
   const { cls, label } = map[status] || map.draft;
   return (
     <div className="flex items-center gap-2">
       <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border', cls)}>
-        {status === 'draft'     && <span className="w-1.5 h-1.5 bg-slate-400 rounded-full" />}
+        {status === 'draft'     && <span className="w-1.5 h-1.5 bg-muted-foreground/60 rounded-full" />}
         {status === 'submitted' && <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" />}
         {status === 'approved'  && <CheckCircle2 className="w-3.5 h-3.5" />}
         {status === 'locked'    && <Lock className="w-3 h-3" />}
@@ -337,13 +337,13 @@ const Banner: React.FC<{
 // Faint teal ground + quiet dotted rows + calm billable/non-billable badges,
 // matching the refreshed Daily Review "Lightning" look.
 const BADGE_BILL  = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/10 text-primary';
-const BADGE_NON   = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-slate-100 text-slate-500';
-const HOURS_CELL  = 'text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]';
+const BADGE_NON   = 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-muted text-muted-foreground';
+const HOURS_CELL  = 'text-right font-mono text-[12.5px] font-semibold text-foreground tabular-nums shrink-0 w-[64px]';
 
 // Daily Review "Lightning" primitives, reused so the timesheet reads the same.
-const LANE_CARD   = 'overflow-hidden rounded-[15px] border border-border/70 bg-white shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]';
-const MIN_CHIP    = 'inline-flex items-center justify-center shrink-0 min-w-[52px] rounded-md bg-muted px-1.5 py-1 font-mono text-[10.5px] font-bold tabular-nums text-slate-500';
-const UPPER_LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-slate-400';
+const LANE_CARD   = 'overflow-hidden rounded-[15px] border border-border/70 bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]';
+const MIN_CHIP    = 'inline-flex items-center justify-center shrink-0 min-w-[52px] rounded-md bg-muted px-1.5 py-1 font-mono text-[10.5px] font-bold tabular-nums text-muted-foreground';
+const UPPER_LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70';
 // Font stacks: Inter for the hero voice, mono for captured titles/minutes.
 const INTER       = { fontFamily: '"Inter", sans-serif' } as const;
 const pctOfLabel  = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
@@ -728,7 +728,7 @@ const WeeklyTimesheet: React.FC = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[300px]">
-        <RefreshCw className="w-5 h-5 text-slate-300 animate-spin" />
+        <RefreshCw className="w-5 h-5 text-muted-foreground/50 animate-spin" />
       </div>
     );
   }
@@ -740,7 +740,7 @@ const WeeklyTimesheet: React.FC = () => {
       return (
         <button
           onClick={() => setShowSubmitModal(true)}
-          className="px-4 py-2 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+          className="px-4 py-2 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
         >
           <CheckCircle2 className="w-4 h-4" /> Submit for Approval
         </button>
@@ -749,10 +749,10 @@ const WeeklyTimesheet: React.FC = () => {
     if (timesheetData?.status === 'rejected') {
       return (
         <>
-          <button onClick={handleReopen} className="px-4 py-2 bg-slate-100 text-slate-700 text-sm font-semibold rounded-lg hover:bg-slate-200 transition-all">
+          <button onClick={handleReopen} className="px-4 py-2 bg-muted text-foreground text-sm font-semibold rounded-lg hover:bg-muted transition-all">
             Edit
           </button>
-          <button onClick={() => setShowSubmitModal(true)} className="px-4 py-2 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all">
+          <button onClick={() => setShowSubmitModal(true)} className="px-4 py-2 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 transition-all">
             Resubmit
           </button>
         </>
@@ -769,27 +769,27 @@ const WeeklyTimesheet: React.FC = () => {
       <div style={INTER}>
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">My Timesheet</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">My Timesheet</span>
             {timesheetData && (
               <StatusBadge status={timesheetData.status} autoSubmitted={timesheetData.auto_submitted ?? false} />
             )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <div className="flex items-center gap-0.5 bg-white/70 border border-border/50 rounded-lg overflow-hidden">
-              <button onClick={() => goToWeek(-1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
+            <div className="flex items-center gap-0.5 bg-card border border-border/50 rounded-lg overflow-hidden">
+              <button onClick={() => goToWeek(-1)} className="px-1.5 py-1.5 text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all">
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setWeekStart(getMonday(new Date()).toISOString().split('T')[0])}
-                className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-muted transition-all"
+                className="px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted transition-all"
               >
                 This week
               </button>
-              <button onClick={() => goToWeek(1)} className="px-1.5 py-1.5 text-slate-400 hover:text-slate-700 hover:bg-muted transition-all">
+              <button onClick={() => goToWeek(1)} className="px-1.5 py-1.5 text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all">
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
-            <span className="text-[12.5px] font-medium text-slate-500 whitespace-nowrap tabular-nums">
+            <span className="text-[12.5px] font-medium text-muted-foreground whitespace-nowrap tabular-nums">
               {timesheetData && formatWeekRange(timesheetData.week_start)}
             </span>
           </div>
@@ -797,46 +797,46 @@ const WeeklyTimesheet: React.FC = () => {
 
         <div className="mt-3 flex items-baseline justify-between gap-4">
           <div className="min-w-0">
-            <span className="text-[22px] font-bold tracking-[-0.01em] text-slate-900 tabular-nums">
+            <span className="text-[22px] font-bold tracking-[-0.01em] text-foreground tabular-nums">
               {fmtHours(grandTotal)}
             </span>
-            <span className="ml-2 text-[13px] font-semibold text-slate-500">
+            <span className="ml-2 text-[13px] font-semibold text-muted-foreground">
               active · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
             </span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <div className="flex bg-white/70 border border-border/50 rounded-lg p-0.5" title="Toggle hours format">
+            <div className="flex bg-card border border-border/50 rounded-lg p-0.5" title="Toggle hours format">
               {(['hm', 'decimal'] as HourFmt[]).map(m => (
                 <button
                   key={m}
                   onClick={() => setHourFmt(m)}
                   className={cn(
                     'px-2 py-0.5 font-mono text-[11px] font-semibold rounded-md transition-all',
-                    hourFmt === m ? 'bg-white text-primary shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                    hourFmt === m ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground/70 hover:text-muted-foreground'
                   )}
                 >
                   {m === 'hm' ? 'H:M' : 'Dec'}
                 </button>
               ))}
             </div>
-            <span className="font-mono text-[12px] tabular-nums text-slate-400">
+            <span className="font-mono text-[12px] tabular-nums text-muted-foreground/70">
               {totalClients} client{totalClients !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
 
-        <div className="mt-3 h-2 rounded-full bg-slate-200 overflow-hidden flex shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
+        <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden flex shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
           <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pct(billable, grandTotal)}%` }} />
-          <div className="h-full bg-slate-300" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
+          <div className="h-full bg-muted-foreground/30" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
         </div>
-        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12.5px] text-slate-500">
+        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12.5px] text-muted-foreground">
           <span className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-[3px] bg-gradient-to-r from-primary to-accent inline-block" />
-            <b className="text-slate-700 tabular-nums">{fmtHours(billable)}</b> billable
+            <b className="text-foreground tabular-nums">{fmtHours(billable)}</b> billable
           </span>
           <span className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-[3px] bg-slate-300 inline-block" />
-            <b className="text-slate-700 tabular-nums">{fmtHours(nonBillable)}</b> non-billable
+            <span className="w-2.5 h-2.5 rounded-[3px] bg-muted-foreground/30 inline-block" />
+            <b className="text-foreground tabular-nums">{fmtHours(nonBillable)}</b> non-billable
           </span>
         </div>
       </div>
@@ -905,7 +905,7 @@ const WeeklyTimesheet: React.FC = () => {
             <span className="flex-1" />
             <button
               onClick={() => setMatterGapOpen(o => !o)}
-              className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-sans text-[12px] font-medium text-amber-800 shadow-[0_1px_2px_rgba(16,27,46,0.05)] hover:bg-amber-100"
+              className="shrink-0 rounded-lg border border-amber-300 bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-amber-800 shadow-[0_1px_2px_rgba(16,27,46,0.05)] hover:bg-amber-100"
             >
               {matterGapOpen ? 'Hide' : 'Show these'}
             </button>
@@ -918,7 +918,7 @@ const WeeklyTimesheet: React.FC = () => {
           <div className="flex flex-col border-b border-amber-200 bg-amber-50/40 px-4 py-2">
             {matterGapRows.slice(0, gapShown).map(row => (
               <div key={row.key} className="flex items-center gap-2 py-1 min-w-0">
-                <span className="w-[76px] shrink-0 truncate font-sans text-[12px] font-semibold text-slate-700">
+                <span className="w-[76px] shrink-0 truncate font-sans text-[12px] font-semibold text-foreground">
                   {row.clientName || 'No client'}
                 </span>
                 <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={row.label}>
@@ -964,19 +964,19 @@ const WeeklyTimesheet: React.FC = () => {
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
           </button>
           <div className="relative w-44 ml-auto">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70 pointer-events-none" />
             <input
               ref={searchRef}
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search clients…"
-              className="w-full pl-8 pr-7 py-1.5 text-sm bg-white border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
+              className="w-full pl-8 pr-7 py-1.5 text-sm bg-card border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-all"
             />
             {search && (
               <button
                 onClick={() => { setSearch(''); searchRef.current?.focus(); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -994,7 +994,7 @@ const WeeklyTimesheet: React.FC = () => {
                 onClick={() => { setView(id); setLaneOpen(true); }}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-md transition-all',
-                  view === id ? 'bg-white text-primary shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  view === id ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
                 <Icon className="w-3.5 h-3.5" /> {label}
@@ -1007,17 +1007,17 @@ const WeeklyTimesheet: React.FC = () => {
         <MoveContext.Provider value={moveValue}>
         <div>
           {!bodyOpen ? null : isEmpty ? (
-            <div className="text-center py-20 text-slate-400">
+            <div className="text-center py-20 text-muted-foreground/70">
               {search ? (
                 <>
-                  <Search className="w-8 h-8 text-slate-200 mx-auto mb-3" />
-                  <p className="font-medium text-slate-500">No clients match “{search}”</p>
+                  <Search className="w-8 h-8 text-muted-foreground/40 mx-auto mb-3" />
+                  <p className="font-medium text-muted-foreground">No clients match “{search}”</p>
                   <button onClick={() => setSearch('')} className="mt-2 text-sm text-primary hover:underline">Clear search</button>
                 </>
               ) : (
                 <>
-                  <Clock className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                  <p className="font-medium text-slate-500">No time tracked this week</p>
+                  <Clock className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+                  <p className="font-medium text-muted-foreground">No time tracked this week</p>
                   <p className="text-sm mt-1">Time appears here as it's captured by your desktop agent</p>
                 </>
               )}
@@ -1044,14 +1044,14 @@ const WeeklyTimesheet: React.FC = () => {
       </div>
 
       {/* ── Sticky submit bar: stays reachable as the page scrolls ─────── */}
-      <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-white/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3 flex items-center justify-between gap-4">
+      <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-card/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3 flex items-center justify-between gap-4">
         <div className="flex items-baseline gap-2.5">
           <span className={UPPER_LABEL}>Week total</span>
-          <span className="font-mono text-base font-extrabold text-slate-800 tabular-nums">{fmtHours(grandTotal)}</span>
+          <span className="font-mono text-base font-extrabold text-foreground tabular-nums">{fmtHours(grandTotal)}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
-            <Lock className="w-3.5 h-3.5 text-slate-300" />
+          <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground/70">
+            <Lock className="w-3.5 h-3.5 text-muted-foreground/50" />
             Auto-captured ·{' '}
             <a href="/daily" className="text-primary font-medium hover:underline">Adjust in Daily Review →</a>
           </span>
@@ -1062,23 +1062,23 @@ const WeeklyTimesheet: React.FC = () => {
       {/* ── Submit Modal ──────────────────────────────────────────────── */}
       {showSubmitModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full mx-4 max-h-[88vh] flex flex-col overflow-hidden">
+          <div className="bg-card rounded-2xl shadow-xl max-w-3xl w-full mx-4 max-h-[88vh] flex flex-col overflow-hidden">
             <div className="px-6 py-4 border-b border-border/50">
-              <h3 className="text-base font-bold text-slate-800">Submit Timesheet</h3>
-              <p className="text-sm text-slate-500 mt-0.5">
+              <h3 className="text-base font-bold text-foreground">Submit Timesheet</h3>
+              <p className="text-sm text-muted-foreground mt-0.5">
                 {timesheetData && formatWeekRange(timesheetData.week_start)}
               </p>
             </div>
             <div className="p-6 space-y-4 overflow-y-auto">
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label: 'Total',    value: fmtHours(grandTotal), cls: 'text-slate-800' },
+                  { label: 'Total',    value: fmtHours(grandTotal), cls: 'text-foreground' },
                   { label: 'Billable', value: fmtHours(billable),   cls: 'text-primary' },
-                  { label: 'Non-bill', value: fmtHours(nonBillable), cls: 'text-slate-400' },
+                  { label: 'Non-bill', value: fmtHours(nonBillable), cls: 'text-muted-foreground/70' },
                 ].map(({ label, value, cls }) => (
-                  <div key={label} className="text-center p-3 bg-slate-50 rounded-lg border border-border/50">
+                  <div key={label} className="text-center p-3 bg-muted/40 rounded-lg border border-border/50">
                     <p className={cn('text-lg font-bold tabular-nums', cls)}>{value}</p>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mt-0.5">{label}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">{label}</p>
                   </div>
                 ))}
               </div>
@@ -1089,8 +1089,8 @@ const WeeklyTimesheet: React.FC = () => {
                   exists to inform. */}
               <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
-                  Notes <span className="text-slate-400 normal-case font-normal">(optional)</span>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Notes <span className="text-muted-foreground/70 normal-case font-normal">(optional)</span>
                 </label>
                 <textarea
                   value={submitNotes}
@@ -1153,9 +1153,9 @@ const WeeklyTimesheet: React.FC = () => {
                                 person, and only then is there anything to show.
                                 Every other reason renders exactly as before. */}
                             {sk.conflict_key && (
-                              <span className="mt-0.5 block rounded bg-white/70 px-2 py-1">
+                              <span className="mt-0.5 block rounded bg-card px-2 py-1">
                                 {sk.existing?.map((e: any, j: number) => (
-                                  <span key={j} className="block truncate text-[10px] text-slate-500">
+                                  <span key={j} className="block truncate text-[10px] text-muted-foreground">
                                     already in Clio: {e.minutes}m — {e.note || '(no note)'}
                                   </span>
                                 ))}
@@ -1184,20 +1184,20 @@ const WeeklyTimesheet: React.FC = () => {
                 </p>
               )}
             </div>
-            <div className="px-6 py-4 bg-slate-50/60 border-t border-border/50 flex items-center gap-3">
-              <p className="hidden flex-1 text-xs text-slate-400 sm:block">
+            <div className="px-6 py-4 bg-muted/60 border-t border-border/50 flex items-center gap-3">
+              <p className="hidden flex-1 text-xs text-muted-foreground/70 sm:block">
                 Once submitted, you can't edit until your manager reviews it.
               </p>
               <button
                 onClick={() => setShowSubmitModal(false)}
-                className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted rounded-lg transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={submitting}
-                className="px-5 py-2 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 transition-all disabled:opacity-50 flex items-center gap-2"
+                className="px-5 py-2 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 transition-all disabled:opacity-50 flex items-center gap-2"
               >
                 {submitting
                   ? <><RefreshCw className="w-4 h-4 animate-spin" /> Submitting...</>
@@ -1248,7 +1248,7 @@ const RowMenuPortal: React.FC<{
       <button className="fixed inset-0 z-[60] cursor-default"
               onClick={(e) => { e.stopPropagation(); onClose(); }} aria-label="Close" />
       <div style={style}
-           className="z-[61] overflow-auto rounded-lg border border-border bg-white shadow-xl py-1">
+           className="z-[61] overflow-auto rounded-lg border border-border bg-card shadow-xl py-1">
         {children}
       </div>
     </>,
@@ -1278,19 +1278,19 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
       </button>
       {open && !busy && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={224}>
-          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Move to category</p>
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">Move to category</p>
             {ctx.taskTypes.map(tt => {
               const isCurrent = tt.name === currentName;
               return (
                 <button
                   key={tt.id}
                   onClick={(e) => { e.stopPropagation(); setOpen(false); if (!isCurrent) ctx.onMove(agg.ids, tt.id); }}
-                  className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
-                    isCurrent ? 'text-slate-400' : 'text-slate-700')}
+                  className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-muted/40',
+                    isCurrent ? 'text-muted-foreground/70' : 'text-foreground')}
                 >
                   <span className="flex-1 truncate">{tt.name}</span>
-                  {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300" />}
-                  {!isCurrent && !tt.is_billable && <span className="text-[10px] text-slate-400">non-bill</span>}
+                  {isCurrent && <Check className="w-3.5 h-3.5 text-muted-foreground/50" />}
+                  {!isCurrent && !tt.is_billable && <span className="text-[10px] text-muted-foreground/70">non-bill</span>}
                 </button>
               );
             })}
@@ -1379,12 +1379,12 @@ const BlockMatterMenu: React.FC<{
       </button>
       {open && !saving && (
         <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={288}>
-          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
               {data?.client_name ? `Matters for ${data.client_name}` : 'Set matter'}
             </p>
-            {loading && <p className="px-3 py-2 text-[12px] text-slate-400">Loading…</p>}
+            {loading && <p className="px-3 py-2 text-[12px] text-muted-foreground/70">Loading…</p>}
             {!loading && data && data.options?.length === 0 && (
-              <p className="px-3 py-2 text-[12px] text-slate-500">
+              <p className="px-3 py-2 text-[12px] text-muted-foreground">
                 {data.client_id
                   ? `${data.client_name || 'This client'} has no open matters in Clio. Open one there, then sync from Settings → Integrations.`
                   : 'Assign a client first — a matter belongs to a client.'}
@@ -1407,27 +1407,27 @@ const BlockMatterMenu: React.FC<{
               return (
                 <React.Fragment key={o.project_id}>
                   {i === 0 && o.last_worked && (
-                    <p className="px-3 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <p className="px-3 pt-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
                       Recently worked
                     </p>
                   )}
                   {startsRest && i > 0 && (
-                    <p className="px-3 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-t border-border/50 mt-1">
+                    <p className="px-3 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 border-t border-border/50 mt-1">
                       Other matters
                     </p>
                   )}
                   <button
                     onClick={(e) => { e.stopPropagation(); if (!isCurrent) choose(o.project_id); }}
-                    className={cn('w-full flex items-start gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-slate-50',
-                      isCurrent ? 'text-slate-400' : 'text-slate-700')}
+                    className={cn('w-full flex items-start gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-muted/40',
+                      isCurrent ? 'text-muted-foreground/70' : 'text-foreground')}
                   >
                     <span className="flex-1 min-w-0">
                       <span className="block truncate font-semibold">{o.display_number}</span>
                       {o.description && (
-                        <span className="block truncate text-[11px] text-slate-500">{o.description}</span>
+                        <span className="block truncate text-[11px] text-muted-foreground">{o.description}</span>
                       )}
                       {facts.length > 0 && (
-                        <span className="block truncate text-[10px] text-slate-400">{facts.join(' · ')}</span>
+                        <span className="block truncate text-[10px] text-muted-foreground/70">{facts.join(' · ')}</span>
                       )}
                       {o.requires_utbms && (
                         <span className="block text-[10px] text-amber-600">needs UTBMS codes — will not push</span>
@@ -1436,13 +1436,13 @@ const BlockMatterMenu: React.FC<{
                         <span className="block text-[10px] text-amber-600">{o.billing_method} fee — tracked, not pushed</span>
                       )}
                     </span>
-                    {isCurrent && <Check className="w-3.5 h-3.5 text-slate-300 mt-0.5 shrink-0" />}
+                    {isCurrent && <Check className="w-3.5 h-3.5 text-muted-foreground/50 mt-0.5 shrink-0" />}
                   </button>
                 </React.Fragment>
               );
             })}
           {!loading && data?.options?.length > 0 && (
-            <p className="px-3 pt-1.5 pb-1 text-[10px] text-slate-400 border-t border-border/50 mt-1">
+            <p className="px-3 pt-1.5 pb-1 text-[10px] text-muted-foreground/70 border-t border-border/50 mt-1">
               Future work in the same folder goes here automatically.
             </p>
           )}
@@ -1499,14 +1499,14 @@ const AggBlockRow: React.FC<{
         title={categoryBillable ? 'Billable' : 'Non-billable'}
         className={cn(
           'hidden shrink-0 rounded-full px-2 py-0.5 font-sans text-[10px] font-semibold sm:inline',
-          categoryBillable ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-500',
+          categoryBillable ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
         )}
       >
         {categoryName}
       </span>
     )}
     {agg.count > 1 && (
-      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-400" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
+      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground/70" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
     <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
     <MatterState agg={agg} />
@@ -1577,14 +1577,25 @@ const ClientRow: React.FC<{
     <>
       <button
         onClick={() => onToggle(agg.key)}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-black/[0.015] transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-muted/40 transition-colors"
       >
-        <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
+        <ChevronRight className={cn('w-3.5 h-3.5 text-muted-foreground/50 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
         <span className={cn('flex-1 font-sans text-[14px] font-semibold truncate leading-tight',
-          noClient ? 'italic text-slate-400' : 'text-slate-800')}>
+          noClient ? 'italic text-muted-foreground' : 'text-foreground')}>
           {displayClientName(agg)}
         </span>
-        <span className="text-right font-mono text-[12.5px] font-semibold text-slate-800 tabular-nums shrink-0 w-[64px]">
+        {/* Same split Daily Review shows on every client, in the same words and
+            the same type. Rendered even when a client is entirely one or the
+            other: leaving those blank puts gaps down the column, and a gap
+            reads as data that failed to load rather than as "all billable". */}
+        <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 sm:inline">
+          {agg.billable > 0 && agg.nonBillable > 0
+            ? `${fmtHours(agg.billable)} billable · ${fmtHours(agg.nonBillable)} non-bill`
+            : agg.nonBillable > 0 ? 'all non-bill'
+            : agg.billable > 0 ? 'all billable'
+            : ''}
+        </span>
+        <span className="text-right font-mono text-[12.5px] font-semibold text-foreground tabular-nums shrink-0 w-[64px]">
           {fmtHours(agg.total)}
         </span>
       </button>
@@ -1663,9 +1674,9 @@ const WorkSummaryView: React.FC<{
 
   if (!real.length) {
     return (
-      <div className="text-center py-20 text-slate-400">
-        <Sparkles className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-        <p className="font-medium text-slate-500">No client work to summarize this week</p>
+      <div className="text-center py-20 text-muted-foreground/70">
+        <Sparkles className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+        <p className="font-medium text-muted-foreground">No client work to summarize this week</p>
         <p className="text-sm mt-1">The recap covers billable client time — not unassigned or internal work.</p>
       </div>
     );
@@ -1674,7 +1685,7 @@ const WorkSummaryView: React.FC<{
   return (
     <div className="p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
           <Sparkles className="w-3.5 h-3.5 text-primary" /> Your week in review · {weekLabel}
         </div>
         <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">AI draft — review before sending</span>
@@ -1684,7 +1695,7 @@ const WorkSummaryView: React.FC<{
             <button onClick={copy} className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
               <Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy'}
             </button>
-            <button onClick={gen} className="text-[11px] font-medium text-slate-400 hover:text-slate-600">Regenerate</button>
+            <button onClick={gen} className="text-[11px] font-medium text-muted-foreground/70 hover:text-muted-foreground">Regenerate</button>
           </div>
         ) : (
           <button onClick={gen} disabled={cell.loading}
@@ -1694,17 +1705,17 @@ const WorkSummaryView: React.FC<{
         )}
       </div>
 
-      <div className="rounded-xl border border-border bg-white p-4">
+      <div className="rounded-xl border border-border bg-card p-4">
         {cell.loading ? (
-          <div className="text-[12.5px] text-slate-400">Pulling together your week…</div>
+          <div className="text-[12.5px] text-muted-foreground/70">Pulling together your week…</div>
         ) : cell.error ? (
-          <div className="text-[12.5px] text-slate-500">Couldn’t generate right now. <button onClick={gen} className="font-medium text-primary hover:underline">Try again</button></div>
+          <div className="text-[12.5px] text-muted-foreground">Couldn’t generate right now. <button onClick={gen} className="font-medium text-primary hover:underline">Try again</button></div>
         ) : cell.empty ? (
-          <div className="text-[12.5px] text-slate-400">{cell.text || 'No client work to summarize this week.'}</div>
+          <div className="text-[12.5px] text-muted-foreground/70">{cell.text || 'No client work to summarize this week.'}</div>
         ) : cell.text ? (
-          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">{cell.text}</div>
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{cell.text}</div>
         ) : (
-          <div className="text-[12.5px] text-slate-400">
+          <div className="text-[12.5px] text-muted-foreground/70">
             A friendly, bulleted recap of everything you worked on across {real.length} client{real.length !== 1 ? 's' : ''} this week — one summary, not one per client.
           </div>
         )}
@@ -1734,13 +1745,13 @@ const SummaryView: React.FC<{
       <>
         <button
           onClick={onToggleTail}
-          className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-black/[0.015] transition-colors"
+          className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-muted/40 transition-colors"
         >
-          <ChevronDown className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', tailOpen && 'rotate-180')} />
-          <span className="flex-1 font-sans text-[13px] font-semibold text-slate-500 truncate">
+          <ChevronDown className={cn('w-3.5 h-3.5 text-muted-foreground/50 shrink-0 transition-transform', tailOpen && 'rotate-180')} />
+          <span className="flex-1 font-sans text-[13px] font-semibold text-muted-foreground truncate">
             {tailClients.length} more client{tailClients.length !== 1 ? 's' : ''} under 15 min
           </span>
-          <span className="text-right font-mono text-[12.5px] font-semibold text-slate-500 tabular-nums shrink-0 w-[64px]">{fmtHours(tailTotals.total)}</span>
+          <span className="text-right font-mono text-[12.5px] font-semibold text-muted-foreground tabular-nums shrink-0 w-[64px]">{fmtHours(tailTotals.total)}</span>
         </button>
 
         {tailOpen && tailClients.map(agg => (
@@ -1772,11 +1783,11 @@ const ByDayClientRow: React.FC<{
     <>
       <button
         onClick={() => onToggle(id)}
-        className="w-full flex items-center gap-3 pl-9 pr-5 py-2.5 text-left hover:bg-black/[0.02] transition-colors"
+        className="w-full flex items-center gap-3 pl-9 pr-5 py-2.5 text-left hover:bg-muted/40 transition-colors"
       >
-        <ChevronRight className={cn('w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform', isOpen && 'rotate-90')} />
+        <ChevronRight className={cn('w-3.5 h-3.5 text-muted-foreground/50 shrink-0 transition-transform', isOpen && 'rotate-90')} />
         <span className={cn('flex-1 text-[13px] font-bold truncate leading-tight',
-          noClient ? 'italic text-slate-400 font-semibold' : 'text-slate-800')}>
+          noClient ? 'italic text-muted-foreground/70 font-semibold' : 'text-foreground')}>
           {displayClientName(agg)}
         </span>
         <span className={HOURS_CELL}>{fmtHours(dc.dayTotal)}</span>
@@ -1837,9 +1848,9 @@ const ByDayView: React.FC<{
 
   if (!groups.length) {
     return (
-      <div className="text-center py-20 text-slate-400">
-        <CalendarDays className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-        <p className="font-medium text-slate-500">No time tracked on any day this week</p>
+      <div className="text-center py-20 text-muted-foreground/70">
+        <CalendarDays className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+        <p className="font-medium text-muted-foreground">No time tracked on any day this week</p>
       </div>
     );
   }
@@ -1854,31 +1865,31 @@ const ByDayView: React.FC<{
             <button
               onClick={() => toggleDay(day.date)}
               className={cn('w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors',
-                day.isWeekend ? 'bg-slate-50/40' : '', 'hover:bg-black/[0.02]')}
+                day.isWeekend ? 'bg-muted/40' : '', 'hover:bg-muted/40')}
             >
-              <ChevronDown className={cn('w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform', !dayOpen && '-rotate-90')} />
+              <ChevronDown className={cn('w-3.5 h-3.5 text-muted-foreground/70 shrink-0 transition-transform', !dayOpen && '-rotate-90')} />
               <span className={cn('text-[10px] font-bold uppercase tracking-widest shrink-0 w-9',
-                day.isToday ? 'text-primary' : 'text-slate-400')}>
+                day.isToday ? 'text-primary' : 'text-muted-foreground/70')}>
                 {day.label}
               </span>
               <span className={cn('text-sm font-bold shrink-0 tabular-nums',
-                day.isToday ? 'text-primary' : 'text-slate-700')}>
+                day.isToday ? 'text-primary' : 'text-foreground')}>
                 {day.dayNum}
               </span>
               {day.isToday && <span className="text-[10px] font-bold text-primary">Today</span>}
               <span className="flex-1" />
               {span && (
                 <span
-                  className="text-[11px] font-medium text-slate-400 tabular-nums shrink-0 hidden md:inline"
+                  className="text-[11px] font-medium text-muted-foreground/70 tabular-nums shrink-0 hidden md:inline"
                   title="Workday span: your first to last tracked activity that day (clock-in/out estimated from activity)."
                 >
                   {span.start}–{span.end}
                 </span>
               )}
-              <span className="text-[11px] text-slate-400 tabular-nums shrink-0 hidden sm:inline">
+              <span className="text-[11px] text-muted-foreground/70 tabular-nums shrink-0 hidden sm:inline">
                 {dayClients.length} client{dayClients.length !== 1 ? 's' : ''}
               </span>
-              <span className="text-right text-[15px] font-extrabold text-slate-800 tabular-nums shrink-0 w-[64px]">
+              <span className="text-right text-[15px] font-extrabold text-foreground tabular-nums shrink-0 w-[64px]">
                 {fmtHours(total)}
               </span>
             </button>
@@ -1900,8 +1911,8 @@ const ByDayView: React.FC<{
         );
       })}
 
-      <div className="flex items-center gap-3 px-5 py-3 bg-white border-t-2 border-border/50">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Week total</span>
+      <div className="flex items-center gap-3 px-5 py-3 bg-card border-t-2 border-border/50">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Week total</span>
         <span className="flex-1" />
         <span className="text-right text-[15px] font-extrabold text-primary tabular-nums w-[64px]">{fmtHours(grandTotal)}</span>
       </div>

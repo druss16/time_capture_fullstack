@@ -962,9 +962,6 @@ const WeeklyTimesheet: React.FC = () => {
           >
             <ChevronRight className={cn('w-4 h-4 text-primary/60 shrink-0 transition-transform group-hover:text-primary', bodyOpen && 'rotate-90')} />
             <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-primary">This week</span>
-            <span className="font-mono text-[11.5px] text-slate-400 hidden md:inline">
-              {totalClients} client{totalClients !== 1 ? 's' : ''} · {fmtHours(grandTotal)}
-            </span>
           </button>
           <div className="relative w-44 ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />

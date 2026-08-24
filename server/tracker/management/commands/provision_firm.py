@@ -29,6 +29,11 @@ Usage:
     # Re-run with updated CSVs (updates existing records)
     python manage.py provision_firm --org smith-associates --team team.csv --update
 
+    # Import the team AND give everyone a way to sign in. Writes
+    # invite_links_<org>.csv even when mail cannot be sent, so the links can be
+    # handed over by whatever channel the firm already uses.
+    python manage.py provision_firm --org smith-associates --team team.csv --send-invites
+
 CSV Formats:
     team.csv:               email, display_name, role, billing_rate, cost_rate, machine_hostname, windows_username
     clients.csv:            client_name, billing_rate, assigned_team (comma-separated emails)
@@ -38,6 +43,7 @@ CSV Formats:
 
 import csv
 import sys
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
@@ -104,7 +110,16 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--send-invites', action='store_true',
-            help='Send invitation emails to new users (default: skip)'
+            help='Mint a setup link for every provisioned user who cannot sign in yet, '
+                 'try to email it, and always write the links to a CSV'
+        )
+        parser.add_argument(
+            '--invite-links-out', type=str, default=None,
+            help='Where to write the invite-links CSV (default: invite_links_<org>.csv)'
+        )
+        parser.add_argument(
+            '--invited-by', type=str, default=None,
+            help='Email of the person the invite comes from (default: the org owner)'
         )
 
     def handle(self, *args, **options):
@@ -115,16 +130,20 @@ class Command(BaseCommand):
         seed_category_mappings = options['seed_category_mappings']
         category_mappings_csv = options['category_mappings']
         suggest_mappings = options['suggest_mappings']
+        send_invites = options['send_invites']
+        invite_links_out = options['invite_links_out']
+        invited_by_email = options['invited_by']
         dry_run = options['dry_run']
         update = options['update']
         generate_token = options['generate_token']
 
         if not team_csv and not clients_csv and not task_types_csv \
                 and not seed_category_mappings and not category_mappings_csv \
-                and not suggest_mappings:
+                and not suggest_mappings and not send_invites:
             raise CommandError(
                 'Provide at least one of --team, --clients, --task-types, '
-                '--seed-category-mappings, --category-mappings, or --suggest-mappings'
+                '--seed-category-mappings, --category-mappings, --suggest-mappings, '
+                'or --send-invites'
             )
 
         # ─── Resolve org ───
@@ -186,6 +205,17 @@ class Command(BaseCommand):
                 org, category_mappings_csv, seed_category_mappings, dry_run, update
             )
 
+        # ─── Invite everyone who still cannot sign in ───
+        # Provisioning creates accounts with an unusable password, which is
+        # right for MSI auto-pair (their time captures without anyone logging
+        # in) and wrong for everything after it: they could never open Daily
+        # Review or submit a timesheet. Minting the links here is what turns a
+        # provisioned roster into people who can actually use the product.
+        if send_invites:
+            self._issue_invites(
+                org, invited_by_email, invite_links_out, dry_run,
+            )
+
         # ─── Generate deployment token ───
         if generate_token and not dry_run:
             self._ensure_deployment_token(org)
@@ -206,6 +236,107 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('\nDRY RUN — no changes were made.'))
         else:
             self.stdout.write(self.style.SUCCESS('\nProvisioning complete.'))
+
+    def _issue_invites(self, org, invited_by_email, out_path, dry_run):
+        """Mint setup links for provisioned members and write them to a CSV.
+
+        The CSV is written whether or not the email goes out. Mail delivery is
+        the part most likely to be missing on a rollout day — no provider
+        configured, a lapsed plan, a firm's gateway quarantining the first
+        message from a new sender — and none of that should stop a rollout when
+        the link itself is the entire credential and can be handed over in
+        whatever channel the firm already uses.
+
+        Only members who have never signed in are touched, which matches the
+        Resend button on the activation roster. Having a password is not the
+        test: every account created under the old temp-password flow has one
+        whether or not anyone ever opened the email, and replacing an unused
+        password is how one that went out in plaintext stops working. Anyone
+        who has actually logged in is left alone — they need a password reset,
+        not an invite.
+        """
+        from tracker.views_onboarding import _issue_invite
+
+        self.stdout.write(f'\n  Issuing setup links...')
+
+        inviter = None
+        if invited_by_email:
+            inviter = User.objects.filter(email__iexact=invited_by_email).first()
+            if not inviter:
+                raise CommandError(f'No user found with email "{invited_by_email}"')
+        else:
+            owner = (OrganizationMembership.objects
+                     .filter(organization=org, role='owner')
+                     .select_related('user').first())
+            inviter = owner.user if owner else None
+        if not inviter:
+            raise CommandError(
+                'No owner on this org to send invites from. '
+                'Pass --invited-by <email>.'
+            )
+
+        candidates = []
+        for m in (OrganizationMembership.objects.filter(organization=org)
+                  .select_related('user').order_by('user__first_name')):
+            u = m.user
+            if not u.email:
+                continue
+            if u.last_login is not None:
+                continue          # they have really signed in — leave them be
+            candidates.append((m, u))
+
+        if not candidates:
+            self.stdout.write('    Everyone has signed in already — nothing to send.')
+            return
+
+        if dry_run:
+            for _, u in candidates:
+                self.stdout.write(f'    Would invite {u.email}')
+            self.stdout.write(self.style.WARNING(
+                f'    DRY RUN — {len(candidates)} invite(s) not created.'
+            ))
+            return
+
+        rows, emailed = [], 0
+        for m, u in candidates:
+            # Nothing depends on a password that has never been used, so retire
+            # it as we go rather than leaving a live credential in an old inbox.
+            if u.has_usable_password():
+                u.set_unusable_password()
+                u.save(update_fields=['password'])
+            invite_url, email_sent = _issue_invite(org, u, m.role, inviter)
+            emailed += 1 if email_sent else 0
+            rows.append({
+                'name': f'{u.first_name} {u.last_name}'.strip() or u.username,
+                'email': u.email,
+                'role': m.role,
+                'invite_url': invite_url,
+                'expires': (timezone.now() + timedelta(days=7)).strftime('%Y-%m-%d'),
+                'emailed': 'yes' if email_sent else 'no',
+            })
+            self.stdout.write(
+                f'    {"✓ emailed" if email_sent else "• link only"}  {u.email}'
+            )
+
+        out_path = out_path or f'invite_links_{org.slug}.csv'
+        try:
+            with open(out_path, 'w', newline='', encoding='utf-8') as fh:
+                w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+                w.writeheader()
+                w.writerows(rows)
+            self.stdout.write(self.style.SUCCESS(f'    Wrote {out_path}'))
+        except OSError as e:
+            # The links are the deliverable, so never lose them to a bad path.
+            self.stdout.write(self.style.ERROR(f'    Could not write {out_path}: {e}'))
+            self.stdout.write('    Links, for copying:')
+            for r in rows:
+                self.stdout.write(f"      {r['email']}  {r['invite_url']}")
+
+        if emailed < len(rows):
+            self.stdout.write(self.style.WARNING(
+                f'    {len(rows) - emailed} of {len(rows)} could not be emailed — '
+                f'send those links yourself. Each works once and expires in 7 days.'
+            ))
 
     def _generate_unique_code(self, org, name):
         """Generate a unique client code, appending a number if needed."""

@@ -363,6 +363,61 @@ Questions? Visit {help_url} or reply to this email.
     )
 
 
+# ---------- 2b. Password reset ----------
+
+def send_password_reset(
+    to_email: str,
+    user_name: str,
+    reset_url: str,
+    org_name: str = "TimeTracker",
+    expires_hours: int = 72,
+):
+    """Send a password reset link.
+
+    Deliberately says nothing about the account beyond the firm name: reset
+    mail reaches whoever controls the mailbox, which is not always the person
+    it was meant for.
+    """
+    plain = f"""Hi {user_name},
+
+Someone asked to reset the password for your {org_name} TimeTracker account.
+
+Choose a new one here:
+{reset_url}
+
+This link expires in {expires_hours} hours and can only be used once.
+
+If this wasn't you, ignore this email — nothing has changed.
+
+- The TimeTracker Team"""
+
+    body = f'''
+        <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
+        <p style="color:#475569;font-size:16px;line-height:1.5;">
+            Someone asked to reset the password for your <strong>{org_name}</strong> TimeTracker account.
+        </p>
+        {_btn(reset_url, "#2B9D90 0%,#237F74 100%", "Choose a new password &rarr;")}
+        <p style="color:#94a3b8;font-size:13px;text-align:center;margin-top:-8px;">
+            Expires in {expires_hours} hours &middot; works once
+        </p>
+        <p style="color:#64748b;font-size:14px;line-height:1.5;margin-top:24px;">
+            If this wasn't you, you can ignore this email — nothing has changed.
+        </p>
+        <p style="color:#94a3b8;font-size:12px;word-break:break-all;margin-top:16px;">
+            Button not working? Paste this into your browser:<br>{reset_url}
+        </p>'''
+
+    html = _wrap_html("#2B9D90 0%,#237F74 100%", "\U0001F511", "Reset your password", body)
+
+    return send_email(
+        to_email=to_email,
+        subject="Reset your TimeTracker password",
+        html_content=html,
+        plain_content=plain,
+        categories=["password_reset"],
+    )
+
+
 # ---------- 3. Daily timesheet review reminder ----------
 
 def send_timesheet_reminder(

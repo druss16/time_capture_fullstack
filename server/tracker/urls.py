@@ -56,6 +56,8 @@ urlpatterns = [
     # -------------------------------
     path("firm-signup/", views.firm_signup, name="firm_signup"),
     path("invite/", views.invite_team_member, name="invite_team_member"),
+    path("auth/password-reset/", csrf_exempt(views.password_reset_request), name="password_reset_request"),
+    path("auth/password-reset/confirm/", csrf_exempt(views.password_reset_confirm), name="password_reset_confirm"),
     path("invite/<str:token>/", views.invite_details, name="invite_details"),
     path("invite/<str:token>/accept/", csrf_exempt(views.accept_invitation), name="accept_invitation"),
 

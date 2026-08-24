@@ -6123,6 +6123,112 @@ def invite_team_member(request):
 
 
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_request(request):
+    """POST /api/auth/password-reset/ — start a reset.
+
+    Always answers the same way, whether or not the address is known. A
+    different response for a real account turns this endpoint into a way to
+    test which of a firm's addresses exist.
+
+    Accounts provisioned for MSI auto-pair have no usable password at all;
+    those get their setup invite resent instead of a reset, because a reset
+    link would land them on a page for changing something they never had.
+    """
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.http import urlsafe_base64_encode
+    from django.utils.encoding import force_bytes
+
+    same_answer = Response({
+        'ok': True,
+        'detail': 'If that address has an account, a reset link is on its way.',
+    })
+
+    email = (request.data.get('email') or '').strip()
+    if not email:
+        return Response({'error': 'Email is required.'}, status=400)
+
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
+    if not user:
+        return same_answer
+
+    membership = OrganizationMembership.objects.filter(
+        user=user
+    ).select_related('organization').first()
+    org_name = membership.organization.name if membership else 'TimeTracker'
+
+    # Never signed in and no password: this is an unfinished setup, not a
+    # forgotten password. Send the invite that was missing.
+    if not user.has_usable_password() and membership:
+        try:
+            from tracker.views_onboarding import _issue_invite
+            _issue_invite(
+                membership.organization, user, membership.role,
+                membership.invited_by or user,
+            )
+        except Exception as e:
+            logger.error(f'[RESET] Could not re-issue invite for {email}: {e}')
+        return same_answer
+
+    base = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai').rstrip('/')
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    reset_url = f'{base}/reset-password/{uid}/{token}'
+
+    try:
+        from tracker.email_service import send_password_reset
+        send_password_reset(
+            to_email=user.email,
+            user_name=user.first_name or user.username,
+            reset_url=reset_url,
+            org_name=org_name,
+        )
+    except Exception as e:
+        logger.error(f'[RESET] Could not send reset email to {email}: {e}')
+
+    return same_answer
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request):
+    """POST /api/auth/password-reset/confirm/ — finish a reset.
+
+    Django's token generator hashes the user's current password and last_login
+    into the token, so using a link invalidates it and a stale link cannot be
+    replayed. No model or migration needed for any of that.
+    """
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.http import urlsafe_base64_decode
+    from django.utils.encoding import force_str
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    uid = request.data.get('uid') or ''
+    token = request.data.get('token') or ''
+    password = request.data.get('password') or ''
+
+    try:
+        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
+    except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+        return Response({'error': 'This reset link is no longer valid.'}, status=400)
+
+    if not default_token_generator.check_token(user, token):
+        return Response({'error': 'This reset link has expired or was already used.'}, status=400)
+
+    try:
+        validate_password(password, user=user)
+    except DjangoValidationError as e:
+        return Response({'error': ' '.join(e.messages)}, status=400)
+
+    user.set_password(password)
+    user.save(update_fields=['password'])
+    logger.info(f'[RESET] Password reset completed for {user.email}')
+
+    return Response({'ok': True, 'detail': 'Your password has been changed. You can sign in now.'})
+
+
 def _lookup_invite(token):
     """Resolve a live invite token, or return None."""
     return Invitation.objects.select_related('organization', 'invited_by').filter(

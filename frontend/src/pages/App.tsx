@@ -53,6 +53,8 @@ const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
 const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
 const AcceptInvite = lazyWithRetry(() => import("./AcceptInvite"));
 const Welcome = lazyWithRetry(() => import("./Welcome"));
+const ForgotPassword = lazyWithRetry(() => import("./ForgotPassword"));
+const ResetPassword = lazyWithRetry(() => import("./ResetPassword"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
 
@@ -205,6 +207,8 @@ export default function App() {
                 <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />
                 <Route path="/invite/:token" element={<AcceptInvite />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password/:uid/:token" element={<ResetPassword />} />
 
                 {/* Auth */}
                 {!AUTH_DISABLED && (

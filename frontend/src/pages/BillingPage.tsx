@@ -11,6 +11,7 @@ import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
+import FeeBasis from '@/components/FeeBasis';
 import ClientProfitability from '@/components/ClientProfitability';
 import TimesheetHistory from '@/components/TimesheetHistory';
 import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
@@ -106,6 +107,14 @@ const SECTIONS: Record<Section, SectionConfig> = {
     eyebrow: 'Billing',
     title: 'Clients & Invoices',
     tabs: [
+      {
+        id: 'fees',
+        label: 'Set Fees',
+        description: 'Decide what to charge, by client',
+        requiredRoles: ['owner', 'admin', 'manager'],
+        icon: DollarSign,
+        requiredPlan: EXECUTIVE_PLANS,
+      },
       {
         id: 'billing',
         label: 'Client Billing',
@@ -425,6 +434,7 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
                 <>
                   {activeTab === 'timesheet' && <WeeklyTimesheet />}
                   {activeTab === 'approvals' && <ApprovalQueue />}
+                  {activeTab === 'fees'      && <FeeBasis />}
                   {activeTab === 'billing'   && <ClientSummary />}
                   {activeTab === 'invoices'  && (
                     <InvoiceManager

@@ -1,4 +1,5 @@
 import { primeCsrf, getCookie } from "@/lib/csrf";
+import { getViewAs, shouldAttachViewAs, VIEW_AS_HEADER } from "@/lib/viewAs";
 
 const RAW = (import.meta.env.VITE_API_BASE_URL || "http://localhost:7123").replace(/\/+$/, "");
 export const API_BASE = RAW.endsWith("/api") ? RAW : `${RAW}/api`;
@@ -75,18 +76,6 @@ function extractErrorMessage(body: any): string {
 // Safe JSON fetch with token-based auth
 // ============================================================================
 export async function safeFetchJson<T = any>(input: string, init: RequestInit = {}): Promise<T> {
-  // ── Org + user impersonation override ───────────────────────────────────
-  const impersonatingOrgId  = localStorage.getItem("impersonating_org_id");
-  const impersonatingUserId = localStorage.getItem("impersonating_user_id");
-  if (impersonatingOrgId) {
-    try {
-      const u = new URL(input, window.location.origin);
-      u.searchParams.set("org_id", impersonatingOrgId);
-      if (impersonatingUserId) u.searchParams.set("user_id", impersonatingUserId);
-      input = u.toString();
-    } catch {}
-  }
-
   const makeHeaders = () => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -94,6 +83,17 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
       "X-Requested-With": "XMLHttpRequest",
       ...(init.headers as Record<string, string> | undefined),
     };
+
+    // ── MavOps "View as" ──────────────────────────────────────────────────
+    // The server swaps request.user during authentication, so this one header
+    // is the entire client contract — no per-endpoint ?org_id=/?user_id= to
+    // append, and no view left behind because it never opted in.
+    // installViewAsFetch() also covers callers that bypass this helper; setting
+    // it here too means the header is present even before that patch installs.
+    const viewAs = getViewAs();
+    if (viewAs && shouldAttachViewAs(input)) {
+      headers[VIEW_AS_HEADER] = viewAs.userId;
+    }
 
     // v1.3.61: never send the token to auth endpoints — a stale token there
     // causes a 403 before the login view ever runs.

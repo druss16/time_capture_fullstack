@@ -281,6 +281,8 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-agent-user", 
     "x-agent-host",
     "x-admin-secret",
+    # MavOps "View as" — carries the target user on every request.
+    "x-view-as-user",
 
 ]
 

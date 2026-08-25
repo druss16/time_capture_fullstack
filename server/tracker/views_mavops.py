@@ -857,6 +857,63 @@ def mavops_org_members(request, org_id):
     })
 
 
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_view_as_check(request):
+    """
+    POST /api/mavops/view-as/   {"user_id": <id>}
+
+    Validates a view-as target and echoes back who the admin would become.
+
+    The swap itself needs no server state — the client sends X-View-As-User on
+    every request and auth re-validates it each time. This endpoint exists so
+    the admin console can refuse an impossible target up front with a readable
+    message, instead of the admin discovering it as a wall of 403s.
+
+    This path is exempt from the swap (see tracker.impersonation), so it always
+    runs as the real admin.
+    """
+    from tracker.impersonation import resolve_view_as_user
+    from rest_framework.exceptions import AuthenticationFailed
+
+    user_id = request.data.get("user_id")
+    if not user_id:
+        return Response({"error": "user_id is required."}, status=400)
+
+    # Re-run the real gate rather than duplicating its rules here, by handing it
+    # a stub carrying the requested target.
+    class _Probe:
+        META = {"HTTP_X_VIEW_AS_USER": str(user_id)}
+        path = "/api/whoami/"
+        method = "GET"
+
+    try:
+        target = resolve_view_as_user(_Probe(), request.user)
+    except AuthenticationFailed as exc:
+        return Response({"error": str(exc.detail)}, status=403)
+
+    if target.pk == request.user.pk:
+        return Response({"error": "That is already you."}, status=400)
+
+    membership = (
+        OrganizationMembership.objects
+        .filter(user=target)
+        .select_related("organization")
+        .first()
+    )
+    return Response({
+        "ok": True,
+        "user_id": target.id,
+        "username": target.username,
+        "full_name": (f"{target.first_name} {target.last_name}".strip() or target.username),
+        "email": target.email or "",
+        "role": membership.role if membership else None,
+        "org_id": membership.organization_id if membership else None,
+        "org_name": membership.organization.name if membership else None,
+    })
+
+
 # ── Firm-wide Daily Review (accuracy audit) ──────────────────────────────────
 
 @api_view(['GET'])

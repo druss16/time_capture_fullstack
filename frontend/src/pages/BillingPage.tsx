@@ -228,12 +228,10 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
         const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
         setUserInfo(response);
 
-        // ── Admin impersonation: always grant executive access ──
-        if (localStorage.getItem("impersonating_org_id")) {
-          setOrgPlan('executive');
-          setLoading(false);
-          return;
-        }
+        // No view-as special case: under MavOps view-as the server resolves
+        // request.user to the target, so the plan below is genuinely theirs.
+        // Faking 'executive' here would misreport what the customer is paying
+        // for on the very page that exists to show it.
 
         if (response.org_id) {
           try {

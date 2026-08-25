@@ -2899,6 +2899,7 @@ from rest_framework.response import Response
 def whoami(request):
     """Check authentication via token in database."""
     from tracker.models import AuthToken, OrganizationMembership
+    from tracker.impersonation import resolve_view_as_user, view_as_context
     
     # Helper to get org info AND role
     def get_user_info(user):
@@ -2931,6 +2932,11 @@ def whoami(request):
         
         return {
             "is_authenticated": True,
+            # When a MavOps admin is viewing as someone, every field below
+            # describes the TARGET user — their org, role, plan and vertical —
+            # so the whole UI gates itself exactly the way that user sees it.
+            # "view_as" names the real admin behind the swap.
+            "view_as": view_as_context(request),
             "username": user.username,
             "user_id": user.id,
             "email": user.email or "",
@@ -2955,7 +2961,8 @@ def whoami(request):
         try:
             auth_token = AuthToken.objects.select_related('user').get(token=token)
             if auth_token.is_valid():
-                user_data = get_user_info(auth_token.user)
+                effective_user = resolve_view_as_user(request, auth_token.user)
+                user_data = get_user_info(effective_user)
                 user_data["auth_source"] = "token"
                 user_data["host"] = None
                 user_data["device_id"] = None

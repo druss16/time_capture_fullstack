@@ -142,8 +142,15 @@ class BearerTokenAuthentication(BaseAuthentication):
             if not auth_token.is_valid():
                 logger.info("[BearerAuth] Token expired!")
                 raise AuthenticationFailed('Token expired')
-            
-            return (auth_token.user, auth_token)
+
+            # MavOps "View as": swap the identity here, once, so every view
+            # downstream sees the target user as request.user. Doing it in the
+            # auth layer is what makes view-as cover the whole app instead of
+            # only the handful of endpoints that opted into ?user_id=.
+            from tracker.impersonation import resolve_view_as_user
+            effective_user = resolve_view_as_user(request, auth_token.user)
+
+            return (effective_user, auth_token)
             
         except AuthToken.DoesNotExist:
             # Token not found in AuthToken table

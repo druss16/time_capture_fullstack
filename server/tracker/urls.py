@@ -440,6 +440,7 @@ urlpatterns = [
     path("analytics/tax-returns/", views_analytics_tax_returns.tax_returns_dashboard),
 
     path('mavops/orgs/<int:org_id>/members/', views_mavops.mavops_org_members),
+    path('mavops/view-as/',            views_mavops.mavops_view_as_check,    name='mavops-view-as'),
 
     path('mavops/daily-review/', views_mavops.mavops_daily_review, name='mavops-daily-review'),
 

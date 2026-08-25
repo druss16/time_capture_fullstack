@@ -57,6 +57,7 @@ const ForgotPassword = lazyWithRetry(() => import("./ForgotPassword"));
 const ResetPassword = lazyWithRetry(() => import("./ResetPassword"));
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
+import { getViewAs, stopViewAs } from "@/lib/viewAs";
 
 const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === "true";
 const queryClient = new QueryClient();
@@ -129,30 +130,63 @@ function AccountLayoutWrapper() {
 }
 
 
+/**
+ * Persistent "you are someone else right now" bar.
+ *
+ * It confirms the swap from the *server's* answer, not from localStorage: the
+ * identity shown is whoever whoami says request.user resolved to. If the header
+ * were ever being ignored, this bar would show the admin's own name and the
+ * mismatch would be visible immediately, rather than the admin quietly reading
+ * their own data believing it was the customer's.
+ */
 function ImpersonationBanner() {
-  const [orgId, setOrgId]     = useState(() => localStorage.getItem("impersonating_org_id"));
-  const [orgName, setOrgName] = useState(() => localStorage.getItem("impersonating_org_name"));
-  const [userName, setUserName] = useState(() => localStorage.getItem("impersonating_user_name"));
-  if (!orgId) return null;
+  const [session, setSession] = useState(() => getViewAs());
+  const [confirmed, setConfirmed] = useState<{ username: string; role?: string | null; org?: string | null } | null>(null);
+  const [drift, setDrift] = useState(false);
+
+  useEffect(() => {
+    if (!session) return;
+    safeFetchJson(`${API_BASE}/whoami/`)
+      .then((me: any) => {
+        setConfirmed({ username: me?.username, role: me?.role, org: me?.org_name });
+        // whoami reports the swap it actually applied. No view_as block means
+        // the server served this request as the admin.
+        setDrift(!me?.view_as?.active);
+      })
+      .catch(() => setDrift(true));
+  }, [session]);
+
+  const exit = () => {
+    stopViewAs();
+    setSession(null);
+    window.location.reload();
+  };
+
+  if (!session) return null;
+
+  const bg = drift ? "#7f1d1d" : "#92400e";
   return (
     <div style={{
-      background: "#92400e", color: "#fef3c7", padding: "9px 24px",
+      background: bg, color: "#fef3c7", padding: "9px 24px",
       fontSize: 13, display: "flex", justifyContent: "space-between",
-      alignItems: "center", fontFamily: "monospace",
+      alignItems: "center", fontFamily: "monospace", gap: 16,
     }}>
       <span>
-        👁 MavOps Admin — viewing as <strong>{userName}</strong> @ <strong>{orgName}</strong>
+        {drift ? (
+          <>⚠ View-as is NOT active on the server — this is your own account.</>
+        ) : (
+          <>
+            👁 MavOps Admin — acting as <strong>{confirmed?.username || session.userName}</strong>
+            {confirmed?.role ? <> ({confirmed.role})</> : null} @{" "}
+            <strong>{confirmed?.org || session.orgName}</strong>
+            {" — writes are real."}
+          </>
+        )}
       </span>
-      <button onClick={() => {
-        localStorage.removeItem("impersonating_org_id");
-        localStorage.removeItem("impersonating_org_name");
-        localStorage.removeItem("impersonating_user_id");
-        localStorage.removeItem("impersonating_user_name");
-        setOrgId(null); setOrgName(null); setUserName(null);
-        window.location.reload();
-      }} style={{
+      <button onClick={exit} style={{
         background: "none", border: "1px solid #fef3c7aa", color: "#fef3c7",
         padding: "3px 14px", cursor: "pointer", borderRadius: 4, fontSize: 12,
+        flexShrink: 0,
       }}>exit ×</button>
     </div>
   );

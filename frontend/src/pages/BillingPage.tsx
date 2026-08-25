@@ -1,7 +1,7 @@
 /**
  * BillingPage.tsx - Two sections behind plan/role gating.
  *  · section="timesheet"  →  My Timesheet · Approvals · History   (route /timesheet)
- *  · section="billing"    →  Client Billing · Invoices · Profitability (route /billing)
+ *  · section="billing"    →  Set Fees · Client Billing · Invoices (route /billing)
  * Professional plan: Timesheet section. Executive plan: Billing section + History.
  * No plan: Show subscribe prompt.
  */
@@ -12,7 +12,6 @@ import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import FeeBasis from '@/components/FeeBasis';
-import ClientProfitability from '@/components/ClientProfitability';
 import TimesheetHistory from '@/components/TimesheetHistory';
 import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
 import InvoiceManager from '@/components/InvoiceManager';
@@ -20,7 +19,6 @@ import {
   Clock,
   CheckSquare,
   DollarSign,
-  TrendingUp,
   FileText,
   Receipt,
   Lock,
@@ -129,14 +127,6 @@ const SECTIONS: Record<Section, SectionConfig> = {
         description: 'Manage imported & billed invoices',
         requiredRoles: ['owner', 'admin'],
         icon: Receipt,
-        requiredPlan: EXECUTIVE_PLANS,
-      },
-      {
-        id: 'profitability',
-        label: 'Profitability',
-        description: 'Analyze margins & efficiency',
-        requiredRoles: ['owner', 'admin'],
-        icon: TrendingUp,
         requiredPlan: EXECUTIVE_PLANS,
       },
     ],
@@ -318,7 +308,6 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
     switch (tabId) {
       case 'billing':       return 'Client Billing';
       case 'invoices':      return 'Invoice Management';
-      case 'profitability': return 'Profitability Analysis';
       case 'history':       return 'Timesheet History';
       default:              return 'This Feature';
     }
@@ -435,17 +424,14 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
                   {activeTab === 'fees'      && <FeeBasis />}
                   {activeTab === 'billing'   && <ClientSummary />}
                   {activeTab === 'invoices'  && (
-                    <InvoiceManager
-                      filter={invoiceFilter}
-                      onFilterClear={() => {
-                        setInvoiceFilter('');
-                        setSearchParams({ tab: 'invoices' });
-                      }}
-                    />
-                  )}
-                  {activeTab === 'profitability' && (
                     <div className="space-y-6">
-                      <ClientProfitability />
+                      <InvoiceManager
+                        filter={invoiceFilter}
+                        onFilterClear={() => {
+                          setInvoiceFilter('');
+                          setSearchParams({ tab: 'invoices' });
+                        }}
+                      />
                       <IntegrationInvoicePanel />
                     </div>
                   )}

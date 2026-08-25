@@ -1,7 +1,9 @@
 /**
  * IntegrationInvoicePanel.tsx
- * Pull invoices from QuickBooks/Xero for profitability comparison
- * Lives inside the Profitability tab
+ * Pull invoices from QuickBooks/Xero.
+ * Lives in the Invoices tab. What it imports is what Set Fees reads back as
+ * "billed last year" — the anchor a partner sets this period's fee against —
+ * so this is the way that history gets into the product.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
@@ -162,7 +164,7 @@ const IntegrationInvoicePanel: React.FC = () => {
             No Billing System Connected
           </h3>
           <p className="text-slate-600 font-medium mb-6 max-w-sm">
-            Connect QuickBooks Online or Xero to pull invoice data for profitability analysis.
+            Connect QuickBooks Online or Xero to pull in what you've actually billed.
           </p>
           <a
             href="/account"
@@ -199,7 +201,7 @@ const IntegrationInvoicePanel: React.FC = () => {
           <div>
             <h3 className="text-base font-extrabold text-slate-900">Invoice Data</h3>
             <p className="text-sm text-slate-500 font-medium">
-              Pull invoices for profitability comparison
+              Pull invoices so past fees show up alongside tracked time
             </p>
           </div>
         </div>

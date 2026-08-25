@@ -4,9 +4,9 @@
  * page mounted and drapes a faded, non-interactive "cloak" over it with an
  * upgrade CTA when the org is not on the Executive plan.
  *
- * Plan is resolved the same way as BillingPage: admin impersonation forces
- * executive, otherwise read /settings/org/ with a /billing/subscription-status/
- * fallback.
+ * Plan is resolved the same way as BillingPage: read /settings/org/ with a
+ * /billing/subscription-status/ fallback. Under MavOps view-as those endpoints
+ * already answer for the target user, so the gate reflects what they see.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -24,12 +24,11 @@ export default function ExecutiveGate({ children }: ExecutiveGateProps) {
 
   useEffect(() => {
     const checkPlan = async () => {
-      // Admin impersonation: always grant executive access.
-      if (localStorage.getItem('impersonating_org_id')) {
-        setStatus('unlocked');
-        return;
-      }
-
+      // No view-as special case on purpose. request.user is now the target
+      // user server-side, so /settings/org/ returns *their* org's plan — and an
+      // admin viewing as a Starter user should hit the same paywall that user
+      // hits. Forcing 'unlocked' here would show the admin a page the customer
+      // has never seen, which defeats the point of viewing as them.
       let plan: PlanType | undefined;
       try {
         const org = await safeFetchJson<{ plan?: PlanType }>(`${API_BASE}/settings/org/`);

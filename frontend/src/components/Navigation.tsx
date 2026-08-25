@@ -84,24 +84,19 @@ export default function Navigation() {
     navigate(path);
   };
 
-  const impersonatingUserName = localStorage.getItem("impersonating_user_name");
-  const impersonatingOrgName  = localStorage.getItem("impersonating_org_name");
+  // No localStorage patch-over here any more: under MavOps view-as, whoami
+  // already answers as the target user, so userInfo IS the person being viewed
+  // — name, org, role and the nav items those gate. The banner above the nav
+  // is what says whose account this is.
+  const displayName = userInfo?.first_name
+    ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim()
+    : userInfo?.username || '';
 
-  const displayName = impersonatingUserName
-    ? impersonatingUserName
-    : userInfo?.first_name 
-      ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim()
-      : userInfo?.username || '';
+  const orgDisplayName = userInfo?.org_name;
 
-  const orgDisplayName = impersonatingUserName
-    ? impersonatingOrgName || userInfo?.org_name
-    : userInfo?.org_name;
-
-  const initials = impersonatingUserName
-    ? impersonatingUserName.charAt(0).toUpperCase()
-    : userInfo?.first_name 
-      ? `${userInfo.first_name[0]}${userInfo.last_name?.[0] || ''}`.toUpperCase()
-      : userInfo?.username?.charAt(0).toUpperCase() || '?';
+  const initials = userInfo?.first_name
+    ? `${userInfo.first_name[0]}${userInfo.last_name?.[0] || ''}`.toUpperCase()
+    : userInfo?.username?.charAt(0).toUpperCase() || '?';
 
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },

@@ -116,12 +116,12 @@ export default function Settings() {
       .catch(() => {});
   }, []);
 
-  // Load org plan once
+  // Load org plan once.
+  // No view-as special case: this used to force 'executive' and return early,
+  // which also skipped setOrgInfo — so under view-as the page showed a plan the
+  // firm doesn't have AND never loaded their org at all. The server now resolves
+  // request.user to the target, so this one call is correct for both cases.
   useEffect(() => {
-    if (localStorage.getItem("impersonating_org_id")) {
-      setOrgPlan('executive');
-      return;
-    }
     safeFetchJson<OrgInfo>(`${API_BASE}/settings/org/`)
       .then(org => { setOrgInfo(org); setOrgPlan(org.plan || 'professional'); })
       .catch(() => {});

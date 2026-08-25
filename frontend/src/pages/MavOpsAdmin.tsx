@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from "react";
+import { startViewAs, stopViewAs } from "@/lib/viewAs";
 
 import {
   TemplatePickerModal,
@@ -2750,25 +2751,44 @@ export default function MavOpsAdmin() {
     } catch { flash("Failed to resolve.", "err"); }
   };
 
-  const impersonateOrg = (org: Org, userId: number, username: string) => {
-    localStorage.setItem("impersonating_org_id", String(org.id));
-    localStorage.setItem("impersonating_org_name", org.name);
-    localStorage.setItem("impersonating_user_id", String(userId));
-    localStorage.setItem("impersonating_user_name", username);
-    setImpersonatingOrg({ id: org.id, name: org.name });
-    setViewAsPickerOrg(null);
-    window.open("/daily", "_blank");
-    flash(`✓ Opening as ${username} @ ${org.name}`);
+  // Ask the server to validate the target before switching. The swap itself is
+  // stateless (a header on each request, re-checked by auth), but validating up
+  // front turns "deactivated user" or "cannot view as a superuser" into one
+  // readable message instead of a new tab full of 403s.
+  const impersonateOrg = async (org: Org, userId: number, username: string) => {
+    try {
+      // Deliberately not apiFetch: that helper throws a bare `HTTP 403`, and
+      // the whole point here is to show the server's reason.
+      const res = await fetch(`${API}/mavops/view-as/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const check = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(check?.error || `HTTP ${res.status}`);
+      startViewAs({
+        userId: String(userId),
+        userName: check.username || username,
+        orgId: String(check.org_id ?? org.id),
+        orgName: check.org_name || org.name,
+      });
+      setImpersonatingOrg({ id: org.id, name: org.name });
+      setViewAsPickerOrg(null);
+      window.open("/daily", "_blank");
+      flash(`✓ Opening as ${check.full_name || username}${check.role ? ` (${check.role})` : ""} @ ${check.org_name || org.name}`);
+    } catch (e: any) {
+      flash(`View-as failed: ${e?.message || "unknown error"}`, "err");
+    }
   };
 
   const clearImpersonation = () => {
-    localStorage.removeItem("impersonating_org_id");
-    localStorage.removeItem("impersonating_org_name");
-    localStorage.removeItem("impersonating_user_id");
-    localStorage.removeItem("impersonating_user_name");
+    stopViewAs();
     setImpersonatingOrg(null);
     setViewAsPickerOrg(null);
-    flash("✓ Impersonation cleared");
+    flash("✓ View-as cleared");
   };
 
   useEffect(() => {

@@ -40,13 +40,14 @@ OK, WARN, BAD = 'ok', 'warn', 'bad'
 
 ICON = {OK: '✓', WARN: '⚠', BAD: '✗'}
 
-CANONICAL = [
-    'Tax Preparation', 'Tax Planning', 'Tax Research', 'Tax Compliance',
-    'Accounting/Bookkeeping', 'Financial Statement Prep', 'Audit/Assurance',
-    'Payroll Services', 'Advisory', 'Document Management', 'Research',
-    'Email/Communication', 'Meetings', 'Administration', 'Billing/Admin',
-    'Training', 'General Client Work', 'Idle', 'Personal/Non-Billable',
-]
+# The canonical list is per-industry — a law firm emits Depositions and
+# Discovery, never Tax Preparation — so it is read from the org rather than
+# hardcoded. Hardcoding the CPA list made this check meaningless for every
+# other vertical: it reported 0/19 resolving against categories the firm's
+# classifier could not emit in the first place.
+def canonical_for(org):
+    from tracker.industry_categories import get_categories_for_industry
+    return get_categories_for_industry(org.industry_type) or []
 
 
 class Command(BaseCommand):
@@ -266,20 +267,27 @@ class Command(BaseCommand):
             self._line('category mappings', BAD, f'resolver import failed: {e}', quiet)
             return [(BAD, 'category mappings', f'could not import the resolver: {e}')]
 
+        canonical = canonical_for(org)
+        if not canonical:
+            self._line('category mappings', BAD, 'no canonical list for this industry', quiet)
+            return [(BAD, 'category mappings',
+                     f'industry_type "{org.industry_type}" has no category list — fix that first')]
+
         missing = []
-        for cat in CANONICAL:
+        for cat in canonical:
             try:
                 if not resolve_task_type_for_category(org, cat):
                     missing.append(cat)
             except Exception:
                 missing.append(cat)
 
+        total = len(canonical)
         if missing:
-            self._line('category mappings', BAD, f'{len(CANONICAL) - len(missing)}/{len(CANONICAL)} resolve', quiet)
+            self._line('category mappings', BAD, f'{total - len(missing)}/{total} resolve', quiet)
             shown = ', '.join(missing[:4]) + (f' +{len(missing) - 4} more' if len(missing) > 4 else '')
             return [(BAD, 'category mappings',
                      f'{len(missing)} unmapped ({shown}) — add them and re-run provision_firm --category-mappings')]
-        self._line('category mappings', OK, f'{len(CANONICAL)}/{len(CANONICAL)} resolve', quiet)
+        self._line('category mappings', OK, f'{total}/{total} resolve', quiet)
         return []
 
     def _check_pairing(self, org, quiet):

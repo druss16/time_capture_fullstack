@@ -30,7 +30,10 @@ type Day = {
   checkable: boolean;
 };
 
+export type Submission = { mode: 'push' | 'review' | 'auto' | 'off'; reason: string };
+
 type Payload = {
+  submission?: Submission;
   week_start: string;
   captured_hours: number;
   gap_hours: number;
@@ -60,7 +63,15 @@ const ICON_TONE: Record<DayState, string> = {
   unknown: "text-muted-foreground/50",
 };
 
-export default function WeekCoverage({ weekStart }: { weekStart?: string }) {
+export default function WeekCoverage({
+  weekStart,
+  onSubmission,
+}: {
+  weekStart?: string;
+  /** Lifted so the timesheet below can gate its submit control off the same
+   *  response instead of repeating this query. */
+  onSubmission?: (s: Submission | null) => void;
+}) {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -70,13 +81,15 @@ export default function WeekCoverage({ weekStart }: { weekStart?: string }) {
     setErr(null);
     try {
       const qs = weekStart ? `?start=${weekStart}` : "";
-      setData(await safeFetchJson<Payload>(`${API_BASE}/billing/week-coverage/${qs}`));
+      const d = await safeFetchJson<Payload>(`${API_BASE}/billing/week-coverage/${qs}`);
+      setData(d);
+      onSubmission?.(d.submission ?? null);
     } catch (e: any) {
       setErr(e?.message || "Couldn't check this week");
     } finally {
       setLoading(false);
     }
-  }, [weekStart]);
+  }, [weekStart, onSubmission]);
 
   useEffect(() => {
     load();

@@ -31,12 +31,13 @@ Caveats the endpoint is honest about rather than hiding:
 from datetime import date, timedelta
 from collections import defaultdict
 
+from django.db import models
 from django.db.models import Sum, Min, Max
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from tracker.models import Block, RawEvent, OrganizationMembership
+from tracker.models import Block, RawEvent, OrganizationMembership, Timesheet
 
 # Raw events are pruned on a 30-day cycle; past that there is nothing to
 # compare against and saying "looks complete" would be a guess.
@@ -48,6 +49,55 @@ MATERIAL_GAP_MINUTES = 45
 # A day the agent barely saw at all is a different problem from a day with a
 # hole in it — usually the machine was off, or the agent was not running.
 QUIET_DAY_ACTIVE_MINUTES = 30
+
+
+def _submission_mode(org) -> dict:
+    """Does this firm actually use submit/approve, and does it matter?
+
+    Three genuinely different products share this page. Showing every firm the
+    same "Submit for Approval" button tells the majority to perform a ritual
+    they have never performed — org21 has 320 of 350 hours unapproved — which
+    teaches people the screen is not talking to them.
+
+    Read from what the firm has configured and done, not from a preference
+    nobody set:
+
+      push   — time reaches a billing system on submit or approve. The button
+               is the mechanism; it must be prominent.
+      review — somebody has actually approved a timesheet here, so the workflow
+               is real and worth keeping in front of people.
+      auto   — the firm auto-submits on a schedule; a manual button is noise,
+               though the fact that it happens is worth saying.
+      off    — no evidence anyone submits. Keep it available, quietly, rather
+               than making it the point of the page.
+    """
+    if getattr(org, 'auto_submit_timesheets', False):
+        return {'mode': 'auto', 'reason': 'This week submits itself on Tuesday morning.'}
+
+    # A live billing integration whose push hangs off the transition.
+    try:
+        from tracker.models import Integration
+        pushes = Integration.objects.filter(
+            organization=org, provider__in=('clio',),
+        ).exists()
+    except Exception:
+        pushes = False
+    if pushes:
+        trigger = getattr(org, 'clio_push_trigger', 'approve') or 'approve'
+        return {
+            'mode': 'push',
+            'reason': f'Submitting sends your time to Clio (on {trigger}).',
+        }
+
+    # Has anyone here ever really approved someone else's week? Owners
+    # auto-approve their own on submit, so that alone proves nothing.
+    real_approval = Timesheet.objects.filter(
+        org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
+    ).exclude(approved_by=models.F('user')).exists()
+    if real_approval:
+        return {'mode': 'review', 'reason': 'Your firm reviews timesheets before they are final.'}
+
+    return {'mode': 'off', 'reason': ''}
 
 
 def _monday(d: date) -> date:
@@ -155,6 +205,7 @@ def week_coverage(request):
 
     captured_total = sum(d["captured_hours"] for d in days)
     return Response({
+        "submission": _submission_mode(org),
         "week_start": start.isoformat(),
         "week_end": end.isoformat(),
         "user_id": user.id,

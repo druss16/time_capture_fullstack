@@ -9,7 +9,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
-import WeekCoverage from '@/components/WeekCoverage';
+import WeekCoverage, { type Submission } from '@/components/WeekCoverage';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import FeeBasis from '@/components/FeeBasis';
@@ -207,6 +207,8 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
   const tabInSection = (id: string | null): boolean => !!id && sectionTabs.some((t) => t.id === id);
 
   const [searchParams, setSearchParams] = useSearchParams();
+  // Whether this firm actually submits, learned from the coverage response.
+  const [submission, setSubmission] = useState<Submission | null>(null);
   const [activeTab, setActiveTab] = useState<string>(
     tabInSection(searchParams.get('tab')) ? (searchParams.get('tab') as string) : defaultTab
   );
@@ -426,8 +428,8 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
                 <>
                   {activeTab === 'timesheet' && (
                     <div className="space-y-4">
-                      <WeekCoverage />
-                      <WeeklyTimesheet />
+                      <WeekCoverage onSubmission={setSubmission} />
+                      <WeeklyTimesheet submission={submission} />
                     </div>
                   )}
                   {activeTab === 'approvals' && <ApprovalQueue />}

@@ -750,12 +750,22 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
       if (mode === 'auto') {
-        // Nothing to press: it goes on its own. Say so instead of implying
-        // the week is waiting on the person reading this.
+        // It goes on its own, so nobody should think the week is waiting on
+        // them — but saying that is not a reason to take the action away.
+        // Anyone finishing on Friday still needs a way to send it now rather
+        // than wait for Tuesday.
         return (
-          <span className="text-[12.5px] text-muted-foreground">
-            {submission?.reason || 'This week submits itself.'}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-[12.5px] text-muted-foreground">
+              {submission?.reason || 'This week submits itself.'}
+            </span>
+            <button
+              onClick={() => setShowSubmitModal(true)}
+              className="px-3 py-1.5 border border-border text-muted-foreground text-[12.5px] font-semibold rounded-lg hover:bg-muted/60 transition-all flex items-center gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Send it now
+            </button>
+          </div>
         );
       }
       // Submission is available any day of the week; the confirm modal guards

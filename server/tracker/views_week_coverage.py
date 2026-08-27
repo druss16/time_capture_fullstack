@@ -51,61 +51,74 @@ MATERIAL_GAP_MINUTES = 45
 QUIET_DAY_ACTIVE_MINUTES = 30
 
 
+# Tools whose push is wired to a timesheet transition, and what to call them
+# in front of a person. Adding another billing integration means adding it here
+# rather than teaching the UI a second special case.
+PUSH_DESTINATIONS = [('clio', 'Clio')]
+
+
 def _submission_mode(org) -> dict:
-    """What submitting actually does at this firm, and whether anyone must act.
+    """What pressing submit actually does at this firm.
 
-    These are two independent facts and an earlier version treated them as
-    alternatives, checking auto-submit first and returning before it ever looked
-    at the billing integration. A firm with Clio connected AND auto-submit on
-    was therefore told only "this week submits itself" — omitting that
-    submitting is what sends their time to Clio, which is the part that matters.
+    The button should name the furthest TRUE consequence of pressing it, not a
+    ritual. "Submit for Approval" is right when a human is genuinely waiting;
+    it is theatre at a firm where nobody approves anything, and it is simply
+    wrong at a firm where pressing it puts time in Clio.
 
-      mode   what submitting is FOR, which sets how prominent the control is:
-             push   → it moves time into a billing system
-             review → a human here genuinely approves other people's weeks
-             off    → no evidence anyone submits
-      auto   whether it happens on a schedule without anyone pressing anything.
-
-    Both travel together, because "it goes by itself on Tuesday" and "this is
-    what puts your time in Clio" are both true at once and a person needs both.
+    Returns:
+      destination      what receives the time, or None. A NAME, so the label
+                       can say "Send to Clio" rather than something generic.
+      sends_on_submit  whether SUBMITTING is what sends it. On the 'approve'
+                       trigger it is not — approving is — so promising a send
+                       would be a lie.
+      has_approver     somebody here really approves other people's weeks.
+      auto             it also happens on a schedule without anyone acting.
     """
     auto = bool(getattr(org, 'auto_submit_timesheets', False))
 
-    pushes = False
+    destination, sends_on_submit = None, False
     try:
         from tracker.models import Integration
-        pushes = Integration.objects.filter(
-            organization=org, provider='clio',
-        ).exists()
-    except Exception:
-        pushes = False
-
-    if pushes:
-        # Which transition fires the push matters: on 'approve', submitting is
-        # necessary but NOT sufficient, and saying "submitting sends your time"
-        # would be wrong.
-        trigger = (getattr(org, 'clio_push_trigger', 'approve') or 'approve')
-        if trigger == 'submit':
-            what = 'Submitting sends your time to Clio.'
-        else:
-            what = 'Your time reaches Clio once a manager approves it.'
-        mode = 'push'
-    else:
-        # Owners auto-approve their own week inside submit(), so self-approval
-        # proves nothing about whether a workflow exists.
-        real_approval = Timesheet.objects.filter(
-            org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
-        ).exclude(approved_by=models.F('user')).exists()
-        mode = 'review' if real_approval else 'off'
-        what = (
-            'Your firm reviews timesheets before they are final.'
-            if real_approval else ''
+        connected = set(
+            Integration.objects.filter(organization=org).values_list('provider', flat=True)
         )
+        for provider, label in PUSH_DESTINATIONS:
+            if provider in connected:
+                destination = label
+                trigger = (getattr(org, 'clio_push_trigger', 'approve') or 'approve')
+                sends_on_submit = trigger in ('submit', 'continuous')
+                break
+    except Exception:
+        destination = None
+
+    # Owners auto-approve their own week inside submit(), so self-approval
+    # proves nothing about whether a workflow exists.
+    has_approver = Timesheet.objects.filter(
+        org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
+    ).exclude(approved_by=models.F('user')).exists()
+
+    if destination:
+        mode = 'push'
+        what = (
+            f'Submitting sends your time to {destination}.'
+            if sends_on_submit
+            else f'Your time reaches {destination} once a manager approves it.'
+        )
+    elif has_approver:
+        mode, what = 'review', 'Your firm reviews timesheets before they are final.'
+    else:
+        mode, what = 'off', ''
 
     when = 'This week submits itself on Tuesday morning.' if auto else ''
-    reason = ' '.join(p for p in (what, when) if p)
 
-    return {'mode': mode, 'auto': auto, 'reason': reason}
+    return {
+        'mode': mode,
+        'auto': auto,
+        'destination': destination,
+        'sends_on_submit': sends_on_submit,
+        'has_approver': has_approver,
+        'reason': ' '.join(p for p in (what, when) if p),
+    }
 
 
 def _monday(d: date) -> date:

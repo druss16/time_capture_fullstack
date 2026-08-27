@@ -361,7 +361,14 @@ type SubmissionMode = 'push' | 'review' | 'off';
 interface WeeklyTimesheetProps {
   /** How this firm actually uses submit/approve. Absent = treat as 'review'
    *  so nothing regresses for a caller that has not been updated. */
-  submission?: { mode: SubmissionMode; auto: boolean; reason: string } | null;
+  submission?: {
+    mode: SubmissionMode;
+    auto: boolean;
+    destination: string | null;
+    sends_on_submit: boolean;
+    has_approver: boolean;
+    reason: string;
+  } | null;
 }
 
 const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
@@ -747,6 +754,21 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // page. Absent mode behaves as before.
   const mode: SubmissionMode = submission?.mode ?? 'review';
   const auto = submission?.auto ?? false;
+
+  // Name the furthest TRUE consequence of pressing it. "Submit for Approval"
+  // is right when a human is genuinely waiting, theatre where nobody approves
+  // anything, and wrong where pressing it puts time in a billing system.
+  const submitLabel = (() => {
+    if (submission?.destination && submission.sends_on_submit) {
+      return `Send to ${submission.destination}`;
+    }
+    if (mode === 'push' || mode === 'review' || submission?.has_approver) {
+      return 'Submit for Approval';
+    }
+    // Nothing receives it and nobody reviews it, so submitting only marks the
+    // week done. Saying so beats inventing a recipient.
+    return 'Mark week complete';
+  })();
   // One button style, always. Dimming it to signal "you don't have to" made it
   // hard to see, which is a worse problem than the one it solved: an action
   // that is available should look available. What differs per firm is the
@@ -763,7 +785,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           className="flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-primary/30 active:scale-[0.98]"
         >
           <CheckCircle2 className="w-4 h-4" />
-          {auto ? 'Send it now' : mode === 'off' ? 'Submit week' : 'Submit for Approval'}
+          {submitLabel}
         </button>
       );
     }

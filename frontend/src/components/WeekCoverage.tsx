@@ -30,7 +30,14 @@ type Day = {
   checkable: boolean;
 };
 
-export type Submission = { mode: 'push' | 'review' | 'auto' | 'off'; reason: string };
+export type Submission = {
+  /** What submitting is FOR — sets how prominent the control should be. */
+  mode: 'push' | 'review' | 'off';
+  /** Whether it also happens on a schedule. Independent of mode: a firm can
+   *  push to Clio AND auto-submit, and a person needs to know both. */
+  auto: boolean;
+  reason: string;
+};
 
 type Payload = {
   submission?: Submission;

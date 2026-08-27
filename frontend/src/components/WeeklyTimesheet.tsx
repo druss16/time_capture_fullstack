@@ -356,12 +356,12 @@ const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
 
 type ViewMode = 'summary' | 'byday' | 'work_summary';
 
-type SubmissionMode = 'push' | 'review' | 'auto' | 'off';
+type SubmissionMode = 'push' | 'review' | 'off';
 
 interface WeeklyTimesheetProps {
   /** How this firm actually uses submit/approve. Absent = treat as 'review'
    *  so nothing regresses for a caller that has not been updated. */
-  submission?: { mode: SubmissionMode; reason: string } | null;
+  submission?: { mode: SubmissionMode; auto: boolean; reason: string } | null;
 }
 
 const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
@@ -746,45 +746,35 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // perform a ritual it does not perform — which teaches people to ignore the
   // page. Absent mode behaves as before.
   const mode: SubmissionMode = submission?.mode ?? 'review';
+  const auto = submission?.auto ?? false;
+  // Prominence follows what submitting is FOR. Scheduling only changes whether
+  // the person has to act — never whether they may.
+  const quiet = auto || mode === 'off';
 
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
-      if (mode === 'auto') {
-        // It goes on its own, so nobody should think the week is waiting on
-        // them — but saying that is not a reason to take the action away.
-        // Anyone finishing on Friday still needs a way to send it now rather
-        // than wait for Tuesday.
-        return (
-          <div className="flex items-center gap-3">
-            <span className="text-[12.5px] text-muted-foreground">
-              {submission?.reason || 'This week submits itself.'}
-            </span>
-            <button
-              onClick={() => setShowSubmitModal(true)}
-              className="px-3 py-1.5 border border-border text-muted-foreground text-[12.5px] font-semibold rounded-lg hover:bg-muted/60 transition-all flex items-center gap-1.5"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" /> Send it now
-            </button>
-          </div>
-        );
-      }
       // Submission is available any day of the week; the confirm modal guards
       // against accidental early submits.
-      const quiet = mode === 'off';
-      return (
+      const button = (
         <button
           onClick={() => setShowSubmitModal(true)}
-          title={submission?.reason || undefined}
           className={cn(
-            'px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5',
+            'text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5',
             quiet
-              ? 'border border-border text-muted-foreground hover:bg-muted/60'
-              : 'bg-primary text-primary-foreground hover:opacity-90'
+              ? 'px-3 py-1.5 border border-border text-muted-foreground text-[12.5px] hover:bg-muted/60'
+              : 'px-4 py-2 bg-primary text-primary-foreground hover:opacity-90'
           )}
         >
-          <CheckCircle2 className="w-4 h-4" />
-          {quiet ? 'Submit anyway' : 'Submit for Approval'}
+          <CheckCircle2 className={quiet ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+          {auto ? 'Send it now' : mode === 'off' ? 'Submit anyway' : 'Submit for Approval'}
         </button>
+      );
+      if (!submission?.reason) return button;
+      return (
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          <span className="text-[12.5px] text-muted-foreground">{submission.reason}</span>
+          {button}
+        </div>
       );
     }
     if (timesheetData?.status === 'rejected') {

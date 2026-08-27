@@ -52,52 +52,60 @@ QUIET_DAY_ACTIVE_MINUTES = 30
 
 
 def _submission_mode(org) -> dict:
-    """Does this firm actually use submit/approve, and does it matter?
+    """What submitting actually does at this firm, and whether anyone must act.
 
-    Three genuinely different products share this page. Showing every firm the
-    same "Submit for Approval" button tells the majority to perform a ritual
-    they have never performed — org21 has 320 of 350 hours unapproved — which
-    teaches people the screen is not talking to them.
+    These are two independent facts and an earlier version treated them as
+    alternatives, checking auto-submit first and returning before it ever looked
+    at the billing integration. A firm with Clio connected AND auto-submit on
+    was therefore told only "this week submits itself" — omitting that
+    submitting is what sends their time to Clio, which is the part that matters.
 
-    Read from what the firm has configured and done, not from a preference
-    nobody set:
+      mode   what submitting is FOR, which sets how prominent the control is:
+             push   → it moves time into a billing system
+             review → a human here genuinely approves other people's weeks
+             off    → no evidence anyone submits
+      auto   whether it happens on a schedule without anyone pressing anything.
 
-      push   — time reaches a billing system on submit or approve. The button
-               is the mechanism; it must be prominent.
-      review — somebody has actually approved a timesheet here, so the workflow
-               is real and worth keeping in front of people.
-      auto   — the firm auto-submits on a schedule; a manual button is noise,
-               though the fact that it happens is worth saying.
-      off    — no evidence anyone submits. Keep it available, quietly, rather
-               than making it the point of the page.
+    Both travel together, because "it goes by itself on Tuesday" and "this is
+    what puts your time in Clio" are both true at once and a person needs both.
     """
-    if getattr(org, 'auto_submit_timesheets', False):
-        return {'mode': 'auto', 'reason': 'This week submits itself on Tuesday morning.'}
+    auto = bool(getattr(org, 'auto_submit_timesheets', False))
 
-    # A live billing integration whose push hangs off the transition.
+    pushes = False
     try:
         from tracker.models import Integration
         pushes = Integration.objects.filter(
-            organization=org, provider__in=('clio',),
+            organization=org, provider='clio',
         ).exists()
     except Exception:
         pushes = False
+
     if pushes:
-        trigger = getattr(org, 'clio_push_trigger', 'approve') or 'approve'
-        return {
-            'mode': 'push',
-            'reason': f'Submitting sends your time to Clio (on {trigger}).',
-        }
+        # Which transition fires the push matters: on 'approve', submitting is
+        # necessary but NOT sufficient, and saying "submitting sends your time"
+        # would be wrong.
+        trigger = (getattr(org, 'clio_push_trigger', 'approve') or 'approve')
+        if trigger == 'submit':
+            what = 'Submitting sends your time to Clio.'
+        else:
+            what = 'Your time reaches Clio once a manager approves it.'
+        mode = 'push'
+    else:
+        # Owners auto-approve their own week inside submit(), so self-approval
+        # proves nothing about whether a workflow exists.
+        real_approval = Timesheet.objects.filter(
+            org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
+        ).exclude(approved_by=models.F('user')).exists()
+        mode = 'review' if real_approval else 'off'
+        what = (
+            'Your firm reviews timesheets before they are final.'
+            if real_approval else ''
+        )
 
-    # Has anyone here ever really approved someone else's week? Owners
-    # auto-approve their own on submit, so that alone proves nothing.
-    real_approval = Timesheet.objects.filter(
-        org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
-    ).exclude(approved_by=models.F('user')).exists()
-    if real_approval:
-        return {'mode': 'review', 'reason': 'Your firm reviews timesheets before they are final.'}
+    when = 'This week submits itself on Tuesday morning.' if auto else ''
+    reason = ' '.join(p for p in (what, when) if p)
 
-    return {'mode': 'off', 'reason': ''}
+    return {'mode': mode, 'auto': auto, 'reason': reason}
 
 
 def _monday(d: date) -> date:

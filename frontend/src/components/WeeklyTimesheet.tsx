@@ -747,29 +747,25 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // page. Absent mode behaves as before.
   const mode: SubmissionMode = submission?.mode ?? 'review';
   const auto = submission?.auto ?? false;
-  // Prominence follows what submitting is FOR. Scheduling only changes whether
-  // the person has to act — never whether they may.
-  const quiet = auto || mode === 'off';
+  // One button style, always. Dimming it to signal "you don't have to" made it
+  // hard to see, which is a worse problem than the one it solved: an action
+  // that is available should look available. What differs per firm is the
+  // LABEL and the note beside it, which is where that context belongs — a
+  // button nobody can find communicates nothing at all.
 
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
       // Submission is available any day of the week; the confirm modal guards
       // against accidental early submits.
-      const button = (
+      return (
         <button
           onClick={() => setShowSubmitModal(true)}
-          className={cn(
-            'text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5',
-            quiet
-              ? 'px-3 py-1.5 border border-border text-muted-foreground text-[12.5px] hover:bg-muted/60'
-              : 'px-4 py-2 bg-primary text-primary-foreground hover:opacity-90'
-          )}
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition-all hover:bg-primary/90 hover:shadow-primary/30 active:scale-[0.98]"
         >
-          <CheckCircle2 className={quiet ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
-          {auto ? 'Send it now' : mode === 'off' ? 'Submit anyway' : 'Submit for Approval'}
+          <CheckCircle2 className="w-4 h-4" />
+          {auto ? 'Send it now' : mode === 'off' ? 'Submit week' : 'Submit for Approval'}
         </button>
       );
-      return button;
     }
     if (timesheetData?.status === 'rejected') {
       return (

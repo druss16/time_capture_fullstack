@@ -1,0 +1,220 @@
+"""
+tracker/views_week_coverage.py
+
+Is this person's week actually whole?
+
+Daily Review answers "is this time on the right client?" — a question about
+*attribution*, and one the product has always been able to answer, because a
+mis-attributed block is visible: it is sitting there on the wrong client.
+
+Nothing answered the other question. Time that was never captured is invisible
+by definition. It does not appear on a wrong client, it does not sit in a queue,
+it simply is not there — and under a fee-setting model that is the expensive
+failure. A partner who bills from 47 hours when the real number was 62 has
+underbilled permanently, and no screen would have told them.
+
+The signal is RawEvent. Blocks are compacted from raw events, so the two can be
+compared: raw events are what the agent saw, blocks are what survived into
+reviewable time. A day where the agent watched six active hours and produced
+two hours of blocks is a day with a hole in it.
+
+Caveats the endpoint is honest about rather than hiding:
+
+  · Raw events are pruned after 30 days, so older weeks genuinely cannot be
+    checked. Those days report `checkable: false` instead of a fake clean bill.
+  · Idle intervals (app_name == "idle") are excluded from the active total —
+    counting them would flag lunch as missing work.
+  · A gap is not automatically an error. Short gaps are compaction rounding and
+    suppressed sub-minute activity. Only a material shortfall is worth raising.
+"""
+
+from datetime import date, timedelta
+from collections import defaultdict
+
+from django.db import models
+from django.db.models import Sum, Min, Max
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from tracker.models import Block, RawEvent, OrganizationMembership, Timesheet
+
+# Raw events are pruned on a 30-day cycle; past that there is nothing to
+# compare against and saying "looks complete" would be a guess.
+RAW_RETENTION_DAYS = 28
+
+# Below this, a shortfall is compaction rounding rather than lost work.
+MATERIAL_GAP_MINUTES = 45
+
+# A day the agent barely saw at all is a different problem from a day with a
+# hole in it — usually the machine was off, or the agent was not running.
+QUIET_DAY_ACTIVE_MINUTES = 30
+
+
+def _submission_mode(org) -> dict:
+    """Does this firm actually use submit/approve, and does it matter?
+
+    Three genuinely different products share this page. Showing every firm the
+    same "Submit for Approval" button tells the majority to perform a ritual
+    they have never performed — org21 has 320 of 350 hours unapproved — which
+    teaches people the screen is not talking to them.
+
+    Read from what the firm has configured and done, not from a preference
+    nobody set:
+
+      push   — time reaches a billing system on submit or approve. The button
+               is the mechanism; it must be prominent.
+      review — somebody has actually approved a timesheet here, so the workflow
+               is real and worth keeping in front of people.
+      auto   — the firm auto-submits on a schedule; a manual button is noise,
+               though the fact that it happens is worth saying.
+      off    — no evidence anyone submits. Keep it available, quietly, rather
+               than making it the point of the page.
+    """
+    if getattr(org, 'auto_submit_timesheets', False):
+        return {'mode': 'auto', 'reason': 'This week submits itself on Tuesday morning.'}
+
+    # A live billing integration whose push hangs off the transition.
+    try:
+        from tracker.models import Integration
+        pushes = Integration.objects.filter(
+            organization=org, provider__in=('clio',),
+        ).exists()
+    except Exception:
+        pushes = False
+    if pushes:
+        trigger = getattr(org, 'clio_push_trigger', 'approve') or 'approve'
+        return {
+            'mode': 'push',
+            'reason': f'Submitting sends your time to Clio (on {trigger}).',
+        }
+
+    # Has anyone here ever really approved someone else's week? Owners
+    # auto-approve their own on submit, so that alone proves nothing.
+    real_approval = Timesheet.objects.filter(
+        org=org, status__in=('approved', 'locked'), approved_by__isnull=False,
+    ).exclude(approved_by=models.F('user')).exists()
+    if real_approval:
+        return {'mode': 'review', 'reason': 'Your firm reviews timesheets before they are final.'}
+
+    return {'mode': 'off', 'reason': ''}
+
+
+def _monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def week_coverage(request):
+    """GET /api/billing/week-coverage/?start=YYYY-MM-DD
+
+    Per day for one person's week: what the agent saw, what became reviewable
+    time, and where the difference is big enough to be worth a look.
+    """
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related("organization").first()
+    if not membership:
+        return Response({"error": "No organization"}, status=403)
+    org = membership.organization
+
+    start_param = request.query_params.get("start")
+    try:
+        start = date.fromisoformat(start_param) if start_param else _monday(date.today())
+    except ValueError:
+        return Response({"error": "start must be YYYY-MM-DD"}, status=400)
+    start = _monday(start)
+    end = start + timedelta(days=6)
+
+    # Whose week — a manager may inspect a report's, anyone else only their own.
+    user = request.user
+    target = request.query_params.get("user_id")
+    if target and membership.role in ("owner", "admin", "manager"):
+        member = OrganizationMembership.objects.filter(
+            organization=org, user_id=target
+        ).select_related("user").first()
+        if not member:
+            return Response({"error": "Not a member of this organization"}, status=404)
+        user = member.user
+
+    captured = {
+        r["day"]: r["minutes"] or 0
+        for r in Block.objects.filter(
+            org=org, user=user, day__gte=start, day__lte=end
+        ).values("day").annotate(minutes=Sum("minutes"))
+    }
+
+    # What the agent actually watched. Idle is excluded — flagging lunch as
+    # missing work would make the whole screen noise.
+    seen = defaultdict(lambda: {"minutes": 0, "first": None, "last": None})
+    horizon = date.today() - timedelta(days=RAW_RETENTION_DAYS)
+    raw_qs = RawEvent.objects.filter(
+        user=user, start_ts__date__gte=start, start_ts__date__lte=end,
+    ).exclude(app_name__iexact="idle")
+
+    for r in raw_qs.values("start_ts__date").annotate(
+        first=Min("start_ts"), last=Max("end_ts"),
+    ):
+        d = r["start_ts__date"]
+        seen[d]["first"] = r["first"]
+        seen[d]["last"] = r["last"]
+
+    # Summing interval durations is correct here: the agent emits sequential
+    # non-overlapping intervals (start_ts = last emit, end_ts = now), so
+    # heartbeats do not double-count.
+    for r in raw_qs.values("start_ts__date", "start_ts", "end_ts"):
+        d = r["start_ts__date"]
+        delta = (r["end_ts"] - r["start_ts"]).total_seconds() / 60.0
+        if 0 < delta < 180:                 # ignore absurd spans from clock skew
+            seen[d]["minutes"] += delta
+
+    days, total_gap, flagged = [], 0.0, 0
+    for i in range(7):
+        d = start + timedelta(days=i)
+        cap = float(captured.get(d, 0))
+        info = seen.get(d)
+        active = round(info["minutes"], 1) if info else 0.0
+        checkable = d >= horizon and d <= date.today()
+
+        gap = max(0.0, active - cap)
+        if not checkable:
+            state = "unknown"
+        elif active < QUIET_DAY_ACTIVE_MINUTES and cap < QUIET_DAY_ACTIVE_MINUTES:
+            state = "quiet"                 # nothing happened; usually a day off
+        elif gap >= MATERIAL_GAP_MINUTES:
+            state = "gap"
+        else:
+            state = "ok"
+
+        if state == "gap":
+            total_gap += gap
+            flagged += 1
+
+        days.append({
+            "date": d.isoformat(),
+            "weekday": d.strftime("%a"),
+            "captured_hours": round(cap / 60, 2),
+            "active_hours": round(active / 60, 2),
+            "gap_hours": round(gap / 60, 2) if state == "gap" else 0,
+            "first_seen": info["first"].isoformat() if info and info["first"] else None,
+            "last_seen": info["last"].isoformat() if info and info["last"] else None,
+            "state": state,
+            "checkable": checkable,
+        })
+
+    captured_total = sum(d["captured_hours"] for d in days)
+    return Response({
+        "submission": _submission_mode(org),
+        "week_start": start.isoformat(),
+        "week_end": end.isoformat(),
+        "user_id": user.id,
+        "user_name": f"{user.first_name} {user.last_name}".strip() or user.username,
+        "captured_hours": round(captured_total, 2),
+        "gap_hours": round(total_gap / 60, 2),
+        "days_flagged": flagged,
+        # False when the whole week predates raw-event retention, so the UI can
+        # say "too old to check" rather than implying the week is clean.
+        "checkable": any(d["checkable"] for d in days),
+        "days": days,
+    })

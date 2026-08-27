@@ -356,7 +356,15 @@ const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
 
 type ViewMode = 'summary' | 'byday' | 'work_summary';
 
-const WeeklyTimesheet: React.FC = () => {
+type SubmissionMode = 'push' | 'review' | 'auto' | 'off';
+
+interface WeeklyTimesheetProps {
+  /** How this firm actually uses submit/approve. Absent = treat as 'review'
+   *  so nothing regresses for a caller that has not been updated. */
+  submission?: { mode: SubmissionMode; reason: string } | null;
+}
+
+const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState<string | null>(null);
   const [weekStart, setWeekStart]           = useState<string>(() => {
@@ -733,16 +741,39 @@ const WeeklyTimesheet: React.FC = () => {
     );
   }
 
+  // What submitting is worth here differs per firm, so the control does too.
+  // A firm that auto-submits, or has never approved anything, was being told to
+  // perform a ritual it does not perform — which teaches people to ignore the
+  // page. Absent mode behaves as before.
+  const mode: SubmissionMode = submission?.mode ?? 'review';
+
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
+      if (mode === 'auto') {
+        // Nothing to press: it goes on its own. Say so instead of implying
+        // the week is waiting on the person reading this.
+        return (
+          <span className="text-[12.5px] text-muted-foreground">
+            {submission?.reason || 'This week submits itself.'}
+          </span>
+        );
+      }
       // Submission is available any day of the week; the confirm modal guards
       // against accidental early submits.
+      const quiet = mode === 'off';
       return (
         <button
           onClick={() => setShowSubmitModal(true)}
-          className="px-4 py-2 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 transition-all flex items-center gap-1.5"
+          title={submission?.reason || undefined}
+          className={cn(
+            'px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5',
+            quiet
+              ? 'border border-border text-muted-foreground hover:bg-muted/60'
+              : 'bg-primary text-primary-foreground hover:opacity-90'
+          )}
         >
-          <CheckCircle2 className="w-4 h-4" /> Submit for Approval
+          <CheckCircle2 className="w-4 h-4" />
+          {quiet ? 'Submit anyway' : 'Submit for Approval'}
         </button>
       );
     }

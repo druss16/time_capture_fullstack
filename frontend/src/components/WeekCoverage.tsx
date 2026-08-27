@@ -14,11 +14,12 @@
  * clean bill it has no evidence for.
  */
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import { AlertTriangle, Check, Minus, HelpCircle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/design-system";
 
-type DayState = "ok" | "gap" | "quiet" | "unknown";
+type DayState = "ok" | "gap" | "quiet" | "unknown" | "future";
 
 type Day = {
   date: string;
@@ -50,24 +51,37 @@ type Payload = {
 };
 
 const TONE: Record<DayState, string> = {
-  ok: "border-border/60 bg-card",
-  gap: "border-amber-300 bg-amber-50",
-  quiet: "border-border/40 bg-muted/30",
-  unknown: "border-border/40 bg-muted/20",
+  ok: "bg-card",
+  gap: "bg-amber-50",
+  quiet: "bg-muted/30",
+  unknown: "bg-muted/20",
+  future: "bg-muted/10",
 };
 
-const ICON: Record<DayState, React.ElementType> = {
+const ICON: Record<DayState, React.ElementType | null> = {
   ok: Check,
   gap: AlertTriangle,
   quiet: Minus,
   unknown: HelpCircle,
+  // A day that has not happened yet needs no verdict — an icon there reads as
+  // a judgement about time nobody has spent.
+  future: null,
 };
 
 const ICON_TONE: Record<DayState, string> = {
   ok: "text-primary",
   gap: "text-amber-600",
-  quiet: "text-muted-foreground/50",
-  unknown: "text-muted-foreground/50",
+  quiet: "text-muted-foreground/40",
+  unknown: "text-muted-foreground/40",
+  future: "",
+};
+
+const HINT: Record<DayState, string> = {
+  ok: "captured",
+  gap: "agent saw more activity than became time",
+  quiet: "nothing captured — usually a day off",
+  unknown: "too old to check",
+  future: "hasn't happened yet",
 };
 
 export default function WeekCoverage({
@@ -127,12 +141,12 @@ export default function WeekCoverage({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border/60 bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60">
             Is this week whole?
           </div>
-          <div className="mt-0.5 text-[14px] text-foreground">
+          <div className="mt-0.5 text-[13.5px] text-foreground">
             {!data.checkable ? (
               <span className="text-muted-foreground">
                 This week is too old to check — we only keep the raw detail for about a month.
@@ -162,42 +176,59 @@ export default function WeekCoverage({
         </button>
       </div>
 
+      {/* Each day links to that day in Daily Review, which is where anything
+          it reports can actually be acted on. Days with nothing to look at —
+          future, or too old to check — are inert rather than dead links. */}
       <div className="grid grid-cols-7 gap-px border-t border-border/60 bg-border/60">
         {data.days.map((d) => {
           const Icon = ICON[d.state];
-          return (
-            <div
-              key={d.date}
-              className={cn("px-2 py-2.5 text-center", TONE[d.state])}
-              title={
-                d.state === "gap"
-                  ? `Agent saw ${d.active_hours.toFixed(1)}h of activity, ${d.captured_hours.toFixed(1)}h became time`
-                  : d.state === "quiet"
-                  ? "Nothing captured — usually a day off"
-                  : d.state === "unknown"
-                  ? "Too old to check"
-                  : `${d.captured_hours.toFixed(1)}h captured`
-              }
-            >
-              <div className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          const actionable = d.state !== "future" && d.state !== "unknown";
+          const label = `${d.captured_hours > 0 ? `${d.captured_hours.toFixed(1)}h ` : ""}${HINT[d.state]}`;
+
+          const body = (
+            <>
+              <div className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">
                 {d.weekday}
               </div>
-              <div className="mt-1 font-mono text-[15px] font-bold tabular-nums text-foreground">
-                {d.captured_hours > 0 ? d.captured_hours.toFixed(1) : "—"}
+              <div className="mt-0.5 flex items-center justify-center gap-1">
+                <span className="font-mono text-[13px] font-bold tabular-nums text-foreground">
+                  {d.captured_hours > 0 ? d.captured_hours.toFixed(1) : "—"}
+                </span>
+                {Icon && <Icon className={cn("h-3 w-3 shrink-0", ICON_TONE[d.state])} />}
               </div>
-              <Icon className={cn("mx-auto mt-1 h-3.5 w-3.5", ICON_TONE[d.state])} />
               {d.state === "gap" && (
-                <div className="mt-0.5 font-mono text-[10.5px] font-semibold tabular-nums text-amber-700">
+                <div className="font-mono text-[9.5px] font-semibold tabular-nums text-amber-700">
                   −{d.gap_hours.toFixed(1)}h
                 </div>
               )}
-            </div>
+            </>
+          );
+
+          if (!actionable) {
+            return (
+              <div key={d.date} className={cn("px-1.5 py-1.5 text-center", TONE[d.state])} title={label}>
+                {body}
+              </div>
+            );
+          }
+          return (
+            <Link
+              key={d.date}
+              to={`/daily?date=${d.date}`}
+              title={`${label} — open in Daily Review`}
+              className={cn(
+                "px-1.5 py-1.5 text-center transition-colors hover:bg-muted/60",
+                TONE[d.state]
+              )}
+            >
+              {body}
+            </Link>
           );
         })}
       </div>
 
       {!clean && data.checkable && (
-        <p className="border-t border-border/60 px-4 py-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p className="border-t border-border/60 px-4 py-2 text-[12px] leading-relaxed text-muted-foreground">
           On the flagged days the agent saw more activity than turned into time. That usually
           means it was stopped mid-day, the machine slept, or work happened somewhere it can't
           see. Worth adding by hand if you remember what it was.

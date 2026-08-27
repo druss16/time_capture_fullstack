@@ -183,10 +183,14 @@ def week_coverage(request):
         cap = float(captured.get(d, 0))
         info = seen.get(d)
         active = round(info["minutes"], 1) if info else 0.0
-        checkable = d >= horizon and d <= date.today()
+        checkable = horizon <= d <= date.today()
 
         gap = max(0.0, active - cap)
-        if not checkable:
+        if d > date.today():
+            # Hasn't happened yet. Reporting a future Friday as "too old to
+            # check" made the current week look broken from Thursday onward.
+            state = "future"
+        elif not checkable:
             state = "unknown"
         elif active < QUIET_DAY_ACTIVE_MINUTES and cap < QUIET_DAY_ACTIVE_MINUTES:
             state = "quiet"                 # nothing happened; usually a day off

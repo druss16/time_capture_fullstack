@@ -32,11 +32,16 @@ type Day = {
 };
 
 export type Submission = {
-  /** What submitting is FOR — sets how prominent the control should be. */
   mode: 'push' | 'review' | 'off';
-  /** Whether it also happens on a schedule. Independent of mode: a firm can
-   *  push to Clio AND auto-submit, and a person needs to know both. */
+  /** Also happens on a schedule. Independent of everything else. */
   auto: boolean;
+  /** What receives the time — a NAME, so the button can say "Send to Clio"
+   *  instead of something generic. Null when nothing does. */
+  destination: string | null;
+  /** Whether SUBMITTING is what sends it. False on the approve trigger, where
+   *  approving is — so the button must not promise a send. */
+  sends_on_submit: boolean;
+  has_approver: boolean;
   reason: string;
 };
 

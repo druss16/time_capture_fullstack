@@ -9,6 +9,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
+import WeekCoverage from '@/components/WeekCoverage';
 import ApprovalQueue from '@/components/ApprovalQueue';
 import ClientSummary from '@/components/ClientSummary';
 import FeeBasis from '@/components/FeeBasis';
@@ -69,16 +70,18 @@ const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 
 const SECTIONS: Record<Section, SectionConfig> = {
   timesheet: {
-    eyebrow: 'Timesheet',
-    // Deliberately a verb: this is the page where a week stops being editable
-    // and becomes a claim. Daily Review answers "is this the right client?";
-    // this one answers "is this week right, and can it go to my manager?"
-    title: 'Review & submit your week',
+    eyebrow: 'My Week',
+    // Named for the question it answers, not a ritual most firms skip. Daily
+    // Review asks "is this the right client?" — attribution, and visible.
+    // This asks "is my time whole?" — completeness, which is invisible unless
+    // something goes looking for it. Submitting is one optional thing you can
+    // do here, not what the page is for.
+    title: 'Is your time whole?',
     tabs: [
       {
         id: 'timesheet',
-        label: 'My Timesheet',
-        description: 'Review & submit your week',
+        label: 'My Week',
+        description: 'Check nothing is missing',
         requiredRoles: ['owner', 'admin', 'manager', 'member'],
         icon: Clock,
         requiredPlan: PROFESSIONAL_PLANS,
@@ -421,7 +424,12 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
               if (locked) return <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />;
               return (
                 <>
-                  {activeTab === 'timesheet' && <WeeklyTimesheet />}
+                  {activeTab === 'timesheet' && (
+                    <div className="space-y-4">
+                      <WeekCoverage />
+                      <WeeklyTimesheet />
+                    </div>
+                  )}
                   {activeTab === 'approvals' && <ApprovalQueue />}
                   {activeTab === 'fees'      && <FeeBasis />}
                   {activeTab === 'billing'   && <ClientSummary />}

@@ -128,11 +128,14 @@ def _note_for(blocks):
 
 
 def decide_entry(captured_minutes, already_minutes, *, requires_utbms=False,
-                 billing_method='', matter_status=''):
+                 billing_method='', matter_status='', ours_minutes=0):
     """
     Decide what to do with one (user, matter, day) bucket. Pure — no I/O.
 
-    Returns (action, minutes, reason) where action is 'push' or 'skip'.
+    Returns (action, minutes, reason) where action is 'push', 'reduce' or
+    'skip'. `ours_minutes` is how much of what Clio already holds we put there,
+    which is what makes a safe retraction distinguishable from overwriting
+    somebody's hand-entered time.
     The guard order is deliberate: a matter that cannot legally take our time
     is rejected before we bother reasoning about how much time that is.
 
@@ -147,9 +150,25 @@ def decide_entry(captured_minutes, already_minutes, *, requires_utbms=False,
         return 'skip', captured_minutes, 'matter_closed'
 
     delta = captured_minutes - already_minutes
-    if delta < MIN_PUSH_MINUTES:
-        return 'skip', captured_minutes, 'already_in_clio'
-    return 'push', delta, ''
+    if delta >= MIN_PUSH_MINUTES:
+        return 'push', delta, ''
+
+    # Captured has fallen below what Clio holds. If the shortfall is OUR OWN
+    # earlier push, attribution moved after we wrote — a block recategorised to
+    # a different matter — and leaving it would bill both matters for the same
+    # hour. A positive-only delta can never correct that, so it is named here
+    # and reduced rather than quietly skipped. Time somebody logged by hand is
+    # never touched: `ours_minutes` counts only activities we created.
+    # Measured against OUR OWN contribution, never the combined total. If they
+    # hand-logged extra time, `already` exceeds `captured` while our push is
+    # still entirely correct — comparing against the total there would delete a
+    # legitimate entry and under-bill, which is the failure this whole module
+    # exists to prevent.
+    overshoot = ours_minutes - captured_minutes
+    if overshoot >= MIN_PUSH_MINUTES:
+        return 'reduce', overshoot, 'attribution_moved'
+
+    return 'skip', captured_minutes, 'already_in_clio'
 
 
 def build_push_plan(integration: Integration, start_date, end_date, user_ids=None,
@@ -319,12 +338,48 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
             })
             continue
 
+        ours = [e for e in existing_entries.get((clio_user_id, matter_id, day), [])
+                if e['ours'] and e['clio_activity_id']]
+        ours_minutes = sum(e['minutes'] for e in ours)
+
         action, delta_minutes, reason = decide_entry(
             captured_minutes, already_minutes,
             requires_utbms=mapping.requires_utbms,
             billing_method=mapping.billing_method,
             matter_status=mapping.external_status,
+            ours_minutes=ours_minutes,
         )
+
+        if action == 'reduce':
+            # Walk our own activities largest-first, taking the overshoot out
+            # of each until it is absorbed. Largest-first keeps the number of
+            # writes down, and only our own ids are ever in this list.
+            remaining = delta_minutes
+            reductions = []
+            for e in sorted(ours, key=lambda x: -x['minutes']):
+                if remaining <= 0:
+                    break
+                take = min(remaining, e['minutes'])
+                reductions.append({
+                    'clio_activity_id': e['clio_activity_id'],
+                    'from_minutes': e['minutes'],
+                    'to_minutes': e['minutes'] - take,
+                })
+                remaining -= take
+            entries.append({
+                'action': 'reduce',
+                'clio_user_id': clio_user_id, 'matter_id': matter_id,
+                'matter': mapping.display_number or matter_id, 'day': str(day),
+                'captured_minutes': captured_minutes,
+                'already_in_clio_minutes': already_minutes,
+                'push_minutes': 0,
+                'push_hours': 0,
+                'reduce_minutes': delta_minutes,
+                'reductions': reductions,
+                'note': '',
+                'block_ids': [b.id for b in block_objs],
+            })
+            continue
 
         if action == 'skip':
             skipped.append({
@@ -345,6 +400,7 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
             continue
 
         entries.append({
+            'action': 'push',
             'clio_user_id': clio_user_id,
             'matter_id': matter_id,
             'matter': mapping.display_number or matter_id,
@@ -378,7 +434,31 @@ def execute_push(integration: Integration, plan: dict) -> dict:
     api = ClioClient(integration)
     pushed, errors = [], []
 
+    reduced = []
     for entry in plan.get('entries', []):
+        if entry.get('action') == 'reduce':
+            # Attribution moved after we wrote. Patch our own activities down
+            # rather than leaving two matters billed for the same hour.
+            for r in entry.get('reductions', []):
+                try:
+                    api.patch(
+                        f"/activities/{r['clio_activity_id']}",
+                        {'quantity': r['to_minutes'] * 60},
+                        fields=CREATED_FIELDS,
+                    )
+                    reduced.append({
+                        'matter': entry['matter'], 'day': entry['day'],
+                        'clio_activity_id': r['clio_activity_id'],
+                        'from_minutes': r['from_minutes'],
+                        'to_minutes': r['to_minutes'],
+                    })
+                except ClioError as e:
+                    errors.append({
+                        'matter': entry['matter'], 'day': entry['day'],
+                        'error': 'reduce_failed', 'detail': str(e)[:300],
+                    })
+            continue
+
         payload = {
             'type': 'TimeEntry',
             'date': entry['day'],
@@ -422,6 +502,11 @@ def execute_push(integration: Integration, plan: dict) -> dict:
         })
 
     total_minutes = sum(p['minutes'] for p in pushed)
+    # Surfaced, never silent: a retraction changes a bill somebody may have
+    # already looked at.
+    if reduced:
+        logger.info('Clio push for org %s: reduced %s activity(ies) after '
+                    'attribution moved', integration.organization_id, len(reduced))
     if pushed:
         integration.last_synced_at = timezone.now()
         integration.save(update_fields=['last_synced_at', 'updated_at'])
@@ -433,6 +518,7 @@ def execute_push(integration: Integration, plan: dict) -> dict:
 
     return {
         'pushed': pushed,
+        'reduced': reduced,
         'errors': errors,
         'skipped': plan.get('skipped', []),
         'totals': {

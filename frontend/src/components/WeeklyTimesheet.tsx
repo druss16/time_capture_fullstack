@@ -769,13 +769,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           {auto ? 'Send it now' : mode === 'off' ? 'Submit anyway' : 'Submit for Approval'}
         </button>
       );
-      if (!submission?.reason) return button;
-      return (
-        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-          <span className="text-[12.5px] text-muted-foreground">{submission.reason}</span>
-          {button}
-        </div>
-      );
+      return button;
     }
     if (timesheetData?.status === 'rejected') {
       return (
@@ -800,7 +794,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       <div style={INTER}>
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">My Timesheet</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">My Week</span>
             {timesheetData && (
               <StatusBadge status={timesheetData.status} autoSubmitted={timesheetData.auto_submitted ?? false} />
             )}
@@ -1116,18 +1110,31 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       </div>
 
       {/* ── Sticky submit bar: stays reachable as the page scrolls ─────── */}
-      <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-card/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-baseline gap-2.5">
-          <span className={UPPER_LABEL}>Week total</span>
-          <span className="font-mono text-base font-extrabold text-foreground tabular-nums">{fmtHours(grandTotal)}</span>
-        </div>
+      <div className="sticky bottom-2 z-10 mt-4 rounded-[15px] border border-border/70 bg-card/95 backdrop-blur shadow-[0_8px_22px_-14px_rgba(16,27,46,0.32)] px-5 py-3">
         <div className="flex items-center gap-4">
-          <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground/70">
+          {/* The total is the anchor and must never wrap — "23h 35m" breaking
+              across two lines was the loudest thing in the bar. */}
+          <div className="flex shrink-0 items-baseline gap-2.5 whitespace-nowrap">
+            <span className={UPPER_LABEL}>Week total</span>
+            <span className="font-mono text-base font-extrabold text-foreground tabular-nums">{fmtHours(grandTotal)}</span>
+          </div>
+
+          <span className="hidden lg:flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground/70">
             <Lock className="w-3.5 h-3.5 text-muted-foreground/50" />
             Auto-captured ·{' '}
             <a href="/daily" className="text-primary font-medium hover:underline">Adjust in Daily Review →</a>
           </span>
-          {submitButton}
+
+          <div className="ml-auto flex min-w-0 items-center justify-end gap-3">
+            {/* Capped and right-aligned so a two-sentence note stays a caption
+                beside the action rather than pushing it onto its own line. */}
+            {submission?.reason && (
+              <span className="hidden md:block max-w-[20rem] text-right text-[12px] leading-snug text-muted-foreground">
+                {submission.reason}
+              </span>
+            )}
+            <div className="shrink-0">{submitButton}</div>
+          </div>
         </div>
       </div>
 

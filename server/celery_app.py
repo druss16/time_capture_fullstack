@@ -33,6 +33,15 @@ app.autodiscover_tasks()
 # ============================================================================
 
 app.conf.beat_schedule = {
+    # Firms on clio_push_trigger='continuous' have no timesheet at all: settled,
+    # confirmed time goes to Clio overnight. Inert for everyone else — the task
+    # selects on that trigger, and nothing is set to it by default.
+    'push-settled-time-to-clio': {
+        'task': 'tracker.push_settled_time_to_clio',
+        # 02:15 local: after the day has closed, before anyone is billing.
+        'schedule': crontab(hour=2, minute=15),
+        'options': {'expires': 3600},
+    },
     # =========================================================================
     # BLOCK PROCESSING (Frequent)
     # =========================================================================

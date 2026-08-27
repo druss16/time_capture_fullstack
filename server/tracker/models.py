@@ -146,13 +146,21 @@ class Organization(models.Model):
     CLIO_PUSH_TRIGGER_CHOICES = [
         ('approve', 'When a manager approves the timesheet'),
         ('submit', 'As soon as the person submits it'),
+        # No timesheet at all. The push is a convergent delta per
+        # (user, matter, day), so it does not need a moment when the numbers go
+        # final — it only needs to run again. That makes the submit/approve
+        # ceremony optional rather than load-bearing for firms that never
+        # wanted it: confirming in Daily Review is the authorisation.
+        ('continuous', 'Nightly, once time has settled — no timesheet needed'),
     ]
     clio_push_trigger = models.CharField(
         max_length=16,
         choices=CLIO_PUSH_TRIGGER_CHOICES,
         default='approve',
         help_text='When captured time is written to Clio. "approve" keeps manager '
-                  'review as the gate on what reaches the billing system.',
+                  'review as the gate on what reaches the billing system; '
+                  '"continuous" drops the timesheet entirely and pushes settled, '
+                  'confirmed time on a nightly schedule.',
     )
 
     sandwich_correlation_enabled = models.BooleanField(

@@ -1995,6 +1995,85 @@ def push_timesheet_to_clio(timesheet, org, force_conflicts=None):
     }
 
 
+@shared_task(name='tracker.push_settled_time_to_clio')
+def push_settled_time_to_clio(settle_hours=24, window_days=14):
+    """Nightly push for firms that do not run timesheets at all.
+
+    The submit/approve gate exists to pick a moment when the numbers are final.
+    This push does not need one: it is a convergent delta per
+    (user, matter, day), so it only needs to run again. That makes the whole
+    timesheet ceremony optional for firms that never wanted it — confirming a
+    block in Daily Review is the authorisation, which is the same judgement an
+    approver was being asked for, made by the person who actually did the work.
+
+    Two things keep it safe rather than merely convenient:
+
+      · Only committed blocks travel. build_push_plan already reads through
+        committed_block_qs, so nothing a human has not confirmed can reach a
+        bill.
+      · Only SETTLED time travels. A block recategorised after we pushed leaves
+        the old matter billed; the plan can now retract that, but not billing it
+        in the first place is better than correcting it afterwards. Waiting a
+        day means attribution has stopped moving.
+
+    The window looks back further than the settle point so that a late
+    correction inside it is still picked up on a subsequent night.
+    """
+    from tracker.models import Organization, Integration
+    from tracker.integrations.clio.push import build_push_plan, execute_push
+
+    orgs = Organization.objects.filter(clio_push_trigger='continuous')
+    results = []
+    for org in orgs:
+        integration = Integration.objects.filter(
+            organization=org, provider='clio',
+        ).first()
+        if not integration:
+            logger.info('Clio continuous: org %s has no Clio connection', org.id)
+            continue
+
+        today = timezone.localdate()
+        cutoff = timezone.now() - timedelta(hours=settle_hours)
+        start_date = today - timedelta(days=window_days)
+        end_date = (cutoff.astimezone(timezone.get_current_timezone())).date()
+
+        try:
+            plan = build_push_plan(integration, start_date, end_date)
+            # Drop anything whose attribution changed inside the settle window;
+            # it is still moving and will be caught tomorrow.
+            plan['entries'] = [
+                e for e in plan.get('entries', [])
+                if not _entry_is_unsettled(e, cutoff)
+            ]
+            result = execute_push(integration, plan)
+        except Exception as e:
+            logger.warning('Clio continuous push failed for org %s: %s', org.id, e, exc_info=True)
+            results.append({'org': org.id, 'error': str(e)[:200]})
+            continue
+
+        results.append({
+            'org': org.id,
+            'entries': result['totals']['entries'],
+            'minutes': result['totals']['minutes'],
+            'reduced': len(result.get('reduced') or []),
+            'errors': result['totals']['errors'],
+        })
+
+    return {'orgs': len(results), 'results': results}
+
+
+def _entry_is_unsettled(entry, cutoff):
+    """True if any block behind this entry was re-decided after the cutoff."""
+    from tracker.models import Block
+
+    ids = entry.get('block_ids') or []
+    if not ids:
+        return False
+    return Block.objects.filter(
+        id__in=ids, state_changed_at__gt=cutoff,
+    ).exists()
+
+
 @shared_task(name='tracker.push_timesheet_to_clio')
 def push_timesheet_to_clio_task(timesheet_id, force_conflicts=None):
     """

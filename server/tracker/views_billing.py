@@ -2039,11 +2039,15 @@ def push_settled_time_to_clio(settle_hours=24, window_days=14):
 
         try:
             plan = build_push_plan(integration, start_date, end_date)
-            # Drop anything whose attribution changed inside the settle window;
-            # it is still moving and will be caught tomorrow.
+            # Two gates, and the second is the one that matters. "Committed" is
+            # not a person's opinion — at a live org 87% of committed time was
+            # committed by the classifier with nobody in the loop — so a day
+            # nobody has looked at must not reach a client's bill unattended.
+            by_block, reviewed = _reviewed_lookup(org, plan.get('entries', []))
             plan['entries'] = [
                 e for e in plan.get('entries', [])
                 if not _entry_is_unsettled(e, cutoff)
+                and _entry_is_reviewed(e, by_block, reviewed)
             ]
             result = execute_push(integration, plan)
         except Exception as e:
@@ -2060,6 +2064,50 @@ def push_settled_time_to_clio(settle_hours=24, window_days=14):
         })
 
     return {'orgs': len(results), 'results': results}
+
+
+def _reviewed_lookup(org, entries):
+    """One reviewed-day set per person for the whole plan.
+
+    Asking per entry meant a query pair for every (user, day) in the window —
+    a fifty-person fortnight is hundreds of round trips to answer a question
+    that is two queries per person.
+    """
+    from tracker.models import Block
+    from tracker.views_day_review import reviewed_days
+
+    all_ids = [i for e in entries for i in (e.get('block_ids') or [])]
+    if not all_ids:
+        return {}, {}
+
+    by_block = {}
+    per_user_days = defaultdict(list)
+    for block_id, user_id, day in Block.objects.filter(
+        id__in=all_ids
+    ).values_list('id', 'user_id', 'day'):
+        by_block[block_id] = (user_id, day)
+        if day:
+            per_user_days[user_id].append(day)
+
+    reviewed = {}
+    for user_id, days in per_user_days.items():
+        reviewed[user_id] = reviewed_days(org, user_id, min(days), max(days))
+    return by_block, reviewed
+
+
+def _entry_is_reviewed(entry, by_block, reviewed):
+    """True only if every block behind this entry sits on a reviewed day."""
+    ids = entry.get('block_ids') or []
+    if not ids:
+        return False
+    for block_id in ids:
+        pair = by_block.get(block_id)
+        if not pair:
+            return False
+        user_id, day = pair
+        if not day or day not in reviewed.get(user_id, set()):
+            return False
+    return True
 
 
 def _entry_is_unsettled(entry, cutoff):

@@ -4764,3 +4764,32 @@ class AccuracySample(models.Model):
 
     def __str__(self):
         return f'{self.verdict} — block {self.block_id} ({self.period_start}..{self.period_end})'
+
+
+class DayReview(models.Model):
+    """A person looked at one day's time and said it was right.
+
+    The system could not previously tell "reviewed and found clean" from "never
+    opened" — both are simply an absence of edits. That distinction is what
+    makes unattended pushing to a billing system safe or reckless: 87% of
+    committed time at a live org was committed by the classifier with no human
+    involvement, so "committed" alone is not a human saying anything.
+
+    Only the EXPLICIT case is stored. A day where somebody actually changed
+    something already carries that evidence on the blocks themselves
+    (state_changed_by of user / user_edit / correction), and is derived at read
+    time rather than duplicated here. This row exists for the case with no
+    other trace: opened it, agreed with all of it, touched nothing.
+    """
+
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='day_reviews')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='day_reviews')
+    day = models.DateField(db_index=True)
+    reviewed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['org', 'user', 'day']]
+        indexes = [models.Index(fields=['org', 'user', 'day'])]
+
+    def __str__(self):
+        return f'{self.user} reviewed {self.day}'

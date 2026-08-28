@@ -141,6 +141,13 @@ def day_seen(request, day):
 def day_review(request, day):
     """GET/POST/DELETE /api/daily/<YYYY-MM-DD>/reviewed/
 
+    NO UI CALLS THIS. The "Looks right" button it was built for is gone:
+    once opening a day marks it (see day_seen), a button asking somebody to
+    confirm the page they are already looking at is a step that changes
+    nothing. Kept as the read/undo path — GET answers whether a day still
+    counts, DELETE takes a mark back — both of which a person may need and
+    neither of which day_seen provides.
+
     POST marks the day reviewed by the caller; DELETE takes it back. Only ever
     your own day — one person cannot vouch for another's time, which is the
     whole point of the signal.

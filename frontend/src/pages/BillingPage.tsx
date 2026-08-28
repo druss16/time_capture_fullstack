@@ -71,17 +71,18 @@ const EXECUTIVE_PLANS: PlanType[] = ['executive'];
 const SECTIONS: Record<Section, SectionConfig> = {
   timesheet: {
     eyebrow: 'My Week',
-    // Named for the question it answers, not a ritual most firms skip. Daily
-    // Review asks "is this the right client?" — attribution, and visible.
-    // This asks "is my time whole?" — completeness, which is invisible unless
-    // something goes looking for it. Submitting is one optional thing you can
-    // do here, not what the page is for.
-    title: 'Is your time whole?',
+    // The weekly roll-up of the daily reviews — the record that goes to the
+    // firm's practice-management tool. Daily Review settles which client a
+    // block belongs to; by the time it reaches here that is decided, and the
+    // remaining job is to gather the days into a week and send it. An earlier
+    // title made completeness the point, which put a diagnostic question where
+    // the record should be.
+    title: "This week's record",
     tabs: [
       {
         id: 'timesheet',
         label: 'My Week',
-        description: 'Check nothing is missing',
+        description: 'The week you send',
         requiredRoles: ['owner', 'admin', 'manager', 'member'],
         icon: Clock,
         requiredPlan: PROFESSIONAL_PLANS,

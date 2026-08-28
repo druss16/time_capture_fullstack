@@ -21,6 +21,7 @@ import { cn } from "@/lib/design-system";
 import { useSearchParams, Link } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
 import NoTimeYet from "@/components/NoTimeYet";
+import DayReviewedButton from "@/components/DayReviewedButton";
 import { MatterPicker } from "@/components/MatterPicker";
 import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
@@ -929,6 +930,12 @@ export default function DailyReview() {
                 : <Check className="w-4 h-4" />}
               {confirmingAll ? "Confirming\u2026" : "Confirm all"}
             </button>
+
+            {/* The affirmative signal. Only meaningful on a single day — a
+                range has no one day to vouch for. */}
+            {range === "day" && (
+              <DayReviewedButton date={date} hasTime={totalMin > 0} />
+            )}
 
             {/* Refresh — ghost icon, no background until hover */}
             <button

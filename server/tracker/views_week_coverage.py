@@ -233,6 +233,9 @@ def week_coverage(request):
         if 0 < delta < 180:                 # ignore absurd spans from clock skew
             seen[d]["minutes"] += delta
 
+    from tracker.views_day_review import reviewed_days
+    reviewed = reviewed_days(org, user, start, end)
+
     days, total_gap, flagged = [], 0.0, 0
     for i in range(7):
         d = start + timedelta(days=i)
@@ -269,6 +272,9 @@ def week_coverage(request):
             "last_seen": info["last"].isoformat() if info and info["last"] else None,
             "state": state,
             "checkable": checkable,
+            # Whether a person has actually looked at this day. Absence of edits
+            # is not agreement, and nothing unattended should push without it.
+            "reviewed": d in reviewed,
         })
 
     captured_total = sum(d["captured_hours"] for d in days)
@@ -283,6 +289,10 @@ def week_coverage(request):
         "captured_hours": round(captured_total, 2),
         "gap_hours": round(total_gap / 60, 2),
         "days_flagged": flagged,
+        "days_unreviewed": sum(
+            1 for x in days
+            if not x["reviewed"] and x["state"] in ("ok", "gap") and x["captured_hours"] > 0
+        ),
         # False when the whole week predates raw-event retention, so the UI can
         # say "too old to check" rather than implying the week is clean.
         "checkable": any(d["checkable"] for d in days),

@@ -162,7 +162,8 @@ def review_misfiled_time(request):
     # Review count, which is exactly the Certain bucket: filed by the classifier,
     # never re-examined after its verdict. Proposed blocks are deliberately out
     # — those are still sitting in the person's own Needs-you lane.
-    per_week, uncommitted = [], 0
+    per_week, uncommitted, uncommitted_min = [], 0, 0
+    unconfirmed_blocks = []
     for t in sheets:
         start_utc, end_utc = _day_bounds_utc(t.week_start, t.week_start + timedelta(days=6))
         qs = (
@@ -179,13 +180,24 @@ def review_misfiled_time(request):
         for b in qs:
             b._review_timesheet_id = t.id
             per_week.append(b)
-        uncommitted += (
+        # The same week's UNCONFIRMED time. Nobody has accepted these yet, so
+        # they are not what a manager is approving — but a wrong client on one
+        # is not harmless either: if the person never opens Daily Review it
+        # sits there forever, which is how time strands. Scanned separately and
+        # reported separately, never mixed into the confirmed counts.
+        unconf_qs = (
             Block.objects
             .filter(org=org, user_id=t.user_id, deleted_at__isnull=True,
                     start__gte=start_utc, start__lt=end_utc, is_categorized=False)
             .exclude(classification_state='suppressed')
-            .count()
+            .select_related('client', 'user', 'org', 'proposed_client')
         )
+        for b in unconf_qs:
+            uncommitted += 1
+            uncommitted_min += b.minutes or 0
+            if b.client_id and b.window_title:
+                b._review_timesheet_id = t.id
+                unconfirmed_blocks.append(b)
 
     result = scan_buckets(
         chain(per_week), names_by_org, index_by_org, firm_by_org,
@@ -194,6 +206,30 @@ def review_misfiled_time(request):
         # asks the same question every Monday and stops being read.
         skip_block_ids=confirmed_correct_block_ids([org.id]),
     )
+
+    # Same detector, same thresholds — only the input differs. A row here means
+    # the title contradicts the client even though nobody has confirmed it yet.
+    unconf = scan_buckets(
+        unconfirmed_blocks, names_by_org, index_by_org, firm_by_org,
+        limit=limit,
+        skip_block_ids=confirmed_correct_block_ids([org.id]),
+    )
+
+    # Where the classifier has ALREADY staged a fix, that proposal is the answer
+    # and the row's one-click action should simply accept it, rather than making
+    # a manager re-derive what the system already worked out.
+    _unconf_by_id = {b.id: b for b in unconfirmed_blocks}
+    unconfirmed_rows = []
+    for _bucket in ('client', 'unsure'):
+        for r in unconf['flagged'][_bucket]:
+            b = _unconf_by_id.get(r['block_id'])
+            if b is not None and b.proposed_client_id and b.proposed_client_id != b.client_id:
+                r['proposed_client_id'] = b.proposed_client_id
+                r['proposed_client_name'] = b.proposed_client.name if b.proposed_client_id else None
+                r['proposed_confidence'] = float(getattr(b, 'proposed_confidence', 0.0) or 0.0)
+            r['confirmed'] = False
+            unconfirmed_rows.append(r)
+    unconfirmed_rows.sort(key=lambda r: (r['date'], r['block_id']), reverse=True)
 
     # Per-timesheet counts for the queue badges. Counted off the CLIENT bucket
     # only: an internal-bucket row is not a reason to hold up an approval, and a
@@ -231,9 +267,19 @@ def review_misfiled_time(request):
         # errors, and both are worth being able to see.
         'dismissed_blocks': result['dismissed_hits'],
         'by_timesheet': by_timesheet,
-        # Not a mismatch, but it belongs next to one: time in these weeks
-        # nobody has confirmed yet. Approving a week that still has
-        # unreviewed blocks in it is its own thing worth knowing.
+        # Not a mismatch in confirmed time, but it belongs next to one: the
+        # blocks nobody has accepted yet whose title already contradicts the
+        # client they are sitting on. `blocks`/`minutes` size the whole
+        # unconfirmed pile these weeks carry, flagged or not.
+        'unconfirmed': {
+            'total': unconf['counts']['client'] + unconf['counts']['unsure'],
+            'returned': len(unconfirmed_rows),
+            'histogram': [],
+            'top_pairs': [],
+            'mismatches': unconfirmed_rows,
+            'blocks': uncommitted,
+            'minutes': uncommitted_min,
+        },
         'uncommitted_blocks': uncommitted,
         'client': bucket_payload(result, 'client'),
         'internal': bucket_payload(result, 'internal'),

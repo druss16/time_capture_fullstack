@@ -66,6 +66,11 @@ interface Row {
   looks_like_client_name?: string;
   bucket: 'client' | 'internal' | 'unsure';
   verdict?: 'booked_absent';
+  /** Present on unconfirmed rows: the fix the classifier has already staged. */
+  proposed_client_id?: number;
+  proposed_client_name?: string;
+  proposed_confidence?: number;
+  confirmed?: boolean;
   set_by?: 'user' | 'classifier';
   candidates?: Candidate[];
   confidence: {
@@ -102,6 +107,10 @@ export interface MisfiledResponse {
   client: Bucket;
   internal: Bucket;
   unsure: Bucket;
+  /** Flagged rows nobody has confirmed yet, plus the size of that whole pile.
+   *  Optional: frontend and backend deploy separately, so a new bundle can
+   *  briefly talk to an API that predates this bucket. */
+  unconfirmed?: Bucket & { blocks: number; minutes: number };
   clients: { id: number; name: string }[];
 }
 
@@ -185,18 +194,29 @@ const FlagRow: React.FC<{
   // target; a tie carries ranked candidates. Either way they are the choices,
   // so they are the buttons.
   const isTie = row.verdict === 'booked_absent';
-  const targets = isTie
+  const detected = isTie
     ? (row.candidates || []).map((c) => ({ id: c.client_id, name: c.client_name }))
     : row.looks_like_client_id
     ? [{ id: row.looks_like_client_id, name: row.looks_like_client_name || '?' }]
     : [];
+  // On an unconfirmed row the classifier has usually ALREADY staged the fix.
+  // That proposal leads, because making a reviewer re-derive an answer the
+  // system already worked out is the nagging this panel exists to avoid.
+  const proposed = row.proposed_client_id && row.proposed_client_name
+    ? [{ id: row.proposed_client_id, name: row.proposed_client_name }]
+    : [];
+  const targets = [
+    ...proposed,
+    ...detected.filter((d) => !proposed.some((p) => p.id === d.id)),
+  ];
+
   // Green marks the answer, and only where there IS one. Two candidates means
   // the detector abstained, so neither gets to look like the recommendation.
-  const actionCls = !isTie
-    ? ACTIONS.recommend
-    : targets.length === 1
-    ? ACTIONS.suggest
-    : ACTIONS.choice;
+  const styleFor = (i: number) => {
+    if (proposed.length) return i === 0 ? ACTIONS.recommend : ACTIONS.choice;
+    if (!isTie) return ACTIONS.recommend;
+    return targets.length === 1 ? ACTIONS.suggest : ACTIONS.choice;
+  };
 
   // What this row needs to be undone: itself, and where it currently sits.
   const self: Ref[] = [{ id: row.block_id, clientId: row.booked_client_id }];
@@ -232,6 +252,14 @@ const FlagRow: React.FC<{
           <span className={cn('font-bold tabular-nums', trivial ? 'text-slate-300' : 'text-slate-500')}>
             {formatMinutes(row.minutes)}
           </span>
+          {row.confirmed === false && (
+            <span
+              className="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded px-1.5 py-px"
+              title="Nobody has accepted this block yet — it is still sitting in this person's Daily Review"
+            >
+              not confirmed
+            </span>
+          )}
           {locked && (
             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">
               week {week?.status}
@@ -266,13 +294,13 @@ const FlagRow: React.FC<{
             )}
             <span className="text-slate-300" aria-hidden>→</span>
 
-            {targets.map((tg) => (
+            {targets.map((tg, i) => (
               <button
                 key={tg.id}
                 onClick={() => onMove(self, tg.id, tg.name)}
                 className={cn(
                   'px-2.5 py-1 rounded-md text-xs font-semibold transition-colors max-w-[280px] truncate',
-                  actionCls
+                  styleFor(i)
                 )}
                 title={`Move this block to ${tg.name}`}
               >
@@ -349,6 +377,7 @@ const FlagRow: React.FC<{
 
 const Section: React.FC<{
   title: string;
+  note?: string;
   tone: Tone;
   bucket: Bucket;
   weeks: Map<number, Week>;
@@ -359,7 +388,7 @@ const Section: React.FC<{
   onMove: (rows: Ref[], clientId: number, clientName: string) => void;
   onCorrect: (rows: Ref[]) => void;
   defaultOpen: boolean;
-}> = ({ title, tone, bucket, weeks, clients, selected, toggle, hidden, onMove, onCorrect, defaultOpen }) => {
+}> = ({ title, note, tone, bucket, weeks, clients, selected, toggle, hidden, onMove, onCorrect, defaultOpen }) => {
   const [open, setOpen] = useState(defaultOpen);
   const t = TONES[tone];
   // Resolved rows leave immediately; the count follows them out rather than
@@ -386,6 +415,7 @@ const Section: React.FC<{
           {total}
         </span>
         <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">{title}</span>
+        {note && <span className="text-xs text-slate-400 truncate hidden sm:inline">{note}</span>}
       </button>
 
       {open && (
@@ -649,7 +679,11 @@ const MisfiledTimeReview: React.FC<{
 
   const clientTotal = visible(data?.client);
   const unsureTotal = visible(data?.unsure);
-  const flagged = clientTotal + unsureTotal;
+  // Counted for whether the panel has anything to show, but badged separately:
+  // unconfirmed time is not what is being approved, so it must never inflate
+  // the "wrong client" number a reviewer acts on.
+  const unconfTotal = visible(data?.unconfirmed);
+  const flagged = clientTotal + unsureTotal + unconfTotal;
 
   return (
     <div className="shrink-0 space-y-2">
@@ -705,6 +739,11 @@ const MisfiledTimeReview: React.FC<{
                   {unsureTotal > 0 && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-800 border-amber-200">
                       <HelpCircle className="w-3.5 h-3.5" /> {unsureTotal} to check
+                    </span>
+                  )}
+                  {unconfTotal > 0 && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-slate-50 text-slate-600 border-slate-200">
+                      {unconfTotal} unconfirmed
                     </span>
                   )}
                 </>
@@ -791,6 +830,22 @@ const MisfiledTimeReview: React.FC<{
               onCorrect={onCorrect}
               defaultOpen={data.client.total === 0}
             />
+            {data.unconfirmed && (
+            <Section
+              title="Not confirmed yet"
+              note="nobody has accepted these — the system already suggests a fix"
+              tone="slate"
+              bucket={data.unconfirmed}
+              weeks={weeks}
+              clients={data.clients}
+              selected={selected}
+              toggle={toggle}
+              hidden={hidden}
+              onMove={onMove}
+              onCorrect={onCorrect}
+              defaultOpen={clientTotal === 0}
+            />
+            )}
             <Section
               title="Internal & admin"
               tone="slate"
@@ -804,6 +859,14 @@ const MisfiledTimeReview: React.FC<{
               onCorrect={onCorrect}
               defaultOpen={false}
             />
+            {!!data.unconfirmed?.blocks && (
+              <p className="border-t border-border/40 px-4 py-2.5 text-[11px] text-slate-400">
+                {data.unconfirmed.blocks.toLocaleString()} blocks
+                {' '}({Math.round(data.unconfirmed.minutes / 60)}h) in these weeks are still
+                unconfirmed. They stay in each person&rsquo;s Daily Review — only the ones whose
+                title contradicts their client are listed above.
+              </p>
+            )}
           </div>
         )}
       </div>

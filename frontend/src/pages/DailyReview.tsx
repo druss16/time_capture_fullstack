@@ -849,18 +849,45 @@ export default function DailyReview() {
   // user page into a fully-future range). end === date for the day view, so this
   // matches the old `date >= today` behavior.
   // Opening a single day IS the review — the act people already perform. The
-  // server ignores it for a future day or one with no time, and the staleness
-  // rule means later work un-reviews the day anyway, so this can only ever
-  // mean "seen, as of now".
+  // server ignores a future day or one with no time, and the staleness rule
+  // means later work un-reviews the day, so this only ever means "seen now".
+  //
+  // Keyed on the DAY, never on its contents. Depending on totalMin looked
+  // reasonable and was the opposite of what we want: this page polls in the
+  // background, so a tab left open would re-mark the day every time new time
+  // arrived — silently re-reviewing work nobody had looked at, which is
+  // precisely what the staleness rule exists to prevent.
+  //
+  // A person has to be LOOKING: visible tab, focused window. Coming back to the
+  // tab re-arms it, because returning and seeing the newer time genuinely is a
+  // fresh look.
+  const seenTotalRef = useRef(0);
+  seenTotalRef.current = totalMin;
   useEffect(() => {
-    if (range !== "day" || busy || totalMin <= 0) return;
+    if (range !== "day") return;
     let cancelled = false;
-    const t = setTimeout(() => {
-      if (cancelled) return;
-      safeFetchJson(`${API_BASE}/daily/${date}/seen/`, { method: "POST" }).catch(() => {});
-    }, 2500);   // a beat, so paging quickly through days marks none of them
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [date, range, busy, totalMin]);
+    let timer: number | undefined;
+
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+        if (seenTotalRef.current <= 0) return;
+        safeFetchJson(`${API_BASE}/daily/${date}/seen/`, { method: "POST" }).catch(() => {});
+      }, 2500);
+    };
+
+    arm();
+    window.addEventListener("focus", arm);
+    document.addEventListener("visibilitychange", arm);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", arm);
+      document.removeEventListener("visibilitychange", arm);
+    };
+  }, [date, range]);
 
   const atLatestRange = rangeBounds(date, range).end >= todayIso();
 

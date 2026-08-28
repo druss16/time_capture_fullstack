@@ -575,9 +575,17 @@ def create_weekly_timesheets():
     created_count = 0
     existing_count = 0
 
-    # For each active organization
-    for org in Organization.objects.filter(is_active=True):
-        # Get all active members
+    # Organization has no is_active field either — the same FieldError as the
+    # membership filter below, one line earlier and left behind when that one
+    # was fixed. It raised on the FIRST line of the loop, so this task has never
+    # created a single timesheet: no draft means auto-submit has nothing to
+    # submit, which is why most people never reached a manager's approval queue
+    # at all despite capturing time every week.
+    #
+    # Liveness is deleted_at plus the MavOps archive flag; both are real fields.
+    for org in Organization.objects.filter(
+        deleted_at__isnull=True, mavops_archived=False,
+    ):
         # NOTE: OrganizationMembership has no is_active field — a member either
         # has a membership row or they don't. Filtering on is_active raised a
         # FieldError and silently killed this whole task, so draft timesheets

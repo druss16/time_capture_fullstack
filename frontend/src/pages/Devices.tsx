@@ -5,6 +5,7 @@
  */
 
 import PairDeviceCard from "@/components/PairDeviceCard";
+import { useItDeployed } from "@/lib/useItDeployed";
 import { useEffect, useState } from "react";
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { Monitor, RefreshCw, Laptop, AlertCircle, Trash2 } from 'lucide-react';
@@ -20,6 +21,7 @@ type Device = {
 };
 
 export default function Devices() {
+  const itDeployed = useItDeployed();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
@@ -83,7 +85,19 @@ export default function Devices() {
         </div>
 
         {/* Pair new device */}
-        <PairDeviceCard />
+        {/* A machine paired by hand is a machine that never matches the
+            provisioning map, so this is hidden where IT does the rollout. */}
+        {itDeployed === false && <PairDeviceCard />}
+        {itDeployed === true && (
+          <div className="rounded-2xl border border-border/60 bg-card p-5">
+            <h3 className="text-[15px] font-bold text-foreground">Your firm installs this centrally</h3>
+            <p className="mt-1.5 max-w-xl text-[13.5px] leading-relaxed text-muted-foreground">
+              Computers are set up by your IT team and connect on their own — there's no
+              code to enter. If one is missing after a day or two, your IT contact can push
+              it, and we'll help them.
+            </p>
+          </div>
+        )}
 
         {/* Linked Devices */}
         <div className="bg-white rounded-2xl border-2 border-slate-200 shadow-sm overflow-hidden">

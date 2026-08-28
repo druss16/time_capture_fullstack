@@ -18,6 +18,8 @@ type State = {
   reviewed: boolean;
   explicit: boolean;
   derived_from_edits: boolean;
+  /** Looked at once, but time has landed since. */
+  stale: boolean;
 };
 
 export default function DayReviewedButton({
@@ -79,7 +81,9 @@ export default function DayReviewedButton({
       onClick={toggle}
       disabled={busy}
       title={
-        state.explicit
+        state.stale
+          ? "You checked this day, but more time has been captured since."
+          : state.explicit
           ? "You marked this day as correct. Click to undo."
           : "Confirm this day is correct — nothing here needs changing."
       }
@@ -91,7 +95,7 @@ export default function DayReviewedButton({
       )}
     >
       <Check className="h-3.5 w-3.5" />
-      {state.explicit ? "Marked correct" : "Looks right"}
+      {state.explicit ? "Marked correct" : state.stale ? "Check again" : "Looks right"}
     </button>
   );
 }

@@ -121,28 +121,141 @@ def _fmt_hours(decimal_hours) -> str:
 # SHARED HTML WRAPPER
 # ============================================================================
 
-def _wrap_html(header_gradient, header_icon, header_title, body_html):
-    """Wrap body content in standard email template."""
-    return f'''<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<div style="max-width:500px;margin:0 auto;padding:20px;">
-    <div style="background:linear-gradient(135deg,{header_gradient});padding:24px;border-radius:16px 16px 0 0;text-align:center;">
-        <h1 style="margin:0;color:white;font-size:24px;">{header_icon} {header_title}</h1>
-    </div>
-    <div style="background:white;padding:24px;border-radius:0 0 16px 16px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
-        {body_html}
-    </div>
-</div>
-</body></html>'''
+# ── Brand ───────────────────────────────────────────────────────────────────
+# One palette, defined once. Every template used to pass its own gradient, so
+# fourteen emails from the same product arrived in fourteen different colour
+# schemes. The only thing a caller now chooses is TONE — and only because a
+# seat-overage warning and a rejected timesheet genuinely are not the same news
+# as an invitation.
+INK        = '#131a1e'
+INK_SOFT   = '#47555c'
+INK_FAINT  = '#7b8a91'
+GROUND     = '#f4f5f4'
+RULE       = '#e4e6e4'
+TEAL       = '#1F7269'
+AMBER      = '#a8641f'
+RED        = '#b3392f'
+
+TONES = {'brand': TEAL, 'warn': AMBER, 'alert': RED}
+
+FONT = ("-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+        "'Helvetica Neue',Arial,sans-serif")
+
+
+def _accent_for(tone_or_gradient):
+    """Map a tone name, or a legacy CSS gradient, onto one accent colour."""
+    accent = TONES.get(tone_or_gradient)
+    if accent is not None:
+        return accent
+    g = str(tone_or_gradient)
+    if 'ef4444' in g or 'dc2626' in g:
+        return RED
+    if 'F59E0B' in g or 'D97706' in g:
+        return AMBER
+    return TEAL
+
+
+def _preheader(text: str) -> str:
+    """The line an inbox shows beside the subject.
+
+    Left empty, clients scrape it from the markup and show a fragment of the
+    header or a run of whitespace. It is the second thing a person reads and it
+    was going to waste on every email we send. The padding run stops the client
+    continuing past our sentence into the header markup.
+    """
+    if not text:
+        return ''
+    pad = '&#847;&zwnj;&nbsp;' * 30
+    return (
+        '<div style="display:none;max-height:0;overflow:hidden;opacity:0;'
+        'mso-hide:all;">' + text + '</div>'
+        '<div style="display:none;max-height:0;overflow:hidden;">' + pad + '</div>'
+    )
+
+
+def _wrap_html(tone_or_gradient, header_icon, header_title, body_html,
+               preheader=''):
+    """The one shell every email uses.
+
+    The signature is unchanged so the existing callers keep working, but the
+    first argument is now a TONE ('brand' / 'warn' / 'alert'). A legacy CSS
+    gradient string maps onto a tone rather than being honoured, because
+    per-email gradients are exactly what made the set look unrelated.
+
+    header_icon is accepted and ignored. An emoji in an H1 dates an email
+    instantly, and the title already says the same thing in words.
+    """
+    accent = _accent_for(tone_or_gradient)
+    head = (
+        '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="light only">'
+        '<title>' + str(header_title) + '</title></head>'
+    )
+    return (
+        head +
+        '<body style="margin:0;padding:0;background:' + GROUND +
+        ';font-family:' + FONT + ';-webkit-font-smoothing:antialiased;">'
+        + _preheader(preheader) +
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' border="0" style="background:' + GROUND + ';">'
+        '<tr><td align="center" style="padding:32px 16px;">'
+
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' border="0" style="max-width:600px;background:#ffffff;border:1px solid '
+        + RULE + ';border-radius:14px;overflow:hidden;">'
+
+        # Wordmark bar: a slim band of brand rather than a gradient block with
+        # an emoji in it. Gradients render unpredictably across clients, and
+        # the emoji carried nothing the title did not already carry.
+        '<tr><td style="background:' + TEAL + ';padding:14px 28px;">'
+        '<span style="color:#ffffff;font-size:15px;font-weight:700;'
+        'letter-spacing:-0.01em;">TimeTracker</span>'
+        '<span style="color:rgba(255,255,255,0.72);font-size:12px;">'
+        ' by MavOps</span></td></tr>'
+
+        # The only per-email colour, and only where the news genuinely differs.
+        '<tr><td style="height:3px;background:' + accent +
+        ';font-size:0;line-height:0;">&nbsp;</td></tr>'
+
+        '<tr><td style="padding:30px 28px 8px;">'
+        '<h1 style="margin:0;color:' + INK + ';font-size:21px;line-height:1.25;'
+        'font-weight:700;letter-spacing:-0.01em;">' + str(header_title) + '</h1>'
+        '</td></tr>'
+
+        '<tr><td style="padding:4px 28px 28px;color:' + INK_SOFT +
+        ';font-size:15px;line-height:1.55;">' + body_html + '</td></tr>'
+
+        '</table>'
+
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' border="0" style="max-width:600px;"><tr>'
+        '<td style="padding:16px 28px 0;text-align:center;color:' + INK_FAINT +
+        ';font-size:12px;line-height:1.5;">TimeTracker by MavOps &middot; '
+        '<a href="mailto:info@mavops.ai" style="color:' + TEAL +
+        ';text-decoration:none;">info@mavops.ai</a></td></tr></table>'
+
+        '</td></tr></table></body></html>'
+    )
 
 
 def _btn(url, gradient, text):
-    """Generate a CTA button."""
-    return f'''<div style="text-align:center;margin:24px 0;">
-    <a href="{url}" style="display:inline-block;background:linear-gradient(135deg,{gradient});color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:bold;font-size:16px;">{text}</a>
-</div>'''
+    """One button style.
+
+    The gradient argument is kept for existing callers and ignored: Outlook
+    drops CSS gradients entirely, which was rendering white text on a white
+    button. A solid fill in a table cell renders identically everywhere.
+    """
+    bg = _accent_for(gradient)
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
+        ' style="margin:26px 0 10px;"><tr>'
+        '<td style="border-radius:10px;background:' + bg + ';">'
+        '<a href="' + url + '" style="display:inline-block;padding:13px 26px;'
+        'color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;'
+        'border-radius:10px;">' + text + '</a>'
+        '</td></tr></table>'
+    )
 
 
 # ============================================================================
@@ -257,7 +370,7 @@ Add seats: {billing_url}
     )
 
 
-# ---------- 2. Onboarding invitation (rich) ----------
+# ---------- 2. Onboarding invitation ----------
 
 def send_onboarding_invitation(
     to_email: str,
@@ -272,87 +385,68 @@ def send_onboarding_invitation(
     the invite is single-use and expires, so a forwarded or archived message
     cannot be replayed into an account.
 
-    Order matters here. Set password -> land in the app -> download -> pair.
-    The download used to come first, which left people staring at an agent they
+    Order matters. Set password -> land in the app -> download -> pair. The
+    download used to come first, which left people staring at an agent they
     could not sign into yet.
     """
     help_url = f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')}/help"
-    invite_line = f"{invited_by} has invited" if invited_by else "You've been invited"
+    who = f"{invited_by} has invited you" if invited_by else "You have been invited"
 
-    plain = f"""Welcome to TimeTracker!
-
-{invite_line} you to join {org_name} on TimeTracker.
-
-SET UP YOUR ACCOUNT
+    plain = f"""{who} to join {org_name} on TimeTracker.
 
 Open this link to choose a password and finish setup:
 {invite_url}
 
-This link works once and expires in {expires_days} days.
+It works once and expires in {expires_days} days.
 
-WHAT HAPPENS NEXT
-
+What happens next:
   1. Choose your password (30 seconds)
-  2. We'll walk you through installing the desktop app
+  2. We walk you through installing the desktop app
   3. Your billable time starts capturing automatically
 
-Questions? Visit {help_url} or reply to this email.
+Questions? {help_url} or reply to this email.
 
 - The TimeTracker Team"""
 
-    html = f'''<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;">
-<tr><td align="center" style="padding:40px 20px;">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,0.05);">
-    <tr><td style="background:linear-gradient(135deg,#2B9D90 0%,#237F74 100%);padding:40px 40px 30px;text-align:center;">
-        <div style="width:60px;height:60px;background:rgba(255,255,255,0.2);border-radius:16px;margin:0 auto 20px;line-height:60px;"><span style="font-size:28px;">&#9201;&#65039;</span></div>
-        <h1 style="margin:0;color:#fff;font-size:28px;font-weight:700;">Welcome to TimeTracker!</h1>
-        <p style="margin:12px 0 0;color:rgba(255,255,255,0.9);font-size:16px;">{f"{invited_by} has invited you to join" if invited_by else "You've been invited to join"}</p>
-        <p style="margin:4px 0 0;color:#fff;font-size:20px;font-weight:600;">{org_name}</p>
-    </td></tr>
-    <tr><td style="padding:40px;">
-        <p style="margin:0 0 28px;color:#475569;font-size:16px;line-height:1.6;">TimeTracker automatically captures your billable time so you never forget to log hours again. Setup takes about two minutes &mdash; start by choosing a password.</p>
+    steps = "".join(
+        f'<tr><td style="padding:0 0 14px;">'
+        f'<span style="display:inline-block;width:22px;color:{TEAL};'
+        f'font-weight:700;">{n}.</span>'
+        f'<span style="color:{INK};font-weight:600;">{t}</span><br>'
+        f'<span style="display:inline-block;width:22px;">&nbsp;</span>'
+        f'<span style="color:{INK_FAINT};font-size:14px;">{d}</span>'
+        f'</td></tr>'
+        for n, t, d in [
+            (1, 'Choose your password', 'You pick it &mdash; we never email one.'),
+            (2, 'Install the desktop app',
+                'We hand you the right download and a code to connect it.'),
+            (3, 'Your time starts capturing',
+                'It runs quietly in the background and sorts work by client.'),
+        ]
+    )
 
-        <div style="text-align:center;margin:0 0 12px;">
-            <a href="{invite_url}" style="display:inline-block;background:linear-gradient(135deg,#2B9D90 0%,#237F74 100%);color:#fff;padding:16px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:16px;">Set your password &rarr;</a>
-        </div>
-        <p style="margin:0 0 32px;color:#94a3b8;font-size:13px;text-align:center;">This link works once and expires in {expires_days} days.</p>
+    body = (
+        f'<p style="margin:0 0 6px;">{who} to join '
+        f'<strong style="color:{INK};">{org_name}</strong>.</p>'
+        f'<p style="margin:0;">TimeTracker captures your billable time '
+        f'automatically, so you never have to remember to log hours. Setup '
+        f'takes about two minutes.</p>'
+        + _btn(invite_url, 'brand', 'Set your password')
+        + f'<p style="margin:0 0 22px;color:{INK_FAINT};font-size:13px;">'
+        f'This link works once and expires in {expires_days} days.</p>'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        f'width="100%" style="border-top:1px solid {RULE};padding-top:20px;">'
+        f'<tr><td style="padding:20px 0 12px;color:{INK};font-weight:600;">'
+        f'What happens next</td></tr>{steps}</table>'
+        f'<p style="margin:18px 0 0;color:{INK_FAINT};font-size:13px;'
+        f'word-break:break-all;">Button not working? Paste this into your '
+        f'browser:<br>{invite_url}</p>'
+    )
 
-        <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 28px;">
-
-        <h3 style="margin:0 0 18px;color:#1e293b;font-size:16px;font-weight:600;">What happens next</h3>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">1</div></td>
-            <td valign="top" style="padding-left:12px;">
-                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Choose your password</h4>
-                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">You pick it &mdash; we never email one.</p>
-            </td>
-        </tr></table>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">2</div></td>
-            <td valign="top" style="padding-left:12px;">
-                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Install the desktop app</h4>
-                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">We'll hand you the right download for your computer and a code to connect it.</p>
-            </td>
-        </tr></table>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:8px;"><tr>
-            <td width="44" valign="top"><div style="width:36px;height:36px;background:#d1f0ed;border-radius:50%;text-align:center;line-height:36px;color:#2B9D90;font-weight:700;font-size:16px;">3</div></td>
-            <td valign="top" style="padding-left:12px;">
-                <h4 style="margin:0 0 4px;color:#1e293b;font-size:15px;font-weight:600;">Your time starts capturing</h4>
-                <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">It runs quietly in the background and sorts your work by client.</p>
-            </td>
-        </tr></table>
-    </td></tr>
-    <tr><td style="background:#f8fafc;padding:24px 40px;border-top:1px solid #e2e8f0;">
-        <p style="margin:0 0 10px;color:#64748b;font-size:14px;text-align:center;">Questions? <a href="{help_url}" style="color:#2B9D90;text-decoration:none;font-weight:500;">Visit our Help Center</a> or reply to this email.</p>
-        <p style="margin:0;color:#94a3b8;font-size:12px;text-align:center;word-break:break-all;">Button not working? Paste this into your browser:<br>{invite_url}</p>
-    </td></tr>
-</table>
-<p style="margin:24px 0 0;color:#94a3b8;font-size:12px;text-align:center;">&copy; 2026 TimeTracker by MavOps</p>
-</td></tr></table>
-</body></html>'''
+    html = _wrap_html(
+        'brand', '', f'Welcome to {org_name}', body,
+        preheader='Choose a password and finish setup — takes about two minutes.',
+    )
 
     return send_email(
         to_email=to_email,
@@ -669,49 +763,10 @@ Your manager will review and approve it shortly.
     )
 
 
-# ---------- 7. Approval/rejection notification ----------
-
-def send_approval_notification(
-    to_email: str,
-    user_name: str,
-    period_str: str,
-    status: str,
-    total_hours: float = 0,
-    reviewer_notes: str = "",
-):
-    """Send approved/rejected notification."""
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai')
-
-    if status == 'approved':
-        body = f'''
-            <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
-            <p style="color:#475569;font-size:16px;line-height:1.5;">
-                Your timesheet for <strong>{period_str}</strong> ({_fmt_hours(total_hours)}) has been approved.
-            </p>
-            {_btn(frontend_url + "/timesheet", "#2B9D90 0%,#237F74 100%", "View Timesheet &rarr;")}'''
-        html = _wrap_html("#2B9D90 0%,#237F74 100%", "✅", "Timesheet Approved", body)
-        subject = f"✅ Timesheet Approved: {period_str}"
-        plain = f"Hi {user_name},\n\nYour timesheet for {period_str} ({_fmt_hours(total_hours)}) has been approved.\n\n- TimeTracker"
-    else:
-        feedback = f"\nFeedback: {reviewer_notes}" if reviewer_notes else "\nPlease review and resubmit."
-        reason_html = f'<div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:8px;margin:16px 0;"><p style="margin:0;color:#92400e;font-size:14px;">Feedback: {reviewer_notes}</p></div>' if reviewer_notes else ''
-        body = f'''
-            <p style="color:#475569;font-size:16px;line-height:1.5;margin-top:0;">Hi {user_name},</p>
-            <p style="color:#475569;font-size:16px;line-height:1.5;">Your timesheet for <strong>{period_str}</strong> needs revision.</p>
-            {reason_html}
-            {_btn(frontend_url + "/timesheet", "#ef4444 0%,#dc2626 100%", "Revise Timesheet &rarr;")}'''
-        html = _wrap_html("#ef4444 0%,#dc2626 100%", "⚠️", "Timesheet Needs Revision", body)
-        subject = f"❌ Timesheet Needs Revision: {period_str}"
-        plain = f"Hi {user_name},\n\nYour timesheet for {period_str} needs revision.{feedback}\n\nEdit: {frontend_url}/timesheet\n\n- TimeTracker"
-
-    return send_email(
-        to_email=to_email,
-        subject=subject,
-        html_content=html,
-        plain_content=plain,
-        categories=["approval_notification", status],
-    )
-
+# ---------- 7. (removed) ----------
+# send_approval_notification had no callers: the approve/reject pair below
+# replaced it, and the task that used to call it targeted a model that does
+# not exist. Deleted rather than left as a template nobody renders.
 
 # ---------- 8. Manager pending approvals ----------
 

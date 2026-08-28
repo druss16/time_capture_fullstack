@@ -23,9 +23,10 @@ from tracker.models import (
 from django.db import transaction
  
 from tracker.utils.client_name_match import (
-    build_token_index, detect_mismatch, detect_booked_absent, detect_title_client,
+    build_token_index, detect_mismatch, detect_title_client,
 )
 from tracker.utils.db_iter import keyset_iter
+from tracker.services.mismatch_scan import scan_buckets, bucket_payload
 
 logger = logging.getLogger(__name__)
 
@@ -1818,51 +1819,6 @@ def _confirmed_correct_block_ids(org_id):
     )
 
 
-def _record_absent(b, oid, absent, names, flagged, by_day, by_pair, counts, limit):
-    """Record one "booked client isn't in its own title" row.
-
-    Kept out of the scan loop because it books into the same tallies as a
-    mismatch but carries a different payload: `candidates` (plural, ranked)
-    where a mismatch carries one `looks_like_client_*` pair.
-    """
-    bucket = absent.get("bucket", "unsure")
-    day = timezone.localtime(b.start).date().isoformat()
-    cands = absent["candidates"]
-    by_day[bucket][day] += 1
-    # Pair on the top candidate only, so the "top pairs" summary stays readable;
-    # the row itself keeps the full ranked list.
-    by_pair[bucket][f'{names[b.client_id]} → ?{cands[0]["client_name"]}'] += 1
-    counts[bucket] += 1
-
-    if len(flagged[bucket]) >= limit:
-        return
-    flagged[bucket].append({
-        'block_id': b.id,
-        'org_id': oid,
-        'org_name': b.org.name if b.org_id else None,
-        'user': (b.user.get_full_name().strip() or b.user.username) if b.user_id else None,
-        'date': day,
-        'window_title': b.window_title[:200],
-        'app_name': getattr(b, 'app_name', '') or '',
-        'booked_client_id': b.client_id,
-        'booked_client_name': names[b.client_id],
-        'bucket': bucket,
-        'verdict': 'booked_absent',
-        'booked_is_internal': absent.get('booked_is_internal', False),
-        # Who put the block on this client. A person deliberately allocating
-        # time reads identically to a classifier error in the numbers, but the
-        # two want opposite responses, so the row says which it was.
-        'set_by': 'user' if (b.state_changed_by in ('user', 'user_edit', 'correction')
-                             or b.categorized_by == 'manual') else 'classifier',
-        'candidates': cands,
-        'confidence': {
-            'booked_coverage': absent['booked_coverage'],
-            'top_candidate_coverage': cands[0]['coverage'],
-            'abs_hit': cands[0]['abs_hit'],
-        },
-    })
-
-
 @api_view(['GET'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated, IsStaff])
@@ -1935,136 +1891,42 @@ def mavops_client_mismatches(request):
     if org_id:
         blocks = blocks.filter(org_id=org_id)
 
-    # Split everything by bucket: "client" = real billing-impacting mismatches,
-    # "internal" = firm/admin bucket noise (real but not a client billing error).
-    # "unsure" is a THIRD verdict, not a weaker mismatch: the booked client is
-    # absent from its own title, but same-family rivals tie so no single
-    # replacement can be named. Read-only — reconcile abstains on these.
-    _BUCKETS = ("client", "internal", "unsure")
-    flagged = {b: [] for b in _BUCKETS}
-    by_day = {b: defaultdict(int) for b in _BUCKETS}
-    by_pair = {b: defaultdict(int) for b in _BUCKETS}
-    counts = {b: 0 for b in _BUCKETS}
-    scanned = 0
-    # Rows a human already looked at and declared correct. Skipped rather than
-    # re-derived, so the judgement holds until someone reopens it.
-    dismissed_ids = _confirmed_correct_block_ids(org_id)
-    dismissed_hits = 0
-
+    # Split everything by bucket, and by the SAME core the firm-facing
+    # "Check for misfiled time" panel in Approvals runs (see
+    # services/mismatch_scan.scan_buckets). Two surfaces, one detector: a
+    # manager clearing a row over there and MavOps looking at this org have to
+    # be seeing the same verdict.
+    #
     # NOT .iterator(): that opens a named server-side cursor, and Neon's
     # transaction pooler can hand the next FETCH to a different backend session
     # ("cursor _django_curs_... does not exist"), which 500s this endpoint
     # intermittently. keyset_iter pages by pk instead. Descending so the `limit`
-    # truncation below keeps the most recent rows, as -start used to.
-    for b in keyset_iter(blocks, 1000, descending=True):
-        scanned += 1
-        oid = b.org_id
-        index = index_by_org.get(oid)
-        names = names_by_org.get(oid)
-        if not index or not names or b.client_id not in names:
-            continue
-
-        if b.id in dismissed_ids:
-            dismissed_hits += 1
-            continue
-
-        firm = firm_by_org.get(oid)
-        m = detect_mismatch(b.window_title, b.client_id, index, names, firm_name=firm)
-        if not m:
-            # No nameable replacement — but the title may still not name the
-            # booked client at all, which is its own reportable verdict.
-            absent = detect_booked_absent(
-                b.window_title, b.client_id, index, names, firm_name=firm,
-            )
-            if absent:
-                _record_absent(b, oid, absent, names, flagged, by_day, by_pair,
-                               counts, limit)
-            continue
-
-        bucket = m.get("bucket", "client")
-        day = timezone.localtime(b.start).date().isoformat()
-        by_day[bucket][day] += 1
-        by_pair[bucket][f'{names[b.client_id]} → {m["looks_like_client_name"]}'] += 1
-        counts[bucket] += 1
-
-        if len(flagged[bucket]) < limit:
-            flagged[bucket].append({
-                'block_id': b.id,
-                'org_id': oid,
-                'org_name': b.org.name if b.org_id else None,
-                'user': (b.user.get_full_name().strip() or b.user.username) if b.user_id else None,
-                'date': day,
-                'window_title': b.window_title[:200],
-                'app_name': getattr(b, 'app_name', '') or '',
-                'booked_client_id': b.client_id,
-                'booked_client_name': names[b.client_id],
-                'looks_like_client_id': m['looks_like_client_id'],
-                'looks_like_client_name': m['looks_like_client_name'],
-                'bucket': bucket,
-                # Carried here as well as on the target-unclear rows: this
-                # bucket has a one-click fix, so it is the one where NOT
-                # knowing a person chose the client is expensive. Block 59099
-                # is booked to First Baptist by a staff edit and reads as a
-                # clean auto-fixable mismatch without this.
-                'set_by': 'user' if (b.state_changed_by in ('user', 'user_edit', 'correction')
-                                     or b.categorized_by == 'manual') else 'classifier',
-                'confidence': {
-                    'looks_like_coverage': m['looks_like_coverage'],
-                    'abs_hit': m['looks_like_abs_hit'],
-                    'booked_coverage': m['booked_coverage'],
-                    'top_token_weight': m['top_token_weight'],
-                },
-            })
-
-    # pk-desc paging is only ~chronological (backfills and late syncs land out
-    # of order), so sort the sample the UI shows by the block's own date.
-    for rows in flagged.values():
-        rows.sort(key=lambda r: (r['date'], r['block_id']), reverse=True)
-
-    def _histogram(bucket):
-        d = by_day[bucket]
-        return [{'date': k, 'count': d[k]} for k in sorted(d.keys())]
-
-    def _pairs(bucket):
-        return sorted(
-            ({'pair': k, 'count': v} for k, v in by_pair[bucket].items()),
-            key=lambda x: -x['count'],
-        )[:25]
+    # truncation inside the scan keeps the most recent rows, as -start used to.
+    result = scan_buckets(
+        keyset_iter(blocks, 1000, descending=True),
+        names_by_org, index_by_org, firm_by_org,
+        limit=limit,
+        # Rows a human already looked at and declared correct. Skipped rather
+        # than re-derived, so the judgement holds until someone reopens it.
+        skip_block_ids=_confirmed_correct_block_ids(org_id),
+    )
 
     return Response({
         'params': {'org_id': int(org_id) if org_id else None, 'days': days},
-        'scanned_blocks': scanned,
+        'scanned_blocks': result['scanned'],
         # Surfaced rather than silent: a growing number here means either the
         # detector keeps raising the same false alarm, or someone is waving
         # away real errors. Both are worth being able to see.
-        'dismissed_blocks': dismissed_hits,
+        'dismissed_blocks': result['dismissed_hits'],
         # The money bucket — real client<->client mismatches (e.g. UltraTax
         # forward-fill). The verdict/histogram the UI leads with is THIS one.
-        'client': {
-            'total': counts['client'],
-            'returned': len(flagged['client']),
-            'histogram': _histogram('client'),
-            'top_pairs': _pairs('client'),
-            'mismatches': flagged['client'],
-        },
+        'client': bucket_payload(result, 'client'),
         # Firm/admin bucket noise — surfaced separately so it's visible and
         # accurate, but never inflates the client count or the verdict.
-        'internal': {
-            'total': counts['internal'],
-            'returned': len(flagged['internal']),
-            'histogram': _histogram('internal'),
-            'top_pairs': _pairs('internal'),
-            'mismatches': flagged['internal'],
-        },
+        'internal': bucket_payload(result, 'internal'),
         # Booked-client-is-absent rows. Rows carry `candidates` instead of a
         # single target, and no reconcile action, because the tie is the point.
-        'unsure': {
-            'total': counts['unsure'],
-            'returned': len(flagged['unsure']),
-            'histogram': _histogram('unsure'),
-            'top_pairs': _pairs('unsure'),
-            'mismatches': flagged['unsure'],
-        },
+        'unsure': bucket_payload(result, 'unsure'),
     })
 
 

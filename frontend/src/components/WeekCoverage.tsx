@@ -21,7 +21,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { safeFetchJson, API_BASE } from "@/lib/api";
-import { AlertTriangle } from "lucide-react";
+import { cn } from "@/lib/design-system";
+import { AlertTriangle, Clock } from "lucide-react";
 
 type DayState = "ok" | "gap" | "quiet" | "unknown" | "future";
 
@@ -49,8 +50,16 @@ export type Submission = {
   reason: string;
 };
 
+export type LateWork = {
+  hours: number;
+  blocks: number;
+  timesheet_status: string;
+  handled_automatically: boolean;
+};
+
 type Payload = {
   submission?: Submission;
+  late_work?: LateWork | null;
   week_start: string;
   captured_hours: number;
   gap_hours: number;
@@ -96,9 +105,41 @@ export default function WeekCoverage({
   if (loading || err || !data || !data.checkable) return null;
 
   const flagged = data.days.filter((d) => d.state === "gap");
-  if (flagged.length === 0) return null;
+  const late = data.late_work;
+  if (flagged.length === 0 && !late) return null;
 
   return (
+    <div className="space-y-2">
+    {late && (
+      <div
+        className={cn(
+          "flex flex-wrap items-start gap-x-2 gap-y-1 rounded-xl border px-3.5 py-2.5",
+          late.handled_automatically
+            ? "border-border/60 bg-muted/40"
+            : "border-amber-200 bg-amber-50"
+        )}
+      >
+        <Clock
+          className={cn(
+            "mt-0.5 h-3.5 w-3.5 shrink-0",
+            late.handled_automatically ? "text-muted-foreground" : "text-amber-600"
+          )}
+        />
+        <p
+          className={cn(
+            "min-w-0 flex-1 text-[13px] leading-relaxed",
+            late.handled_automatically ? "text-muted-foreground" : "text-amber-900"
+          )}
+        >
+          <span className="font-semibold">{late.hours.toFixed(1)}h</span> was captured after
+          this week was {late.timesheet_status === "submitted" ? "submitted" : "approved"}.{" "}
+          {late.handled_automatically
+            ? "It will be sent tonight along with everything else — nothing to do."
+            : "It is not on the submitted week and will not be sent. Ask your manager to reopen the week if it should go."}
+        </p>
+      </div>
+    )}
+    {flagged.length > 0 && (
     <div className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
       <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-amber-900">
@@ -121,6 +162,8 @@ export default function WeekCoverage({
         ))}
         . Worth a look before this goes out.
       </p>
+      </div>
+    )}
     </div>
   );
 }

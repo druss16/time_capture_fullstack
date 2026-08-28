@@ -8,6 +8,7 @@ from . import views_fee_basis
 from . import views_week_coverage
 from . import views_day_review
 from . import views_capture_status
+from . import views_review_misfiled
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -552,6 +553,10 @@ urlpatterns = [
 
     path("reports/activity/", views_reports.reports_activity, name="reports_activity"),
 
+    # Firm-facing misfiled-time sweep — the Approvals-tab counterpart to the
+    # MavOps mismatches tab above. Same detector, role-scoped to the firm.
+    path("review/misfiled/", views_review_misfiled.review_misfiled_time, name="review_misfiled_time"),
+    path("review/misfiled/resolve/", views_review_misfiled.review_misfiled_resolve, name="review_misfiled_resolve"),
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),
 
     path("mavops/mismatches/reconcile/", views_mavops.mavops_reconcile_mismatches, name="mavops_reconcile_mismatches"),

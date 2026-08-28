@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { TimesheetDetailDrawer } from './TimesheetDetailDrawer';
+import MisfiledTimeReview from './MisfiledTimeReview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -93,10 +94,12 @@ const PendingBadge: React.FC<{ days: number }> = ({ days }) => {
 
 const TimesheetRow: React.FC<{
   timesheet: Timesheet;
+  /** Blocks in this week the misfile sweep flagged as on the wrong client. */
+  misfiled?: { count: number; minutes: number } | undefined;
   onApprove: (id: number) => Promise<void>;
   onReject:  (id: number, reason: string) => Promise<void>;
   onView:    (id: number) => void;
-}> = ({ timesheet, onApprove, onReject, onView }) => {
+}> = ({ timesheet, misfiled, onApprove, onReject, onView }) => {
   const [expanded,        setExpanded]        = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason,    setRejectReason]    = useState('');
@@ -175,6 +178,14 @@ const TimesheetRow: React.FC<{
         <td className="px-3 py-2.5">
           <div className="flex items-center justify-end gap-1.5 flex-nowrap">
             {/* Badges */}
+            {misfiled && misfiled.count > 0 && (
+              <span
+                title={`${misfiled.count} confirmed block${misfiled.count === 1 ? '' : 's'} (${formatHours(misfiled.minutes / 60)}) look booked to the wrong client — open "Check for misfiled time" above`}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap"
+              >
+                <AlertTriangle className="w-3 h-3 shrink-0" /> {misfiled.count} misfiled
+              </span>
+            )}
             {timesheet.auto_submitted && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
                 <Clock className="w-3 h-3 shrink-0" /> Auto
@@ -325,6 +336,11 @@ const ApprovalQueue: React.FC = () => {
   const [queueData,      setQueueData]      = useState<QueueData>({ count: 0, timesheets: [] });
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [drawerTimesheetId, setDrawerTimesheetId] = useState<number | null>(null);
+  // Per-week misfile counts from the sweep panel, so each row can warn before
+  // anyone clicks Approve. Keyed by timesheet id (as a string, from JSON).
+  const [misfiled, setMisfiled] = useState<Record<string, { count: number; minutes: number }>>({});
+  // Bumped after an approve/reject so the sweep re-runs against the new queue.
+  const [sweepKey, setSweepKey] = useState(0);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
@@ -358,6 +374,7 @@ const ApprovalQueue: React.FC = () => {
       });
       showSuccess('Timesheet approved');
       fetchQueue();
+      setSweepKey(k => k + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approve failed');
     }
@@ -371,6 +388,7 @@ const ApprovalQueue: React.FC = () => {
       });
       showSuccess('Timesheet rejected');
       fetchQueue();
+      setSweepKey(k => k + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed');
     }
@@ -467,6 +485,12 @@ const ApprovalQueue: React.FC = () => {
         </div>
       )}
 
+      {/* ── Misfiled-time sweep ────────────────────────────────────────── */}
+      {/* Above the table on purpose: "is any of this on the wrong client?" is a
+          question to answer BEFORE approving, not after. Collapsed by default so
+          a clean queue stays a one-line reassurance. */}
+      <MisfiledTimeReview onCounts={setMisfiled} refreshKey={sweepKey} />
+
       {/* ── Table ──────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-border/60 overflow-hidden flex flex-col flex-1 min-h-0">
         <div className="overflow-auto flex-1">
@@ -507,6 +531,7 @@ const ApprovalQueue: React.FC = () => {
                   <TimesheetRow
                     key={ts.id}
                     timesheet={ts}
+                    misfiled={misfiled[String(ts.id)]}
                     onApprove={handleApprove}
                     onReject={handleReject}
                     onView={handleView}

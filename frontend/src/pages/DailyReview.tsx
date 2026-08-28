@@ -1081,19 +1081,12 @@ export default function DailyReview() {
                     <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
                   )}
                 </div>
-                {/* Finishing triage used to be a dead end — the page said "all
-                    caught up" and stopped, with no mention of the thing that
-                    sorted time is actually for. Name the next step and hand
-                    them to it. */}
-                {needsYouCount === 0 && (
-                  <Link
-                    to="/timesheet"
-                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-[13px] font-semibold text-white shadow-lg shadow-primary/20 transition-all hover:bg-primary/90"
-                  >
-                    Review &amp; submit your week
-                    <ChevronRight className="h-4 w-4" />
-                  </Link>
-                )}
+                {/* Caught up IS the end. This used to offer "Review & submit
+                    your week", which was wrong twice over: My Week sits in the
+                    nav directly above, and on a Thursday it invited submitting
+                    a week that had three days left to run. The week now sends
+                    itself once its days are reviewed, with Tuesday as a
+                    backstop, so finishing a day asks nothing further. */}
               </div>
             )}
           </div>

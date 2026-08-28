@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import PairDeviceCard from "@/components/PairDeviceCard";
+import { useItDeployed } from "@/lib/useItDeployed";
 import {
   Check,
   Download,
@@ -114,6 +115,7 @@ function StepShell({
 }
 
 export default function Welcome() {
+  const itDeployed = useItDeployed();
   const nav = useNavigate();
   const os = detectOS();
 
@@ -200,9 +202,29 @@ export default function Welcome() {
         <StepShell
           n={2}
           state={installState}
-          title="Install the desktop app"
-          blurb="This is the piece that watches which client you're working in. Everything else follows from it."
+          title={itDeployed ? "Your firm installs the desktop app" : "Install the desktop app"}
+          blurb={
+            itDeployed
+              ? "It arrives on its own and connects itself — nothing to download and no code to enter."
+              : "This is the piece that watches which client you're working in. Everything else follows from it."
+          }
         >
+          {itDeployed ? (
+            // Handing a member an installer at a firm that pushes an MSI puts
+            // an unmanaged, unmatched copy on the machine and breaks the
+            // provisioning map their rollout is measured by.
+            <p className="text-[13px] text-muted-foreground">
+              If it hasn't appeared after a day or two, your IT contact can push it —{" "}
+              <a
+                href="mailto:info@mavops.ai?subject=TimeTracker%20not%20installed%20on%20my%20computer"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+              >
+                tell us
+              </a>{" "}
+              and we'll help them.
+            </p>
+          ) : (
+          <>
           <div className="flex flex-wrap items-center gap-3">
             <a
               href={DOWNLOADS[os]}
@@ -224,6 +246,8 @@ export default function Welcome() {
           <p className="mt-3 text-[12.5px] text-muted-foreground/80">
             Open the installer once it downloads, then come back to this page.
           </p>
+          </>
+          )}
         </StepShell>
 
         <StepShell
@@ -232,7 +256,14 @@ export default function Welcome() {
           title="Connect this computer"
           blurb="Generate a code here and type it into the desktop app once."
         >
-          {pairState === "active" ? (
+          {itDeployed === true ? (
+            // Nothing to do: the MSI carries the org token and the machine
+            // pairs itself against the provisioning map.
+            <p className="text-[13px] text-muted-foreground">
+              Your firm installs TimeTracker centrally, so this connects on its own once
+              IT has pushed it — there's no code to enter.
+            </p>
+          ) : pairState === "active" ? (
             <div className="space-y-3">
               <PairDeviceCard />
               <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground">

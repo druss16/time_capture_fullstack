@@ -25,7 +25,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from tracker.models import AgentDevice, Block, OrganizationMembership
+from tracker.models import (
+    AgentDevice, Block, DeviceProvisioningMap, OrgDeploymentToken,
+    OrganizationMembership,
+)
 
 
 @api_view(['GET'])
@@ -47,8 +50,18 @@ def capture_status(request):
         user=request.user,
     ).aggregate(at=Max('last_seen_at'))['at']
 
+    # Whether this firm is rolled out BY IT. A provisioning map or a live
+    # deployment token both mean an MSI exists and machines are meant to arrive
+    # already paired — so telling one of their staff to generate a pairing code
+    # is asking them to work around their own IT department.
+    it_deployed = (
+        DeviceProvisioningMap.objects.filter(organization=org).exists()
+        or OrgDeploymentToken.objects.filter(organization=org, is_active=True).exists()
+    )
+
     now = timezone.now()
     return Response({
+        'it_deployed': it_deployed,
         # The load-bearing one. Ever captured anything at all?
         'has_captured': last_block is not None,
         'last_capture_at': last_block.isoformat() if last_block else None,

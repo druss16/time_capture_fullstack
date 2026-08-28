@@ -18,9 +18,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { safeFetchJson, API_BASE } from "@/lib/api";
-import { ArrowRight, Monitor, Coffee } from "lucide-react";
+import { ArrowRight, Monitor, Coffee, LifeBuoy } from "lucide-react";
 
 type Status = {
+  /** Rolled out by the firm's IT department, so nobody should self-pair. */
+  it_deployed: boolean;
   has_captured: boolean;
   last_capture_at: string | null;
   captured_recently: boolean;
@@ -71,6 +73,31 @@ export default function NoTimeYet({ isToday }: { isToday: boolean }) {
   }
 
   if (situation === "never_set_up") {
+    // At a firm rolled out by IT, the machine is meant to arrive already
+    // paired. Offering a setup wizard here asks somebody to work around their
+    // own IT department, and a device they pair by hand is a device that
+    // never matches the provisioning map.
+    if (status?.it_deployed) {
+      return (
+        <div className="mt-2.5">
+          <h1 className="text-[22px] font-bold tracking-[-0.01em] text-slate-900">
+            TimeTracker hasn't reached this computer yet.
+          </h1>
+          <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-slate-500">
+            Your firm installs it centrally, so there's nothing to set up here — it
+            arrives on its own. If it hasn't after a day or two, your IT contact can
+            push it, and we'll help them.
+          </p>
+          <a
+            href="mailto:info@mavops.ai?subject=TimeTracker%20not%20installed%20on%20my%20computer"
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50"
+          >
+            <LifeBuoy className="h-4 w-4" />
+            Tell us it's missing
+          </a>
+        </div>
+      );
+    }
     return (
       <div className="mt-2.5">
         <h1 className="text-[22px] font-bold tracking-[-0.01em] text-slate-900">

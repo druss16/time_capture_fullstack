@@ -427,6 +427,87 @@ def send_timesheet_reminders():
     }
 
 
+@shared_task(name='tracker.submit_settled_timesheets')
+def submit_settled_timesheets():
+    """Send a closed week the moment it is settled, instead of waiting for Tuesday.
+
+    A fixed deadline treats everyone as if they will leave it to the last
+    moment. Somebody who finished reviewing on Friday then waits until Tuesday
+    for no reason, and their manager waits with them.
+
+    So: each night, any draft for a week that has ENDED goes now if every day
+    in it that carries time has been reviewed. Tuesday stays as the backstop
+    for weeks that never settle, which is where auto_submit_timesheets picks up.
+
+    "Reviewed" is deliberately not "committed" — 87% of committed time was
+    committed by the classifier with nobody in the loop. It means a person
+    either edited something that day, or said "Looks right" on it.
+
+    Only runs for orgs with auto-submit on. A firm that submits by hand has
+    chosen the ritual, and should not have it done for them.
+    """
+    from tracker.models import Block, Timesheet
+    from tracker.views_day_review import reviewed_days
+
+    today = timezone.localdate()
+    # Only ever a week that has fully ended. Monday's own week is still open.
+    this_monday = today - timedelta(days=today.weekday())
+
+    drafts = (
+        Timesheet.objects
+        .filter(status='draft', week_start__lt=this_monday)
+        .select_related('user', 'org')
+    )
+
+    submitted, not_settled, empty = 0, 0, 0
+    for ts in drafts:
+        try:
+            if not getattr(ts.org, 'auto_submit_timesheets', False):
+                continue
+
+            week_end = ts.week_start + timedelta(days=6)
+            days_with_time = set(
+                Block.objects.filter(
+                    org=ts.org, user=ts.user,
+                    day__gte=ts.week_start, day__lte=week_end,
+                ).exclude(minutes=None).exclude(minutes=0)
+                .values_list('day', flat=True)
+            )
+            if not days_with_time:
+                empty += 1
+                continue
+
+            reviewed = reviewed_days(ts.org, ts.user, ts.week_start, week_end)
+            if not days_with_time.issubset(reviewed):
+                not_settled += 1
+                continue
+
+            # Same linking the submit endpoint does — blocks attach to a
+            # timesheet once, here, or they are stranded on no timesheet at all.
+            Block.objects.filter(
+                org=ts.org, user=ts.user,
+                day__gte=ts.week_start, day__lte=week_end,
+            ).update(timesheet=ts)
+
+            ts.submit(notes='[Sent automatically — every day reviewed]', auto=True)
+            submitted += 1
+            logger.info(
+                '[TIMESHEET] %s week %s sent early: all %s day(s) reviewed',
+                ts.user.username, ts.week_start, len(days_with_time),
+            )
+        except Exception as e:
+            logger.warning(
+                '[TIMESHEET] settled-submit failed for %s week %s: %s',
+                ts.user_id, ts.week_start, e, exc_info=True,
+            )
+
+    logger.info(
+        '[TIMESHEET] settled-submit: %s sent, %s still unreviewed, %s empty',
+        submitted, not_settled, empty,
+    )
+    return {'submitted': submitted, 'not_settled': not_settled, 'empty': empty}
+
+
 @shared_task(name='tracker.auto_submit_timesheets')
 def auto_submit_timesheets():
     """
@@ -512,7 +593,27 @@ def auto_submit_timesheets():
                 continue
 
             # Use the model's submit method with auto=True
-            timesheet.submit(notes='[Auto-submitted by system - Tuesday deadline]', auto=True)
+            # Name what was swept up unreviewed. A week that reaches the
+            # deadline is exactly the week nobody checked, and the note is the
+            # only place that fact survives onto the record.
+            try:
+                from tracker.views_day_review import reviewed_days
+                _end = last_monday + timedelta(days=6)
+                _with_time = set(
+                    Block.objects.filter(
+                        org=org, user=user, day__gte=last_monday, day__lte=_end,
+                    ).exclude(minutes=None).exclude(minutes=0)
+                    .values_list('day', flat=True)
+                )
+                _unreviewed = _with_time - reviewed_days(org, user, last_monday, _end)
+            except Exception:
+                _unreviewed = set()
+
+            note = '[Auto-submitted by system - Tuesday deadline]'
+            if _unreviewed:
+                days = ', '.join(d.strftime('%a') for d in sorted(_unreviewed))
+                note += f' — {len(_unreviewed)} day(s) not reviewed: {days}'
+            timesheet.submit(notes=note, auto=True)
 
             auto_submitted += 1
             logger.info(

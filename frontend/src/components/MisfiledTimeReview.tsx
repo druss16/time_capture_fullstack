@@ -27,7 +27,14 @@
 // 4. THE EVIDENCE IS THE HEADLINE. The window title is the reason the row is
 //    here and the only thing that settles it, so it gets read weight, not a
 //    dim monospace footnote.
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+// 5. A CLICK NEVER COSTS A RELOAD. Resolving a row used to re-run the whole
+//    server sweep — thousands of blocks — behind a spinner, and a global `busy`
+//    flag disabled every other button until it came back. Reviewing is a
+//    rhythm: look, decide, click, next. So a resolved row is hidden instantly,
+//    the request goes out in the background, requests never serialise, and the
+//    payload is reconciled quietly once the clicking stops. Same fix as Daily
+//    Review's Needs-you lane, for the same reason.
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw,
@@ -100,6 +107,18 @@ export interface MisfiledResponse {
 
 type Tone = 'red' | 'amber' | 'slate';
 
+/** A block and the client it currently sits on — enough to reverse a move. */
+interface Ref { id: number; clientId: number }
+
+/** One resolved row, with everything needed to put it back. */
+interface Done {
+  ids: number[];
+  label: string;
+  /** The client each block sat on before, so a move can be reversed exactly. */
+  from: Ref[];
+  kind: 'move' | 'keep';
+}
+
 // Colour is split by JOB, not by bucket, because the two were fighting.
 //
 // TONES marks the PROBLEM — the rail down the row and the count badge. Red
@@ -154,10 +173,9 @@ const FlagRow: React.FC<{
   clients: { id: number; name: string }[];
   selected: boolean;
   onToggle: () => void;
-  onMove: (blockIds: number[], clientId: number, clientName: string) => Promise<void>;
-  onCorrect: (blockIds: number[]) => Promise<void>;
-  busy: boolean;
-}> = ({ row, tone, week, clients, selected, onToggle, onMove, onCorrect, busy }) => {
+  onMove: (rows: Ref[], clientId: number, clientName: string) => void;
+  onCorrect: (rows: Ref[]) => void;
+}> = ({ row, tone, week, clients, selected, onToggle, onMove, onCorrect }) => {
   const [picking, setPicking] = useState(false);
   const [pick, setPick] = useState<number | ''>('');
   const t = TONES[tone];
@@ -179,6 +197,9 @@ const FlagRow: React.FC<{
     : targets.length === 1
     ? ACTIONS.suggest
     : ACTIONS.choice;
+
+  // What this row needs to be undone: itself, and where it currently sits.
+  const self: Ref[] = [{ id: row.block_id, clientId: row.booked_client_id }];
 
   const byHand = row.set_by === 'user';
   // Sub-2-minute blocks are real but rarely worth a manager's attention; they
@@ -248,10 +269,9 @@ const FlagRow: React.FC<{
             {targets.map((tg) => (
               <button
                 key={tg.id}
-                disabled={busy}
-                onClick={() => onMove([row.block_id], tg.id, tg.name)}
+                onClick={() => onMove(self, tg.id, tg.name)}
                 className={cn(
-                  'px-2.5 py-1 rounded-md text-xs font-semibold disabled:opacity-50 transition-colors max-w-[280px] truncate',
+                  'px-2.5 py-1 rounded-md text-xs font-semibold transition-colors max-w-[280px] truncate',
                   actionCls
                 )}
                 title={`Move this block to ${tg.name}`}
@@ -263,9 +283,8 @@ const FlagRow: React.FC<{
             <span className="w-px h-4 bg-border/70" aria-hidden />
 
             <button
-              disabled={busy}
-              onClick={() => onCorrect([row.block_id])}
-              className="px-2 py-1 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-50 transition-colors"
+              onClick={() => onCorrect(self)}
+              className="px-2 py-1 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
               title={`Leave it on ${row.booked_client_name} and stop flagging it`}
             >
               Keep
@@ -285,11 +304,11 @@ const FlagRow: React.FC<{
                   ))}
                 </select>
                 <button
-                  disabled={!pick || busy}
+                  disabled={!pick}
                   onClick={() => {
                     const c = clients.find((x) => x.id === pick);
                     if (!c) return;
-                    onMove([row.block_id], c.id, c.name);
+                    onMove(self, c.id, c.name);
                     setPicking(false);
                     setPick('');
                   }}
@@ -336,14 +355,18 @@ const Section: React.FC<{
   clients: { id: number; name: string }[];
   selected: Set<number>;
   toggle: (id: number) => void;
-  onMove: (blockIds: number[], clientId: number, clientName: string) => Promise<void>;
-  onCorrect: (blockIds: number[]) => Promise<void>;
-  busy: boolean;
+  hidden: Set<number>;
+  onMove: (rows: Ref[], clientId: number, clientName: string) => void;
+  onCorrect: (rows: Ref[]) => void;
   defaultOpen: boolean;
-}> = ({ title, tone, bucket, weeks, clients, selected, toggle, onMove, onCorrect, busy, defaultOpen }) => {
+}> = ({ title, tone, bucket, weeks, clients, selected, toggle, hidden, onMove, onCorrect, defaultOpen }) => {
   const [open, setOpen] = useState(defaultOpen);
   const t = TONES[tone];
-  if (!bucket.total) return null;
+  // Resolved rows leave immediately; the count follows them out rather than
+  // waiting for the server, so the section can empty itself as you work.
+  const rows = bucket.mismatches.filter((r) => !hidden.has(r.block_id));
+  const total = bucket.total - (bucket.mismatches.length - rows.length);
+  if (total <= 0) return null;
 
   return (
     <div className="border-t border-border/60">
@@ -360,14 +383,14 @@ const Section: React.FC<{
             t.count
           )}
         >
-          {bucket.total}
+          {total}
         </span>
         <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">{title}</span>
       </button>
 
       {open && (
         <div>
-          {bucket.mismatches.map((row) => (
+          {rows.map((row) => (
             <FlagRow
               key={row.block_id}
               row={row}
@@ -378,12 +401,11 @@ const Section: React.FC<{
               onToggle={() => toggle(row.block_id)}
               onMove={onMove}
               onCorrect={onCorrect}
-              busy={busy}
             />
           ))}
-          {bucket.returned < bucket.total && (
+          {rows.length < total && (
             <p className="px-4 py-2 text-xs text-slate-400 border-t border-border/40">
-              Showing {bucket.returned} of {bucket.total}.
+              Showing {rows.length} of {total}.
             </p>
           )}
         </div>
@@ -402,34 +424,74 @@ const MisfiledTimeReview: React.FC<{
 }> = ({ onCounts, refreshKey = 0 }) => {
   const [data, setData] = useState<MisfiledResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkClient, setBulkClient] = useState<number | ''>('');
   const [open, setOpen] = useState(false);
-  // "Keep" is one click on a dense list and it WILL get mis-clicked, so the way
-  // back is right there rather than a database edit.
-  const [undo, setUndo] = useState<{ blockIds: number[]; label: string } | null>(null);
+  // Rows the reviewer has dealt with, hidden the moment they click. The server
+  // is still catching up; the screen is not made to wait for it.
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  // What has been done, newest first — the count people watch tick up, and the
+  // way back from a mis-click. Optimistic hiding makes a wrong click cheaper to
+  // make and quieter to notice, so undo stops being a nicety here.
+  const [log, setLog] = useState<Done[]>([]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // A ref, not state: the reconcile has to read the CURRENT number of in-flight
+  // requests, and a closure would capture a stale one and un-hide live rows.
+  const inflight = useRef(0);
+  const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=open`);
       setData(d);
-      setSelected(new Set());
-      onCounts?.(d.by_timesheet || {});
+      // Anything successfully resolved is simply absent from the fresh payload,
+      // and anything still in it was never applied — so a clean reload makes
+      // the optimistic set redundant either way.
+      setHidden(new Set());
+      if (!silent) {
+        setSelected(new Set());
+        setLog([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not run the check');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [onCounts]);
+  }, []);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
+  // Quietly re-sync once the clicking stops. Deliberately never while a request
+  // is still out: reconciling mid-flight would flash a resolved row back.
+  const scheduleReconcile = useCallback(() => {
+    if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+    reconcileTimer.current = setTimeout(() => {
+      if (inflight.current === 0) load(true);
+    }, 2500);
+  }, [load]);
+
+  useEffect(() => () => {
+    if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+  }, []);
+
   const weeks = useMemo(
     () => new Map((data?.weeks || []).map((w) => [w.timesheet_id, w])),
+    [data]
+  );
+
+  // Bulk actions only carry block ids, but undoing a move needs the client
+  // each block came from — so look them up before firing.
+  const refsFor = useCallback(
+    (ids: number[]): Ref[] => {
+      const byId = new Map<number, number>();
+      for (const b of [data?.client, data?.unsure, data?.internal]) {
+        for (const r of b?.mismatches || []) byId.set(r.block_id, r.booked_client_id);
+      }
+      return ids.map((id) => ({ id, clientId: byId.get(id) ?? 0 }));
+    },
     [data]
   );
 
@@ -440,60 +502,153 @@ const MisfiledTimeReview: React.FC<{
       return next;
     });
 
-  const resolve = async (body: Record<string, unknown>) => {
-    setBusy(true);
-    setError(null);
+  // Fires and returns; callers do NOT await before updating the screen. No
+  // global busy flag either — one row's request must never disable another's
+  // button, which is what stopped people clicking straight down the list.
+  const send = useCallback(async (body: Record<string, unknown>) => {
+    inflight.current += 1;
     try {
       return await safeFetchJson<any>(`${API_BASE}/review/misfiled/resolve/`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
     } finally {
-      setBusy(false);
+      inflight.current -= 1;
     }
-  };
+  }, []);
 
-  const onMove = async (blockIds: number[], clientId: number, clientName: string) => {
-    try {
-      const r = await resolve({ block_ids: blockIds, action: 'move', client_id: clientId });
-      // Report honestly: the server refuses invoiced time and approved weeks,
-      // and silently showing "moved" for those would be a lie the reviewer
-      // only discovers at billing.
-      if (r?.skipped) {
-        setError(
-          `Moved ${r.moved} to ${clientName}. ${r.skipped} left alone — ` +
-          `${(r.skips || []).map((s: any) => s.reason).filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join('; ')}.`
-        );
-      }
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Move failed');
+  /** Put rows back on screen when the server would not take the change. */
+  const unhide = useCallback((ids: number[], why: string) => {
+    if (!ids.length) {
+      setError(why);
+      return;
     }
-  };
+    const back = new Set(ids);
+    setHidden((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    // Subtract only the refused rows. A bulk move where three landed and one
+    // was refused must keep undo for the three that actually moved.
+    setLog((prev) =>
+      prev
+        .map((d) => ({
+          ...d,
+          ids: d.ids.filter((id) => !back.has(id)),
+          from: d.from.filter((f) => !back.has(f.id)),
+        }))
+        .filter((d) => d.ids.length > 0)
+    );
+    setError(why);
+  }, []);
 
-  const onCorrect = async (blockIds: number[]) => {
-    try {
-      await resolve({ block_ids: blockIds, action: 'correct' });
-      setUndo({ blockIds, label: `${blockIds.length} kept as filed` });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not clear that');
+  const hide = useCallback((ids: number[]) => {
+    setHidden((prev) => new Set([...prev, ...ids]));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+
+  const onMove = useCallback(
+    (rows: { id: number; clientId: number }[], clientId: number, clientName: string) => {
+      const ids = rows.map((r) => r.id);
+      hide(ids);
+      setLog((prev) => [{ ids, label: `Moved to ${clientName}`, from: rows, kind: 'move' }, ...prev]);
+
+      send({ block_ids: ids, action: 'move', client_id: clientId })
+        .then((r) => {
+          // The server refuses invoiced time and approved weeks. Showing those
+          // as moved would be a lie the reviewer only discovers at billing, so
+          // the rows come back with the reason attached.
+          if (r?.skipped) {
+            const reasons = (r.skips || [])
+              .map((x: any) => x.reason)
+              .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
+              .join('; ');
+            const refused = (r.skips || []).map((x: any) => x.block_id);
+            unhide(refused, `${r.skipped} left alone — ${reasons}.`);
+          }
+          scheduleReconcile();
+        })
+        .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Move failed'));
+    },
+    [hide, send, unhide, scheduleReconcile]
+  );
+
+  const onCorrect = useCallback(
+    (rows: { id: number; clientId: number }[]) => {
+      const ids = rows.map((r) => r.id);
+      hide(ids);
+      setLog((prev) => [
+        { ids, label: `Kept as filed`, from: rows, kind: 'keep' },
+        ...prev,
+      ]);
+      send({ block_ids: ids, action: 'correct' })
+        .then(() => scheduleReconcile())
+        .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Could not clear that'));
+    },
+    [hide, send, unhide, scheduleReconcile]
+  );
+
+  /** Reverse the most recent action and drop it from the log. */
+  const undoLast = useCallback(() => {
+    const last = log[0];
+    if (!last) return;
+    setLog((prev) => prev.slice(1));
+    setHidden((prev) => {
+      const next = new Set(prev);
+      last.ids.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    if (last.kind === 'keep') {
+      send({ block_ids: last.ids, action: 'reopen' }).then(() => scheduleReconcile());
+      return;
     }
-  };
+    // A move is undone by moving each block back to the client it came from.
+    // Grouped by destination, because the endpoint takes one client per call.
+    // A zero clientId means the origin was never resolved, and sending it would
+    // just 404 — so those are skipped rather than guessed at.
+    const byClient = new Map<number, number[]>();
+    last.from.forEach((f) => {
+      if (!f.clientId) return;
+      byClient.set(f.clientId, [...(byClient.get(f.clientId) || []), f.id]);
+    });
+    Promise.all(
+      [...byClient.entries()].map(([cid, ids]) =>
+        send({ block_ids: ids, action: 'move', client_id: cid })
+      )
+    ).then(() => scheduleReconcile());
+  }, [log, send, scheduleReconcile]);
 
-  const onUndo = async () => {
-    if (!undo) return;
-    try {
-      await resolve({ block_ids: undo.blockIds, action: 'reopen' });
-      setUndo(null);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Undo failed');
+  // Counts follow the optimistic hides, so header badges, section counts and
+  // the queue-row badges all drain together as rows are resolved.
+  const visible = useCallback(
+    (b: Bucket | undefined) =>
+      b ? b.total - b.mismatches.filter((r) => hidden.has(r.block_id)).length : 0,
+    [hidden]
+  );
+
+  // One place computes what the parent badges show, so they can never disagree
+  // with what is on screen.
+  useEffect(() => {
+    if (!data) return;
+    const counts: Record<string, { count: number; minutes: number }> = {};
+    for (const row of data.client.mismatches) {
+      if (hidden.has(row.block_id) || row.timesheet_id == null) continue;
+      const k = String(row.timesheet_id);
+      const c = counts[k] || (counts[k] = { count: 0, minutes: 0 });
+      c.count += 1;
+      c.minutes += row.minutes || 0;
     }
-  };
+    onCounts?.(counts);
+  }, [data, hidden, onCounts]);
 
-  const clientTotal = data?.client.total || 0;
-  const unsureTotal = data?.unsure.total || 0;
+  const clientTotal = visible(data?.client);
+  const unsureTotal = visible(data?.unsure);
   const flagged = clientTotal + unsureTotal;
 
   return (
@@ -556,12 +711,12 @@ const MisfiledTimeReview: React.FC<{
               )
             )}
             <button
-              onClick={load}
-              disabled={loading || busy}
+              onClick={() => load()}
+              disabled={loading}
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-40"
               title="Re-run the check"
             >
-              <RefreshCw className={cn('w-4 h-4', (loading || busy) && 'animate-spin')} />
+              <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
             </button>
           </div>
         </div>
@@ -584,11 +739,11 @@ const MisfiledTimeReview: React.FC<{
                   ))}
                 </select>
                 <button
-                  disabled={!bulkClient || busy}
+                  disabled={!bulkClient}
                   onClick={() => {
                     const c = data.clients.find((x) => x.id === bulkClient);
                     if (!c) return;
-                    onMove([...selected], c.id, c.name);
+                    onMove(refsFor([...selected]), c.id, c.name);
                     setBulkClient('');
                   }}
                   className="px-3 py-1.5 rounded-md text-xs font-semibold bg-primary text-white hover:opacity-90 disabled:opacity-40"
@@ -596,8 +751,7 @@ const MisfiledTimeReview: React.FC<{
                   Move
                 </button>
                 <button
-                  disabled={busy}
-                  onClick={() => onCorrect([...selected])}
+                  onClick={() => onCorrect(refsFor([...selected]))}
                   className="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
                 >
                   Keep
@@ -619,9 +773,9 @@ const MisfiledTimeReview: React.FC<{
               clients={data.clients}
               selected={selected}
               toggle={toggle}
+              hidden={hidden}
               onMove={onMove}
               onCorrect={onCorrect}
-              busy={busy}
               defaultOpen
             />
             <Section
@@ -632,9 +786,9 @@ const MisfiledTimeReview: React.FC<{
               clients={data.clients}
               selected={selected}
               toggle={toggle}
+              hidden={hidden}
               onMove={onMove}
               onCorrect={onCorrect}
-              busy={busy}
               defaultOpen={data.client.total === 0}
             />
             <Section
@@ -645,9 +799,9 @@ const MisfiledTimeReview: React.FC<{
               clients={data.clients}
               selected={selected}
               toggle={toggle}
+              hidden={hidden}
               onMove={onMove}
               onCorrect={onCorrect}
-              busy={busy}
               defaultOpen={false}
             />
           </div>
@@ -655,14 +809,17 @@ const MisfiledTimeReview: React.FC<{
       </div>
 
       {/* Undo / error strips — outside the card so they read as transient */}
-      {undo && (
+      {log.length > 0 && (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-lg border bg-emerald-50 border-emerald-200 text-sm">
-          <span className="text-emerald-700 font-medium">{undo.label} — won&rsquo;t be flagged again.</span>
+          <span className="text-emerald-800 font-medium">
+            {log.length} resolved
+            <span className="text-emerald-700/70 font-normal"> · {log[0].label}</span>
+          </span>
           <button
-            onClick={onUndo}
+            onClick={undoLast}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 hover:underline shrink-0"
           >
-            <Undo2 className="w-3.5 h-3.5" /> Undo
+            <Undo2 className="w-3.5 h-3.5" /> Undo last
           </button>
         </div>
       )}

@@ -2,42 +2,60 @@
 /**
  * What Daily Review shows when there is nothing to review.
  *
- * "Nothing tracked yet." was technically true and completely unhelpful: it read
- * identically to a brand-new member whose agent was never installed, a member
- * whose agent had died, and a partner looking at a Sunday. Those need three
- * different sentences, so this asks the server which one applies.
+ * Three different things produce an empty day — never set up, set up but the
+ * agent is not running, and simply not working that day — and they need three
+ * different sentences. An earlier version decided between them from
+ * /api/devices/, which is guarded by @login_required and redirects a
+ * token-authenticated caller to a login page rather than returning anything.
+ * The empty result read as "no device", so a partner with four hundred blocks
+ * that week was told the desktop app was not connected and offered a setup
+ * wizard, on a day he was simply out of the office.
+ *
+ * Capture history is the honest signal and cannot be wrong in that direction:
+ * somebody who has captured time obviously has a working agent. Setup is only
+ * ever suggested to someone who has never captured anything at all.
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { safeFetchJson, API_BASE } from "@/lib/api";
 import { ArrowRight, Monitor, Coffee } from "lucide-react";
 
-type Device = { device_id: string; last_seen_at?: string | null };
+type Status = {
+  has_captured: boolean;
+  last_capture_at: string | null;
+  captured_recently: boolean;
+  last_device_seen_at: string | null;
+  device_seen_recently: boolean;
+};
 
-type Situation = "checking" | "no_device" | "device_quiet" | "nothing_this_period";
+type Situation = "checking" | "never_set_up" | "agent_quiet" | "day_off";
+
+function daysAgo(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
 
 export default function NoTimeYet({ isToday }: { isToday: boolean }) {
   const [situation, setSituation] = useState<Situation>("checking");
+  const [status, setStatus] = useState<Status | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    safeFetchJson<Device[] | { devices: Device[] }>(`${API_BASE}/devices/`)
-      .then((d) => {
+    safeFetchJson<Status>(`${API_BASE}/capture-status/`)
+      .then((s) => {
         if (cancelled) return;
-        const devices = Array.isArray(d) ? d : d?.devices || [];
-        if (devices.length === 0) return setSituation("no_device");
-        if (!isToday) return setSituation("nothing_this_period");
-
-        // Paired but silent for a long stretch on a day we'd expect activity:
-        // usually the agent is not running, which is worth saying out loud.
-        const freshest = devices
-          .map((x) => (x.last_seen_at ? new Date(x.last_seen_at).getTime() : 0))
-          .reduce((a, b) => Math.max(a, b), 0);
-        const quiet = !freshest || Date.now() - freshest > 6 * 60 * 60 * 1000;
-        setSituation(quiet ? "device_quiet" : "nothing_this_period");
+        setStatus(s);
+        if (!s.has_captured) return setSituation("never_set_up");
+        // Captured before, but the agent has gone quiet on a day we would
+        // expect it. Only ever raised about today — a past empty day is
+        // history, not something to act on.
+        if (isToday && !s.device_seen_recently) return setSituation("agent_quiet");
+        setSituation("day_off");
       })
       .catch(() => {
-        if (!cancelled) setSituation("nothing_this_period");
+        // Never guess "not set up" from a failed request. Saying nothing is
+        // better than telling a working user their agent is missing.
+        if (!cancelled) setSituation("day_off");
       });
     return () => {
       cancelled = true;
@@ -52,15 +70,15 @@ export default function NoTimeYet({ isToday }: { isToday: boolean }) {
     );
   }
 
-  if (situation === "no_device") {
+  if (situation === "never_set_up") {
     return (
       <div className="mt-2.5">
         <h1 className="text-[22px] font-bold tracking-[-0.01em] text-slate-900">
           Let's get your time flowing.
         </h1>
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-slate-500">
-          Nothing has been captured because the desktop app isn't connected to this account
-          yet. It takes about two minutes and then this page fills itself in.
+          Nothing has been captured on this account yet. Connecting the desktop app takes
+          about two minutes, and then this page fills itself in.
         </p>
         <Link
           to="/welcome"
@@ -72,16 +90,18 @@ export default function NoTimeYet({ isToday }: { isToday: boolean }) {
     );
   }
 
-  if (situation === "device_quiet") {
+  if (situation === "agent_quiet") {
+    const d = daysAgo(status?.last_device_seen_at ?? null);
     return (
       <div className="mt-2.5">
         <h1 className="text-[22px] font-bold tracking-[-0.01em] text-slate-900">
           Nothing tracked yet today.
         </h1>
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-slate-500">
-          Your computer is paired, but TimeTracker hasn't heard from it in a while. If you've
-          been working, the desktop app probably isn't running — open it and this page will
-          catch up on its own.
+          If you've been working, the desktop app probably isn't running — TimeTracker
+          last heard from your computer{" "}
+          {d === null ? "a while ago" : d === 0 ? "earlier today" : d === 1 ? "yesterday" : `${d} days ago`}.
+          Open it and this page will catch up on its own.
         </p>
         <Link
           to="/devices"
@@ -94,16 +114,18 @@ export default function NoTimeYet({ isToday }: { isToday: boolean }) {
     );
   }
 
+  // Nothing captured, and nothing wrong. Most often a day off — say so plainly
+  // rather than implying something needs fixing.
   return (
     <div className="mt-2.5">
       <h1 className="flex items-center gap-2.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900">
         <Coffee className="h-5 w-5 text-slate-400" />
-        {isToday ? "Nothing tracked yet today." : "Nothing tracked in this stretch."}
+        {isToday ? "Nothing tracked yet today." : "No time on this day."}
       </h1>
       <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-slate-500">
         {isToday
-          ? "Your time will appear here as you work — usually within a few minutes of starting."
-          : "Try a different date or a wider range."}
+          ? "Your time appears here as you work — usually within a few minutes of starting."
+          : "Nothing was captured. If that's a day you worked, you can add it by hand."}
       </p>
     </div>
   );

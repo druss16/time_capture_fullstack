@@ -7,6 +7,7 @@ from .integrations.clio import views as clio_views
 from . import views_fee_basis
 from . import views_week_coverage
 from . import views_day_review
+from . import views_capture_status
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -510,6 +511,8 @@ urlpatterns = [
     path("billing/fee-basis/", views_fee_basis.fee_basis, name="fee_basis"),
     path("billing/week-coverage/", views_week_coverage.week_coverage, name="week_coverage"),
     path("daily/<str:day>/reviewed/", views_day_review.day_review, name="day_review"),
+    path("daily/<str:day>/seen/", views_day_review.day_seen, name="day_seen"),
+    path("capture-status/", views_capture_status.capture_status, name="capture_status"),
     path("clients/<int:client_id>/work-summary/", views_work_summary.client_work_summary, name="client_work_summary"),
     path("work-summary/week/", views_work_summary.my_week_summary, name="my_week_summary"),
     path("work-summaries/clients/", views_work_summary.firm_period_clients, name="firm_period_clients"),

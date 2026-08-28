@@ -848,6 +848,20 @@ export default function DailyReview() {
   // Disable "next" once the current range already reaches today (never let the
   // user page into a fully-future range). end === date for the day view, so this
   // matches the old `date >= today` behavior.
+  // Opening a single day IS the review — the act people already perform. The
+  // server ignores it for a future day or one with no time, and the staleness
+  // rule means later work un-reviews the day anyway, so this can only ever
+  // mean "seen, as of now".
+  useEffect(() => {
+    if (range !== "day" || busy || totalMin <= 0) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      safeFetchJson(`${API_BASE}/daily/${date}/seen/`, { method: "POST" }).catch(() => {});
+    }, 2500);   // a beat, so paging quickly through days marks none of them
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [date, range, busy, totalMin]);
+
   const atLatestRange = rangeBounds(date, range).end >= todayIso();
 
   return (

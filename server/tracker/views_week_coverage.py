@@ -32,7 +32,7 @@ from datetime import date, timedelta
 from collections import defaultdict
 
 from django.db import models
-from django.db.models import Sum, Min, Max
+from django.db.models import Sum, Min, Max, Count, Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -118,6 +118,49 @@ def _submission_mode(org) -> dict:
         'sends_on_submit': sends_on_submit,
         'has_approver': has_approver,
         'reason': ' '.join(p for p in (what, when) if p),
+    }
+
+
+def _late_work(org, user, start, end, submission) -> dict | None:
+    """Time that landed after the week was already sent, and is now stranded.
+
+    Blocks are attached to a timesheet exactly once, by the submit endpoint, at
+    the moment of submission. Nothing attaches them afterwards. And a submitted
+    or approved timesheet cannot be submitted again (submit() takes only draft
+    or rejected) or reopened (reopen() takes only rejected) — so an approved
+    week has no route back at all short of a manager rejecting it.
+
+    The result: bill two hours on Friday evening after submitting on Friday
+    afternoon, and those two hours are on no timesheet and reach no billing
+    system, silently. The push fires on a state transition and there are no
+    transitions left.
+
+    Firms on 'continuous' are immune — that task walks a rolling date window and
+    never looks at a timesheet — so this reports the difference rather than
+    alarming people whose setup already handles it.
+    """
+    ts = Timesheet.objects.filter(org=org, user=user, week_start=start).first()
+    if not ts or ts.status not in ('submitted', 'approved', 'locked'):
+        return None
+
+    stranded = (
+        Block.objects.filter(org=org, user=user, day__gte=start, day__lte=end,
+                             timesheet__isnull=True)
+        .filter(Q(classification_state='committed') | Q(is_categorized=True))
+        .exclude(classification_state__in=('proposed', 'suppressed'))
+    )
+    agg = stranded.aggregate(mins=Sum('minutes'), n=Count('id'))
+    minutes = agg['mins'] or 0
+    if minutes < MATERIAL_GAP_MINUTES:
+        return None
+
+    trigger = (getattr(org, 'clio_push_trigger', 'approve') or 'approve')
+    return {
+        'hours': round(minutes / 60.0, 2),
+        'blocks': agg['n'] or 0,
+        'timesheet_status': ts.status,
+        # True when the nightly push will sweep it up on its own tonight.
+        'handled_automatically': trigger == 'continuous' and bool(submission.get('destination')),
     }
 
 
@@ -229,8 +272,10 @@ def week_coverage(request):
         })
 
     captured_total = sum(d["captured_hours"] for d in days)
+    submission = _submission_mode(org)
     return Response({
-        "submission": _submission_mode(org),
+        "submission": submission,
+        "late_work": _late_work(org, user, start, end, submission),
         "week_start": start.isoformat(),
         "week_end": end.isoformat(),
         "user_id": user.id,

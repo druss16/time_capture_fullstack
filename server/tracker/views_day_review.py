@@ -21,6 +21,7 @@ Reviewedness is therefore two things, and only one of them is stored:
 from datetime import date
 
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -83,6 +84,56 @@ def reviewed_days(org, user, start, end) -> set:
         if activity_at is None or human_at >= activity_at:
             reviewed.add(day)
     return reviewed
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def day_seen(request, day):
+    """POST /api/daily/<YYYY-MM-DD>/seen/ — Daily Review opened this day.
+
+    A button asking somebody to confirm a day they have just read is friction
+    that buys nothing: pressing it proves no more attention than opening the
+    page did. What either act actually establishes is that the person had the
+    day in front of them and did not object, so the honest thing is to record
+    the act they already perform rather than invent a second one.
+
+    Deliberately narrow. Only a SINGLE-day view counts — paging through a month
+    must not vouch for thirty days — and only a day that has time on it, since
+    there is nothing to agree with otherwise. And it is not permanent: the
+    staleness rule means work landing afterwards un-reviews the day, so this
+    can only ever mean "seen, as of now".
+    """
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related('organization').first()
+    if not membership:
+        return Response({'error': 'No organization'}, status=403)
+    org = membership.organization
+
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        return Response({'error': 'day must be YYYY-MM-DD'}, status=400)
+    if d > date.today():
+        return Response({'seen': False, 'reason': 'future'})
+
+    has_time = Block.objects.filter(
+        org=org, user=request.user, day=d,
+    ).exclude(minutes=None).exclude(minutes=0).exists()
+    if not has_time:
+        return Response({'seen': False, 'reason': 'no_time'})
+
+    DayReview.objects.update_or_create(
+        org=org, user=request.user, day=d, defaults={},
+    )
+    # update_or_create with empty defaults will not touch an existing row, and
+    # reviewed_at is auto_now — so re-open it explicitly to move the timestamp
+    # forward. Without this, a day reviewed at 2pm stays stamped 2pm forever
+    # and the staleness rule never clears.
+    DayReview.objects.filter(org=org, user=request.user, day=d).update(
+        reviewed_at=timezone.now(),
+    )
+    return Response({'seen': True, 'day': d.isoformat()})
 
 
 @api_view(['GET', 'POST', 'DELETE'])

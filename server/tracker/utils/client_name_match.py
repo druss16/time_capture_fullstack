@@ -44,6 +44,22 @@ _STOPish = {
     "accounts", "temp", "temps", "tax", "client", "clients",
 }
 
+# Generic words that nonetheless say WHAT KIND of organisation this is. A
+# cemetery and a church of the same saint are different clients with different
+# bills, and this word is the only thing in either name that separates them.
+#
+# Deliberately a subset of _STOPish, not the whole of it. The rest of _STOPish
+# is connectors and legal noise — "st", "the", "of", "inc" — and "st" appears in
+# nearly every title in this book of business. Letting a connector stand in for
+# a head noun (see _corroborated) is what rubber-stamped every "St. X" client
+# that happened to share a first name with the title.
+_HEAD_NOUNS = {
+    "church", "parish", "cemetery", "cemeteries", "school", "chapel",
+    "cathedral", "basilica", "academy", "rectory", "shrine", "seminary",
+    "diocese", "ministry", "ministries", "center", "centre", "association",
+    "foundation", "society", "council", "hall", "home", "clinic", "hospital",
+}
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -415,7 +431,13 @@ def _corroborated(title_tokens: set[str], cid: int, index: dict) -> bool:
         return False                     # a distinctive word of the name is missing
     if len(distinctive) >= 2:
         return True
-    return bool(generic & title_tokens)  # lone word needs its head noun alongside
+    # A lone distinctive word needs its HEAD NOUN alongside — the word that says
+    # what kind of organisation this is. Any generic token used to count, and
+    # "st" is generic: "St. John's Church" is {john, church, st}, so a title
+    # reading "St. John's CEMETERY bills" corroborated the CHURCH off the shared
+    # "st" and won at 97% coverage, while the real St John Cemetery never
+    # surfaced. A connector cannot stand in for the head noun.
+    return bool(generic & _HEAD_NOUNS & title_tokens)
 
 
 def detect_booked_absent(

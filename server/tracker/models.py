@@ -3244,6 +3244,30 @@ class Timesheet(models.Model):
         
         self.save(update_fields=['total_hours', 'billable_hours', 'non_billable_hours', 'total_amount', 'updated_at'])
     
+    def _holds_misfiled_time(self):
+        """True if this week's confirmed time is booked to the wrong client.
+
+        Only ever consulted to decide whether an owner's week may skip review.
+        Wrapped: a detector hiccup must not be able to block submission, so on
+        any failure this answers False and the previous behaviour stands. That
+        deliberately fails OPEN — the alternative is a broken matcher freezing
+        every owner timesheet in the product.
+        """
+        try:
+            from tracker.services.mismatch_scan import week_has_client_misfiles
+            return week_has_client_misfiles(self.org, self.user, self.week_start)
+        except Exception:
+            # This module has no module-level logger; the surrounding code
+            # imports logging per method, so do the same. A bare `logger` here
+            # would raise NameError inside the very except meant to keep
+            # submission safe, masking the real error and taking submit() down.
+            import logging
+            logging.getLogger(__name__).exception(
+                "[TIMESHEET] misfile pre-check failed for timesheet %s; "
+                "allowing the normal owner auto-approve", self.pk,
+            )
+            return False
+
     def submit(self, notes='', auto=False, force_conflicts=None):
         """
         Submit timesheet for approval.
@@ -3269,11 +3293,23 @@ class Timesheet(models.Model):
         
         self.save()
         
-        # Auto-approve owner timesheets — no one above them to review
+        # Auto-approve owner timesheets — no one above them to review.
+        #
+        # Except when the week contains time booked to the wrong client. An
+        # owner's week never enters the approval queue, so nothing between
+        # capture and the Clio push ever looks at it: submit -> approve -> bill,
+        # unattended. That is fine for a clean week and exactly wrong for one
+        # carrying a client-name mismatch, because the first human to see it
+        # would be whoever queries the invoice.
+        #
+        # So a flagged week stays 'submitted' and lands in the queue like
+        # anyone else's, where the misfile check on Approvals can show it and
+        # the owner can fix it and approve it themselves (owners may approve
+        # their own submitted timesheets, so this cannot strand them).
         membership = OrganizationMembership.objects.filter(
             user=self.user, organization=self.org
         ).first()
-        if membership and membership.role == 'owner':
+        if membership and membership.role == 'owner' and not self._holds_misfiled_time():
             self.approve(
                 approved_by=self.user, notes='Auto-approved (owner)',
                 force_conflicts=force_conflicts,

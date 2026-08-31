@@ -586,7 +586,8 @@ const MisfiledTimeReview: React.FC<{
               <p className="text-xs text-slate-400 truncate">
                 {loading ? 'Scanning…'
                   : data ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked`
-                         + ` across ${data.weeks.length} week${data.weeks.length === 1 ? '' : 's'} awaiting approval`
+                         + ` across ${data.weeks.length} week${data.weeks.length === 1 ? '' : 's'} `
+                         + (scope === 'queue' ? 'awaiting approval' : 'submitted or in progress')
                   : '—'}
               </p>
             </div>

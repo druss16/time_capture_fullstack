@@ -411,57 +411,32 @@ const ApprovalQueue: React.FC = () => {
   return (
     <div className="flex flex-col h-[calc(100vh-56px-48px-32px)] min-h-0 space-y-2">
 
-      {/* ── ROW 1: Title / Stats ───────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-border/60 px-5 h-14 flex items-center justify-between gap-4 shrink-0">
-
-        {/* Left: title + count badge */}
+      {/* ── Title ──────────────────────────────────────────────────────── */}
+      {/* Deliberately thin. The billable/value/auto-sub cluster that used to sit
+          here now lives in step 2's own header, next to the table those numbers
+          describe — three stats floating above two numbered steps read as a
+          fourth thing to deal with. */}
+      <div className="bg-white rounded-xl border border-border/60 px-5 h-12 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-3 shrink-0">
           <h2 className="text-base font-bold text-slate-800">Approvals</h2>
-          {queueData.count > 0 && (
+          {queueData.count > 0 ? (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-700 border-amber-200">
               <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" />
               {queueData.count} pending
             </span>
-          )}
-          {queueData.count === 0 && !loading && (
+          ) : !loading && (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
               <CheckCircle2 className="w-3.5 h-3.5" /> All caught up
             </span>
           )}
         </div>
-
-        {/* Right: aggregate stats + refresh */}
-        <div className="flex items-center gap-4">
-          {queueData.count > 0 && (
-            <div className="flex items-center gap-5 pr-4 border-r border-border/50">
-              <div className="text-right">
-                <p className="text-sm font-bold tabular-nums text-primary leading-none">
-                  {formatHours(totalBillable)}
-                </p>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Billable</p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-bold tabular-nums text-slate-700 leading-none">
-                  {formatCurrency(totalAmount)}
-                </p>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Total value</p>
-              </div>
-              {autoCount > 0 && (
-                <div className="text-right">
-                  <p className="text-sm font-bold tabular-nums text-amber-600 leading-none">{autoCount}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">Auto-sub</p>
-                </div>
-              )}
-            </div>
-          )}
-          <button
-            onClick={fetchQueue}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        </div>
+        <button
+          onClick={fetchQueue}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          title="Refresh"
+        >
+          <RefreshCw className="w-4 h-4" />
+        </button>
       </div>
 
       {/* ── Banners ────────────────────────────────────────────────────── */}
@@ -485,14 +460,39 @@ const ApprovalQueue: React.FC = () => {
         </div>
       )}
 
-      {/* ── Misfiled-time sweep ────────────────────────────────────────── */}
-      {/* Above the table on purpose: "is any of this on the wrong client?" is a
-          question to answer BEFORE approving, not after. Collapsed by default so
-          a clean queue stays a one-line reassurance. */}
-      <MisfiledTimeReview onCounts={setMisfiled} refreshKey={sweepKey} />
+      {/* ── STEP 1 ─────────────────────────────────────────────────────── */}
+      {/* Ordered on purpose. "Is any of this on the wrong client?" is a question
+          to answer BEFORE approving, not after — approvals are final and trigger
+          billing. Numbering it says so without a paragraph of instructions, and
+          the marker turns into a green tick once this step is clear. */}
+      <MisfiledTimeReview step={1} onCounts={setMisfiled} refreshKey={sweepKey} />
 
-      {/* ── Table ──────────────────────────────────────────────────────── */}
+      {/* ── STEP 2 ─────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-border/60 overflow-hidden flex flex-col flex-1 min-h-0">
+        <div className="px-5 py-3 flex items-center justify-between gap-4 border-b border-border/60 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-xs font-bold bg-slate-800 text-white">
+              2
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-slate-800">Approve the weeks</p>
+              <p className="text-xs text-slate-400 truncate">
+                {queueData.count === 0
+                  ? 'Nothing waiting'
+                  : `${queueData.count} timesheet${queueData.count === 1 ? '' : 's'} · ${formatHours(totalBillable)} billable · ${formatCurrency(totalAmount)}`}
+              </p>
+            </div>
+          </div>
+          {/* Moved up out of the footer: whether anyone actually looked at these
+              weeks before they were sent is a fact you want BEFORE you approve,
+              not a note under the last row. */}
+          {autoCount > 0 && (
+            <p className="text-xs text-amber-600 flex items-center gap-1.5 shrink-0 text-right">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>{autoCount} auto-submitted — nobody reviewed {autoCount === 1 ? 'it' : 'them'}</span>
+            </p>
+          )}
+        </div>
         <div className="overflow-auto flex-1">
           <table className="w-full border-collapse text-sm" style={{ minWidth: 680 }}>
 
@@ -548,12 +548,7 @@ const ApprovalQueue: React.FC = () => {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
             Approvals are final and trigger billing workflow
           </p>
-          {autoCount > 0 && (
-            <p className="text-xs text-amber-600 flex items-center gap-1.5">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              {autoCount} timesheet{autoCount !== 1 ? 's were' : ' was'} auto-submitted — review carefully
-            </p>
-          )}
+
         </div>
       </div>
 

@@ -313,23 +313,29 @@ const MisfiledTimeReview: React.FC<{
   onCounts?: (counts: Record<string, { count: number; minutes: number }>) => void;
   /** Re-run the sweep whenever the queue changes underneath it. */
   refreshKey?: number;
-}> = ({ onCounts, refreshKey = 0 }) => {
+  /** Rendered as a numbered step when this sits in an ordered flow. */
+  step?: number;
+}> = ({ onCounts, refreshKey = 0, step }) => {
   const [data, setData] = useState<MisfiledResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [showInternal, setShowInternal] = useState(false);
+  // Default: only the weeks awaiting approval — the list this panel sits on.
+  // A reviewer can widen to weeks still in progress without leaving the page.
+  const [scope, setScope] = useState<'queue' | 'open'>('queue');
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<Done[]>([]);
 
   const inflight = useRef(0);
   const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false, useScope?: 'queue' | 'open') => {
+    const sc = useScope || scope;
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=queue`);
+      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=${sc}`);
       setData(d);
       // Anything applied is absent from the fresh payload, and anything still in
       // it was never applied — so a clean reload makes the optimistic set moot.
@@ -340,7 +346,7 @@ const MisfiledTimeReview: React.FC<{
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -536,17 +542,40 @@ const MisfiledTimeReview: React.FC<{
           <button
             onClick={() => setOpen((o) => !o)}
             className="flex items-center gap-3 text-left min-w-0"
-            disabled={total === 0 && !loading}
           >
-            {total > 0 && (open
+            {/* Always expandable. It used to disable itself when nothing was
+                flagged — which, once the scope narrowed to the approval queue,
+                is most of the time. Clicking a header and getting no response
+                reads as broken, and "nothing is wrong" is worth being able to
+                open and read the basis of. */}
+            {(open
               ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
               : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />)}
-            <ScanSearch className="w-4 h-4 shrink-0 text-primary" />
+            {step != null ? (
+              /* In a numbered flow the step marker replaces the icon: a reviewer
+                 following steps needs to know WHERE they are more than they need
+                 the feature's own logo, and two glyphs side by side is clutter.
+                 It turns green when this step is done. */
+              <span className={cn(
+                'w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-xs font-bold',
+                loading ? 'bg-slate-100 text-slate-400'
+                  : total === 0 ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-800 text-white'
+              )}>
+                {!loading && total === 0 ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : step}
+              </span>
+            ) : (
+              <ScanSearch className="w-4 h-4 shrink-0 text-primary" />
+            )}
             <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-800">Check for misfiled time</p>
+              <p className="text-sm font-bold text-slate-800">
+                {step != null ? 'Check the time is filed right' : 'Check for misfiled time'}
+              </p>
               <p className="text-xs text-slate-400 truncate">
                 {loading ? 'Scanning…'
-                  : data ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked` : '—'}
+                  : data ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked`
+                         + ` across ${data.weeks.length} week${data.weeks.length === 1 ? '' : 's'} awaiting approval`
+                  : '—'}
               </p>
             </div>
           </button>
@@ -579,8 +608,31 @@ const MisfiledTimeReview: React.FC<{
         </div>
 
         {/* ── The ledger ─────────────────────────────────────────────────── */}
-        {open && data && !loading && total > 0 && (
+        {open && data && !loading && (
           <div className="border-t border-border/60 max-h-[52vh] overflow-auto">
+            {total === 0 && (
+              <div className="px-5 py-7 text-center">
+                <CheckCircle2 className="w-8 h-8 text-emerald-200 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-slate-600">
+                  Every confirmed block names the client it&rsquo;s booked to
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {data.scanned_blocks.toLocaleString()} blocks across {data.weeks.length}{' '}
+                  week{data.weeks.length === 1 ? '' : 's'}{' '}
+                  {scope === 'queue' ? 'awaiting approval' : 'submitted or in progress'}
+                  {data.dismissed_blocks > 0 && ` · ${data.dismissed_blocks} previously left as filed`}
+                </p>
+                {scope === 'queue' && (
+                  <button
+                    onClick={() => { setScope('open'); load(false, 'open'); }}
+                    className="mt-3 text-xs font-semibold text-primary hover:underline"
+                  >
+                    Also check weeks still in progress →
+                  </button>
+                )}
+              </div>
+            )}
+            {total > 0 && (
             <table className="w-full table-fixed border-collapse" style={{ minWidth: 720 }}>
               {HEAD}
               <tbody>
@@ -590,6 +642,7 @@ const MisfiledTimeReview: React.FC<{
                 ))}
               </tbody>
             </table>
+            )}
 
             {/* Firm/admin buckets: real, never a client billing error, so they
                 stay out of the count and behind a click. */}
@@ -619,6 +672,17 @@ const MisfiledTimeReview: React.FC<{
               </>
             )}
 
+            {scope === 'open' && (
+              <p className="border-t border-border/40 px-4 py-2 text-[11px] text-slate-400 flex items-center justify-between gap-3">
+                <span>Including weeks still in progress — those aren&rsquo;t yours to approve yet.</span>
+                <button
+                  onClick={() => { setScope('queue'); load(false, 'queue'); }}
+                  className="font-semibold text-primary hover:underline shrink-0"
+                >
+                  Just the approval queue
+                </button>
+              </p>
+            )}
             {!!data.unconfirmed?.blocks && (
               <p className="border-t border-border/40 px-4 py-2.5 text-[11px] text-slate-400">
                 {data.unconfirmed.blocks.toLocaleString()} blocks

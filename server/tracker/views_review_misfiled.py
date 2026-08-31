@@ -78,12 +78,16 @@ def _reviewer_org(request):
     return org, None
 
 
-# What a `scope` value covers. Default is `open` rather than `queue` because
-# scoping to the approval queue alone reads as "nothing is wrong" when the
-# truth is "nothing is wrong YET": on org 21 every currently-flagged block sat
-# in the week still in progress, not in the five weeks awaiting approval. A
-# misfile is cheapest to fix before it is submitted, so the in-progress weeks
-# are shown alongside the queue, sectioned by status rather than mixed into it.
+# What a `scope` value covers. Default is `queue` — the weeks actually awaiting
+# approval — because the panel sits directly above the approval table and has to
+# describe THAT list. Scoping wider was tried and read as a bug: the panel
+# reported 4 findings while the six timesheets listed beneath it had none,
+# because every finding sat in a draft week nobody had submitted yet.
+#
+# Nothing is lost by the narrower scope. The detector is stateless and re-runs
+# from scratch, so a misfile sitting in a draft week today is flagged the moment
+# that week is submitted — which is the moment a manager can act on it. Approved
+# and locked weeks stay out entirely, and writes to them are refused.
 SCOPES = {
     'queue': ('submitted',),
     'open': ('submitted', 'draft'),
@@ -107,8 +111,8 @@ def _timesheets_in_scope(request, org):
         except (TypeError, ValueError):
             return qs.none()
 
-    scope = (request.GET.get('scope') or 'open').strip()
-    statuses = SCOPES.get(scope, SCOPES['open'])
+    scope = (request.GET.get('scope') or 'queue').strip()
+    statuses = SCOPES.get(scope, SCOPES['queue'])
     return qs.filter(status__in=statuses).order_by('-week_start')
 
 
@@ -246,7 +250,7 @@ def review_misfiled_time(request):
     return Response({
         'params': {
             'org_id': org.id,
-            'scope': (request.GET.get('scope') or 'open'),
+            'scope': (request.GET.get('scope') or 'queue'),
             'timesheet_ids': list(sheet_by_id.keys()),
             'limit': limit,
         },

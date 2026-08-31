@@ -10,35 +10,29 @@
 // This runs the same detector as the MavOps Mismatches tab (one shared core on
 // the server), pointed at the weeks in front of the reviewer.
 //
-// ── Design rules ────────────────────────────────────────────────────────────
-// 1. EVERY CLIENT NAME APPEARS ONCE. The candidate IS the button. Naming a
-//    client in a chip and again in a "Move to <chip>" button doubled the text
-//    in the densest part of the row for no added meaning.
-// 2. THE ROW IS A SENTENCE WITH NO PROSE. `booked → [target] [target]` says
-//    "it's here, these are the alternatives" without connectives. Which bucket
-//    a row is in is already stated by its section header; repeating "the title
-//    names someone else" on every row is saying it twice.
-// 3. GREEN IS THE ANSWER; RED IS THE PROBLEM. The destination button is the
-//    thing you are meant to press, so it is green — filled when the detector
-//    named one client, outlined when it only got there by elimination. Red is
-//    reserved for the rail and the count, which mark that something is wrong.
-//    A same-family tie gets neutral buttons and no green at all: colouring one
-//    of them would invent a winner the detector explicitly refused to pick.
-// 4. THE EVIDENCE IS THE HEADLINE. The window title is the reason the row is
-//    here and the only thing that settles it, so it gets read weight, not a
-//    dim monospace footnote.
-// 5. A CLICK NEVER COSTS A RELOAD. Resolving a row used to re-run the whole
-//    server sweep — thousands of blocks — behind a spinner, and a global `busy`
-//    flag disabled every other button until it came back. Reviewing is a
-//    rhythm: look, decide, click, next. So a resolved row is hidden instantly,
-//    the request goes out in the background, requests never serialise, and the
-//    payload is reconciled quietly once the clicking stops. Same fix as Daily
-//    Review's Needs-you lane, for the same reason.
+
+// ── Why it looks like a ledger ──────────────────────────────────────────────
+// Earlier passes labelled every row ("now on X → suggested Y") and stacked four
+// lines per finding. Read down a list, those labels are the same six words over
+// and over — furniture, not information. A table says them ONCE, in the header,
+// and every row below is only the values that differ: what was open, where it
+// is filed, where it looks like it belongs.
+//
+// Rules carried over from those passes, because they still hold:
+//   · GREEN IS THE ANSWER, RED IS THE PROBLEM. The move control is green — it
+//     is the button you are meant to press, and nothing that fixes something
+//     should be coloured like a hazard.
+//   · A TIE NEVER LOOKS LIKE A RECOMMENDATION. Where the detector returned more
+//     than one candidate they are listed as choices instead of one being
+//     dressed up as the answer.
+//   · A CLICK NEVER COSTS A RELOAD. Rows resolve optimistically, requests never
+//     serialise, and the payload reconciles quietly once the clicking stops.
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw,
-  ScanSearch, Undo2, HelpCircle,
+  ScanSearch, Undo2, Check, X,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -114,8 +108,6 @@ export interface MisfiledResponse {
   clients: { id: number; name: string }[];
 }
 
-type Tone = 'red' | 'amber' | 'slate';
-
 /** A block and the client it currently sits on — enough to reverse a move. */
 interface Ref { id: number; clientId: number }
 
@@ -128,33 +120,53 @@ interface Done {
   kind: 'move' | 'keep';
 }
 
-// Colour is split by JOB, not by bucket, because the two were fighting.
-//
-// TONES marks the PROBLEM — the rail down the row and the count badge. Red
-// there means "this one is wrong", which is what red is for.
-//
-// ACTIONS marks the ANSWER, and is always green, because green is the button
-// you are meant to press. Painting the fix red made the remedy look like the
-// hazard: a reviewer saw a red button labelled with a client name and hesitated
-// over the one click that puts the time where it belongs.
-const TONES: Record<Tone, { rail: string; count: string }> = {
-  red:   { rail: 'bg-red-400',   count: 'bg-red-100 text-red-700' },
-  amber: { rail: 'bg-amber-400', count: 'bg-amber-100 text-amber-800' },
-  slate: { rail: 'bg-slate-300', count: 'bg-slate-100 text-slate-600' },
-};
+/** A row flattened for the table, with what it needs to render and act. */
+interface LedgerRow {
+  row: Row;
+  targets: { id: number; name: string }[];
+  /** Exactly one target, and the machine is confident about it. */
+  confident: boolean;
+  /** Nobody has accepted this block yet. */
+  pending: boolean;
+  week: Week | undefined;
+}
 
-const ACTIONS = {
-  // One target and the detector named it: this IS the right answer, so it is
-  // filled. The strongest thing on the row.
-  recommend: 'bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-600',
-  // One target, but the detector only got there by elimination (the booked
-  // client is simply absent from its own title). Green, because it is still the
-  // answer — outlined, because the machine is suggesting rather than asserting.
-  suggest: 'bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50',
-  // A same-family tie. Deliberately NOT green: with two candidates there is no
-  // right choice to highlight, and colouring one green would invent a winner
-  // the detector explicitly refused to pick.
-  choice: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50',
+// ── Title cleanup ─────────────────────────────────────────────────────────────
+//
+// A raw window title is mostly chrome: a date the filename already carries, an
+// extension, and the application advertising itself. None of it helps a person
+// recognise the work, and all of it makes the column unreadable at a glance.
+// The untouched title stays on hover, so nothing is actually hidden.
+//
+//   "8-30-2026 St. John's Cemetery bills etc_.pdf - Work - Microsoft Edge"
+//     -> "St. John's Cemetery bills"
+//   "champions fitness_CAMEZA - File Explorer"  ->  "champions fitness_CAMEZA"
+const APP_TAIL = new RegExp(
+  '^(' + [
+    'file explorer', 'explorer', 'microsoft\\s*edge', 'google chrome', 'chrome',
+    'firefox', 'safari', 'outlook', 'excel', 'word', 'powerpoint', 'onenote',
+    'microsoft teams', 'teams', 'adobe acrobat.*', 'acrobat.*', 'work', 'personal',
+    'quickbooks.*', 'ultratax.*', 'notepad',
+  ].join('|') + ')$', 'i'
+);
+
+const cleanTitle = (title: string, app: string): string => {
+  const raw = (title || '').trim();
+  if (!raw) return '';
+  const parts = raw.split(/\s+[-–—]\s+/).map((p) => p.trim()).filter(Boolean);
+  const appName = (app || '').replace(/\.exe$/i, '').trim().toLowerCase();
+  while (parts.length > 1) {
+    const last = parts[parts.length - 1].toLowerCase();
+    if (APP_TAIL.test(last) || (appName && last === appName)) parts.pop();
+    else break;
+  }
+  let out = parts.join(' - ');
+  out = out.replace(/^\d{1,4}[-._/]\d{1,2}[-._/]\d{2,4}\s+/, '');   // leading date
+  out = out.replace(/\.(pdf|xlsx?|docx?|pptx?|csv|qbw|txt|msg|eml)$/i, '');
+  out = out.replace(/[\s_\-.]+$/, '');
+  out = out.replace(/\s+etc$/i, '');
+  // Never hand back something shorter than useless.
+  return out.trim().length >= 3 ? out.trim() : raw;
 };
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -170,292 +182,127 @@ const formatMinutes = (m: number): string => {
 const formatDate = (iso: string): string =>
   new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-/** "Qbw.Exe" → "Qbw". The .exe is noise in a sentence a person reads. */
-const cleanApp = (app: string): string => (app || '').replace(/\.exe$/i, '');
+// ── One ledger line ───────────────────────────────────────────────────────────
 
-// ── One flagged block ─────────────────────────────────────────────────────────
-
-const FlagRow: React.FC<{
-  row: Row;
-  tone: Tone;
-  week: Week | undefined;
+const LedgerLine: React.FC<{
+  item: LedgerRow;
   clients: { id: number; name: string }[];
-  selected: boolean;
-  onToggle: () => void;
   onMove: (rows: Ref[], clientId: number, clientName: string) => void;
   onCorrect: (rows: Ref[]) => void;
-}> = ({ row, tone, week, clients, selected, onToggle, onMove, onCorrect }) => {
+}> = ({ item, clients, onMove, onCorrect }) => {
+  const { row, targets, confident, pending, week } = item;
   const [picking, setPicking] = useState(false);
-  const [pick, setPick] = useState<number | ''>('');
-  const t = TONES[tone];
   const locked = week ? !week.editable : false;
-
-  // One render path for both buckets. A wrong-client row carries a single named
-  // target; a tie carries ranked candidates. Either way they are the choices,
-  // so they are the buttons.
-  const isTie = row.verdict === 'booked_absent';
-  const detected = isTie
-    ? (row.candidates || []).map((c) => ({ id: c.client_id, name: c.client_name }))
-    : row.looks_like_client_id
-    ? [{ id: row.looks_like_client_id, name: row.looks_like_client_name || '?' }]
-    : [];
-  // On an unconfirmed row the classifier has usually ALREADY staged the fix.
-  // That proposal leads, because making a reviewer re-derive an answer the
-  // system already worked out is the nagging this panel exists to avoid.
-  const proposed = row.proposed_client_id && row.proposed_client_name
-    ? [{ id: row.proposed_client_id, name: row.proposed_client_name }]
-    : [];
-  const targets = [
-    ...proposed,
-    ...detected.filter((d) => !proposed.some((p) => p.id === d.id)),
-  ];
-
-  // Green marks the answer, and only where there IS one. Two candidates means
-  // the detector abstained, so neither gets to look like the recommendation.
-  const styleFor = (i: number) => {
-    if (proposed.length) return i === 0 ? ACTIONS.recommend : ACTIONS.choice;
-    if (!isTie) return ACTIONS.recommend;
-    return targets.length === 1 ? ACTIONS.suggest : ACTIONS.choice;
-  };
-
-  // What this row needs to be undone: itself, and where it currently sits.
   const self: Ref[] = [{ id: row.block_id, clientId: row.booked_client_id }];
-
-  const byHand = row.set_by === 'user';
-  // Sub-2-minute blocks are real but rarely worth a manager's attention; they
-  // stay visible and stay dimmed rather than being hidden.
-  const trivial = row.minutes < 2;
+  const one = targets.length === 1 ? targets[0] : null;
 
   return (
-    <div
-      className={cn(
-        'relative flex gap-3 pl-4 pr-4 py-3 border-t border-border/40 transition-colors',
-        selected ? 'bg-primary/[0.04]' : 'hover:bg-slate-50/70'
-      )}
-    >
-      <span className={cn('absolute left-0 top-0 bottom-0 w-[3px]', t.rail)} aria-hidden />
-
-      <input
-        type="checkbox"
-        checked={selected}
-        onChange={onToggle}
-        disabled={locked}
-        className="mt-1 accent-primary cursor-pointer disabled:cursor-not-allowed shrink-0 opacity-40 hover:opacity-100 checked:opacity-100"
-        aria-label={`Select block ${row.block_id}`}
-      />
-
-      <div className="min-w-0 flex-1">
-        {/* Who, when, how much — the materiality line, kept quiet */}
-        <div className="flex items-baseline gap-2 flex-wrap text-xs">
-          <span className="font-semibold text-slate-600">{row.user || 'Unknown'}</span>
-          <span className="text-slate-400">{formatDate(row.date)}</span>
-          <span className={cn('font-bold tabular-nums', trivial ? 'text-slate-300' : 'text-slate-500')}>
-            {formatMinutes(row.minutes)}
-          </span>
-          {row.confirmed === false && (
-            <span
-              className="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded px-1.5 py-px"
-              title="Nobody has accepted this block yet — it is still sitting in this person's Daily Review"
-            >
-              not confirmed
+    <tr className="border-b border-border/40 last:border-b-0 hover:bg-slate-50/70 transition-colors">
+      {/* What was open */}
+      <td className="px-4 py-3 max-w-0 w-[42%]">
+        <p className="text-sm font-semibold text-slate-800 truncate" title={row.window_title}>
+          {cleanTitle(row.window_title, row.app_name)}
+        </p>
+        <p className="text-xs text-slate-400 truncate mt-0.5">
+          {row.user} · {formatDate(row.date)} · {formatMinutes(row.minutes)}
+          {pending && ' · not accepted yet'}
+          {row.set_by === 'user' && (
+            <span className="text-amber-600"
+              title="A person put this block on this client by hand — likely deliberate">
+              {' '}· set by hand
             </span>
-          )}
-          {locked && (
-            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">
-              week {week?.status}
-            </span>
-          )}
-        </div>
-
-        {/* The evidence — the reason this row exists, so it leads */}
-        <p
-          className="mt-0.5 text-sm text-slate-800 font-medium leading-snug line-clamp-2"
-          title={row.window_title}
-        >
-          {row.window_title}
-          {row.app_name && (
-            <span className="text-slate-400 font-normal"> · {cleanApp(row.app_name)}</span>
           )}
         </p>
+      </td>
 
-        {/* The decision: where it is now → where it could go */}
-        {!locked && (
-          <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap mt-2">
-            {/* Both ends of the swap are named entities, and both are labelled.
-                Unlabelled, the current client read as stray grey text rather
-                than "the client this is filed under", and the target read as a
-                button rather than a claim about a DIFFERENT organisation —
-                which is exactly the confusion that matters when the two are a
-                cemetery and a church of the same saint. */}
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 shrink-0">
-              now on
-            </span>
-            <span
-              className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border bg-white text-slate-700 border-slate-300 max-w-[240px] truncate"
-              title={row.booked_client_name}
-            >
-              {row.booked_client_name}
-            </span>
-            {byHand && (
-              <span
-                className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-px"
-                title="A person put this block on this client by hand — likely deliberate, not a classifier error"
-              >
-                by hand
-              </span>
-            )}
-            <span className="text-slate-300 shrink-0" aria-hidden>→</span>
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 shrink-0">
-              {targets.length > 1 ? 'could be' : 'suggested'}
-            </span>
+      {/* Filed under */}
+      <td className="px-3 py-3 max-w-0 w-[20%]">
+        <span className="block text-sm text-slate-500 truncate" title={row.booked_client_name}>
+          {row.booked_client_name}
+        </span>
+      </td>
 
-            {targets.map((tg, i) => (
+      <td className="w-5 text-center text-slate-300" aria-hidden>→</td>
+
+      {/* Looks like */}
+      <td className="px-3 py-3 max-w-0 w-[22%]">
+        {one ? (
+          <span className="block text-sm font-bold text-emerald-700 truncate" title={one.name}>
+            {one.name}
+          </span>
+        ) : (
+          /* A tie: list them rather than pick one. Clicking a name files it there. */
+          <span className="flex flex-col items-start gap-0.5">
+            {targets.map((t) => (
               <button
-                key={tg.id}
-                onClick={() => onMove(self, tg.id, tg.name)}
-                className={cn(
-                  'px-2.5 py-1 rounded-md text-xs font-semibold transition-colors max-w-[280px] truncate',
-                  styleFor(i)
-                )}
-                title={`Move this block to ${tg.name}`}
+                key={t.id}
+                disabled={locked}
+                onClick={() => onMove(self, t.id, t.name)}
+                title={`File this under ${t.name}`}
+                className="max-w-full text-left text-sm font-semibold text-slate-700 hover:text-emerald-700 hover:underline truncate disabled:text-slate-400 disabled:no-underline"
               >
-                {tg.name}
+                {t.name}
               </button>
             ))}
+          </span>
+        )}
+      </td>
 
-            <span className="w-px h-4 bg-border/70" aria-hidden />
-
-            <button
-              onClick={() => onCorrect(self)}
-              className="px-2 py-1 rounded-md text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-              title={`Leave it on ${row.booked_client_name} and stop flagging it`}
+      {/* Move? */}
+      <td className="px-4 py-3 text-right whitespace-nowrap">
+        {locked ? (
+          <span className="text-[11px] text-slate-400">week {week?.status}</span>
+        ) : picking ? (
+          <span className="inline-flex items-center gap-1.5">
+            <select
+              autoFocus
+              defaultValue=""
+              onChange={(e) => {
+                const c = clients.find((x) => x.id === Number(e.target.value));
+                if (c) { onMove(self, c.id, c.name); setPicking(false); }
+              }}
+              className="text-xs border border-border/60 rounded-md px-2 py-1 max-w-[190px] bg-white"
             >
-              Keep
-            </button>
-
-            {picking ? (
-              <span className="inline-flex items-center gap-1.5">
-                <select
-                  value={pick}
-                  autoFocus
-                  onChange={(e) => setPick(e.target.value ? Number(e.target.value) : '')}
-                  className="text-xs border border-border/60 rounded-md px-2 py-1 max-w-[220px] bg-white"
-                >
-                  <option value="">choose a client…</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-                <button
-                  disabled={!pick}
-                  onClick={() => {
-                    const c = clients.find((x) => x.id === pick);
-                    if (!c) return;
-                    onMove(self, c.id, c.name);
-                    setPicking(false);
-                    setPick('');
-                  }}
-                  className="px-2 py-1 rounded-md text-xs font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-40"
-                >
-                  Move
-                </button>
-                <button
-                  onClick={() => { setPicking(false); setPick(''); }}
-                  className="text-xs text-slate-400 hover:text-slate-600 px-1"
-                >
-                  cancel
-                </button>
-              </span>
-            ) : (
+              <option value="" disabled>choose a client…</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button onClick={() => setPicking(false)}
+              className="text-xs text-slate-400 hover:text-slate-600">cancel</button>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            {one && (
               <button
-                onClick={() => setPicking(true)}
-                className="px-2 py-1 rounded-md text-xs font-medium text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                title="Move it to a client that isn't offered here"
+                onClick={() => onMove(self, one.id, one.name)}
+                title={`Move to ${one.name}`}
+                className={cn(
+                  'w-8 h-8 rounded-lg inline-flex items-center justify-center border transition-colors',
+                  confident
+                    ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
+                    : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                )}
               >
-                Other…
+                <Check className="w-4 h-4" strokeWidth={3} />
               </button>
             )}
-          </div>
+            <button
+              onClick={() => onCorrect(self)}
+              title={`Leave it on ${row.booked_client_name} and stop flagging it`}
+              className="w-8 h-8 rounded-lg inline-flex items-center justify-center border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 transition-colors"
+            >
+              <X className="w-4 h-4" strokeWidth={3} />
+            </button>
+            <button
+              onClick={() => setPicking(true)}
+              title="File it under a different client"
+              className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-100 transition-colors text-lg leading-none"
+            >
+              ⋯
+            </button>
+          </span>
         )}
-
-        {locked && (
-          <p className="mt-2 text-xs text-slate-400">
-            On {row.booked_client_name} — this week is {week?.status}, reopen it to make changes.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ── One verdict section ───────────────────────────────────────────────────────
-
-const Section: React.FC<{
-  title: string;
-  note?: string;
-  tone: Tone;
-  bucket: Bucket;
-  weeks: Map<number, Week>;
-  clients: { id: number; name: string }[];
-  selected: Set<number>;
-  toggle: (id: number) => void;
-  hidden: Set<number>;
-  onMove: (rows: Ref[], clientId: number, clientName: string) => void;
-  onCorrect: (rows: Ref[]) => void;
-  defaultOpen: boolean;
-}> = ({ title, note, tone, bucket, weeks, clients, selected, toggle, hidden, onMove, onCorrect, defaultOpen }) => {
-  const [open, setOpen] = useState(defaultOpen);
-  const t = TONES[tone];
-  // Resolved rows leave immediately; the count follows them out rather than
-  // waiting for the server, so the section can empty itself as you work.
-  const rows = bucket.mismatches.filter((r) => !hidden.has(r.block_id));
-  const total = bucket.total - (bucket.mismatches.length - rows.length);
-  if (total <= 0) return null;
-
-  return (
-    <div className="border-t border-border/60">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full px-4 py-2 flex items-center gap-2.5 hover:bg-slate-50/70 transition-colors text-left"
-      >
-        {open
-          ? <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          : <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
-        <span
-          className={cn(
-            'inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold shrink-0',
-            t.count
-          )}
-        >
-          {total}
-        </span>
-        <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">{title}</span>
-        {note && <span className="text-xs text-slate-400 truncate hidden sm:inline">{note}</span>}
-      </button>
-
-      {open && (
-        <div>
-          {rows.map((row) => (
-            <FlagRow
-              key={row.block_id}
-              row={row}
-              tone={tone}
-              week={row.timesheet_id != null ? weeks.get(row.timesheet_id) : undefined}
-              clients={clients}
-              selected={selected.has(row.block_id)}
-              onToggle={() => toggle(row.block_id)}
-              onMove={onMove}
-              onCorrect={onCorrect}
-            />
-          ))}
-          {rows.length < total && (
-            <p className="px-4 py-2 text-xs text-slate-400 border-t border-border/40">
-              Showing {rows.length} of {total}.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
+      </td>
+    </tr>
   );
 };
 
@@ -470,19 +317,11 @@ const MisfiledTimeReview: React.FC<{
   const [data, setData] = useState<MisfiledResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [bulkClient, setBulkClient] = useState<number | ''>('');
   const [open, setOpen] = useState(false);
-  // Rows the reviewer has dealt with, hidden the moment they click. The server
-  // is still catching up; the screen is not made to wait for it.
+  const [showInternal, setShowInternal] = useState(false);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
-  // What has been done, newest first — the count people watch tick up, and the
-  // way back from a mis-click. Optimistic hiding makes a wrong click cheaper to
-  // make and quieter to notice, so undo stops being a nicety here.
   const [log, setLog] = useState<Done[]>([]);
 
-  // A ref, not state: the reconcile has to read the CURRENT number of in-flight
-  // requests, and a closure would capture a stale one and un-hide live rows.
   const inflight = useRef(0);
   const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -490,16 +329,12 @@ const MisfiledTimeReview: React.FC<{
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=open`);
+      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=queue`);
       setData(d);
-      // Anything successfully resolved is simply absent from the fresh payload,
-      // and anything still in it was never applied — so a clean reload makes
-      // the optimistic set redundant either way.
+      // Anything applied is absent from the fresh payload, and anything still in
+      // it was never applied — so a clean reload makes the optimistic set moot.
       setHidden(new Set());
-      if (!silent) {
-        setSelected(new Set());
-        setLog([]);
-      }
+      if (!silent) setLog([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not run the check');
     } finally {
@@ -509,8 +344,8 @@ const MisfiledTimeReview: React.FC<{
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
-  // Quietly re-sync once the clicking stops. Deliberately never while a request
-  // is still out: reconciling mid-flight would flash a resolved row back.
+  // Quietly re-sync once the clicking stops, and never while a request is still
+  // out — reconciling mid-flight would flash a resolved row back onto the page.
   const scheduleReconcile = useCallback(() => {
     if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
     reconcileTimer.current = setTimeout(() => {
@@ -522,34 +357,9 @@ const MisfiledTimeReview: React.FC<{
     if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
   }, []);
 
-  const weeks = useMemo(
-    () => new Map((data?.weeks || []).map((w) => [w.timesheet_id, w])),
-    [data]
-  );
-
-  // Bulk actions only carry block ids, but undoing a move needs the client
-  // each block came from — so look them up before firing.
-  const refsFor = useCallback(
-    (ids: number[]): Ref[] => {
-      const byId = new Map<number, number>();
-      for (const b of [data?.client, data?.unsure, data?.internal]) {
-        for (const r of b?.mismatches || []) byId.set(r.block_id, r.booked_client_id);
-      }
-      return ids.map((id) => ({ id, clientId: byId.get(id) ?? 0 }));
-    },
-    [data]
-  );
-
-  const toggle = (id: number) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-
-  // Fires and returns; callers do NOT await before updating the screen. No
-  // global busy flag either — one row's request must never disable another's
-  // button, which is what stopped people clicking straight down the list.
+  // Fires and returns; callers do NOT await before updating the screen, and
+  // there is no global busy flag — one row's request must never disable
+  // another's button, which is what stopped people clicking down the list.
   const send = useCallback(async (body: Record<string, unknown>) => {
     inflight.current += 1;
     try {
@@ -564,81 +374,57 @@ const MisfiledTimeReview: React.FC<{
 
   /** Put rows back on screen when the server would not take the change. */
   const unhide = useCallback((ids: number[], why: string) => {
-    if (!ids.length) {
-      setError(why);
-      return;
-    }
+    if (!ids.length) { setError(why); return; }
     const back = new Set(ids);
     setHidden((prev) => {
       const next = new Set(prev);
       ids.forEach((id) => next.delete(id));
       return next;
     });
-    // Subtract only the refused rows. A bulk move where three landed and one
-    // was refused must keep undo for the three that actually moved.
-    setLog((prev) =>
-      prev
-        .map((d) => ({
-          ...d,
-          ids: d.ids.filter((id) => !back.has(id)),
-          from: d.from.filter((f) => !back.has(f.id)),
-        }))
-        .filter((d) => d.ids.length > 0)
-    );
+    // Subtract only the refused rows, so a bulk action that partly landed keeps
+    // undo for the part that did.
+    setLog((prev) => prev
+      .map((d) => ({
+        ...d,
+        ids: d.ids.filter((id) => !back.has(id)),
+        from: d.from.filter((f) => !back.has(f.id)),
+      }))
+      .filter((d) => d.ids.length > 0));
     setError(why);
   }, []);
 
   const hide = useCallback((ids: number[]) => {
     setHidden((prev) => new Set([...prev, ...ids]));
-    setSelected((prev) => {
-      const next = new Set(prev);
-      ids.forEach((id) => next.delete(id));
-      return next;
-    });
   }, []);
 
-  const onMove = useCallback(
-    (rows: { id: number; clientId: number }[], clientId: number, clientName: string) => {
-      const ids = rows.map((r) => r.id);
-      hide(ids);
-      setLog((prev) => [{ ids, label: `Moved to ${clientName}`, from: rows, kind: 'move' }, ...prev]);
+  const onMove = useCallback((rows: Ref[], clientId: number, clientName: string) => {
+    const ids = rows.map((r) => r.id);
+    hide(ids);
+    setLog((prev) => [{ ids, label: `Moved to ${clientName}`, from: rows, kind: 'move' }, ...prev]);
+    send({ block_ids: ids, action: 'move', client_id: clientId })
+      .then((r) => {
+        // The server refuses invoiced time and approved weeks. Showing those as
+        // moved would be a lie the reviewer only discovers at billing.
+        if (r?.skipped) {
+          const reasons = (r.skips || []).map((x: any) => x.reason)
+            .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join('; ');
+          unhide((r.skips || []).map((x: any) => x.block_id),
+                 `${r.skipped} left alone — ${reasons}.`);
+        }
+        scheduleReconcile();
+      })
+      .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Move failed'));
+  }, [hide, send, unhide, scheduleReconcile]);
 
-      send({ block_ids: ids, action: 'move', client_id: clientId })
-        .then((r) => {
-          // The server refuses invoiced time and approved weeks. Showing those
-          // as moved would be a lie the reviewer only discovers at billing, so
-          // the rows come back with the reason attached.
-          if (r?.skipped) {
-            const reasons = (r.skips || [])
-              .map((x: any) => x.reason)
-              .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
-              .join('; ');
-            const refused = (r.skips || []).map((x: any) => x.block_id);
-            unhide(refused, `${r.skipped} left alone — ${reasons}.`);
-          }
-          scheduleReconcile();
-        })
-        .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Move failed'));
-    },
-    [hide, send, unhide, scheduleReconcile]
-  );
+  const onCorrect = useCallback((rows: Ref[]) => {
+    const ids = rows.map((r) => r.id);
+    hide(ids);
+    setLog((prev) => [{ ids, label: 'Left as filed', from: rows, kind: 'keep' }, ...prev]);
+    send({ block_ids: ids, action: 'correct' })
+      .then(() => scheduleReconcile())
+      .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Could not clear that'));
+  }, [hide, send, unhide, scheduleReconcile]);
 
-  const onCorrect = useCallback(
-    (rows: { id: number; clientId: number }[]) => {
-      const ids = rows.map((r) => r.id);
-      hide(ids);
-      setLog((prev) => [
-        { ids, label: `Kept as filed`, from: rows, kind: 'keep' },
-        ...prev,
-      ]);
-      send({ block_ids: ids, action: 'correct' })
-        .then(() => scheduleReconcile())
-        .catch((err) => unhide(ids, err instanceof Error ? err.message : 'Could not clear that'));
-    },
-    [hide, send, unhide, scheduleReconcile]
-  );
-
-  /** Reverse the most recent action and drop it from the log. */
   const undoLast = useCallback(() => {
     const last = log[0];
     if (!last) return;
@@ -648,122 +434,139 @@ const MisfiledTimeReview: React.FC<{
       last.ids.forEach((id) => next.delete(id));
       return next;
     });
-
     if (last.kind === 'keep') {
       send({ block_ids: last.ids, action: 'reopen' }).then(() => scheduleReconcile());
       return;
     }
-    // A move is undone by moving each block back to the client it came from.
-    // Grouped by destination, because the endpoint takes one client per call.
-    // A zero clientId means the origin was never resolved, and sending it would
-    // just 404 — so those are skipped rather than guessed at.
+    // Each block goes back to the client it came from, grouped by destination
+    // because the endpoint takes one client per call. A zero id means the origin
+    // was never resolved, and sending it would only 404.
     const byClient = new Map<number, number[]>();
     last.from.forEach((f) => {
       if (!f.clientId) return;
       byClient.set(f.clientId, [...(byClient.get(f.clientId) || []), f.id]);
     });
-    Promise.all(
-      [...byClient.entries()].map(([cid, ids]) =>
-        send({ block_ids: ids, action: 'move', client_id: cid })
-      )
-    ).then(() => scheduleReconcile());
+    Promise.all([...byClient.entries()].map(([cid, ids]) =>
+      send({ block_ids: ids, action: 'move', client_id: cid })
+    )).then(() => scheduleReconcile());
   }, [log, send, scheduleReconcile]);
 
-  // Counts follow the optimistic hides, so header badges, section counts and
-  // the queue-row badges all drain together as rows are resolved.
-  const visible = useCallback(
-    (b: Bucket | undefined) =>
-      b ? b.total - b.mismatches.filter((r) => hidden.has(r.block_id)).length : 0,
-    [hidden]
+  const weekMap = useMemo(
+    () => new Map((data?.weeks || []).map((w) => [w.timesheet_id, w])),
+    [data]
   );
 
-  // One place computes what the parent badges show, so they can never disagree
-  // with what is on screen.
+  const build = useCallback((r: Row, pending: boolean): LedgerRow => {
+    const detected = r.verdict === 'booked_absent'
+      ? (r.candidates || []).map((c) => ({ id: c.client_id, name: c.client_name }))
+      : r.looks_like_client_id
+      ? [{ id: r.looks_like_client_id, name: r.looks_like_client_name || '?' }]
+      : [];
+    // On a pending row the classifier has usually already staged the fix, and
+    // that proposal is the answer — no point making a reviewer re-derive it.
+    const proposed = r.proposed_client_id && r.proposed_client_name
+      ? [{ id: r.proposed_client_id, name: r.proposed_client_name }]
+      : [];
+    const targets = [...proposed, ...detected.filter((d) => !proposed.some((p) => p.id === d.id))];
+    return {
+      row: r,
+      targets,
+      confident: targets.length === 1 && (proposed.length > 0 || r.verdict !== 'booked_absent'),
+      pending,
+      week: r.timesheet_id != null ? weekMap.get(r.timesheet_id) : undefined,
+    };
+  }, [weekMap]);
+
+  // One flat list. The three verdicts still exist underneath — they decide the
+  // order and how confident the control looks — they just stop being furniture.
+  const rows = useMemo<LedgerRow[]>(() => {
+    if (!data) return [];
+    return [
+      ...data.client.mismatches.map((r) => build(r, false)),
+      ...data.unsure.mismatches.map((r) => build(r, false)),
+      ...(data.unconfirmed?.mismatches || []).map((r) => build(r, true)),
+    ].filter((i) => !hidden.has(i.row.block_id) && i.targets.length > 0);
+  }, [data, hidden, build]);
+
+  const internalRows = useMemo<LedgerRow[]>(() => {
+    if (!data) return [];
+    return data.internal.mismatches
+      .map((r) => build(r, false))
+      .filter((i) => !hidden.has(i.row.block_id) && i.targets.length > 0);
+  }, [data, hidden, build]);
+
+  // Parent badges read the same optimistic set, so they can never disagree with
+  // what is on screen.
   useEffect(() => {
     if (!data) return;
     const counts: Record<string, { count: number; minutes: number }> = {};
-    for (const row of data.client.mismatches) {
-      if (hidden.has(row.block_id) || row.timesheet_id == null) continue;
-      const k = String(row.timesheet_id);
+    for (const r of data.client.mismatches) {
+      if (hidden.has(r.block_id) || r.timesheet_id == null) continue;
+      const k = String(r.timesheet_id);
       const c = counts[k] || (counts[k] = { count: 0, minutes: 0 });
       c.count += 1;
-      c.minutes += row.minutes || 0;
+      c.minutes += r.minutes || 0;
     }
     onCounts?.(counts);
   }, [data, hidden, onCounts]);
 
-  const clientTotal = visible(data?.client);
-  const unsureTotal = visible(data?.unsure);
-  // Counted for whether the panel has anything to show, but badged separately:
-  // unconfirmed time is not what is being approved, so it must never inflate
-  // the "wrong client" number a reviewer acts on.
-  const unconfTotal = visible(data?.unconfirmed);
-  const flagged = clientTotal + unsureTotal + unconfTotal;
+  const total = rows.length;
+  const wrongClient = rows.filter((i) => !i.pending && i.confident).length;
+
+  const HEAD = (
+    <thead className="sticky top-0 z-10">
+      <tr className="bg-slate-50 border-b border-border/60">
+        <th className="text-left px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">What was open</th>
+        <th className="text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Filed under</th>
+        <th />
+        <th className="text-left px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Looks like</th>
+        <th className="text-right px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Move?</th>
+      </tr>
+    </thead>
+  );
 
   return (
     <div className="shrink-0 space-y-2">
-      <div
-        className={cn(
-          'bg-white rounded-xl border overflow-hidden',
-          clientTotal > 0 ? 'border-red-200' : 'border-border/60'
-        )}
-      >
+      <div className={cn(
+        'bg-white rounded-xl border overflow-hidden',
+        wrongClient > 0 ? 'border-red-200' : 'border-border/60'
+      )}>
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="px-5 py-3 flex items-center justify-between gap-4">
           <button
             onClick={() => setOpen((o) => !o)}
             className="flex items-center gap-3 text-left min-w-0"
-            disabled={flagged === 0 && !loading}
+            disabled={total === 0 && !loading}
           >
-            {flagged > 0 && (
-              open
-                ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-            )}
-            {/* The site's green, like every other feature icon. It was
-                status-coloured, which duplicated the badges to its right and
-                made the panel's own identity change colour depending on what
-                it happened to find. Status belongs on the badges; the icon is
-                just what this thing IS. */}
+            {total > 0 && (open
+              ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+              : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />)}
             <ScanSearch className="w-4 h-4 shrink-0 text-primary" />
             <div className="min-w-0">
               <p className="text-sm font-bold text-slate-800">Check for misfiled time</p>
               <p className="text-xs text-slate-400 truncate">
-                {loading
-                  ? 'Scanning…'
-                  : data
-                  ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked`
-                  : '—'}
+                {loading ? 'Scanning…'
+                  : data ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked` : '—'}
               </p>
             </div>
           </button>
 
           <div className="flex items-center gap-2 shrink-0">
-            {!loading && data && (
-              flagged === 0 ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
-                </span>
-              ) : (
-                <>
-                  {clientTotal > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-red-50 text-red-700 border-red-200">
-                      <AlertTriangle className="w-3.5 h-3.5" /> {clientTotal} wrong client
-                    </span>
-                  )}
-                  {unsureTotal > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-800 border-amber-200">
-                      <HelpCircle className="w-3.5 h-3.5" /> {unsureTotal} to check
-                    </span>
-                  )}
-                  {unconfTotal > 0 && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-slate-50 text-slate-600 border-slate-200">
-                      {unconfTotal} unconfirmed
-                    </span>
-                  )}
-                </>
-              )
-            )}
+            {!loading && data && (total === 0 ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
+              </span>
+            ) : (
+              <span className={cn(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border',
+                wrongClient > 0
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-amber-50 text-amber-800 border-amber-200'
+              )}>
+                {wrongClient > 0 && <AlertTriangle className="w-3.5 h-3.5" />}
+                {total} to review
+              </span>
+            ))}
             <button
               onClick={() => load()}
               disabled={loading}
@@ -775,118 +578,60 @@ const MisfiledTimeReview: React.FC<{
           </div>
         </div>
 
-        {/* ── Findings ───────────────────────────────────────────────────── */}
-        {open && data && !loading && flagged > 0 && (
-          <div className="max-h-[52vh] overflow-auto">
-            {selected.size > 0 && (
-              <div className="border-t border-border/60 bg-slate-50/80 px-4 py-2.5 flex items-center gap-3 flex-wrap sticky top-0 z-10">
-                <span className="text-xs font-bold text-slate-700">{selected.size} selected</span>
-                <div className="flex-1" />
-                <select
-                  value={bulkClient}
-                  onChange={(e) => setBulkClient(e.target.value ? Number(e.target.value) : '')}
-                  className="text-xs border border-border/60 rounded-md px-2 py-1.5 max-w-[240px] bg-white"
-                >
-                  <option value="">move all to…</option>
-                  {data.clients.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+        {/* ── The ledger ─────────────────────────────────────────────────── */}
+        {open && data && !loading && total > 0 && (
+          <div className="border-t border-border/60 max-h-[52vh] overflow-auto">
+            <table className="w-full table-fixed border-collapse" style={{ minWidth: 720 }}>
+              {HEAD}
+              <tbody>
+                {rows.map((item) => (
+                  <LedgerLine key={item.row.block_id} item={item} clients={data.clients}
+                    onMove={onMove} onCorrect={onCorrect} />
+                ))}
+              </tbody>
+            </table>
+
+            {/* Firm/admin buckets: real, never a client billing error, so they
+                stay out of the count and behind a click. */}
+            {internalRows.length > 0 && (
+              <>
                 <button
-                  disabled={!bulkClient}
-                  onClick={() => {
-                    const c = data.clients.find((x) => x.id === bulkClient);
-                    if (!c) return;
-                    onMove(refsFor([...selected]), c.id, c.name);
-                    setBulkClient('');
-                  }}
-                  className="px-3 py-1.5 rounded-md text-xs font-semibold bg-primary text-white hover:opacity-90 disabled:opacity-40"
+                  onClick={() => setShowInternal((v) => !v)}
+                  className="w-full px-4 py-2 flex items-center gap-2 text-left border-t border-border/60 hover:bg-slate-50/70 transition-colors"
                 >
-                  Move
+                  {showInternal
+                    ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                    : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+                  <span className="text-xs text-slate-500">
+                    {internalRows.length} internal &amp; admin — real, but not a client billing error
+                  </span>
                 </button>
-                <button
-                  onClick={() => onCorrect(refsFor([...selected]))}
-                  className="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
-                >
-                  Keep
-                </button>
-                <button
-                  onClick={() => setSelected(new Set())}
-                  className="text-xs text-slate-400 hover:text-slate-600 px-1"
-                >
-                  clear
-                </button>
-              </div>
+                {showInternal && (
+                  <table className="w-full table-fixed border-collapse" style={{ minWidth: 720 }}>
+                    <tbody>
+                      {internalRows.map((item) => (
+                        <LedgerLine key={item.row.block_id} item={item} clients={data.clients}
+                          onMove={onMove} onCorrect={onCorrect} />
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
             )}
 
-            <Section
-              title="Wrong client"
-              tone="red"
-              bucket={data.client}
-              weeks={weeks}
-              clients={data.clients}
-              selected={selected}
-              toggle={toggle}
-              hidden={hidden}
-              onMove={onMove}
-              onCorrect={onCorrect}
-              defaultOpen
-            />
-            <Section
-              title="Worth a look"
-              tone="amber"
-              bucket={data.unsure}
-              weeks={weeks}
-              clients={data.clients}
-              selected={selected}
-              toggle={toggle}
-              hidden={hidden}
-              onMove={onMove}
-              onCorrect={onCorrect}
-              defaultOpen={data.client.total === 0}
-            />
-            {data.unconfirmed && (
-            <Section
-              title="Not confirmed yet"
-              note="nobody has accepted these — the system already suggests a fix"
-              tone="slate"
-              bucket={data.unconfirmed}
-              weeks={weeks}
-              clients={data.clients}
-              selected={selected}
-              toggle={toggle}
-              hidden={hidden}
-              onMove={onMove}
-              onCorrect={onCorrect}
-              defaultOpen={clientTotal === 0}
-            />
-            )}
-            <Section
-              title="Internal & admin"
-              tone="slate"
-              bucket={data.internal}
-              weeks={weeks}
-              clients={data.clients}
-              selected={selected}
-              toggle={toggle}
-              hidden={hidden}
-              onMove={onMove}
-              onCorrect={onCorrect}
-              defaultOpen={false}
-            />
             {!!data.unconfirmed?.blocks && (
               <p className="border-t border-border/40 px-4 py-2.5 text-[11px] text-slate-400">
                 {data.unconfirmed.blocks.toLocaleString()} blocks
                 {' '}({Math.round(data.unconfirmed.minutes / 60)}h) in these weeks are still
-                unconfirmed. They stay in each person&rsquo;s Daily Review — only the ones whose
-                title contradicts their client are listed above.
+                unaccepted. They stay in each person&rsquo;s Daily Review — only the ones whose
+                title contradicts their client are listed here.
               </p>
             )}
           </div>
         )}
       </div>
 
-      {/* Undo / error strips — outside the card so they read as transient */}
+      {/* Transient strips, outside the card */}
       {log.length > 0 && (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-lg border bg-emerald-50 border-emerald-200 text-sm">
           <span className="text-emerald-800 font-medium">

@@ -281,7 +281,19 @@ const FlagRow: React.FC<{
         {/* The decision: where it is now → where it could go */}
         {!locked && (
           <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap mt-2">
-            <span className="text-xs text-slate-500 truncate max-w-[220px]" title={row.booked_client_name}>
+            {/* Both ends of the swap are named entities, and both are labelled.
+                Unlabelled, the current client read as stray grey text rather
+                than "the client this is filed under", and the target read as a
+                button rather than a claim about a DIFFERENT organisation —
+                which is exactly the confusion that matters when the two are a
+                cemetery and a church of the same saint. */}
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 shrink-0">
+              now on
+            </span>
+            <span
+              className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border bg-white text-slate-700 border-slate-300 max-w-[240px] truncate"
+              title={row.booked_client_name}
+            >
               {row.booked_client_name}
             </span>
             {byHand && (
@@ -292,7 +304,10 @@ const FlagRow: React.FC<{
                 by hand
               </span>
             )}
-            <span className="text-slate-300" aria-hidden>→</span>
+            <span className="text-slate-300 shrink-0" aria-hidden>→</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 shrink-0">
+              {targets.length > 1 ? 'could be' : 'suggested'}
+            </span>
 
             {targets.map((tg, i) => (
               <button

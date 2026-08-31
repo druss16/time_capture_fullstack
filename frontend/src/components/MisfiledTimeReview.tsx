@@ -92,6 +92,8 @@ interface Week {
 }
 
 export interface MisfiledResponse {
+  /** Findings in weeks nobody has submitted — counted, not listed. */
+  also_in_progress?: { rows: number; weeks: number };
   params: { org_id: number; scope: string; timesheet_ids: number[] };
   weeks: Week[];
   scanned_blocks: number;
@@ -557,12 +559,22 @@ const MisfiledTimeReview: React.FC<{
                  the feature's own logo, and two glyphs side by side is clutter.
                  It turns green when this step is done. */
               <span className={cn(
-                'w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-xs font-bold',
+                'relative w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-xs font-bold',
                 loading ? 'bg-slate-100 text-slate-400'
                   : total === 0 ? 'bg-emerald-600 text-white'
                   : 'bg-slate-800 text-white'
               )}>
-                {!loading && total === 0 ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : step}
+                {/* The numeral always stays. Swapping it for a tick when the
+                    step was clear left the page reading "… 2", with no step one
+                    anywhere — the sequence is the point, so completion is shown
+                    by the colour and a corner mark, not by deleting the number. */}
+                {step}
+                {!loading && total === 0 && (
+                  <Check
+                    className="absolute -right-1 -bottom-1 w-3 h-3 rounded-full bg-white text-emerald-600 p-px"
+                    strokeWidth={4}
+                  />
+                )}
               </span>
             ) : (
               <ScanSearch className="w-4 h-4 shrink-0 text-primary" />
@@ -582,8 +594,15 @@ const MisfiledTimeReview: React.FC<{
 
           <div className="flex items-center gap-2 shrink-0">
             {!loading && data && (total === 0 ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
-                <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
+              <span className="inline-flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
+                </span>
+                {scope === 'queue' && !!data.also_in_progress?.rows && (
+                  <span className="text-xs text-slate-400 hidden sm:inline">
+                    {data.also_in_progress.rows} in weeks still in progress
+                  </span>
+                )}
               </span>
             ) : (
               <span className={cn(
@@ -627,7 +646,9 @@ const MisfiledTimeReview: React.FC<{
                     onClick={() => { setScope('open'); load(false, 'open'); }}
                     className="mt-3 text-xs font-semibold text-primary hover:underline"
                   >
-                    Also check weeks still in progress →
+                    {data.also_in_progress?.rows
+                      ? `${data.also_in_progress.rows} more in weeks still in progress →`
+                      : 'Also check weeks still in progress →'}
                   </button>
                 )}
               </div>

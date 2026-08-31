@@ -247,7 +247,44 @@ def review_misfiled_time(request):
         b['count'] += 1
         b['minutes'] += row.get('minutes') or 0
 
+    # When the sweep is scoped to the approval queue it is, correctly, blind to
+    # weeks nobody has submitted — and a finding sitting in one of those is real
+    # even though it is not yet this reviewer's to approve. Counting them costs
+    # one more pass and means "all filed correctly" can never quietly mean "all
+    # filed correctly, in the half I looked at".
+    also = {'rows': 0, 'weeks': 0}
+    if (request.GET.get('scope') or 'queue') == 'queue':
+        drafts = list(Timesheet.objects.filter(org=org, status='draft').select_related('user'))
+        if drafts:
+            probe = []
+            for t in drafts:
+                s_utc, e_utc = _day_bounds_utc(t.week_start, t.week_start + timedelta(days=6))
+                probe.extend(
+                    committed_block_qs(org, s_utc, e_utc, user_id=t.user_id, can_see_all=False)
+                    .filter(client_id__isnull=False)
+                    .exclude(window_title__isnull=True).exclude(window_title='')
+                    .select_related('client', 'user', 'org')
+                )
+                probe.extend(
+                    Block.objects
+                    .filter(org=org, user_id=t.user_id, deleted_at__isnull=True,
+                            start__gte=s_utc, start__lt=e_utc, is_categorized=False,
+                            client_id__isnull=False)
+                    .exclude(classification_state='suppressed')
+                    .exclude(window_title__isnull=True).exclude(window_title='')
+                    .select_related('client', 'user', 'org')
+                )
+            # limit=0 keeps the tallies without building any rows — this is a
+            # count for a pointer, not a second list to render.
+            p_res = scan_buckets(probe, names_by_org, index_by_org, firm_by_org,
+                                 limit=0, skip_block_ids=confirmed_correct_block_ids([org.id]))
+            also = {
+                'rows': p_res['counts']['client'] + p_res['counts']['unsure'],
+                'weeks': len(drafts),
+            }
+
     return Response({
+        'also_in_progress': also,
         'params': {
             'org_id': org.id,
             'scope': (request.GET.get('scope') or 'queue'),

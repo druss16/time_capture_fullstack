@@ -1163,12 +1163,19 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
             firm most non-billable time is legitimately non-billable (admin,
             internal, firm work). A permanent gauge reading 43% is a score, and
             a score is not what a record should hand you.
-            The logo ring survives at label size, doing the job of the word
-            "43%" beside the billable figure rather than presiding over it. */}
+            The ring came out too. It was the only graphic in the row, wedged
+            into the middle column, so two plain numbers sat either side of a
+            circle — and a ring's optical centre never quite agrees with digits
+            on a text baseline. Three numbers, three labels, nothing to align
+            against anything.
+
+            The total leads at 30px so the row has an entry point; billable and
+            non-billable stay level with each other at 24px, which is the whole
+            point — neither outranks the other. */}
         <div className="mt-4 flex items-end justify-between gap-5 flex-wrap">
-          <div className="flex items-stretch min-w-0">
-            <div className="pr-6">
-              <div className="text-[26px] font-bold leading-none tracking-[-0.025em] text-foreground tabular-nums">
+          <div className="flex items-baseline min-w-0">
+            <div className="pr-7">
+              <div className="text-[30px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
                 {fmtHours(grandTotal)}
               </div>
               <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">
@@ -1176,27 +1183,17 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
               </div>
             </div>
 
-            <div className="px-6 border-l border-border/50">
-              <div className="flex items-center gap-2">
-                <svg width="26" height="26" viewBox="0 0 26 26" className="shrink-0" aria-hidden>
-                  <circle cx="13" cy="13" r="10.5" fill="none"
-                          className="stroke-muted-foreground/20" strokeWidth="2.4" />
-                  <circle cx="13" cy="13" r="10.5" fill="none"
-                          className="stroke-primary" strokeWidth="2.4" strokeLinecap="round"
-                          strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 10.5} ${2 * Math.PI * 10.5}`}
-                          transform="rotate(-90 13 13)" />
-                </svg>
-                <span className="text-[26px] font-bold leading-none tracking-[-0.025em] text-primary tabular-nums">
-                  {fmtHours(billable)}
-                </span>
+            <div className="px-7 border-l border-border/50">
+              <div className="text-[24px] font-bold leading-none tracking-[-0.025em] text-primary tabular-nums">
+                {fmtHours(billable)}
               </div>
               <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">
                 Billable · {billablePctLabel}%
               </div>
             </div>
 
-            <div className="pl-6 border-l border-border/50">
-              <div className="text-[26px] font-bold leading-none tracking-[-0.025em] text-muted-foreground/70 tabular-nums">
+            <div className="pl-7 border-l border-border/50">
+              <div className="text-[24px] font-bold leading-none tracking-[-0.025em] text-muted-foreground/60 tabular-nums">
                 {fmtHours(nonBillable)}
               </div>
               <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">

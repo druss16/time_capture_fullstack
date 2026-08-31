@@ -329,11 +329,30 @@ def review_misfiled_resolve(request):
               will get mis-clicked; without a way back the only route is a
               hand-written database delete.
     """
+    block_ids = request.data.get('block_ids') or []
+
+    # Reviewing OTHER people's time needs a reviewer role. Fixing your OWN needs
+    # nothing — it is your time, you are the one who knows which client it was,
+    # and making a member leave the page to correct their own block is the
+    # friction that stops anyone correcting anything. So: reviewer role, OR
+    # every targeted block belongs to the requester.
     org, err = _reviewer_org(request)
     if err:
-        return err
+        if not isinstance(block_ids, list) or not block_ids:
+            return err
+        own = set(
+            Block.objects
+            .filter(id__in=block_ids, user=request.user, deleted_at__isnull=True)
+            .values_list('id', flat=True)
+        )
+        if own != set(block_ids):
+            return err
+        membership = (OrganizationMembership.objects
+                      .filter(user=request.user).select_related('organization').first())
+        if not membership:
+            return err
+        org = membership.organization
 
-    block_ids = request.data.get('block_ids') or []
     action = (request.data.get('action') or '').strip()
     client_id = request.data.get('client_id')
 

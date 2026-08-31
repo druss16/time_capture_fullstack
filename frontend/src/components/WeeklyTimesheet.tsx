@@ -347,13 +347,6 @@ const UPPER_LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-mut
 // Font stacks: Inter for the hero voice, mono for captured titles/minutes.
 const INTER       = { fontFamily: '"Inter", sans-serif' } as const;
 
-// Which clients in this week hold time whose title names someone else, keyed by
-// client id. Carried on context rather than threaded through the list
-// components, the same way hour formatting already is — the row that draws the
-// warning is three components below the one that fetches it, and none of the
-// components in between have any business knowing about misfiles.
-const MisfileCtx = React.createContext<Map<number, number>>(new Map());
-const useMisfiles = () => React.useContext(MisfileCtx);
 const pctOfLabel  = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
@@ -541,7 +534,8 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // one finding. What My Week has that Daily Review doesn't is the button that
   // commits the week — the last moment fixing one of these is cheap.
   const [weekMisfiles, setWeekMisfiles] = useState<{ count: number; minutes: number } | null>(null);
-  const [misfilesByClient, setMisfilesByClient] = useState<Map<number, number>>(new Map());
+  const [misfileRows, setMisfileRows] = useState<any[]>([]);
+  const [fixing, setFixing] = useState<number | null>(null);
   const [myRole, setMyRole] = useState<string | null>(null);
   const [weekStart, setWeekStart]           = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -676,6 +670,32 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
 
+  // Resolve without leaving the page. Fixing your own block used to mean
+  // reading a chip here, opening Daily Review, finding the block and moving it
+  // — four steps to correct one minute of time, which is how a warning becomes
+  // something people scroll past. The row is hidden the moment it is clicked;
+  // the request follows.
+  const resolveMisfile = useCallback(async (row: any, action: 'move' | 'correct') => {
+    setFixing(row.block_id);
+    setMisfileRows((prev) => prev.filter((r) => r.block_id !== row.block_id));
+    try {
+      await safeFetchJson(`${API_BASE}/review/misfiled/resolve/`, {
+        method: 'POST',
+        body: JSON.stringify(
+          action === 'move'
+            ? { block_ids: [row.block_id], action: 'move', client_id: row.looks_like_client_id }
+            : { block_ids: [row.block_id], action: 'correct' }
+        ),
+      });
+      setOutstandingTick((t) => t + 1);   // re-count, and refresh the week
+      fetchTimesheet();
+    } catch {
+      setMisfileRows((prev) => [row, ...prev]);   // put it back; nothing was applied
+    } finally {
+      setFixing(null);
+    }
+  }, [fetchTimesheet]);
+
   // MUST stay up here with the other hooks: everything below the `if (loading)`
   // guard is after an early return, and a hook there changes the hook count
   // between renders — React #310, which blanks the whole page. That is exactly
@@ -687,14 +707,12 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       .then((d) => {
         if (!alive) return;
         setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 });
-        setMisfilesByClient(new Map(
-          (d?.by_client || []).map((c: any) => [c.client_id, c.count] as [number, number])
-        ));
+        setMisfileRows(d?.examples || []);
       })
       .catch(() => {                       // never break the page over a warning
         if (!alive) return;
         setWeekMisfiles(null);
-        setMisfilesByClient(new Map());
+        setMisfileRows([]);
       });
     return () => { alive = false; };
   }, [weekStart, outstandingTick]);
@@ -971,28 +989,6 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // LABEL and the note beside it, which is where that context belongs — a
   // button nobody can find communicates nothing at all.
 
-  const misfileWarning = (() => {
-    if (!weekMisfiles?.count) return null;
-    const n = weekMisfiles.count;
-    // An owner's week no longer auto-approves when it carries misfiled time, so
-    // it sits at "submitted" with no explanation unless we give one — owners
-    // never expect to wait on anyone.
-    const held = myRole === 'owner' && timesheetData?.status === 'submitted';
-    return (
-      <p className="flex items-center gap-2 text-xs font-semibold text-amber-700">
-        <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-        <span>
-          {held
-            ? `Held for review — ${n} block${n === 1 ? '' : 's'} look${n === 1 ? 's' : ''} misfiled.`
-            : `${n} block${n === 1 ? '' : 's'} look${n === 1 ? 's' : ''} booked to the wrong client.`}
-          {' '}
-          <a href={`/daily?date=${weekStart}&range=week`} className="underline underline-offset-2 hover:text-amber-900">
-            {held ? 'Review in Daily Review' : 'Check before sending'}
-          </a>
-        </span>
-      </p>
-    );
-  })();
 
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
@@ -1025,13 +1021,59 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
 
   return (
     <HourFmtContext.Provider value={fmtHours}>
-    <MisfileCtx.Provider value={misfilesByClient}>
     <div className="mx-auto w-full max-w-[1120px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
 
       {/* Above everything: a week nobody sent is worth more than a week you
           are looking at, and it is the only thing on this screen that no
           scheduled task will fix on its own. */}
       <OutstandingWeeksBanner onOpenWeek={setWeekStart} refreshKey={outstandingTick} />
+
+      {/* Misfiled time, fixed HERE. This replaced a chip on the client row and a
+          line by the submit button — both of which could only tell you something
+          was wrong and send you to Daily Review to deal with it. Four steps to
+          correct one minute of time is how a warning turns into something people
+          scroll past. One row, one click, gone. */}
+      {misfileRows.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden" style={INTER}>
+          <div className="px-4 pt-3 pb-1 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <p className="text-sm font-bold text-amber-900">
+              {misfileRows.length === 1
+                ? 'This looks like it is on the wrong client'
+                : `${misfileRows.length} of these look like they are on the wrong client`}
+            </p>
+          </div>
+          {misfileRows.map((r) => (
+            <div key={r.block_id}
+              className="px-4 py-2.5 flex items-center gap-3 flex-wrap border-t border-amber-200/60 first:border-t-0 mt-1">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-amber-950 truncate" title={r.window_title}>
+                  {r.window_title}
+                </p>
+                <p className="text-xs text-amber-800/80 mt-0.5">
+                  {r.minutes}m · now on <b className="font-bold">{r.booked_client_name}</b>
+                </p>
+              </div>
+              <button
+                disabled={fixing === r.block_id || !r.looks_like_client_id}
+                onClick={() => resolveMisfile(r, 'move')}
+                className="px-3 py-1.5 rounded-md text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 shrink-0 max-w-[260px] truncate"
+                title={`Move this to ${r.looks_like_client_name}`}
+              >
+                Move to {r.looks_like_client_name}
+              </button>
+              <button
+                disabled={fixing === r.block_id}
+                onClick={() => resolveMisfile(r, 'correct')}
+                className="px-2.5 py-1.5 rounded-md text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50 shrink-0"
+                title={`Leave it on ${r.booked_client_name} and stop flagging it`}
+              >
+                It&rsquo;s right
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Hero: Inter voice, Daily Review "Lightning" look ───────────── */}
       <div style={INTER}>
@@ -1369,18 +1411,11 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           </span>
 
           <div className="ml-auto flex min-w-0 items-center justify-end gap-3">
-            {/* Rides the control that already exists rather than claiming a
-                banner: it appears only when this week actually carries misfiled
-                time, and takes the place of the generic firm note when it does,
-                because "2 blocks are on the wrong client" outranks "your firm
-                reviews timesheets before they are final". */}
-            {misfileWarning ? (
-              <div className="hidden md:block max-w-[22rem] text-right">{misfileWarning}</div>
-            ) : submission?.reason ? (
+            {submission?.reason && (
               <span className="hidden md:block max-w-[20rem] text-right text-[12px] leading-snug text-muted-foreground">
                 {submission.reason}
               </span>
-            ) : null}
+            )}
             <div className="shrink-0">{submitButton}</div>
           </div>
         </div>
@@ -1536,7 +1571,6 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
         </div>
       )}
     </div>
-    </MisfileCtx.Provider>
     </HourFmtContext.Provider>
   );
 };
@@ -1901,11 +1935,6 @@ const ClientRow: React.FC<{
 }> = ({ agg, isExpanded, onToggle, weekBlocks }) => {
   const noClient = isNoClient(agg);
   const fmtHours = useFmtHours();
-  // The hook is called unconditionally and the branch happens after. Inline in
-  // the ternary it would only run for rows that have a client id, which is a
-  // conditional hook — React #310, the blank page.
-  const misfileMap = useMisfiles();
-  const misfiled = agg.clientId != null ? (misfileMap.get(agg.clientId) || 0) : 0;
   return (
     <>
       <button
@@ -1913,21 +1942,10 @@ const ClientRow: React.FC<{
         className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-muted/40 transition-colors"
       >
         <ChevronRight className={cn('w-3.5 h-3.5 text-muted-foreground/50 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
-        <span className={cn('font-sans text-[14px] font-semibold truncate leading-tight',
+        <span className={cn('flex-1 font-sans text-[14px] font-semibold truncate leading-tight',
           noClient ? 'italic text-muted-foreground' : 'text-foreground')}>
           {displayClientName(agg)}
         </span>
-        {/* On the row, because "which client is wrong" is the question a person
-            actually has, and a line in the footer can never answer it. */}
-        {misfiled > 0 && (
-          <span
-            title={`${misfiled} block${misfiled === 1 ? '' : 's'} here look${misfiled === 1 ? 's' : ''} booked to a different client — open Daily Review to check`}
-            className="shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800"
-          >
-            <AlertTriangle className="w-3 h-3" />
-            {misfiled} may be misfiled
-          </span>
-        )}
         <span className="flex-1" />
         {/* Same split Daily Review shows on every client, in the same words and
             the same type. Rendered even when a client is entirely one or the

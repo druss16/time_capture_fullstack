@@ -720,12 +720,12 @@ const MisfiledTimeReview: React.FC<{
                 ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
                 : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
             )}
-            <ScanSearch
-              className={cn(
-                'w-4 h-4 shrink-0',
-                clientTotal > 0 ? 'text-red-500' : unsureTotal > 0 ? 'text-amber-500' : 'text-slate-400'
-              )}
-            />
+            {/* The site's green, like every other feature icon. It was
+                status-coloured, which duplicated the badges to its right and
+                made the panel's own identity change colour depending on what
+                it happened to find. Status belongs on the badges; the icon is
+                just what this thing IS. */}
+            <ScanSearch className="w-4 h-4 shrink-0 text-primary" />
             <div className="min-w-0">
               <p className="text-sm font-bold text-slate-800">Check for misfiled time</p>
               <p className="text-xs text-slate-400 truncate">

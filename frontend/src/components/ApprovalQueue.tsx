@@ -1,11 +1,11 @@
 // src/components/ApprovalQueue.tsx
 // Manager dashboard — styled to match WeeklyTimesheet design system
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, AlertTriangle,
-  ChevronRight, User, CalendarDays, DollarSign, Info,
+  ChevronRight, User, CalendarDays, DollarSign, Info, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { TimesheetDetailDrawer } from './TimesheetDetailDrawer';
@@ -128,12 +128,17 @@ const TimesheetRow: React.FC<{
       <tr
         onClick={() => onView(timesheet.id)}
         className={cn(
-          'cursor-pointer hover:bg-slate-100/70 transition-colors',
-          timesheet.auto_submitted && 'bg-amber-50/30',
+          'group cursor-pointer transition-colors',
+          timesheet.auto_submitted ? 'bg-amber-50/30' : 'bg-white',
+          'hover:bg-slate-100/70',
         )}
       >
         {/* Employee */}
-        <td className="sticky left-0 z-10 px-4 py-2.5 bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
+        <td className={cn(
+          'sticky left-0 z-10 px-4 py-2.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]',
+          timesheet.auto_submitted ? 'bg-amber-50' : 'bg-white',
+          'group-hover:bg-slate-100'
+        )}>
           {timesheet.auto_submitted && (
             <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-amber-400 rounded-r" aria-hidden />
           )}
@@ -175,7 +180,11 @@ const TimesheetRow: React.FC<{
         </td>
 
         {/* Actions + inline badges */}
-        <td className="px-3 py-2.5">
+        <td className={cn(
+          'sticky right-0 z-10 px-4 py-2.5 shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]',
+          timesheet.auto_submitted ? 'bg-amber-50' : 'bg-white',
+          'group-hover:bg-slate-100'
+        )}>
           <div className="flex items-center justify-end gap-1.5 flex-nowrap">
             {/* Badges */}
             {misfiled && misfiled.count > 0 && (
@@ -187,7 +196,10 @@ const TimesheetRow: React.FC<{
               </span>
             )}
             {timesheet.auto_submitted && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <span
+                title="Auto-submitted at the Tuesday deadline — the employee did not review this week before it was sent"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap"
+              >
                 <Clock className="w-3 h-3 shrink-0" /> Auto
               </span>
             )}
@@ -253,17 +265,11 @@ const TimesheetRow: React.FC<{
         </tr>
       )}
 
-      {/* Auto-submitted notice row */}
-      {timesheet.auto_submitted && !expanded && (
-        <tr className="bg-amber-50/20 border-t-0">
-          <td colSpan={5} className="px-5 pb-2.5 pt-0">
-            <div className="ml-10 flex items-center gap-2 text-[11px] text-amber-600">
-              <AlertTriangle className="w-3 h-3 shrink-0" />
-              Employee did not manually review before submission (Tuesday auto-submit deadline).
-            </div>
-          </td>
-        </tr>
-      )}
+      {/* The full-width "did not manually review" row used to sit under every
+          auto-submitted timesheet. With most weeks auto-submitting, that doubled
+          the row count for a sentence that was identical every time — 40 people
+          became 80 rows to scroll. The amber row tint, the "Auto" badge and its
+          tooltip carry the same fact without costing a line each. */}
 
       {/* Reject Modal */}
       {showRejectModal && (
@@ -341,6 +347,10 @@ const ApprovalQueue: React.FC = () => {
   const [misfiled, setMisfiled] = useState<Record<string, { count: number; minutes: number }>>({});
   // Bumped after an approve/reject so the sweep re-runs against the new queue.
   const [sweepKey, setSweepKey] = useState(0);
+  // At 20-40 reports the queue stops being a list you read and becomes one
+  // you search. Client-side on purpose: the whole queue is already loaded,
+  // so a round trip per keystroke would buy nothing.
+  const [q, setQ] = useState('');
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
@@ -395,6 +405,14 @@ const ApprovalQueue: React.FC = () => {
   };
 
   const handleView = (id: number) => { setDrawerTimesheetId(id); };
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return queueData.timesheets;
+    return queueData.timesheets.filter(t =>
+      t.user_name.toLowerCase().includes(needle) ||
+      t.user_email.toLowerCase().includes(needle));
+  }, [queueData.timesheets, q]);
 
   const autoCount   = queueData.timesheets.filter(t => t.auto_submitted).length;
   const totalBillable = queueData.timesheets.reduce((s, t) => s + t.billable_hours, 0);
@@ -479,13 +497,34 @@ const ApprovalQueue: React.FC = () => {
               <p className="text-xs text-slate-400 truncate">
                 {queueData.count === 0
                   ? 'Nothing waiting'
+                  : q.trim()
+                  ? `${shown.length} of ${queueData.count} shown`
                   : `${queueData.count} timesheet${queueData.count === 1 ? '' : 's'} · ${formatHours(totalBillable)} billable · ${formatCurrency(totalAmount)}`}
               </p>
             </div>
           </div>
-          {/* Moved up out of the footer: whether anyone actually looked at these
-              weeks before they were sent is a fact you want BEFORE you approve,
-              not a note under the last row. */}
+          {/* Appears only once the list is long enough to need it — a search
+              box above six rows is furniture, above forty it is the feature. */}
+          {queueData.timesheets.length >= 8 && (
+            <div className="relative shrink-0">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Find a person…"
+                className="w-44 pl-8 pr-7 py-1.5 text-xs border border-border/60 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary/40 outline-none"
+              />
+              {q && (
+                <button
+                  onClick={() => setQ('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  title="Clear"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
           {autoCount > 0 && (
             <p className="text-xs text-amber-600 flex items-center gap-1.5 shrink-0 text-right">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
@@ -494,7 +533,7 @@ const ApprovalQueue: React.FC = () => {
           )}
         </div>
         <div className="overflow-auto flex-1">
-          <table className="w-full border-collapse text-sm" style={{ minWidth: 680 }}>
+          <table className="w-full border-collapse text-sm" style={{ minWidth: 620 }}>
 
             {/* Sticky col headers */}
             <thead className="sticky top-0 z-20">
@@ -511,23 +550,30 @@ const ApprovalQueue: React.FC = () => {
                 <th className="text-right px-3 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 whitespace-nowrap">
                   Amount
                 </th>
-                <th className="text-right px-3 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50">
+                {/* Pinned right for the same reason Employee is pinned left:
+                    at 40 rows the horizontal scroll is real, and Approve is the
+                    one control that must never be the thing scrolled off. */}
+                <th className="sticky right-0 z-20 text-right px-4 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]">
                   Actions
                 </th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-border/30">
-              {queueData.timesheets.length === 0 ? (
+              {shown.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center py-16 text-slate-400">
                     <CheckCircle2 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                    <p className="font-medium text-slate-500">No timesheets pending approval</p>
-                    <p className="text-sm mt-1">You're all caught up</p>
+                    <p className="font-medium text-slate-500">
+                      {q.trim() ? `Nobody matching “${q.trim()}”` : 'No timesheets pending approval'}
+                    </p>
+                    <p className="text-sm mt-1">
+                      {q.trim() ? 'Try a different name' : "You're all caught up"}
+                    </p>
                   </td>
                 </tr>
               ) : (
-                queueData.timesheets.map(ts => (
+                shown.map(ts => (
                   <TimesheetRow
                     key={ts.id}
                     timesheet={ts}

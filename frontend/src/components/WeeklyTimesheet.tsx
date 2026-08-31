@@ -1169,7 +1169,10 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
             numbers in a line. */}
         <div className="mt-4 flex items-end justify-between gap-5 flex-wrap">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="relative w-[74px] h-[74px] shrink-0">
+            <div className="relative w-[74px] h-[74px] shrink-0"
+                 title={`${billablePctLabel}% of this week is billable`}
+                 role="img"
+                 aria-label={`${billablePctLabel}% of this week is billable`}>
               <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden>
                 <circle cx="37" cy="37" r="30" fill="none"
                         className="stroke-muted-foreground/20" strokeWidth="6.75" />
@@ -1178,12 +1181,14 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                         strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 30} ${2 * Math.PI * 30}`}
                         transform="rotate(-90 37 37)" />
               </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-[17px] font-bold leading-none tracking-[-0.02em] text-foreground tabular-nums">
-                  {billablePctLabel}%
-                </span>
-                <span className="mt-0.5 text-[8.5px] font-bold uppercase tracking-[0.09em] text-muted-foreground">
-                  billable
+              {/* One line only. The ring's inner diameter is ~60px, and "43%"
+                  stacked over "BILLABLE" was two type sizes and a letter-spaced
+                  caption fighting for it. The word is not load-bearing: the arc
+                  is the same teal as the billable figure beside it, and the line
+                  underneath already reads "3.30 billable". */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-[20px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                  {billablePctLabel}<span className="text-[13px] font-semibold text-muted-foreground/70">%</span>
                 </span>
               </div>
             </div>

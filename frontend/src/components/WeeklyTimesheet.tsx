@@ -1157,47 +1157,50 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           </div>
         </div>
 
-        {/* Three equal numbers, and billable is one of them.
-            A full-size dial at the centre of the hero put 43% where the eye
-            lands first, every week, on a person's OWN record — and for this
-            firm most non-billable time is legitimately non-billable (admin,
-            internal, firm work). A permanent gauge reading 43% is a score, and
-            a score is not what a record should hand you.
-            The ring came out too. It was the only graphic in the row, wedged
-            into the middle column, so two plain numbers sat either side of a
-            circle — and a ring's optical centre never quite agrees with digits
-            on a text baseline. Three numbers, three labels, nothing to align
-            against anything.
+        {/* The ring is the product's own mark: timetracker-icon-circle.svg is a
+            track circle plus a dash-array arc with a round cap, rotated -90.
+            Same geometry here (stroke ≈ 22.5% of radius), so it reads as the
+            logo doing a job rather than a dashboard donut borrowed from
+            somewhere else.
 
-            The total leads at 30px so the row has an entry point; billable and
-            non-billable stay level with each other at 24px, which is the whole
-            point — neither outranks the other. */}
+            It also replaces two elements at once — the progress bar AND the
+            swatch legend — because a ratio drawn once does not need drawing
+            again underneath. What is left is the ring, the total, and the two
+            numbers in a line. */}
         <div className="mt-4 flex items-end justify-between gap-5 flex-wrap">
-          <div className="flex items-baseline min-w-0">
-            <div className="pr-7">
-              <div className="text-[30px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
-                {fmtHours(grandTotal)}
-              </div>
-              <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">
-                {hourFmt === 'decimal' ? 'Total hours' : 'Total'}
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="relative w-[74px] h-[74px] shrink-0">
+              <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden>
+                <circle cx="37" cy="37" r="30" fill="none"
+                        className="stroke-muted-foreground/20" strokeWidth="6.75" />
+                <circle cx="37" cy="37" r="30" fill="none"
+                        className="stroke-primary" strokeWidth="6.75" strokeLinecap="round"
+                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 30} ${2 * Math.PI * 30}`}
+                        transform="rotate(-90 37 37)" />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-[17px] font-bold leading-none tracking-[-0.02em] text-foreground tabular-nums">
+                  {billablePctLabel}%
+                </span>
+                <span className="mt-0.5 text-[8.5px] font-bold uppercase tracking-[0.09em] text-muted-foreground">
+                  billable
+                </span>
               </div>
             </div>
 
-            <div className="px-7 border-l border-border/50">
-              <div className="text-[24px] font-bold leading-none tracking-[-0.025em] text-primary tabular-nums">
-                {fmtHours(billable)}
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[30px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                  {fmtHours(grandTotal)}
+                </span>
+                {hourFmt === 'decimal' && grandTotal > 0 && (
+                  <span className="text-[13px] font-semibold text-muted-foreground/80">hrs</span>
+                )}
               </div>
-              <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">
-                Billable · {billablePctLabel}%
-              </div>
-            </div>
-
-            <div className="pl-7 border-l border-border/50">
-              <div className="text-[24px] font-bold leading-none tracking-[-0.025em] text-muted-foreground/60 tabular-nums">
-                {fmtHours(nonBillable)}
-              </div>
-              <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/70">
-                Non-billable
+              <div className="mt-2 text-[12.5px] font-semibold text-muted-foreground/80">
+                <b className="text-foreground font-bold tabular-nums">{fmtHours(billable)}</b> billable
+                <span className="mx-1.5 text-muted-foreground/40">·</span>
+                <b className="text-foreground font-bold tabular-nums">{fmtHours(nonBillable)}</b> non-billable
               </div>
             </div>
           </div>

@@ -16,6 +16,7 @@ and its backfill never ran.
 The person is the only one who can see their own missing weeks, and until now
 nothing told them. This does.
 """
+from collections import Counter
 from datetime import timedelta
 
 from django.utils import timezone
@@ -224,8 +225,18 @@ def week_misfiles(request):
         'week_start': wk.isoformat(),
         'count': result['counts']['client'],
         'minutes': sum(r.get('minutes') or 0 for r in rows),
+        # Grouped by the client the time is sitting ON, because that is the row
+        # the warning is drawn against in My Week — the person needs to know
+        # WHICH client is wrong, not just that one is.
+        'by_client': [
+            {'client_id': cid, 'count': n}
+            for cid, n in sorted(Counter(
+                r['booked_client_id'] for r in rows if r.get('booked_client_id')
+            ).items())
+        ],
         'examples': [{
             'block_id': r['block_id'],
+            'booked_client_id': r['booked_client_id'],
             'date': r['date'],
             'minutes': r['minutes'],
             'window_title': r['window_title'],

@@ -13,7 +13,7 @@ import { MatterPicker } from '@/components/MatterPicker';
 import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, CheckCircle2, Lock,
   AlertTriangle, Info, RefreshCw, Search, X, Layers, CalendarDays, Sparkles, Copy,
-  FolderInput, Check,
+  FolderInput, Check, ScanSearch,
   Briefcase,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
@@ -1028,50 +1028,76 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           scheduled task will fix on its own. */}
       <OutstandingWeeksBanner onOpenWeek={setWeekStart} refreshKey={outstandingTick} />
 
-      {/* Misfiled time, fixed HERE. This replaced a chip on the client row and a
-          line by the submit button — both of which could only tell you something
-          was wrong and send you to Daily Review to deal with it. Four steps to
-          correct one minute of time is how a warning turns into something people
-          scroll past. One row, one click, gone. */}
+      {/* Misfiled time, fixed here. Styled as the Approvals ledger, not as a
+          warning: amber said "something is wrong with you" for what is usually
+          the classifier being unsure about two similarly-named churches. The
+          calm version gets read the same and resented less — and it matches the
+          screen a manager sees for the same finding, so the two teach one
+          pattern instead of two. */}
       {misfileRows.length > 0 && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden" style={INTER}>
-          <div className="px-4 pt-3 pb-1 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-            <p className="text-sm font-bold text-amber-900">
-              {misfileRows.length === 1
-                ? 'This looks like it is on the wrong client'
-                : `${misfileRows.length} of these look like they are on the wrong client`}
-            </p>
+        <div className="mb-4 rounded-xl border border-border/60 bg-card overflow-hidden" style={INTER}>
+          <div className="px-4 py-2.5 flex items-center gap-2.5 border-b border-border/60">
+            <ScanSearch className="w-4 h-4 text-primary shrink-0" />
+            <p className="text-sm font-bold text-foreground">Check the time is filed right</p>
+            <span className="text-xs text-muted-foreground">
+              {misfileRows.length} to look at
+            </span>
           </div>
-          {misfileRows.map((r) => (
-            <div key={r.block_id}
-              className="px-4 py-2.5 flex items-center gap-3 flex-wrap border-t border-amber-200/60 first:border-t-0 mt-1">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-amber-950 truncate" title={r.window_title}>
-                  {r.window_title}
-                </p>
-                <p className="text-xs text-amber-800/80 mt-0.5">
-                  {r.minutes}m · now on <b className="font-bold">{r.booked_client_name}</b>
-                </p>
-              </div>
-              <button
-                disabled={fixing === r.block_id || !r.looks_like_client_id}
-                onClick={() => resolveMisfile(r, 'move')}
-                className="px-3 py-1.5 rounded-md text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 shrink-0 max-w-[260px] truncate"
-                title={`Move this to ${r.looks_like_client_name}`}
-              >
-                Move to {r.looks_like_client_name}
-              </button>
-              <button
-                disabled={fixing === r.block_id}
-                onClick={() => resolveMisfile(r, 'correct')}
-                className="px-2.5 py-1.5 rounded-md text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50 shrink-0"
-                title={`Leave it on ${r.booked_client_name} and stop flagging it`}
-              >
-                It&rsquo;s right
-              </button>
-            </div>
-          ))}
+
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-muted/40 border-b border-border/60">
+                <th className="text-left px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">What was open</th>
+                <th className="text-left px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">Filed under</th>
+                <th />
+                <th className="text-left px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">Looks like</th>
+                <th className="text-right px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">Move?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {misfileRows.map((r) => (
+                <tr key={r.block_id} className="border-b border-border/40 last:border-b-0 hover:bg-muted/30 transition-colors">
+                  <td className="px-4 py-2.5 max-w-0 w-[42%]">
+                    <p className="text-sm font-semibold text-foreground truncate" title={r.window_title}>
+                      {r.window_title}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{r.minutes}m</p>
+                  </td>
+                  <td className="px-3 py-2.5 max-w-0 w-[21%]">
+                    <span className="block text-sm text-muted-foreground truncate" title={r.booked_client_name}>
+                      {r.booked_client_name}
+                    </span>
+                  </td>
+                  <td className="w-5 text-center text-muted-foreground/40" aria-hidden>→</td>
+                  <td className="px-3 py-2.5 max-w-0 w-[22%]">
+                    <span className="block text-sm font-bold text-emerald-700 truncate" title={r.looks_like_client_name}>
+                      {r.looks_like_client_name}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        disabled={fixing === r.block_id || !r.looks_like_client_id}
+                        onClick={() => resolveMisfile(r, 'move')}
+                        title={`Move this to ${r.looks_like_client_name}`}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center border border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      >
+                        <Check className="w-4 h-4" strokeWidth={3} />
+                      </button>
+                      <button
+                        disabled={fixing === r.block_id}
+                        onClick={() => resolveMisfile(r, 'correct')}
+                        title={`Leave it on ${r.booked_client_name} and stop flagging it`}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center border border-border/70 bg-card text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50 transition-colors"
+                      >
+                        <X className="w-4 h-4" strokeWidth={3} />
+                      </button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

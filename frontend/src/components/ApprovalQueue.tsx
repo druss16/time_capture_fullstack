@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, AlertTriangle,
-  ChevronRight, User, CalendarDays, DollarSign, Info, Search,
+  ChevronRight, ChevronDown, User, CalendarDays, DollarSign, Info, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { TimesheetDetailDrawer } from './TimesheetDetailDrawer';
@@ -351,6 +351,10 @@ const ApprovalQueue: React.FC = () => {
   // you search. Client-side on purpose: the whole queue is already loaded,
   // so a round trip per keystroke would buy nothing.
   const [q, setQ] = useState('');
+  // Step 2 collapses like step 1. At 40 reports the table is the tallest
+  // thing on the page, and someone who has just cleared step 1 may want it
+  // out of the way — two numbered steps should behave the same way.
+  const [openStep2, setOpenStep2] = useState(true);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
@@ -486,9 +490,21 @@ const ApprovalQueue: React.FC = () => {
       <MisfiledTimeReview step={1} onCounts={setMisfiled} refreshKey={sweepKey} />
 
       {/* ── STEP 2 ─────────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-border/60 overflow-hidden flex flex-col flex-1 min-h-0">
-        <div className="px-5 py-3 flex items-center justify-between gap-4 border-b border-border/60 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+      <div className={cn(
+        'bg-white rounded-xl border border-border/60 overflow-hidden flex flex-col min-h-0',
+        openStep2 ? 'flex-1' : 'shrink-0'
+      )}>
+        <div className={cn(
+          'px-5 py-3 flex items-center justify-between gap-4 shrink-0',
+          openStep2 && 'border-b border-border/60'
+        )}>
+          <button
+            onClick={() => setOpenStep2((v) => !v)}
+            className="flex items-center gap-3 min-w-0 text-left"
+          >
+            {openStep2
+              ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+              : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />}
             <span className="w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-xs font-bold bg-slate-800 text-white">
               2
             </span>
@@ -502,7 +518,7 @@ const ApprovalQueue: React.FC = () => {
                   : `${queueData.count} timesheet${queueData.count === 1 ? '' : 's'} · ${formatHours(totalBillable)} billable · ${formatCurrency(totalAmount)}`}
               </p>
             </div>
-          </div>
+          </button>
           {/* Appears only once the list is long enough to need it — a search
               box above six rows is furniture, above forty it is the feature. */}
           {queueData.timesheets.length >= 8 && (
@@ -532,6 +548,8 @@ const ApprovalQueue: React.FC = () => {
             </p>
           )}
         </div>
+        {openStep2 && (
+        <>
         <div className="overflow-auto flex-1">
           <table className="w-full border-collapse text-sm" style={{ minWidth: 620 }}>
 
@@ -594,8 +612,9 @@ const ApprovalQueue: React.FC = () => {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
             Approvals are final and trigger billing workflow
           </p>
-
         </div>
+        </>
+        )}
       </div>
 
       {/* ── Detail Drawer ──────────────────────────────────────────── */}

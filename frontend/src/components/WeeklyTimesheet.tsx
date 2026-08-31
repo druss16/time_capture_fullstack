@@ -667,6 +667,19 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   useEffect(() => { fetchTimesheet(); }, [fetchTimesheet]);
   useEffect(() => { setSearch(''); setExpanded(new Set()); setTailOpen(false); }, [weekStart]);
 
+  // MUST stay up here with the other hooks: everything below the `if (loading)`
+  // guard is after an early return, and a hook there changes the hook count
+  // between renders — React #310, which blanks the whole page. That is exactly
+  // what this effect did when it was declared next to the warning it feeds.
+  useEffect(() => {
+    if (!weekStart) return;
+    let alive = true;
+    safeFetchJson<any>(`${API_BASE}/timesheets/week-misfiles/?week_start=${weekStart}`)
+      .then((d) => { if (alive) setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 }); })
+      .catch(() => { if (alive) setWeekMisfiles(null); });   // never break the page over a warning
+    return () => { alive = false; };
+  }, [weekStart, outstandingTick]);
+
   // Category options for the per-block move menu (loaded once).
   useEffect(() => {
     safeFetchJson<TaskTypeOption[]>(`${API_BASE}/options/task-types/`)
@@ -938,16 +951,6 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // that is available should look available. What differs per firm is the
   // LABEL and the note beside it, which is where that context belongs — a
   // button nobody can find communicates nothing at all.
-
-  // Re-checked whenever the visible week changes or this week is sent.
-  useEffect(() => {
-    let alive = true;
-    if (!weekStart) return;
-    safeFetchJson<any>(`${API_BASE}/timesheets/week-misfiles/?week_start=${weekStart}`)
-      .then((d) => { if (alive) setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 }); })
-      .catch(() => { if (alive) setWeekMisfiles(null); });   // never break the page over a warning
-    return () => { alive = false; };
-  }, [weekStart, outstandingTick]);
 
   const misfileWarning = (() => {
     if (!weekMisfiles?.count) return null;

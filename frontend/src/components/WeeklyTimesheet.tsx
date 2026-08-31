@@ -346,6 +346,14 @@ const MIN_CHIP    = 'inline-flex items-center justify-center shrink-0 min-w-[52p
 const UPPER_LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70';
 // Font stacks: Inter for the hero voice, mono for captured titles/minutes.
 const INTER       = { fontFamily: '"Inter", sans-serif' } as const;
+
+// Which clients in this week hold time whose title names someone else, keyed by
+// client id. Carried on context rather than threaded through the list
+// components, the same way hour formatting already is — the row that draws the
+// warning is three components below the one that fetches it, and none of the
+// components in between have any business knowing about misfiles.
+const MisfileCtx = React.createContext<Map<number, number>>(new Map());
+const useMisfiles = () => React.useContext(MisfileCtx);
 const pctOfLabel  = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 const Badge: React.FC<{ billable: boolean }> = ({ billable }) => (
@@ -533,6 +541,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // one finding. What My Week has that Daily Review doesn't is the button that
   // commits the week — the last moment fixing one of these is cheap.
   const [weekMisfiles, setWeekMisfiles] = useState<{ count: number; minutes: number } | null>(null);
+  const [misfilesByClient, setMisfilesByClient] = useState<Map<number, number>>(new Map());
   const [myRole, setMyRole] = useState<string | null>(null);
   const [weekStart, setWeekStart]           = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -675,8 +684,18 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
     if (!weekStart) return;
     let alive = true;
     safeFetchJson<any>(`${API_BASE}/timesheets/week-misfiles/?week_start=${weekStart}`)
-      .then((d) => { if (alive) setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 }); })
-      .catch(() => { if (alive) setWeekMisfiles(null); });   // never break the page over a warning
+      .then((d) => {
+        if (!alive) return;
+        setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 });
+        setMisfilesByClient(new Map(
+          (d?.by_client || []).map((c: any) => [c.client_id, c.count] as [number, number])
+        ));
+      })
+      .catch(() => {                       // never break the page over a warning
+        if (!alive) return;
+        setWeekMisfiles(null);
+        setMisfilesByClient(new Map());
+      });
     return () => { alive = false; };
   }, [weekStart, outstandingTick]);
 
@@ -1006,6 +1025,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
 
   return (
     <HourFmtContext.Provider value={fmtHours}>
+    <MisfileCtx.Provider value={misfilesByClient}>
     <div className="mx-auto w-full max-w-[1120px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
 
       {/* Above everything: a week nobody sent is worth more than a week you
@@ -1516,6 +1536,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
         </div>
       )}
     </div>
+    </MisfileCtx.Provider>
     </HourFmtContext.Provider>
   );
 };
@@ -1880,6 +1901,11 @@ const ClientRow: React.FC<{
 }> = ({ agg, isExpanded, onToggle, weekBlocks }) => {
   const noClient = isNoClient(agg);
   const fmtHours = useFmtHours();
+  // The hook is called unconditionally and the branch happens after. Inline in
+  // the ternary it would only run for rows that have a client id, which is a
+  // conditional hook — React #310, the blank page.
+  const misfileMap = useMisfiles();
+  const misfiled = agg.clientId != null ? (misfileMap.get(agg.clientId) || 0) : 0;
   return (
     <>
       <button
@@ -1887,10 +1913,22 @@ const ClientRow: React.FC<{
         className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-muted/40 transition-colors"
       >
         <ChevronRight className={cn('w-3.5 h-3.5 text-muted-foreground/50 shrink-0 transition-transform', isExpanded && 'rotate-90')} />
-        <span className={cn('flex-1 font-sans text-[14px] font-semibold truncate leading-tight',
+        <span className={cn('font-sans text-[14px] font-semibold truncate leading-tight',
           noClient ? 'italic text-muted-foreground' : 'text-foreground')}>
           {displayClientName(agg)}
         </span>
+        {/* On the row, because "which client is wrong" is the question a person
+            actually has, and a line in the footer can never answer it. */}
+        {misfiled > 0 && (
+          <span
+            title={`${misfiled} block${misfiled === 1 ? '' : 's'} here look${misfiled === 1 ? 's' : ''} booked to a different client — open Daily Review to check`}
+            className="shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800"
+          >
+            <AlertTriangle className="w-3 h-3" />
+            {misfiled} may be misfiled
+          </span>
+        )}
+        <span className="flex-1" />
         {/* Same split Daily Review shows on every client, in the same words and
             the same type. Rendered even when a client is entirely one or the
             other: leaving those blank puts gaps down the column, and a gap

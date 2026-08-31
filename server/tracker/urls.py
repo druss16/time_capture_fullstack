@@ -9,6 +9,7 @@ from . import views_week_coverage
 from . import views_day_review
 from . import views_capture_status
 from . import views_review_misfiled
+from . import views_outstanding_weeks
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -555,6 +556,9 @@ urlpatterns = [
 
     # Firm-facing misfiled-time sweep — the Approvals-tab counterpart to the
     # MavOps mismatches tab above. Same detector, role-scoped to the firm.
+    # "You still owe last week" — the My Week reminder.
+    path("timesheets/outstanding/", views_outstanding_weeks.outstanding_weeks, name="timesheets_outstanding"),
+    path("timesheets/ensure-week/", views_outstanding_weeks.ensure_week_timesheet, name="timesheets_ensure_week"),
     path("review/misfiled/", views_review_misfiled.review_misfiled_time, name="review_misfiled_time"),
     path("review/misfiled/resolve/", views_review_misfiled.review_misfiled_resolve, name="review_misfiled_resolve"),
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),

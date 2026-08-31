@@ -371,9 +371,153 @@ interface WeeklyTimesheetProps {
   } | null;
 }
 
+
+// ── Outstanding weeks ─────────────────────────────────────────────────────────
+//
+// Nobody here submits by hand; the Tuesday task does it. That works right up
+// until a week has no timesheet ROW, because auto_submit_timesheets only ever
+// reads status='draft' — a week that was never created is invisible to it
+// forever, and its time can never be submitted, approved or billed. Org 21 has
+// 92 such person-weeks holding 1,246h.
+//
+// The person is the only one who can see their own missing weeks. Nothing told
+// them until this banner.
+
+interface OutstandingWeek {
+  week_start: string;
+  week_end: string;
+  timesheet_id: number | null;
+  state: 'draft' | 'missing';
+  minutes: number;
+  billable_minutes: number;
+  auto_submits: boolean;
+}
+
+const shortRange = (a: string, b: string) => {
+  const s = new Date(a + 'T00:00:00'), e = new Date(b + 'T00:00:00');
+  const f = (d: Date, y = false) =>
+    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(y ? { year: 'numeric' } : {}) });
+  return `${f(s)} – ${f(e, s.getFullYear() !== new Date().getFullYear())}`;
+};
+
+const OutstandingWeeksBanner: React.FC<{
+  onOpenWeek: (weekStart: string) => void;
+  refreshKey?: number;
+}> = ({ onOpenWeek, refreshKey = 0 }) => {
+  const [weeks, setWeeks] = useState<OutstandingWeek[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const d: any = await safeFetchJson(`${API_BASE}/timesheets/outstanding/`);
+      setWeeks(d?.weeks || []);
+    } catch {
+      setWeeks([]);            // never let a reminder break the page it sits on
+    }
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  // A week with no timesheet has nothing to submit, so one is created first —
+  // the same row the weekly task would have made.
+  const send = async (w: OutstandingWeek) => {
+    setBusy(w.week_start);
+    setNote(null);
+    try {
+      let id = w.timesheet_id;
+      if (!id) {
+        const made: any = await safeFetchJson(`${API_BASE}/timesheets/ensure-week/`, {
+          method: 'POST', body: JSON.stringify({ week_start: w.week_start }),
+        });
+        id = made?.timesheet_id;
+      }
+      if (!id) throw new Error('Could not open that week');
+      await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/submit/`, {
+        method: 'POST', body: JSON.stringify({ notes: 'Sent from the outstanding-weeks reminder' }),
+      });
+      setNote(`${shortRange(w.week_start, w.week_end)} sent for approval.`);
+      await load();
+    } catch (err: any) {
+      setNote(err?.data?.error || err?.message || 'Could not send that week.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!weeks.length) return null;
+
+  const mins = weeks.reduce((s, w) => s + w.minutes, 0);
+  const bill = weeks.reduce((s, w) => s + w.billable_minutes, 0);
+  // Last week's draft is on the Tuesday task's list. Everything else is on
+  // nobody's, and that distinction is the whole point of saying anything.
+  const stranded = weeks.filter((w) => !w.auto_submits);
+
+  return (
+    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden" style={INTER}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full px-4 py-3 flex items-center gap-3 text-left"
+      >
+        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-amber-900">
+            {stranded.length > 0
+              ? `${stranded.length} earlier week${stranded.length === 1 ? '' : 's'} still ${stranded.length === 1 ? 'needs' : 'need'} sending`
+              : 'Last week hasn’t been sent yet'}
+          </p>
+          <p className="text-xs text-amber-700/90 mt-0.5">
+            {Math.round(mins / 60)}h of your time{bill > 0 && ` (${Math.round(bill / 60)}h billable)`}
+            {' '}isn’t on a timesheet anyone can approve.
+            {stranded.length > 0 && ' Nothing will send these on its own.'}
+          </p>
+        </div>
+        <ChevronDown className={cn('w-4 h-4 text-amber-600 shrink-0 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="border-t border-amber-200/70">
+          {weeks.map((w) => (
+            <div key={w.week_start}
+              className="px-4 py-2.5 flex items-center gap-3 border-b border-amber-200/50 last:border-b-0">
+              <button
+                onClick={() => onOpenWeek(w.week_start)}
+                className="text-sm font-semibold text-amber-900 hover:underline shrink-0"
+                title="Open this week"
+              >
+                {shortRange(w.week_start, w.week_end)}
+              </button>
+              <span className="text-xs text-amber-700/80">
+                {Math.round(w.minutes / 60)}h
+                {w.billable_minutes > 0 && ` · ${Math.round(w.billable_minutes / 60)}h billable`}
+              </span>
+              <span className="flex-1" />
+              {w.auto_submits ? (
+                <span className="text-xs text-amber-700/80">sends itself Tuesday</span>
+              ) : (
+                <button
+                  disabled={busy === w.week_start}
+                  onClick={() => send(w)}
+                  className="px-3 py-1 rounded-md text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {busy === w.week_start ? 'Sending…' : 'Send for approval'}
+                </button>
+              )}
+            </div>
+          ))}
+          {note && <p className="px-4 py-2 text-xs text-amber-800 bg-amber-100/60">{note}</p>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState<string | null>(null);
+  // Bumped whenever this week is sent, so the outstanding-weeks reminder
+  // re-counts instead of still listing a week that just went out.
+  const [outstandingTick, setOutstandingTick] = useState(0);
   const [weekStart, setWeekStart]           = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const p = params.get('week');
@@ -686,6 +830,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       // this only reports the copy that went to billing.
       if (res?.clio) setClioResult(res.clio);
       fetchTimesheet();
+      setOutstandingTick((t) => t + 1);
     } catch (err: any) {
       const d = err?.data || {};
       setError(d.can_submit_on
@@ -807,6 +952,11 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   return (
     <HourFmtContext.Provider value={fmtHours}>
     <div className="mx-auto w-full max-w-[1120px] bg-[#eef4f3] p-4 sm:p-6 rounded-2xl">
+
+      {/* Above everything: a week nobody sent is worth more than a week you
+          are looking at, and it is the only thing on this screen that no
+          scheduled task will fix on its own. */}
+      <OutstandingWeeksBanner onOpenWeek={setWeekStart} refreshKey={outstandingTick} />
 
       {/* ── Hero: Inter voice, Daily Review "Lightning" look ───────────── */}
       <div style={INTER}>

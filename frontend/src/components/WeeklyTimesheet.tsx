@@ -437,7 +437,7 @@ const OutstandingWeeksBanner: React.FC<{
       await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/submit/`, {
         method: 'POST', body: JSON.stringify({ notes: 'Sent from the outstanding-weeks reminder' }),
       });
-      setNote(`${shortRange(w.week_start, w.week_end)} sent for approval.`);
+      setNote(`${shortRange(w.week_start, w.week_end)} sent to your manager.`);
       await load();
     } catch (err: any) {
       setNote(err?.data?.error || err?.message || 'Could not send that week.');
@@ -454,26 +454,52 @@ const OutstandingWeeksBanner: React.FC<{
   // nobody's, and that distinction is the whole point of saying anything.
   const stranded = weeks.filter((w) => !w.auto_submits);
 
+  // A week nobody will ever send is a problem. Last week, which goes out by
+  // itself on Tuesday, is not — so it does not get a warning's colours or a
+  // warning's words. Saying "isn't on a timesheet anyone can approve" about a
+  // week that sends itself tomorrow is alarming someone about a solved thing,
+  // and a warning that cries wolf is the one people stop reading.
+  const stuck = stranded.length > 0;
+  const hrs = Math.round(mins / 60);
+  const billHrs = Math.round(bill / 60);
+
   return (
-    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden" style={INTER}>
+    <div
+      className={cn(
+        'mb-4 rounded-xl border overflow-hidden',
+        stuck ? 'border-amber-200 bg-amber-50' : 'border-border/60 bg-card'
+      )}
+      style={INTER}
+    >
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full px-4 py-3 flex items-center gap-3 text-left"
       >
-        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+        {stuck
+          ? <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          : <Clock className="w-4 h-4 text-primary shrink-0" />}
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-amber-900">
-            {stranded.length > 0
-              ? `${stranded.length} earlier week${stranded.length === 1 ? '' : 's'} still ${stranded.length === 1 ? 'needs' : 'need'} sending`
-              : 'Last week hasn’t been sent yet'}
+          <p className={cn('text-sm font-bold', stuck ? 'text-amber-900' : 'text-foreground')}>
+            {stuck
+              ? `You have ${stranded.length} week${stranded.length === 1 ? '' : 's'} to send`
+              : 'Last week is ready to go'}
           </p>
-          <p className="text-xs text-amber-700/90 mt-0.5">
-            {Math.round(mins / 60)}h of your time{bill > 0 && ` (${Math.round(bill / 60)}h billable)`}
-            {' '}isn’t on a timesheet anyone can approve.
-            {stranded.length > 0 && ' Nothing will send these on its own.'}
+          <p className={cn('text-xs mt-0.5', stuck ? 'text-amber-700/90' : 'text-muted-foreground')}>
+            {stuck ? (
+              <>
+                {hrs}h of your time{billHrs > 0 && ` (${billHrs}h billable)`} hasn’t gone to
+                your manager. It won’t go on its own — send it here.
+              </>
+            ) : (
+              <>
+                {hrs}h{billHrs > 0 && `, ${billHrs}h billable`}. It sends itself Tuesday
+                morning, or you can send it now.
+              </>
+            )}
           </p>
         </div>
-        <ChevronDown className={cn('w-4 h-4 text-amber-600 shrink-0 transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('w-4 h-4 shrink-0 transition-transform',
+          stuck ? 'text-amber-600' : 'text-muted-foreground', open && 'rotate-180')} />
       </button>
 
       {open && (
@@ -503,14 +529,14 @@ const OutstandingWeeksBanner: React.FC<{
                 Open week
               </button>
               {w.auto_submits ? (
-                <span className="text-xs text-amber-700/80 shrink-0">sends itself Tuesday</span>
+                <span className="text-xs text-amber-700/80 shrink-0">goes out Tuesday</span>
               ) : (
                 <button
                   disabled={busy === w.week_start}
                   onClick={() => send(w)}
                   className="px-3 py-1 rounded-md text-xs font-bold bg-white text-amber-800 border border-amber-400 hover:bg-amber-100 disabled:opacity-50 shrink-0"
                 >
-                  {busy === w.week_start ? 'Sending…' : 'Send for approval'}
+                  {busy === w.week_start ? 'Sending…' : 'Send to my manager'}
                 </button>
               )}
             </div>

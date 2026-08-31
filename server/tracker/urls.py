@@ -559,6 +559,7 @@ urlpatterns = [
     # "You still owe last week" — the My Week reminder.
     path("timesheets/outstanding/", views_outstanding_weeks.outstanding_weeks, name="timesheets_outstanding"),
     path("timesheets/ensure-week/", views_outstanding_weeks.ensure_week_timesheet, name="timesheets_ensure_week"),
+    path("timesheets/week-misfiles/", views_outstanding_weeks.week_misfiles, name="timesheets_week_misfiles"),
     path("review/misfiled/", views_review_misfiled.review_misfiled_time, name="review_misfiled_time"),
     path("review/misfiled/resolve/", views_review_misfiled.review_misfiled_resolve, name="review_misfiled_resolve"),
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),

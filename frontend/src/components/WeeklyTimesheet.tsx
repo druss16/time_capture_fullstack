@@ -527,6 +527,13 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // Bumped whenever this week is sent, so the outstanding-weeks reminder
   // re-counts instead of still listing a week that just went out.
   const [outstandingTick, setOutstandingTick] = useState(0);
+  // Misfiled time in THIS week, for the moment of sending. Deliberately not a
+  // banner: Daily Review already shows a person their own mismatches and can
+  // span a week, so a standing box here would be the third surface repeating
+  // one finding. What My Week has that Daily Review doesn't is the button that
+  // commits the week — the last moment fixing one of these is cheap.
+  const [weekMisfiles, setWeekMisfiles] = useState<{ count: number; minutes: number } | null>(null);
+  const [myRole, setMyRole] = useState<string | null>(null);
   const [weekStart, setWeekStart]           = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const p = params.get('week');
@@ -769,7 +776,10 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
     let alive = true;
     fetchWhoAmI()
       .then((me: any) => {
-        if (alive) setClioEnabled(!!me?.primary_integrations?.includes?.('clio'));
+        if (alive) {
+          setClioEnabled(!!me?.primary_integrations?.includes?.('clio'));
+          setMyRole(me?.role ?? null);
+        }
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -928,6 +938,39 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // that is available should look available. What differs per firm is the
   // LABEL and the note beside it, which is where that context belongs — a
   // button nobody can find communicates nothing at all.
+
+  // Re-checked whenever the visible week changes or this week is sent.
+  useEffect(() => {
+    let alive = true;
+    if (!weekStart) return;
+    safeFetchJson<any>(`${API_BASE}/timesheets/week-misfiles/?week_start=${weekStart}`)
+      .then((d) => { if (alive) setWeekMisfiles({ count: d?.count || 0, minutes: d?.minutes || 0 }); })
+      .catch(() => { if (alive) setWeekMisfiles(null); });   // never break the page over a warning
+    return () => { alive = false; };
+  }, [weekStart, outstandingTick]);
+
+  const misfileWarning = (() => {
+    if (!weekMisfiles?.count) return null;
+    const n = weekMisfiles.count;
+    // An owner's week no longer auto-approves when it carries misfiled time, so
+    // it sits at "submitted" with no explanation unless we give one — owners
+    // never expect to wait on anyone.
+    const held = myRole === 'owner' && timesheetData?.status === 'submitted';
+    return (
+      <p className="flex items-center gap-2 text-xs font-semibold text-amber-700">
+        <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+        <span>
+          {held
+            ? `Held for review — ${n} block${n === 1 ? '' : 's'} look${n === 1 ? 's' : ''} misfiled.`
+            : `${n} block${n === 1 ? '' : 's'} look${n === 1 ? 's' : ''} booked to the wrong client.`}
+          {' '}
+          <a href={`/daily?date=${weekStart}&range=week`} className="underline underline-offset-2 hover:text-amber-900">
+            {held ? 'Review in Daily Review' : 'Check before sending'}
+          </a>
+        </span>
+      </p>
+    );
+  })();
 
   const submitButton = (() => {
     if (timesheetData?.status === 'draft') {
@@ -1303,13 +1346,18 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           </span>
 
           <div className="ml-auto flex min-w-0 items-center justify-end gap-3">
-            {/* Capped and right-aligned so a two-sentence note stays a caption
-                beside the action rather than pushing it onto its own line. */}
-            {submission?.reason && (
+            {/* Rides the control that already exists rather than claiming a
+                banner: it appears only when this week actually carries misfiled
+                time, and takes the place of the generic firm note when it does,
+                because "2 blocks are on the wrong client" outranks "your firm
+                reviews timesheets before they are final". */}
+            {misfileWarning ? (
+              <div className="hidden md:block max-w-[22rem] text-right">{misfileWarning}</div>
+            ) : submission?.reason ? (
               <span className="hidden md:block max-w-[20rem] text-right text-[12px] leading-snug text-muted-foreground">
                 {submission.reason}
               </span>
-            )}
+            ) : null}
             <div className="shrink-0">{submitButton}</div>
           </div>
         </div>

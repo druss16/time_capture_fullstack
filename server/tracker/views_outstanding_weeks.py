@@ -166,3 +166,70 @@ def ensure_week_timesheet(request):
 
     ts = Timesheet.objects.create(org=org, user=request.user, week_start=wk, status='draft')
     return Response({'timesheet_id': ts.id, 'status': ts.status, 'created': True}, status=201)
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def week_misfiles(request):
+    """
+    GET /api/timesheets/week-misfiles/?week_start=YYYY-MM-DD
+
+    How much of the requester's own confirmed time for that week is booked to a
+    client its title contradicts.
+
+    This exists for the moment of SENDING, not as ambient furniture. Daily
+    Review already shows a person their own mismatches and can span a week, so a
+    standing banner on My Week would be the third surface repeating one finding.
+    What My Week has that Daily Review does not is the button that commits the
+    week — and that is the last moment fixing one of these is cheap.
+
+    CLIENT bucket only, the same standard the owner auto-approve gate uses.
+    Internal/admin disagreements and same-family ties are real but are not
+    reasons to interrupt someone sending a week; a warning that fires often is
+    one people click past.
+    """
+    membership = (OrganizationMembership.objects
+                  .filter(user=request.user).select_related('organization').first())
+    if not membership:
+        return Response({'count': 0, 'minutes': 0, 'examples': []})
+    org = membership.organization
+
+    raw = (request.GET.get('week_start') or '').strip()
+    try:
+        wk = _monday(timezone.datetime.fromisoformat(raw).date())
+    except (TypeError, ValueError):
+        return Response({'error': 'week_start must be an ISO date (YYYY-MM-DD).'}, status=400)
+
+    from tracker.services.mismatch_scan import (
+        build_indexes, confirmed_correct_block_ids, scan_buckets,
+    )
+
+    start_utc, end_utc = _day_bounds_utc(wk, wk + timedelta(days=6))
+    blocks = (
+        committed_block_qs(org, start_utc, end_utc, user_id=request.user.id, can_see_all=False)
+        .filter(client_id__isnull=False)
+        .exclude(window_title__isnull=True)
+        .exclude(window_title='')
+        .select_related('client', 'user', 'org')
+    )
+    names_by_org, index_by_org, firm_by_org = build_indexes([org.id])
+    result = scan_buckets(
+        blocks, names_by_org, index_by_org, firm_by_org,
+        limit=5,                                   # a warning, not a work queue
+        skip_block_ids=confirmed_correct_block_ids([org.id]),
+    )
+    rows = result['flagged']['client']
+    return Response({
+        'week_start': wk.isoformat(),
+        'count': result['counts']['client'],
+        'minutes': sum(r.get('minutes') or 0 for r in rows),
+        'examples': [{
+            'block_id': r['block_id'],
+            'date': r['date'],
+            'minutes': r['minutes'],
+            'window_title': r['window_title'],
+            'booked_client_name': r['booked_client_name'],
+            'looks_like_client_name': r.get('looks_like_client_name'),
+        } for r in rows],
+    })

@@ -1168,18 +1168,26 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
             again underneath. What is left is the ring, the total, and the two
             numbers in a line. */}
         <div className="mt-4 flex items-end justify-between gap-5 flex-wrap">
-          <div className="flex items-center gap-4 min-w-0">
-            <div className="relative w-[74px] h-[74px] shrink-0"
+          <div className="flex items-center gap-3.5 min-w-0">
+            {/* 58px, not 74. At 74 the ring was the heaviest object in the row
+                while carrying the least important number — a 43% dial louder
+                than the 7.61 hours it is a fraction of. It also left a lot of
+                empty hole around two digits.
+
+                Smaller ring, thinner stroke, fainter track: the hours lead, and
+                the ratio supports them. The logo's stroke-to-radius ratio
+                (0.225) is preserved, so it is still the same mark. */}
+            <div className="relative w-[58px] h-[58px] shrink-0"
                  title={`${billablePctLabel}% of this week is billable`}
                  role="img"
                  aria-label={`${billablePctLabel}% of this week is billable`}>
-              <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden>
-                <circle cx="37" cy="37" r="30" fill="none"
-                        className="stroke-muted-foreground/20" strokeWidth="6.75" />
-                <circle cx="37" cy="37" r="30" fill="none"
-                        className="stroke-primary" strokeWidth="6.75" strokeLinecap="round"
-                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 30} ${2 * Math.PI * 30}`}
-                        transform="rotate(-90 37 37)" />
+              <svg width="58" height="58" viewBox="0 0 58 58" aria-hidden>
+                <circle cx="29" cy="29" r="24" fill="none"
+                        className="stroke-muted-foreground/15" strokeWidth="5.4" />
+                <circle cx="29" cy="29" r="24" fill="none"
+                        className="stroke-primary" strokeWidth="5.4" strokeLinecap="round"
+                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 24} ${2 * Math.PI * 24}`}
+                        transform="rotate(-90 29 29)" />
               </svg>
               {/* One line only. The ring's inner diameter is ~60px, and "43%"
                   stacked over "BILLABLE" was two type sizes and a letter-spaced
@@ -1187,8 +1195,8 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                   is the same teal as the billable figure beside it, and the line
                   underneath already reads "3.30 billable". */}
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-[20px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
-                  {billablePctLabel}<span className="text-[13px] font-semibold text-muted-foreground/70">%</span>
+                <span className="text-[16px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                  {billablePctLabel}<span className="text-[10px] font-semibold text-muted-foreground/70">%</span>
                 </span>
               </div>
             </div>

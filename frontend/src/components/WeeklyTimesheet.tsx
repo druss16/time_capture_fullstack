@@ -454,37 +454,34 @@ const OutstandingWeeksBanner: React.FC<{
   // nobody's, and that distinction is the whole point of saying anything.
   const stranded = weeks.filter((w) => !w.auto_submits);
 
-  // A week nobody will ever send is a problem. Last week, which goes out by
-  // itself on Tuesday, is not — so it does not get a warning's colours or a
-  // warning's words. Saying "isn't on a timesheet anyone can approve" about a
-  // week that sends itself tomorrow is alarming someone about a solved thing,
-  // and a warning that cries wolf is the one people stop reading.
+  // Both states are amber, because both are things the person has to know about
+  // and a white card on a white page is not a reminder — it is furniture. The
+  // first attempt at calming this down made it vanish.
+  //
+  // What changes between them is the CLAIM, not the volume. A week nobody will
+  // ever send is a problem to fix; last week going out on Tuesday is a heads-up
+  // that it is about to leave, which is the last moment to look at it. Same
+  // colour, different sentence.
   const stuck = stranded.length > 0;
   const hrs = Math.round(mins / 60);
   const billHrs = Math.round(bill / 60);
 
   return (
-    <div
-      className={cn(
-        'mb-4 rounded-xl border overflow-hidden',
-        stuck ? 'border-amber-200 bg-amber-50' : 'border-border/60 bg-card'
-      )}
-      style={INTER}
-    >
+    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 overflow-hidden" style={INTER}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full px-4 py-3 flex items-center gap-3 text-left"
       >
         {stuck
           ? <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-          : <Clock className="w-4 h-4 text-primary shrink-0" />}
+          : <Clock className="w-4 h-4 text-amber-600 shrink-0" />}
         <div className="min-w-0 flex-1">
-          <p className={cn('text-sm font-bold', stuck ? 'text-amber-900' : 'text-foreground')}>
+          <p className="text-sm font-bold text-amber-900">
             {stuck
               ? `You have ${stranded.length} week${stranded.length === 1 ? '' : 's'} to send`
-              : 'Last week is ready to go'}
+              : 'Reminder: last week hasn’t been sent yet'}
           </p>
-          <p className={cn('text-xs mt-0.5', stuck ? 'text-amber-700/90' : 'text-muted-foreground')}>
+          <p className="text-xs mt-0.5 text-amber-700/90">
             {stuck ? (
               <>
                 {hrs}h of your time{billHrs > 0 && ` (${billHrs}h billable)`} hasn’t gone to
@@ -492,14 +489,14 @@ const OutstandingWeeksBanner: React.FC<{
               </>
             ) : (
               <>
-                {hrs}h{billHrs > 0 && `, ${billHrs}h billable`}. It sends itself Tuesday
-                morning, or you can send it now.
+                {hrs}h{billHrs > 0 && `, ${billHrs}h billable`}. It goes out automatically
+                Tuesday morning — check it over first, or send it now.
               </>
             )}
           </p>
         </div>
-        <ChevronDown className={cn('w-4 h-4 shrink-0 transition-transform',
-          stuck ? 'text-amber-600' : 'text-muted-foreground', open && 'rotate-180')} />
+        <ChevronDown className={cn('w-4 h-4 text-amber-600 shrink-0 transition-transform',
+          open && 'rotate-180')} />
       </button>
 
       {open && (

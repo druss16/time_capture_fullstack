@@ -4,8 +4,11 @@
  */
 
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-/* Inter — used for the Daily Review headline (crisper than Jakarta at display size). */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&display=swap');
+/* Inter — used for display headlines (crisper than Jakarta at display size).
+   400/500 are loaded too: the headline blocks also carry supporting copy at
+   font-medium, and without those weights the browser synthesises a face that
+   is subtly wrong next to real Inter beside it. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;

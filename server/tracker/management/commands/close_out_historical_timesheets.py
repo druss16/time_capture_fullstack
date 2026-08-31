@@ -163,6 +163,14 @@ class Command(BaseCommand):
                                    start__gte=s_utc, start__lt=e_utc, timesheet__isnull=True)
                            .update(timesheet=ts))
                 ts.recalculate_totals()
+                # Everything approve() does to the blocks, minus the workflow.
+                # Leaving these approved=False under an approved timesheet would
+                # be a latent inconsistency: the legacy executive WIP reads
+                # `approved=True AND invoiced=False`, and anything else that
+                # trusts the flag would disagree with the timesheet above it.
+                Block.objects.filter(timesheet=ts).update(
+                    approved=True, approved_at=now,
+                )
                 # Direct write: no submit(), no approve(), so no mail and no push.
                 Timesheet.objects.filter(id=ts.id).update(
                     status='approved',

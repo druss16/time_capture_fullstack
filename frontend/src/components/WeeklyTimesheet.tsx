@@ -1157,27 +1157,55 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           </div>
         </div>
 
-        {/* Three stacked rows of meta became two, and the swatch legend went
-            entirely: it restated in words what the bar directly above it was
-            already drawing in colour, which is the definition of congestion.
-            "active" went too — it qualified nothing. */}
-        <div className="mt-4 flex items-end justify-between gap-4">
-          <div className="min-w-0 flex items-baseline gap-2">
-            <span className="text-[34px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
-              {fmtHours(grandTotal)}
-            </span>
-            {/* formatHoursDecimal renders an em dash for zero, and "— hrs" is
-                not a thing. The unit only appears when there is a number. */}
-            {hourFmt === 'decimal' && grandTotal > 0 && (
-              <span className="text-[13px] font-medium text-muted-foreground/80">hrs</span>
-            )}
-            <span className="text-[13px] font-medium text-muted-foreground/60">·</span>
-            <span className="text-[13px] font-semibold">
-              <b className="text-primary tabular-nums font-bold">{billablePctLabel}%</b>
-              <span className="text-muted-foreground/80 font-medium"> billable</span>
-            </span>
+        {/* The ring is the product's own mark: timetracker-icon-circle.svg is a
+            track circle plus a dash-array arc with a round cap, rotated -90.
+            Same geometry here (stroke ≈ 22.5% of radius), so it reads as the
+            logo doing a job rather than a dashboard donut borrowed from
+            somewhere else.
+
+            It also replaces two elements at once — the progress bar AND the
+            swatch legend — because a ratio drawn once does not need drawing
+            again underneath. What is left is the ring, the total, and the two
+            numbers in a line. */}
+        <div className="mt-4 flex items-end justify-between gap-5 flex-wrap">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="relative w-[74px] h-[74px] shrink-0">
+              <svg width="74" height="74" viewBox="0 0 74 74" aria-hidden>
+                <circle cx="37" cy="37" r="30" fill="none"
+                        className="stroke-muted-foreground/20" strokeWidth="6.75" />
+                <circle cx="37" cy="37" r="30" fill="none"
+                        className="stroke-primary" strokeWidth="6.75" strokeLinecap="round"
+                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 30} ${2 * Math.PI * 30}`}
+                        transform="rotate(-90 37 37)" />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-[17px] font-bold leading-none tracking-[-0.02em] text-foreground tabular-nums">
+                  {billablePctLabel}%
+                </span>
+                <span className="mt-0.5 text-[8.5px] font-bold uppercase tracking-[0.09em] text-muted-foreground">
+                  billable
+                </span>
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[30px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
+                  {fmtHours(grandTotal)}
+                </span>
+                {hourFmt === 'decimal' && grandTotal > 0 && (
+                  <span className="text-[13px] font-semibold text-muted-foreground/80">hrs</span>
+                )}
+              </div>
+              <div className="mt-2 text-[12.5px] font-semibold text-muted-foreground/80">
+                <b className="text-foreground font-bold tabular-nums">{fmtHours(billable)}</b> billable
+                <span className="mx-1.5 text-muted-foreground/40">·</span>
+                <b className="text-foreground font-bold tabular-nums">{fmtHours(nonBillable)}</b> non-billable
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-3 shrink-0 pb-0.5">
+
+          <div className="flex items-center gap-3 shrink-0 pb-1">
             <div className="flex bg-card/70 border border-border/40 rounded-full p-0.5" title="Hours format">
               {(['decimal', 'hm'] as HourFmt[]).map(m => (
                 <button
@@ -1198,18 +1226,6 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
               {totalClients} client{totalClients !== 1 ? 's' : ''}
             </span>
           </div>
-        </div>
-
-        {/* Thinner, flat, full-round. The inset shadow was doing a groove
-            impression nothing else on the page does. */}
-        <div className="mt-3.5 h-1.5 rounded-full bg-muted/70 overflow-hidden flex">
-          <div className="h-full bg-primary" style={{ width: `${pct(billable, grandTotal)}%` }} />
-          <div className="h-full bg-muted-foreground/25" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted-foreground/80">
-          <b className="text-foreground tabular-nums font-semibold">{fmtHours(billable)}</b> billable
-          <span className="text-muted-foreground/40">·</span>
-          <b className="text-foreground tabular-nums font-semibold">{fmtHours(nonBillable)}</b> non-billable
         </div>
       </div>
 

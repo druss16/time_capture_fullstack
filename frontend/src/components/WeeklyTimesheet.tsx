@@ -229,7 +229,7 @@ const formatHoursDecimal = (hours: number | string): string => {
 type HourFmt = 'hm' | 'decimal';
 
 // Lets any nested row honor the user's H:M / decimal toggle without threading a
-// formatter through every component. Defaults to H:M.
+// formatter through every component. Defaults to decimal — see the hourFmt state.
 const HourFmtContext = React.createContext<(h: number | string) => string>(formatHours);
 const useFmtHours = () => React.useContext(HourFmtContext);
 
@@ -597,7 +597,10 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   const [expanded, setExpanded]             = useState<Set<string>>(new Set());
   const [tailOpen, setTailOpen]             = useState(false);
   const [laneOpen, setLaneOpen]             = useState(false); // "This week" starts collapsed
-  const [hourFmt, setHourFmt]               = useState<HourFmt>('hm'); // H:M vs decimal
+  // Decimal by default. This is a billing record before it is a clock: 7.62
+  // is the number that gets multiplied by a rate, and 7h 37m is a number you
+  // have to convert first. The toggle stays for anyone who thinks in minutes.
+  const [hourFmt, setHourFmt]               = useState<HourFmt>('decimal');
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -1154,49 +1157,59 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           </div>
         </div>
 
-        <div className="mt-3 flex items-baseline justify-between gap-4">
-          <div className="min-w-0">
-            <span className="text-[22px] font-bold tracking-[-0.01em] text-foreground tabular-nums">
+        {/* Three stacked rows of meta became two, and the swatch legend went
+            entirely: it restated in words what the bar directly above it was
+            already drawing in colour, which is the definition of congestion.
+            "active" went too — it qualified nothing. */}
+        <div className="mt-4 flex items-end justify-between gap-4">
+          <div className="min-w-0 flex items-baseline gap-2">
+            <span className="text-[34px] font-bold leading-none tracking-[-0.03em] text-foreground tabular-nums">
               {fmtHours(grandTotal)}
             </span>
-            <span className="ml-2 text-[13px] font-semibold text-muted-foreground">
-              active · <b className="text-primary tabular-nums">{billablePctLabel}%</b> billable
+            {/* formatHoursDecimal renders an em dash for zero, and "— hrs" is
+                not a thing. The unit only appears when there is a number. */}
+            {hourFmt === 'decimal' && grandTotal > 0 && (
+              <span className="text-[13px] font-medium text-muted-foreground/80">hrs</span>
+            )}
+            <span className="text-[13px] font-medium text-muted-foreground/60">·</span>
+            <span className="text-[13px] font-semibold">
+              <b className="text-primary tabular-nums font-bold">{billablePctLabel}%</b>
+              <span className="text-muted-foreground/80 font-medium"> billable</span>
             </span>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="flex bg-card border border-border/50 rounded-lg p-0.5" title="Toggle hours format">
-              {(['hm', 'decimal'] as HourFmt[]).map(m => (
+          <div className="flex items-center gap-3 shrink-0 pb-0.5">
+            <div className="flex bg-card/70 border border-border/40 rounded-full p-0.5" title="Hours format">
+              {(['decimal', 'hm'] as HourFmt[]).map(m => (
                 <button
                   key={m}
                   onClick={() => setHourFmt(m)}
                   className={cn(
-                    'px-2 py-0.5 font-mono text-[11px] font-semibold rounded-md transition-all',
-                    hourFmt === m ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground/70 hover:text-muted-foreground'
+                    'px-2.5 py-0.5 font-mono text-[10.5px] font-semibold rounded-full transition-all',
+                    hourFmt === m
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground/60 hover:text-muted-foreground'
                   )}
                 >
                   {m === 'hm' ? 'H:M' : 'Dec'}
                 </button>
               ))}
             </div>
-            <span className="font-mono text-[12px] tabular-nums text-muted-foreground/70">
+            <span className="text-[12px] tabular-nums text-muted-foreground/60">
               {totalClients} client{totalClients !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
 
-        <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden flex shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)]">
-          <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pct(billable, grandTotal)}%` }} />
-          <div className="h-full bg-muted-foreground/30" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
+        {/* Thinner, flat, full-round. The inset shadow was doing a groove
+            impression nothing else on the page does. */}
+        <div className="mt-3.5 h-1.5 rounded-full bg-muted/70 overflow-hidden flex">
+          <div className="h-full bg-primary" style={{ width: `${pct(billable, grandTotal)}%` }} />
+          <div className="h-full bg-muted-foreground/25" style={{ width: `${pct(nonBillable, grandTotal)}%` }} />
         </div>
-        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[12.5px] text-muted-foreground">
-          <span className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-[3px] bg-gradient-to-r from-primary to-accent inline-block" />
-            <b className="text-foreground tabular-nums">{fmtHours(billable)}</b> billable
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-[3px] bg-muted-foreground/30 inline-block" />
-            <b className="text-foreground tabular-nums">{fmtHours(nonBillable)}</b> non-billable
-          </span>
+        <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted-foreground/80">
+          <b className="text-foreground tabular-nums font-semibold">{fmtHours(billable)}</b> billable
+          <span className="text-muted-foreground/40">·</span>
+          <b className="text-foreground tabular-nums font-semibold">{fmtHours(nonBillable)}</b> non-billable
         </div>
       </div>
 

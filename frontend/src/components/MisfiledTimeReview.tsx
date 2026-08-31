@@ -92,8 +92,6 @@ interface Week {
 }
 
 export interface MisfiledResponse {
-  /** Findings in weeks nobody has submitted — counted, not listed. */
-  also_in_progress?: { rows: number; weeks: number };
   params: { org_id: number; scope: string; timesheet_ids: number[] };
   weeks: Week[];
   scanned_blocks: number;
@@ -323,21 +321,17 @@ const MisfiledTimeReview: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [showInternal, setShowInternal] = useState(false);
-  // Default: only the weeks awaiting approval — the list this panel sits on.
-  // A reviewer can widen to weeks still in progress without leaving the page.
-  const [scope, setScope] = useState<'queue' | 'open'>('queue');
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<Done[]>([]);
 
   const inflight = useRef(0);
   const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async (silent = false, useScope?: 'queue' | 'open') => {
-    const sc = useScope || scope;
+  const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=${sc}`);
+      const d = await safeFetchJson<MisfiledResponse>(`${API_BASE}/review/misfiled/?scope=queue`);
       setData(d);
       // Anything applied is absent from the fresh payload, and anything still in
       // it was never applied — so a clean reload makes the optimistic set moot.
@@ -348,7 +342,7 @@ const MisfiledTimeReview: React.FC<{
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [scope]);
+  }, []);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -587,7 +581,7 @@ const MisfiledTimeReview: React.FC<{
                 {loading ? 'Scanning…'
                   : data ? `${data.scanned_blocks.toLocaleString()} confirmed blocks checked`
                          + ` across ${data.weeks.length} week${data.weeks.length === 1 ? '' : 's'} `
-                         + (scope === 'queue' ? 'awaiting approval' : 'submitted or in progress')
+                         + 'awaiting approval'
                   : '—'}
               </p>
             </div>
@@ -595,15 +589,8 @@ const MisfiledTimeReview: React.FC<{
 
           <div className="flex items-center gap-2 shrink-0">
             {!loading && data && (total === 0 ? (
-              <span className="inline-flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
-                </span>
-                {scope === 'queue' && !!data.also_in_progress?.rows && (
-                  <span className="text-xs text-slate-400 hidden sm:inline">
-                    {data.also_in_progress.rows} in weeks still in progress
-                  </span>
-                )}
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5" /> All filed correctly
               </span>
             ) : (
               <span className={cn(
@@ -639,19 +626,9 @@ const MisfiledTimeReview: React.FC<{
                 <p className="text-xs text-slate-400 mt-1">
                   {data.scanned_blocks.toLocaleString()} blocks across {data.weeks.length}{' '}
                   week{data.weeks.length === 1 ? '' : 's'}{' '}
-                  {scope === 'queue' ? 'awaiting approval' : 'submitted or in progress'}
+                  awaiting approval
                   {data.dismissed_blocks > 0 && ` · ${data.dismissed_blocks} previously left as filed`}
                 </p>
-                {scope === 'queue' && (
-                  <button
-                    onClick={() => { setScope('open'); load(false, 'open'); }}
-                    className="mt-3 text-xs font-semibold text-primary hover:underline"
-                  >
-                    {data.also_in_progress?.rows
-                      ? `${data.also_in_progress.rows} more in weeks still in progress →`
-                      : 'Also check weeks still in progress →'}
-                  </button>
-                )}
               </div>
             )}
             {total > 0 && (
@@ -692,18 +669,6 @@ const MisfiledTimeReview: React.FC<{
                   </table>
                 )}
               </>
-            )}
-
-            {scope === 'open' && (
-              <p className="border-t border-border/40 px-4 py-2 text-[11px] text-slate-400 flex items-center justify-between gap-3">
-                <span>Including weeks still in progress — those aren&rsquo;t yours to approve yet.</span>
-                <button
-                  onClick={() => { setScope('queue'); load(false, 'queue'); }}
-                  className="font-semibold text-primary hover:underline shrink-0"
-                >
-                  Just the approval queue
-                </button>
-              </p>
             )}
             {!!data.unconfirmed?.blocks && (
               <p className="border-t border-border/40 px-4 py-2.5 text-[11px] text-slate-400">

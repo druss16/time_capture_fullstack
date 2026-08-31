@@ -772,6 +772,11 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
     }
   }, [fetchTimesheet]);
 
+  // Whether the week on screen is the one in progress. Drives the forward
+  // arrow's disabled state and whether the "This week" shortcut is worth
+  // showing at all.
+  const isCurrentWeek = weekStart === getMonday(new Date()).toISOString().split('T')[0];
+
   const goToWeek = (dir: number) => {
     const d = new Date(weekStart + 'T00:00:00');
     d.setDate(d.getDate() + dir * 7);
@@ -1137,23 +1142,51 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
             )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            <div className="flex items-center gap-0.5 bg-card border border-border/50 rounded-lg overflow-hidden">
-              <button onClick={() => goToWeek(-1)} className="px-1.5 py-1.5 text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all">
+            {/* One control instead of two. The middle button said "This week"
+                (a jump-to-current action) while the text beside it named the
+                same week in different words — so the pill and the label were
+                describing each other. The date now lives INSIDE the pill, which
+                is what the arrows move, and "This week" appears only when you
+                are somewhere else and it has something to do.
+
+                The forward arrow is disabled on the current week. There is no
+                next week to look at: it holds no time, and walking into it just
+                shows an empty page you have to walk back out of. Disabled
+                rather than hidden, so the control does not change width and
+                move the arrow you are aiming at. */}
+            <div className="flex items-center bg-card border border-border/50 rounded-lg overflow-hidden">
+              <button
+                onClick={() => goToWeek(-1)}
+                title="Previous week"
+                className="px-2 py-1.5 text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all"
+              >
                 <ChevronLeft className="w-4 h-4" />
               </button>
+              <span className="px-3 py-1.5 text-[12.5px] font-semibold text-foreground whitespace-nowrap tabular-nums border-x border-border/40">
+                {timesheetData && formatWeekRange(timesheetData.week_start)}
+              </span>
               <button
-                onClick={() => setWeekStart(getMonday(new Date()).toISOString().split('T')[0])}
-                className="px-2.5 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted transition-all"
+                onClick={() => goToWeek(1)}
+                disabled={isCurrentWeek}
+                title={isCurrentWeek ? 'This is the current week' : 'Next week'}
+                className={cn(
+                  'px-2 py-1.5 transition-all',
+                  isCurrentWeek
+                    ? 'text-muted-foreground/25 cursor-default'
+                    : 'text-muted-foreground/70 hover:text-foreground hover:bg-muted'
+                )}
               >
-                This week
-              </button>
-              <button onClick={() => goToWeek(1)} className="px-1.5 py-1.5 text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-all">
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
-            <span className="text-[12.5px] font-medium text-muted-foreground whitespace-nowrap tabular-nums">
-              {timesheetData && formatWeekRange(timesheetData.week_start)}
-            </span>
+            {!isCurrentWeek && (
+              <button
+                onClick={() => setWeekStart(getMonday(new Date()).toISOString().split('T')[0])}
+                className="text-[12.5px] font-semibold text-primary hover:underline whitespace-nowrap"
+              >
+                This week
+              </button>
+            )}
           </div>
         </div>
 

@@ -241,6 +241,7 @@ def week_misfiles(request):
             'minutes': r['minutes'],
             'window_title': r['window_title'],
             'booked_client_name': r['booked_client_name'],
+            'looks_like_client_id': r.get('looks_like_client_id'),
             'looks_like_client_name': r.get('looks_like_client_name'),
         } for r in rows],
     })

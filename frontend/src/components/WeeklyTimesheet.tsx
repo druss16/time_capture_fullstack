@@ -1220,13 +1220,19 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                   the whole mark; the radius grows to 24.7 so the outer diameter
                   stays put.
 
-                  The track stays, faint but present. Without it a small arc is a
-                  stray tick with nothing to measure against, and low-billable
-                  weeks are normal here — plenty of legitimate admin time. It
-                  needs to survive a 12% week, not just a flattering one. */}
+                  The track stays, and at 0.14 rather than the 0.08 the thinning
+                  first left it at: a 4px stroke covers less ground than the 5.4
+                  it replaced, so the same opacity reads fainter than it used to.
+                  Holding the number steady would have quietly faded the track
+                  twice.
+
+                  It has to stay legible. Without it a small arc is a stray tick
+                  with nothing to measure against, and low-billable weeks are
+                  normal here — plenty of legitimate admin time. It needs to
+                  survive a 12% week, not just a flattering one. */}
               <svg width="58" height="58" viewBox="0 0 58 58" aria-hidden>
                 <circle cx="29" cy="29" r="24.7" fill="none"
-                        className="stroke-muted-foreground/[0.08]" strokeWidth="4" />
+                        className="stroke-muted-foreground/[0.14]" strokeWidth="4" />
                 <circle cx="29" cy="29" r="24.7" fill="none"
                         className="stroke-primary" strokeWidth="4" strokeLinecap="round"
                         strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 24.7} ${2 * Math.PI * 24.7}`}

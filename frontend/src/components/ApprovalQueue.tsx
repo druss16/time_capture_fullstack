@@ -10,6 +10,7 @@ import {
 import { cn } from '@/lib/design-system';
 import { TimesheetDetailDrawer } from './TimesheetDetailDrawer';
 import MisfiledTimeReview from './MisfiledTimeReview';
+import { fetchWhoAmI } from '@/lib/whoami';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -355,6 +356,10 @@ const ApprovalQueue: React.FC = () => {
   // thing on the page, and someone who has just cleared step 1 may want it
   // out of the way — two numbered steps should behave the same way.
   const [openStep2, setOpenStep2] = useState(true);
+  // Where an approved week actually goes for THIS firm. The footer used to
+  // promise a billing workflow to everyone; org 21 has approved 125 weeks and
+  // has no integration, no invoice and no push to show for any of them.
+  const [destination, setDestination] = useState<string | null>(null);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
@@ -374,6 +379,20 @@ const ApprovalQueue: React.FC = () => {
   }, []);
 
   useEffect(() => { fetchQueue(); }, [fetchQueue]);
+
+  useEffect(() => {
+    let alive = true;
+    fetchWhoAmI()
+      .then((me: any) => {
+        if (!alive) return;
+        const live: string[] = me?.primary_integrations || [];
+        setDestination(live.includes('clio') ? 'Clio'
+          : live.includes('karbon') ? 'Karbon'
+          : live.length ? live[0] : null);
+      })
+      .catch(() => { if (alive) setDestination(null); });
+    return () => { alive = false; };
+  }, []);
 
   const showSuccess = (msg: string) => {
     setSuccessMessage(msg);
@@ -484,8 +503,8 @@ const ApprovalQueue: React.FC = () => {
 
       {/* ── STEP 1 ─────────────────────────────────────────────────────── */}
       {/* Ordered on purpose. "Is any of this on the wrong client?" is a question
-          to answer BEFORE approving, not after — approvals are final and trigger
-          billing. Numbering it says so without a paragraph of instructions, and
+          to answer BEFORE approving, not after — approving is final, and where a
+          firm has an integration connected it is what sends the week onward. Numbering it says so without a paragraph of instructions, and
           the marker turns into a green tick once this step is clear. */}
       <MisfiledTimeReview step={1} onCounts={setMisfiled} refreshKey={sweepKey} />
 
@@ -608,9 +627,15 @@ const ApprovalQueue: React.FC = () => {
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-border/50 flex items-center justify-between bg-slate-50/40 shrink-0">
+          {/* Say what approving actually does HERE. Promising a billing workflow
+              to a firm that has none is the sentence teaching people this screen
+              is about invoices — and it is the reason "timesheet" reads as a
+              billing word rather than a record. */}
           <p className="text-xs text-slate-400 flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-            Approvals are final and trigger billing workflow
+            {destination
+              ? `Approving is final and sends the week to ${destination}`
+              : 'Approving is final — the week becomes your firm’s record of the time'}
           </p>
         </div>
         </>

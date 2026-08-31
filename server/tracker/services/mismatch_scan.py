@@ -282,3 +282,40 @@ def bucket_payload(result, bucket, pair_limit=25):
         'top_pairs': pairs,
         'mismatches': result['flagged'][bucket],
     }
+
+
+def week_has_client_misfiles(org, user, week_start):
+    """
+    Does this person's CONFIRMED time for that week contain a block whose title
+    distinctively names a different business client than it is booked to?
+
+    Used to decide whether an owner's timesheet may auto-approve. Deliberately
+    the CLIENT bucket only — the money bucket. Internal/admin disagreements and
+    same-family ties are real but are not reasons to hold a week: a gate that
+    fires often is a gate people learn to route around.
+
+    High precision by construction: org 21 sees roughly 0-4 client-bucket rows
+    across 8,500 blocks in 90 days, so this is expected to almost never fire.
+    When it does, a client was about to be billed for another client's work.
+    """
+    from datetime import timedelta
+
+    from tracker.services.billing_totals import committed_block_qs
+    from tracker.views_reports import _day_bounds_utc
+
+    start_utc, end_utc = _day_bounds_utc(week_start, week_start + timedelta(days=6))
+    blocks = (
+        committed_block_qs(org, start_utc, end_utc, user_id=user.id, can_see_all=False)
+        .filter(client_id__isnull=False)
+        .exclude(window_title__isnull=True)
+        .exclude(window_title='')
+        .select_related('client', 'user', 'org')
+    )
+
+    names_by_org, index_by_org, firm_by_org = _indexes_for_orgs([org.id])
+    result = scan_buckets(
+        blocks, names_by_org, index_by_org, firm_by_org,
+        limit=1,                                  # existence, not a list
+        skip_block_ids=confirmed_correct_block_ids([org.id]),
+    )
+    return result['counts']['client'] > 0

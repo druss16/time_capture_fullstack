@@ -1214,12 +1214,22 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                  title={`${billablePctLabel}% of this week is billable`}
                  role="img"
                  aria-label={`${billablePctLabel}% of this week is billable`}>
+              {/* Stroke 4, not 5.4. Comparing variants side by side, the stroke
+                  does almost all the work — dropping the track opacity alone was
+                  close to imperceptible. Thinner opens the centre and lightens
+                  the whole mark; the radius grows to 24.7 so the outer diameter
+                  stays put.
+
+                  The track stays, faint but present. Without it a small arc is a
+                  stray tick with nothing to measure against, and low-billable
+                  weeks are normal here — plenty of legitimate admin time. It
+                  needs to survive a 12% week, not just a flattering one. */}
               <svg width="58" height="58" viewBox="0 0 58 58" aria-hidden>
-                <circle cx="29" cy="29" r="24" fill="none"
-                        className="stroke-muted-foreground/15" strokeWidth="5.4" />
-                <circle cx="29" cy="29" r="24" fill="none"
-                        className="stroke-primary" strokeWidth="5.4" strokeLinecap="round"
-                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 24} ${2 * Math.PI * 24}`}
+                <circle cx="29" cy="29" r="24.7" fill="none"
+                        className="stroke-muted-foreground/[0.08]" strokeWidth="4" />
+                <circle cx="29" cy="29" r="24.7" fill="none"
+                        className="stroke-primary" strokeWidth="4" strokeLinecap="round"
+                        strokeDasharray={`${(pct(billable, grandTotal) / 100) * 2 * Math.PI * 24.7} ${2 * Math.PI * 24.7}`}
                         transform="rotate(-90 29 29)" />
               </svg>
               {/* One line only. The ring's inner diameter is ~60px, and "43%"

@@ -480,25 +480,34 @@ const OutstandingWeeksBanner: React.FC<{
           {weeks.map((w) => (
             <div key={w.week_start}
               className="px-4 py-2.5 flex items-center gap-3 border-b border-amber-200/50 last:border-b-0">
-              <button
-                onClick={() => onOpenWeek(w.week_start)}
-                className="text-sm font-semibold text-amber-900 hover:underline shrink-0"
-                title="Open this week"
-              >
+              <span className="text-sm font-semibold text-amber-900 shrink-0">
                 {shortRange(w.week_start, w.week_end)}
-              </button>
+              </span>
               <span className="text-xs text-amber-700/80">
                 {Math.round(w.minutes / 60)}h
                 {w.billable_minutes > 0 && ` · ${Math.round(w.billable_minutes / 60)}h billable`}
               </span>
               <span className="flex-1" />
+              {/* Look before you send. The week range was already clickable, but
+                  as bare text it read as a label, so the only thing that looked
+                  pressable was the one action that commits. Opening the week is
+                  green because it is the safe move and the one to try first;
+                  sending stays amber, and outlined, because it is the one that
+                  cannot be taken back. */}
+              <button
+                onClick={() => { onOpenWeek(w.week_start); setOpen(false); }}
+                className="px-3 py-1 rounded-md text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shrink-0"
+                title="Open this week and look through it"
+              >
+                Open week
+              </button>
               {w.auto_submits ? (
-                <span className="text-xs text-amber-700/80">sends itself Tuesday</span>
+                <span className="text-xs text-amber-700/80 shrink-0">sends itself Tuesday</span>
               ) : (
                 <button
                   disabled={busy === w.week_start}
                   onClick={() => send(w)}
-                  className="px-3 py-1 rounded-md text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                  className="px-3 py-1 rounded-md text-xs font-bold bg-white text-amber-800 border border-amber-400 hover:bg-amber-100 disabled:opacity-50 shrink-0"
                 >
                   {busy === w.week_start ? 'Sending…' : 'Send for approval'}
                 </button>

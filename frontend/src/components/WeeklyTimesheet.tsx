@@ -206,6 +206,12 @@ const displayClientName = (agg: Pick<ClientAgg, 'clientId' | 'clientName'>) =>
 // Clients whose whole week is under this many hours get rolled into one row.
 const GAP_PAGE = 8;   // rows shown in the needs-a-matter banner before "show more"
 const TAIL_THRESHOLD_HOURS = 0.25; // 15 minutes
+// Activities under this collapse into one expandable line. A week of real
+// work leaves a long tail of one-minute windows — dialogs, Send/Receive,
+// an Outlook flicker — and forty rows of those bury the six that matter.
+const SHORT_ACTIVITY_MINUTES = 3;
+// Below this many short rows, collapsing costs a click and saves nothing.
+const SHORT_ACTIVITY_MIN_ROWS = 3;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -2116,6 +2122,8 @@ const ClientRow: React.FC<{
 }> = ({ agg, isExpanded, onToggle, weekBlocks }) => {
   const noClient = isNoClient(agg);
   const fmtHours = useFmtHours();
+  const fmtMinutes = useFmtMinutes();
+  const [showShort, setShowShort] = useState(false);
   return (
     <>
       <button
@@ -2151,15 +2159,55 @@ const ClientRow: React.FC<{
                 expansion between client and activity, which put every block two
                 clicks from the top and hid the rows that need a matter. It rides
                 on the row as a chip instead — same information, no extra level. */}
-            {clientActivityRows(agg, weekBlocks).map(({ agg: ab, categoryName, isBillable }) => (
-              <AggBlockRow
-                key={ab.key}
-                agg={ab}
-                withDay
-                categoryName={categoryName}
-                categoryBillable={isBillable}
-              />
-            ))}
+            {(() => {
+              const all = clientActivityRows(agg, weekBlocks);
+              const short = all.filter(r => r.agg.minutes < SHORT_ACTIVITY_MINUTES);
+              const collapse = short.length >= SHORT_ACTIVITY_MIN_ROWS;
+              const shown = collapse
+                ? all.filter(r => r.agg.minutes >= SHORT_ACTIVITY_MINUTES)
+                : all;
+              const shortMinutes = short.reduce((sum, r) => sum + r.agg.minutes, 0);
+              const row = ({ agg: ab, categoryName, isBillable }: typeof all[number]) => (
+                <AggBlockRow
+                  key={ab.key}
+                  agg={ab}
+                  withDay
+                  categoryName={categoryName}
+                  categoryBillable={isBillable}
+                />
+              );
+              return (
+                <>
+                  {shown.map(row)}
+                  {/* Unlike Daily Review's "+ other short activities", this one
+                      opens. Daily Review shows a remainder because its API only
+                      sends the top activities and the rest genuinely are not
+                      there; My Week holds every block, so hiding them without a
+                      way back would be losing data the page already has. */}
+                  {collapse && (
+                    <>
+                      <button
+                        onClick={() => setShowShort(v => !v)}
+                        className="group flex items-center gap-2 pl-6 pr-1 py-1 min-w-0 text-left hover:bg-muted/40 rounded"
+                      >
+                        <ChevronRight className={cn(
+                          'w-3 h-3 text-muted-foreground/50 shrink-0 transition-transform',
+                          showShort && 'rotate-90',
+                        )} />
+                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground/70">
+                          {showShort ? 'Hide' : `${short.length} shorter activities`}
+                        </span>
+                        <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">
+                          {fmtMinutes(shortMinutes)}
+                        </span>
+                        <span className="w-[86px] shrink-0" aria-hidden />
+                      </button>
+                      {showShort && short.map(row)}
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

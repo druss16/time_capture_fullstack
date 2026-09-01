@@ -249,3 +249,91 @@ def is_pending_review_block(b) -> bool:
     depend on this service instead of reaching into views_reports."""
     from tracker.views_reports import is_pending_review_block as _impl
     return _impl(b)
+
+
+def compute_week_grid(org, week_start, *, user_id):
+    """The My Week grid, built from the SAME blocks Daily Review counts.
+
+    My Week is supposed to be seven Daily Reviews added up, and for a long time
+    it was not: `weekly_timesheet_view` attributed RawEvents with its own
+    three-minute-cap algorithm while Daily Review aggregated committed Blocks
+    through `compute_client_cards`. Different source table, different rules, so
+    the two screens could never agree. On org 21 the gap was not subtle — one
+    person's week read 40.62h in My Week against 20.90h in Daily Review, because
+    the event path was also counting her SUPPRESSED blocks (15.53h of them) and
+    her unconfirmed ones.
+
+    This walks `committed_block_qs` with the same per-block rules
+    `compute_client_cards` applies — `_block_minutes` (drops anomalous >6h
+    blocks), `_dominant_category`, `_is_billable_block`, and the same
+    `_EXCLUDE_CATEGORIES` idle filter — and adds the two dimensions the grid
+    needs that the cards do not carry: which day, and whether the row is
+    billable.
+
+    Returns (entries, day_totals_hours) where an entry is the frontend's
+    TimesheetEntry contract:
+        {client_id, client_name, task_type_id, task_type_name,
+         is_billable, days: {iso: hours}, total: hours}
+    """
+    from collections import defaultdict
+    from datetime import timedelta
+
+    from django.utils import timezone as _tz
+
+    from tracker.views_reports import (
+        _block_minutes, _dominant_category, _is_billable_block, _EXCLUDE_CATEGORIES,
+        _day_bounds_utc,
+    )
+
+    days = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
+    start_utc, end_utc = _day_bounds_utc(week_start, week_start + timedelta(days=6))
+
+    rows = defaultdict(lambda: {
+        'client_id': None, 'client_name': None,
+        'task_type_id': None, 'task_type_name': None,
+        'is_billable': False,
+        'day_minutes': {d: 0.0 for d in days},
+    })
+    day_minutes = {d: 0.0 for d in days}
+
+    for b in committed_block_qs(org, start_utc, end_utc,
+                                user_id=user_id, can_see_all=False):
+        minutes = _block_minutes(b)
+        if minutes <= 0:
+            continue
+        cat = _dominant_category(b)
+        billable = _is_billable_block(b)
+        # Same carve-out compute_client_cards makes: idle/uncategorized noise is
+        # dropped UNLESS it is billable time already sitting on a client.
+        if cat.lower() in _EXCLUDE_CATEGORIES and not (billable and b.client_id):
+            continue
+
+        day = _tz.localtime(b.start).date().isoformat()
+        if day not in day_minutes:
+            continue                       # a block whose local day fell outside
+
+        key = (b.client_id, cat, billable)
+        row = rows[key]
+        row['client_id'] = b.client_id
+        row['client_name'] = b.client.name if b.client_id else 'No client'
+        row['task_type_name'] = cat
+        row['is_billable'] = billable
+        row['day_minutes'][day] += minutes
+        day_minutes[day] += minutes
+
+    entries = []
+    for row in rows.values():
+        total = sum(row['day_minutes'].values())
+        if total <= 0:
+            continue
+        entries.append({
+            'client_id': row['client_id'],
+            'client_name': row['client_name'],
+            'task_type_id': row['task_type_id'],
+            'task_type_name': row['task_type_name'],
+            'is_billable': row['is_billable'],
+            'days': {d: round(m / 60, 2) for d, m in row['day_minutes'].items()},
+            'total': round(total / 60, 2),
+        })
+    entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
+    return entries, {d: round(m / 60, 2) for d, m in day_minutes.items()}

@@ -315,11 +315,15 @@ const MisfiledTimeReview: React.FC<{
   refreshKey?: number;
   /** Rendered as a numbered step when this sits in an ordered flow. */
   step?: number;
-}> = ({ onCounts, refreshKey = 0, step }) => {
+  /** Tells an ordered flow when this step is settled, and whether it is clear. */
+  onStatus?: (s: { settled: boolean; total: number }) => void;
+}> = ({ onCounts, refreshKey = 0, step, onStatus }) => {
   const [data, setData] = useState<MisfiledResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  // null means the reviewer has not touched the disclosure, so it follows the
+  // flow (see `open` below). Once they click, their choice sticks.
+  const [openPref, setOpenPref] = useState<boolean | null>(null);
   const [showInternal, setShowInternal] = useState(false);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<Done[]>([]);
@@ -514,6 +518,26 @@ const MisfiledTimeReview: React.FC<{
 
   const total = rows.length;
   const wrongClient = rows.filter((i) => !i.pending && i.confident).length;
+
+  // This step leads on arrival and steps aside once it is satisfied: open while
+  // scanning and while anything is flagged, closed the moment it comes back
+  // clean. Derived rather than set from an effect on purpose — an effect runs
+  // after paint, so a clean scan would flash its full-height "all filed
+  // correctly" panel for a frame before collapsing it.
+  const open = openPref ?? (loading || !data ? true : total > 0);
+  const setOpen = (next: boolean | ((o: boolean) => boolean)) =>
+    setOpenPref(typeof next === 'function' ? next(open) : next);
+
+  // Report upward so the flow knows when to hand over. Fires again as rows are
+  // resolved, so clearing the last finding hands over too.
+  //
+  // A failed scan counts as settled. It cannot say the time is filed right, but
+  // it must not be the reason a reviewer is left staring at two closed headers
+  // with no way forward — the same fail-open rule the server-side approval
+  // guard follows when this check cannot run.
+  useEffect(() => {
+    onStatus?.({ settled: !loading && (!!data || !!error), total });
+  }, [loading, data, error, total, onStatus]);
 
   const HEAD = (
     <thead className="sticky top-0 z-10">

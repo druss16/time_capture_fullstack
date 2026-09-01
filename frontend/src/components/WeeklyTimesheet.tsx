@@ -652,6 +652,13 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
         const tk = blockCatKey(b.task_type_name);
         push(week, wKey(ck, tk), b);
         push(day, dKey(d.date, ck, tk), b);
+        // Also index by client alone. Expanding a client has to show ALL of its
+        // activity, and a block's category does not have to be one the client's
+        // timesheet entries mention — Stephen's Monday had 240m of
+        // Personal/Non-Billable Outlook and Idle blocks under a client whose
+        // only entries were General, so every one of them was silently dropped
+        // from the list while still counting toward the total above it.
+        push(week, wKey(ck, '\u0000all'), b);
       }
     }
     return { weekBlocks: week, dayBlocks: day };
@@ -2069,12 +2076,24 @@ const clientActivityRows = (
   weekBlocks: Map<string, DetailBlock[]>,
 ): { agg: AggBlock; categoryName: string; isBillable: boolean }[] => {
   const out: { agg: AggBlock; categoryName: string; isBillable: boolean }[] = [];
+  // Every block filed under this client, not only those whose category happens
+  // to match one of its timesheet entries. Each row is labelled with its OWN
+  // category, and billability is read from the entry that shares it where one
+  // exists — the block knows what it is; the entry list is not the authority on
+  // what the client did.
+  const name = agg.entries[0]?.client_name ?? agg.clientName;
+  const blocks = weekBlocks.get(wKey(blockClientKey(name), '\u0000all')) ?? [];
+  const billableByCat = new Map<string, boolean>();
   for (const e of agg.entries) {
-    const blocks = weekBlocks.get(wKey(blockClientKey(e.client_name), blockCatKey(e.task_type_name)));
-    if (!blocks?.length) continue;
-    for (const ab of aggregateBlocks(blocks)) {
-      out.push({ agg: ab, categoryName: e.task_type_name || 'General', isBillable: e.is_billable });
-    }
+    billableByCat.set(blockCatKey(e.task_type_name), e.is_billable);
+  }
+  for (const ab of aggregateBlocks(blocks)) {
+    const cat = ab.taskTypeName || 'General';
+    out.push({
+      agg: ab,
+      categoryName: cat,
+      isBillable: billableByCat.get(blockCatKey(cat)) ?? agg.billable > 0,
+    });
   }
   return out.sort((a, b) =>
     (a.agg.firstStart || '').localeCompare(b.agg.firstStart || '') || b.agg.minutes - a.agg.minutes);

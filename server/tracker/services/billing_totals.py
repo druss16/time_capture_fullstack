@@ -315,7 +315,13 @@ def compute_week_grid(org, week_start, *, user_id):
         key = (b.client_id, cat, billable)
         row = rows[key]
         row['client_id'] = b.client_id
-        row['client_name'] = b.client.name if b.client_id else 'No client'
+        # None, not "No client". The block detail endpoint emits None for an
+        # unassigned block and the frontend keys both sides through
+        # blockClientKey(), which maps null -> "Unassigned" — so inventing a
+        # display string here produced a key that matched nothing and the No
+        # client group expanded to an empty list. The UI already renders the
+        # label itself from client_id being null.
+        row['client_name'] = b.client.name if b.client_id else None
         row['task_type_name'] = cat
         row['is_billable'] = billable
         row['day_minutes'][day] += minutes

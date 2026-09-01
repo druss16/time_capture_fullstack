@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404
 from datetime import timedelta, date
 from decimal import Decimal
 from .models import (
-    BillingRate, Timesheet, Block, BlockAuditLog,
+    BillingRate, Timesheet, Block, BlockAuditLog, ClassificationAudit,
     Client, TaskType, Organization, OrganizationMembership,
     EmployeeCostRate, Invitation, Invoice, ClientBudget,
     ClientBillingProfile,
@@ -514,7 +514,6 @@ def timesheet_detail_view(request, pk):
     import datetime as dt_module
     from datetime import timezone as dt_timezone
     from django.utils.timezone import localtime
-    from tracker.models import RawEvent  # adjust if your app is named differently
  
     org = get_request_org_override_billing(request)
     if not org:
@@ -553,108 +552,28 @@ def timesheet_detail_view(request, pk):
         dt_module.datetime.combine(week_end, dt_module.time.max), tz
     ).astimezone(dt_timezone.utc)
  
-    # ── Entries grid (same event-based logic as weekly_timesheet_view) ────────
- 
-    events = list(RawEvent.objects.filter(
-        user=ts_user,
-        start_ts__gte=start_utc,
-        start_ts__lt=end_utc,
-    ).select_related('block', 'block__client', 'block__task_type').order_by('start_ts'))
- 
-    deleted_block_ids = set(
-        Block.objects.filter(user=ts_user, deleted_at__isnull=False)
-        .values_list('id', flat=True)
+    # ── Entries grid ──────────────────────────────────────────────────────────
+    #
+    # The same seven-Daily-Reviews grid My Week is built from. This used to walk
+    # every RawEvent in the week with its own three-minute idle cap — the last
+    # copy of the algorithm `weekly_timesheet_view` was moved off, and it left
+    # this drawer disagreeing with every other screen about the same week:
+    # Stephen's week read 30h 14m here against the 29h 8m on the row the manager
+    # clicked to open it. Two numbers for one week, a click apart.
+    #
+    # It was also the slower half of a slow endpoint: 3,864 events fetched with
+    # three joins, 1.9s before a row is drawn, against 326 blocks for the same
+    # week.
+    from tracker.services.billing_totals import compute_week_grid
+
+    entries, daily_totals_hours = compute_week_grid(
+        org, week_start, user_id=ts_user.id,
     )
- 
-    grid = {}
-    IDLE_CAP = 180  # 3-min cap, matches weekly_timesheet_view
- 
-    for i, event in enumerate(events):
-        if i + 1 < len(events):
-            gap = (events[i + 1].start_ts - event.start_ts).total_seconds()
-            duration_min = min(gap, IDLE_CAP) / 60.0
-        else:
-            duration_min = 3.0
- 
-        block = event.block
-        if block and block.id in deleted_block_ids:
-            block = None
- 
-        if block and block.client_id:
-            client_id      = block.client_id
-            client_name    = block.client.name if block.client else 'Unassigned'
-            task_type_id   = block.task_type_id
-            task_type_name = block.task_type.name if block.task_type else 'General'
-            is_billable    = block.is_billable
-        else:
-            client_id = None; client_name = 'Unassigned'
-            task_type_id = None; task_type_name = 'General'; is_billable = False
- 
-        day_str = localtime(event.start_ts).date().isoformat()
-        if day_str not in day_strings:
-            continue
- 
-        key = (client_id, task_type_id)
-        if key not in grid:
-            grid[key] = {
-                'client_id': client_id, 'client_name': client_name,
-                'task_type_id': task_type_id, 'task_type_name': task_type_name,
-                'is_billable': is_billable,
-                'day_minutes': {d: 0.0 for d in day_strings},
-            }
-        grid[key]['day_minutes'][day_str] += duration_min
- 
-    # Mobile blocks
-    for block in Block.objects.filter(
-        user=ts_user, org=org, hostname='mobile',
-        start__gte=start_utc, start__lte=end_utc,
-        is_categorized=True, client__isnull=False, deleted_at__isnull=True,
-    ).select_related('client', 'task_type'):
-        day_str = localtime(block.start).date().isoformat()
-        if day_str not in day_strings:
-            continue
-        key = (block.client_id, block.task_type_id)
-        if key not in grid:
-            grid[key] = {
-                'client_id': block.client_id,
-                'client_name': block.client.name,
-                'task_type_id': block.task_type_id,
-                'task_type_name': block.task_type.name if block.task_type else 'General',
-                'is_billable': block.is_billable,
-                'day_minutes': {d: 0.0 for d in day_strings},
-            }
-        grid[key]['day_minutes'][day_str] += float(block.minutes or 0)
- 
-    entries = []
-    daily_totals   = {d: 0.0 for d in day_strings}
-    grand_total    = 0.0
-    billable_total = 0.0
- 
-    for data in grid.values():
-        day_hours  = {}
-        row_minutes = 0.0
-        for d in day_strings:
-            m = data['day_minutes'][d]
-            day_hours[d] = round(m / 60, 2)
-            daily_totals[d] += m
-            row_minutes += m
-        row_total = round(row_minutes / 60, 2)
-        grand_total += row_total
-        if data['is_billable']:
-            billable_total += row_total
-        entries.append({
-            'client_id':      data['client_id'],
-            'client_name':    data['client_name'],
-            'task_type_id':   data['task_type_id'],
-            'task_type_name': data['task_type_name'],
-            'is_billable':    data['is_billable'],
-            'days':           day_hours,
-            'total':          row_total,
-        })
- 
     entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
-    daily_totals_hours = {d: round(m / 60, 2) for d, m in daily_totals.items()}
- 
+
+    grand_total    = round(sum(daily_totals_hours.values()), 2)
+    billable_total = round(sum(e['total'] for e in entries if e['is_billable']), 2)
+
     # ── Block-level timeline ──────────────────────────────────────────────────
  
     from tracker.services.billing_totals import committed_block_qs
@@ -693,7 +612,24 @@ def timesheet_detail_view(request, pk):
                 _matter_option_counts.get(_m.project.client_id, 0) + 1
             )
 
-    for block in blocks_qs:
+    # One query for every block's latest classification audit, not one per block.
+    #
+    # This was `ClassificationAudit.objects.filter(block=block).first()` inside
+    # the loop: 326 round trips for Stephen's week, measured at 16 SECONDS. The
+    # query itself is indexed and cheap — it is the per-call latency to the
+    # pooler, 326 times, that costs the endpoint almost all of its wall clock.
+    #
+    # Ordering ascending and overwriting leaves the newest audit per block,
+    # which is what `.order_by('-created_at').first()` returned.
+    blocks_list = list(blocks_qs)
+    audit_by_block = {}
+    for _a in (ClassificationAudit.objects
+               .filter(block_id__in=[b.id for b in blocks_list])
+               .order_by('created_at')
+               .values('block_id', 'source', 'overall_confidence')):
+        audit_by_block[_a['block_id']] = _a
+
+    for block in blocks_list:
         if not block.start:
             continue
         day_str = localtime(block.start).date().isoformat()
@@ -715,20 +651,14 @@ def timesheet_detail_view(request, pk):
         elif block.end and block.end > block.start:
             duration_minutes = int((block.end - block.start).total_seconds() // 60)
  
-        # Try ClassificationAudit for AI confidence — graceful fallback
-        classification_source = None
-        ai_confidence = None
-        try:
-            from tracker.models import ClassificationAudit
-            audit = ClassificationAudit.objects.filter(
-                block=block
-            ).order_by('-created_at').first()
-            if audit:
-                classification_source = getattr(audit, 'source', None)
-                raw_conf = getattr(audit, 'confidence', None)
-                ai_confidence = float(raw_conf) if raw_conf is not None else None
-        except Exception:
-            pass
+        # The confidence pill has never shown a number. It read `audit.confidence`
+        # through a getattr default, and there is no such field — the model calls
+        # it `overall_confidence` — so every AI block sent null and the pill
+        # rendered nothing at all. Reading the real column turns it back on.
+        _audit = audit_by_block.get(block.id)
+        classification_source = _audit['source'] if _audit else None
+        _raw_conf = _audit['overall_confidence'] if _audit else None
+        ai_confidence = float(_raw_conf) if _raw_conf is not None else None
  
         days_map[day_str].append({
             'id':                    block.id,

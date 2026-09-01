@@ -92,21 +92,38 @@ const PendingBadge: React.FC<{ days: number }> = ({ days }) => {
 };
 
 // ── Timesheet Row ─────────────────────────────────────────────────────────────
-
+//
+// A flex row, not a table row.
+//
+// The table this replaces pinned the Employee column left AND the Actions
+// column right over a 620px minimum width — a layout with no solution below
+// that width, because the two pinned columns simply slide over the middle. On a
+// real screen Amount was rendering as "$1,7", and the fix was a horizontal
+// scrollbar under a list nobody wants to scroll sideways.
+//
+// A flex row has no minimum. The name truncates, the numbers keep their widths,
+// and the row shrinks to whatever it is given. It is also how every other list
+// on this screen is built — My Week's client rows, the misfile ledger above —
+// so Approvals stops being the one panel with its own construction.
 const TimesheetRow: React.FC<{
   timesheet: Timesheet;
   /** Blocks in this week the misfile sweep flagged as on the wrong client. */
   misfiled?: { count: number; minutes: number } | undefined;
+  /** The queue spans more than one week, so each row has to name its own. */
+  showWeek: boolean;
   onApprove: (id: number) => Promise<void>;
   onReject:  (id: number, reason: string) => Promise<void>;
   onView:    (id: number) => void;
-}> = ({ timesheet, misfiled, onApprove, onReject, onView }) => {
+}> = ({ timesheet, misfiled, showWeek, onApprove, onReject, onView }) => {
   const [expanded,        setExpanded]        = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason,    setRejectReason]    = useState('');
   const [processing,      setProcessing]      = useState(false);
 
   const nonBillable = timesheet.total_hours - timesheet.billable_hours;
+  const hasNote = Boolean(
+    timesheet.submitted_notes && !timesheet.submitted_notes.startsWith('[Auto-submitted')
+  );
 
   const handleApprove = async () => {
     setProcessing(true);
@@ -124,146 +141,132 @@ const TimesheetRow: React.FC<{
   };
 
   return (
-    <>
-      {/* Main row */}
-      <tr
+    <div>
+      <div
         onClick={() => onView(timesheet.id)}
         className={cn(
-          'group cursor-pointer transition-colors',
-          timesheet.auto_submitted ? 'bg-amber-50/30' : 'bg-white',
-          'hover:bg-slate-100/70',
+          'group relative flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors',
+          timesheet.auto_submitted
+            ? 'bg-amber-50/40 hover:bg-amber-50/80'
+            : 'hover:bg-muted/40',
         )}
       >
-        {/* Employee */}
-        <td className={cn(
-          'sticky left-0 z-10 px-4 py-2.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]',
-          timesheet.auto_submitted ? 'bg-amber-50' : 'bg-white',
-          'group-hover:bg-slate-100'
-        )}>
-          {timesheet.auto_submitted && (
-            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-amber-400 rounded-r" aria-hidden />
-          )}
-          <div className="flex items-center gap-2.5">
-            <Avatar name={timesheet.user_name} />
-            <div className="min-w-0">
-              <p className="font-semibold text-slate-800 text-sm leading-tight truncate">{timesheet.user_name}</p>
-              <p className="text-xs text-slate-400 truncate">{timesheet.user_email}</p>
-            </div>
-          </div>
-        </td>
+        {timesheet.auto_submitted && (
+          <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-amber-400" aria-hidden />
+        )}
 
-        {/* Week */}
-        <td className="px-3 py-2.5 text-sm text-slate-600 whitespace-nowrap">
-          {formatWeekRange(timesheet.week_start, timesheet.week_end)}
-        </td>
+        <Avatar name={timesheet.user_name} />
 
-        {/* Hours — all three in one cell, horizontal */}
-        <td className="px-3 py-2.5 whitespace-nowrap">
-          <div className="flex items-center gap-3 justify-end tabular-nums">
-            <div className="text-right">
-              <p className="text-sm font-bold text-primary leading-none">{formatHours(timesheet.billable_hours)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mt-0.5">Bill</p>
-            </div>
-            <div className="text-right">
-              <p className="text-sm font-bold text-slate-400 leading-none">{formatHours(nonBillable)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mt-0.5">Non</p>
-            </div>
-            <div className="text-right border-l border-border/40 pl-3">
-              <p className="text-sm font-bold text-slate-700 leading-none">{formatHours(timesheet.total_hours)}</p>
-              <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400 mt-0.5">Total</p>
-            </div>
-          </div>
-        </td>
-
-        {/* Amount */}
-        <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
-          <span className="text-sm font-semibold text-slate-700">{formatCurrency(timesheet.total_amount)}</span>
-        </td>
-
-        {/* Actions + inline badges */}
-        <td className={cn(
-          'sticky right-0 z-10 px-4 py-2.5 shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]',
-          timesheet.auto_submitted ? 'bg-amber-50' : 'bg-white',
-          'group-hover:bg-slate-100'
-        )}>
-          <div className="flex items-center justify-end gap-1.5 flex-nowrap">
-            {/* Badges */}
+        {/* The person. `flex-1 min-w-0` is what lets the row shrink rather than
+            scroll: the name is the only thing here that can afford to truncate,
+            so it is the only thing allowed to. */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-sans text-[14px] font-semibold text-foreground truncate leading-tight">
+              {timesheet.user_name}
+            </span>
+            {/* Badges ride with the name now. Three pills sharing the Actions
+                cell with two buttons is what pushed Amount off the row. */}
             {misfiled && misfiled.count > 0 && (
               <span
-                title={`${misfiled.count} confirmed block${misfiled.count === 1 ? '' : 's'} (${formatHours(misfiled.minutes / 60)}) look booked to the wrong client — open "Check for misfiled time" above`}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap"
+                title={`${misfiled.count} confirmed block${misfiled.count === 1 ? '' : 's'} (${formatHours(misfiled.minutes / 60)}) look booked to the wrong client — open “Check the time is filed right” above`}
+                className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200"
               >
-                <AlertTriangle className="w-3 h-3 shrink-0" /> {misfiled.count} misfiled
+                <AlertTriangle className="w-3 h-3 shrink-0" /> {misfiled.count}
               </span>
             )}
             {timesheet.auto_submitted && (
               <span
                 title="Auto-submitted at the Tuesday deadline — the employee did not review this week before it was sent"
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap"
+                className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
               >
                 <Clock className="w-3 h-3 shrink-0" /> Auto
               </span>
             )}
             {timesheet.days_pending > 0 && (
-              <span className={cn(
-                'inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap',
-                timesheet.days_pending >= 3 ? 'bg-red-50 text-red-600 border-red-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-              )}>
+              <span
+                title={`Waiting ${timesheet.days_pending} day${timesheet.days_pending === 1 ? '' : 's'} for approval`}
+                className={cn(
+                  'inline-flex shrink-0 items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border',
+                  timesheet.days_pending >= 3
+                    ? 'bg-red-50 text-red-600 border-red-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200',
+                )}
+              >
                 {timesheet.days_pending}d
               </span>
             )}
-            {/* Notes expand */}
-            {(timesheet.submitted_notes && !timesheet.submitted_notes.startsWith('[Auto-submitted')) && (
+            {hasNote && (
               <button
                 onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
                 className={cn(
-                  'p-1 rounded-lg text-slate-300 hover:text-primary hover:bg-primary/5 transition-colors',
-                  expanded && 'text-primary bg-primary/5'
+                  'shrink-0 p-0.5 rounded text-muted-foreground/50 hover:text-primary hover:bg-primary/5 transition-colors',
+                  expanded && 'text-primary bg-primary/5',
                 )}
-                title="View notes"
+                title="View note"
               >
                 <Info className="w-3.5 h-3.5" />
               </button>
             )}
-            {/* View details */}
-
-            {/* Reject */}
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowRejectModal(true); }}
-              disabled={processing}
-              className="px-2.5 py-1.5 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
-            >
-              Reject
-            </button>
-            {/* Approve */}
-            <button
-              onClick={(e) => { e.stopPropagation(); handleApprove(); }}
-              disabled={processing}
-              className="px-2.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
-            >
-              {processing
-                ? <RefreshCw className="w-3 h-3 animate-spin" />
-                : <CheckCircle2 className="w-3 h-3" />
-              }
-              Approve
-            </button>
           </div>
-        </td>
-      </tr>
+          {/* The week only earns a line when the queue actually holds more than
+              one. Auto-submit runs for last week only, so in the normal case
+              every row carried an identical date — six copies of one fact,
+              costing the widest column on the row. */}
+          <p className="font-mono text-[11px] text-muted-foreground/70 truncate leading-tight mt-0.5">
+            {showWeek && `${formatWeekRange(timesheet.week_start, timesheet.week_end)} · `}
+            {timesheet.user_email}
+          </p>
+        </div>
 
-      {/* Expanded notes row */}
-      {expanded && timesheet.submitted_notes && (
-        <tr className="bg-primary/3 border-t-0">
-          <td colSpan={5} className="px-4 pb-3 pt-0">
-            <div className="ml-10 flex items-start gap-2 p-3 bg-primary/5 rounded-lg border border-primary/15">
-              <Info className="w-3.5 h-3.5 text-primary/60 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-primary/60 mb-0.5">Employee note</p>
-                <p className="text-sm text-slate-700">{timesheet.submitted_notes}</p>
-              </div>
+        {/* The split, in the same words and the same type My Week uses for the
+            same fact. It replaces three stacked columns that each printed a
+            BILL / NON / TOTAL caption on every row — at forty reports, a
+            hundred and twenty repetitions of a column heading. */}
+        <span className="hidden lg:inline shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
+          {formatHours(timesheet.billable_hours)} billable · {formatHours(nonBillable)} non-bill
+        </span>
+
+        <span className="w-[66px] shrink-0 text-right font-mono text-[13px] font-semibold text-foreground tabular-nums">
+          {formatHours(timesheet.total_hours)}
+        </span>
+        <span className="hidden sm:inline w-[84px] shrink-0 text-right font-mono text-[13px] font-semibold text-muted-foreground tabular-nums">
+          {formatCurrency(timesheet.total_amount)}
+        </span>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowRejectModal(true); }}
+            disabled={processing}
+            className="px-2.5 py-1.5 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            Reject
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleApprove(); }}
+            disabled={processing}
+            className="px-2.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
+          >
+            {processing
+              ? <RefreshCw className="w-3 h-3 animate-spin" />
+              : <CheckCircle2 className="w-3 h-3" />
+            }
+            Approve
+          </button>
+        </div>
+      </div>
+
+      {/* The employee's note */}
+      {expanded && hasNote && (
+        <div className="px-4 pb-3 -mt-1">
+          <div className="ml-11 flex items-start gap-2 p-3 bg-primary/5 rounded-lg border border-primary/15">
+            <Info className="w-3.5 h-3.5 text-primary/60 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary/60 mb-0.5">Employee note</p>
+              <p className="text-sm text-foreground">{timesheet.submitted_notes}</p>
             </div>
-          </td>
-        </tr>
+          </div>
+        </div>
       )}
 
       {/* The full-width "did not manually review" row used to sit under every
@@ -274,64 +277,60 @@ const TimesheetRow: React.FC<{
 
       {/* Reject Modal */}
       {showRejectModal && (
-        <tr>
-          <td colSpan={5} className="p-0">
-            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-              <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden">
-                <div className="px-6 py-4 border-b border-border/50">
-                  <h3 className="text-base font-bold text-slate-800">Reject Timesheet</h3>
-                  <p className="text-sm text-slate-500 mt-0.5">
-                    {timesheet.user_name} · {formatWeekRange(timesheet.week_start, timesheet.week_end)}
-                  </p>
-                </div>
-                <div className="p-6 space-y-4">
-                  {timesheet.auto_submitted && (
-                    <div className="flex items-start gap-2.5 p-3 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>This timesheet was auto-submitted. The employee may not have reviewed their entries.</span>
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1.5">
-                      Rejection reason <span className="text-red-500">*</span>
-                    </label>
-                    <textarea
-                      value={rejectReason}
-                      onChange={e => setRejectReason(e.target.value)}
-                      placeholder="Explain what needs to be corrected..."
-                      className="w-full px-3 py-2.5 text-sm border border-border/60 rounded-lg focus:ring-2 focus:ring-red-300 focus:border-red-400 resize-none"
-                      rows={3}
-                      autoFocus
-                    />
-                  </div>
-                  <p className="text-xs text-slate-400">
-                    The employee will be notified and can edit and resubmit.
-                  </p>
-                </div>
-                <div className="px-6 py-4 bg-slate-50/60 border-t border-border/50 flex justify-end gap-2">
-                  <button
-                    onClick={() => { setShowRejectModal(false); setRejectReason(''); }}
-                    className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleReject}
-                    disabled={!rejectReason.trim() || processing}
-                    className="px-5 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {processing
-                      ? <><RefreshCw className="w-4 h-4 animate-spin" /> Rejecting...</>
-                      : <><XCircle className="w-4 h-4" /> Reject Timesheet</>
-                    }
-                  </button>
-                </div>
-              </div>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="px-6 py-4 border-b border-border/50">
+              <h3 className="text-base font-bold text-foreground">Send back to {timesheet.user_name.split(' ')[0]}</h3>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {formatWeekRange(timesheet.week_start, timesheet.week_end)}
+              </p>
             </div>
-          </td>
-        </tr>
+            <div className="p-6 space-y-4">
+              {timesheet.auto_submitted && (
+                <div className="flex items-start gap-2.5 p-3 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>This week was auto-submitted. The employee may not have reviewed their entries.</span>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  What needs fixing <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  placeholder="Explain what needs to be corrected..."
+                  className="w-full px-3 py-2.5 text-sm border border-border/60 rounded-lg focus:ring-2 focus:ring-red-300 focus:border-red-400 resize-none"
+                  rows={3}
+                  autoFocus
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The employee will be notified and can edit and resubmit.
+              </p>
+            </div>
+            <div className="px-6 py-4 bg-muted/40 border-t border-border/50 flex justify-end gap-2">
+              <button
+                onClick={() => { setShowRejectModal(false); setRejectReason(''); }}
+                className="px-4 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={!rejectReason.trim() || processing}
+                className="px-5 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {processing
+                  ? <><RefreshCw className="w-4 h-4 animate-spin" /> Sending back...</>
+                  : <><XCircle className="w-4 h-4" /> Send back</>
+                }
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-    </>
+    </div>
   );
 };
 
@@ -438,6 +437,18 @@ const ApprovalQueue: React.FC = () => {
   }, [queueData.timesheets, q]);
 
   const autoCount   = queueData.timesheets.filter(t => t.auto_submitted).length;
+  // Auto-submit runs for last week only, so the queue is normally one week for
+  // everybody. When it is, the date belongs in the header once instead of on
+  // every row — it was the widest column on the row and said the same thing
+  // six times. When the queue genuinely spans weeks, each row names its own.
+  const weekKeys  = useMemo(
+    () => Array.from(new Set(queueData.timesheets.map(t => t.week_start))).sort(),
+    [queueData.timesheets],
+  );
+  const multiWeek = weekKeys.length > 1;
+  const oneWeek   = weekKeys.length === 1
+    ? queueData.timesheets.find(t => t.week_start === weekKeys[0])
+    : undefined;
   const totalBillable = queueData.timesheets.reduce((s, t) => s + t.billable_hours, 0);
   const totalAmount   = queueData.timesheets.reduce((s, t) => s + t.total_amount,   0);
 
@@ -534,7 +545,12 @@ const ApprovalQueue: React.FC = () => {
                   ? 'Nothing waiting'
                   : q.trim()
                   ? `${shown.length} of ${queueData.count} shown`
-                  : `${queueData.count} timesheet${queueData.count === 1 ? '' : 's'} · ${formatHours(totalBillable)} billable · ${formatCurrency(totalAmount)}`}
+                  : [
+                      `${queueData.count} ${queueData.count === 1 ? 'week' : 'weeks'}`,
+                      oneWeek && formatWeekRange(oneWeek.week_start, oneWeek.week_end),
+                      `${formatHours(totalBillable)} billable`,
+                      formatCurrency(totalAmount),
+                    ].filter(Boolean).join(' · ')}
               </p>
             </div>
           </button>
@@ -569,60 +585,34 @@ const ApprovalQueue: React.FC = () => {
         </div>
         {openStep2 && (
         <>
-        <div className="overflow-auto flex-1">
-          <table className="w-full border-collapse text-sm" style={{ minWidth: 620 }}>
-
-            {/* Sticky col headers */}
-            <thead className="sticky top-0 z-20">
-              <tr className="border-b border-border/60 bg-white">
-                <th className="sticky left-0 z-20 text-left px-4 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 min-w-[200px] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
-                  Employee
-                </th>
-                <th className="text-left px-3 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 whitespace-nowrap">
-                  Week
-                </th>
-                <th className="text-right px-3 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 whitespace-nowrap">
-                  Hours
-                </th>
-                <th className="text-right px-3 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 whitespace-nowrap">
-                  Amount
-                </th>
-                {/* Pinned right for the same reason Employee is pinned left:
-                    at 40 rows the horizontal scroll is real, and Approve is the
-                    one control that must never be the thing scrolled off. */}
-                <th className="sticky right-0 z-20 text-right px-4 py-3 font-semibold text-slate-500 text-xs uppercase tracking-wider bg-slate-50 shadow-[-2px_0_4px_-2px_rgba(0,0,0,0.06)]">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-
-            <tbody className="divide-y divide-border/30">
-              {shown.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="text-center py-16 text-slate-400">
-                    <CheckCircle2 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                    <p className="font-medium text-slate-500">
-                      {q.trim() ? `Nobody matching “${q.trim()}”` : 'No timesheets pending approval'}
-                    </p>
-                    <p className="text-sm mt-1">
-                      {q.trim() ? 'Try a different name' : "You're all caught up"}
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                shown.map(ts => (
-                  <TimesheetRow
-                    key={ts.id}
-                    timesheet={ts}
-                    misfiled={misfiled[String(ts.id)]}
-                    onApprove={handleApprove}
-                    onReject={handleReject}
-                    onView={handleView}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
+        {/* The list. `overflow-x-hidden` is deliberate and is half the fix: the
+            rows below have no minimum width, so a horizontal scrollbar here
+            could only ever mean something inside is misbehaving. Vertical
+            scroll stays — at forty reports it is real. */}
+        <div className="overflow-y-auto overflow-x-hidden flex-1 divide-y divide-border/30">
+          {shown.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <CheckCircle2 className="w-10 h-10 text-muted-foreground/25 mx-auto mb-3" />
+              <p className="font-medium text-foreground/70">
+                {q.trim() ? `Nobody matching “${q.trim()}”` : 'No weeks waiting'}
+              </p>
+              <p className="text-sm mt-1">
+                {q.trim() ? 'Try a different name' : "You're all caught up"}
+              </p>
+            </div>
+          ) : (
+            shown.map(ts => (
+              <TimesheetRow
+                key={ts.id}
+                timesheet={ts}
+                misfiled={misfiled[String(ts.id)]}
+                showWeek={multiWeek}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                onView={handleView}
+              />
+            ))
+          )}
         </div>
 
         {/* Footer */}

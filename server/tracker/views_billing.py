@@ -1435,6 +1435,7 @@ from django.db.models.functions import Coalesce
 # Replace EmployeeCostRateListView in views_billing.py with this:
 
 from django.db import IntegrityError
+from .cost_visibility import CanViewCostData
 
 from django.db import IntegrityError
 
@@ -1450,9 +1451,10 @@ class EmployeeCostRateListView(RequireExecutivePlanMixin, APIView):
     """
     GET: List all employee cost rates for the org
     POST: Create a new cost rate (or return conflict if duplicate)
-    RESTRICTED TO: Professional and Enterprise plans.
+    RESTRICTED TO: Professional and Enterprise plans, and to firm OWNERS
+    (these rows are individual salaries — see tracker/cost_visibility.py).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewCostData]
     
     def get(self, request):
         org = get_user_org(request.user)
@@ -1534,9 +1536,10 @@ class EmployeeCostRateDetailView(RequireExecutivePlanMixin, APIView):
     GET: Get a specific cost rate
     PUT/PATCH: Update a cost rate
     DELETE: Delete a cost rate
-    RESTRICTED TO: Professional and Enterprise plans.
+    RESTRICTED TO: Professional and Enterprise plans, and to firm OWNERS
+    (these rows are individual salaries — see tracker/cost_visibility.py).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewCostData]
     
     def get_object(self, pk, org):
         try:
@@ -1625,7 +1628,9 @@ class ProfitabilityReportView(RequireExecutivePlanMixin, APIView):
     - end_date: YYYY-MM-DD
     - only_approved: true/false
     
-    RESTRICTED TO: Professional and Enterprise plans.
+    RESTRICTED TO: Professional and Enterprise plans, and to firm OWNERS — the
+    per-staff rows carry each person's cost_rate outright, so there is nothing
+    left of this report once cost is redacted (see tracker/cost_visibility.py).
     """
     permission_classes = [IsAuthenticated]
     
@@ -1634,13 +1639,9 @@ class ProfitabilityReportView(RequireExecutivePlanMixin, APIView):
         if not org:
             return Response({'error': 'No organization'}, status=400)
         
-        # Check permission
-        membership = OrganizationMembership.objects.filter(
-            user=request.user, organization=org
-        ).first()
-        
-        if not membership or membership.role not in ['owner', 'admin', 'manager']:
-            return Response({'error': 'Permission denied'}, status=403)
+        from .cost_visibility import can_view_cost_data, cost_denied_response
+        if not can_view_cost_data(request.user, org):
+            return cost_denied_response()
         
         # Parse date range
         start_date = request.query_params.get('start_date')

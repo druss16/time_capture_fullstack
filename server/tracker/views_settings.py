@@ -500,7 +500,8 @@ def import_economics_csv(request):
 
     Body: { csv_content: str, dry_run: bool (default True) }.
     Columns (case-insensitive, flexible aliases): email, tier, cost_rate,
-    bill_rate, hours_per_week. Owner/admin only. When dry_run is true (the
+    bill_rate, hours_per_week. OWNERS ONLY (the file carries salaries; see
+    tracker/cost_visibility.py). When dry_run is true (the
     default) nothing is written — the endpoint returns a preview of the tiers
     to create/update, the people that will be assigned, and any unmatched rows.
     """
@@ -512,9 +513,9 @@ def import_economics_csv(request):
     if not org:
         return Response({'error': 'No organization found'}, status=404)
 
-    membership = OrganizationMembership.objects.filter(user=request.user, organization=org).first()
-    if not membership or membership.role not in ('owner', 'admin'):
-        return Response({'error': 'Permission denied'}, status=403)
+    from .cost_visibility import can_view_cost_data, cost_denied_response
+    if not can_view_cost_data(request.user, org):
+        return cost_denied_response()
 
     csv_content = (request.data.get('csv_content') or '').strip()
     dry_run = bool(request.data.get('dry_run', True))

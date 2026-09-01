@@ -857,6 +857,27 @@ def executive_dashboard(request):
             logger.error("[ANALYTICS] %s failed: %s", fn.__name__, exc, exc_info=True)
             return {"error": str(exc)}
 
+    # Cost is owner-only. This dashboard's profitability blocks are the one
+    # place here that carries it; everything else (realization, utilization,
+    # WIP, cycle time) is cost-free and passes through untouched.
+    from .cost_visibility import can_view_cost_data, strip_cost_fields
+    cost_visible = can_view_cost_data(user, org)
+
+    kpis = {
+        "realization_rate":      _safe(_calc_realization,            org, start_date, end_date),
+        "billable_utilization":  _safe(_calc_billable_utilization,   org, start_date, end_date),
+        "wip_pipeline":          _safe(_calc_wip,                    org),
+        "effective_rate":        _safe(_calc_effective_rate,         org, start_date, end_date),
+        "revenue_trend":         _safe(_calc_revenue_trend,          org, start_date, end_date),
+        "client_profitability":  _safe(_calc_profitability,          org, start_date, end_date),
+        "invoice_profitability": _safe(_calc_invoice_profitability,  org, start_date, end_date),
+        "timesheet_compliance":  _safe(_calc_timesheet_compliance,   org, start_date, end_date),
+        "invoice_cycle_time":    _safe(_calc_invoice_cycle_time,     org, start_date, end_date),
+    }
+    if not cost_visible:
+        for key in ("client_profitability", "invoice_profitability"):
+            kpis[key] = strip_cost_fields(kpis[key])
+
     return Response({
         "meta": {
             "org_id": org.id,
@@ -867,16 +888,7 @@ def executive_dashboard(request):
             "generated_at": timezone.now().isoformat(),
             "plan": plan,
             "role": membership.role if membership else "staff",
+            "cost_visible": cost_visible,
         },
-        "kpis": {
-            "realization_rate":      _safe(_calc_realization,            org, start_date, end_date),
-            "billable_utilization":  _safe(_calc_billable_utilization,   org, start_date, end_date),
-            "wip_pipeline":          _safe(_calc_wip,                    org),
-            "effective_rate":        _safe(_calc_effective_rate,         org, start_date, end_date),
-            "revenue_trend":         _safe(_calc_revenue_trend,          org, start_date, end_date),
-            "client_profitability":  _safe(_calc_profitability,          org, start_date, end_date),
-            "invoice_profitability": _safe(_calc_invoice_profitability,  org, start_date, end_date),
-            "timesheet_compliance":  _safe(_calc_timesheet_compliance,   org, start_date, end_date),
-            "invoice_cycle_time":    _safe(_calc_invoice_cycle_time,     org, start_date, end_date),
-        },
+        "kpis": kpis,
     })

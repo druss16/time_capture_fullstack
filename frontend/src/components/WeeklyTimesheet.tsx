@@ -843,12 +843,21 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       agg.entries.sort((a, b) => b.total - a.total);
       agg.primaryTask = agg.entries[0]?.task_type_name ?? agg.primaryTask;
     }
-    // Rank by time, but the "No client" bucket always sinks to the bottom.
+    // A-Z, with the "No client" bucket always last. Ranking by time makes the
+    // order change every week, so finding a particular client means reading the
+    // whole list each time; alphabetical means you can go straight to it, and a
+    // client that sat third last week is still under S this week.
+    //
+    // localeCompare with numeric:true so "St Mary 2" sorts before "St Mary 10",
+    // and sensitivity:'base' so a stray capital does not push a client out of
+    // its run.
     return list.sort((a, b) => {
       const au = isNoClient(a) ? 1 : 0;
       const bu = isNoClient(b) ? 1 : 0;
       if (au !== bu) return au - bu;
-      return b.total - a.total;
+      return (a.clientName || '').localeCompare(b.clientName || '', undefined, {
+        numeric: true, sensitivity: 'base',
+      });
     });
   }, [searchedEntries]);
 

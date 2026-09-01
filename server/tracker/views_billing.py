@@ -657,13 +657,22 @@ def timesheet_detail_view(request, pk):
  
     # ── Block-level timeline ──────────────────────────────────────────────────
  
-    blocks_qs = Block.objects.filter(
-        user=ts_user,
-        org=org,
-        start__gte=start_utc,
-        start__lte=end_utc,
-        deleted_at__isnull=True,
-    ).select_related('client', 'task_type').order_by('start')
+    from tracker.services.billing_totals import committed_block_qs
+
+    # The SAME blocks the totals above are built from. This query had no
+    # classification_state filter, so after the grid moved onto committed time
+    # the expanded rows still listed suppressed, proposed and captured blocks —
+    # the header said 2.80h while the rows under it added to 6.00h, which is the
+    # same "these numbers do not add up" in its second half.
+    #
+    # A row that is not in the total has no business sitting under it looking
+    # like it is.
+    blocks_qs = (
+        committed_block_qs(org, start_utc, end_utc,
+                           user_id=ts_user.id, can_see_all=False)
+        .select_related('client', 'task_type')
+        .order_by('start')
+    )
  
     days_map = {d: [] for d in day_strings}
  

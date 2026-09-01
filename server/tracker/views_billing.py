@@ -691,11 +691,20 @@ def timesheet_detail_view(request, pk):
         if day_str not in days_map:
             continue
  
+        # block.minutes is TRACKED time; end - start is WALL CLOCK, which
+        # includes every idle gap inside the block. They are wildly different:
+        # block 66583 spans 14:33-15:49 (76 minutes) and holds 5 minutes of
+        # activity. Reading the span made My Week show "1h 16m" for a Google
+        # search that Daily Review correctly showed as "5m", and made a client's
+        # expanded rows add up to several times the client's own total.
+        #
+        # Prefer the tracked figure; the span is only a fallback for a block
+        # that somehow has no minutes recorded.
         duration_minutes = 0
-        if block.end and block.end > block.start:
-            duration_minutes = int((block.end - block.start).total_seconds() // 60)
-        elif block.minutes:
+        if block.minutes:
             duration_minutes = int(block.minutes)
+        elif block.end and block.end > block.start:
+            duration_minutes = int((block.end - block.start).total_seconds() // 60)
  
         # Try ClassificationAudit for AI confidence — graceful fallback
         classification_source = None

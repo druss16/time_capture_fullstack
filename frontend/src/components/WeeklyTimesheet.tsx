@@ -233,6 +233,15 @@ type HourFmt = 'hm' | 'decimal';
 const HourFmtContext = React.createContext<(h: number | string) => string>(formatHours);
 const useFmtHours = () => React.useContext(HourFmtContext);
 
+// Block rows carry MINUTES while every total carries HOURS, so they were
+// formatted by a separate function that knew nothing about the H:M / decimal
+// toggle — pick Dec and the header read 7.61 while the lines under it still
+// said "3h 39m". One converter, one setting.
+const useFmtMinutes = () => {
+  const fmt = useFmtHours();
+  return (m: number) => (m ? fmt(m / 60) : '—');
+};
+
 const getMonday = (date: Date): Date => {
   const d = new Date(date);
   const day = d.getDay();
@@ -546,6 +555,7 @@ const OutstandingWeeksBanner: React.FC<{
 };
 
 const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
+  const fmtMinutes = useFmtMinutes();
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState<string | null>(null);
   // Bumped whenever this week is sent, so the outstanding-weeks reminder
@@ -1385,7 +1395,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
           <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5">
             <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
             <span className="font-mono text-[12px] text-amber-900">
-              <b className="tabular-nums">{formatMinutes(matterGap.minutes)}</b> needs a matter
+              <b className="tabular-nums">{fmtMinutes(matterGap.minutes)}</b> needs a matter
               <span className="hidden sm:inline"> — it will not reach Clio until you choose one</span>
             </span>
             <span className="flex-1" />
@@ -1411,7 +1421,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                   {row.label}
                 </span>
                 <span className="w-[52px] shrink-0 text-right font-mono text-[12px] tabular-nums text-muted-foreground/70">
-                  {formatMinutes(row.minutes)}
+                  {fmtMinutes(row.minutes)}
                 </span>
                 {/* MatterPicker, not BlockMatterMenu: this banner sits ABOVE the
                     MoveContext.Provider, and BlockMatterMenu returns null without
@@ -1992,7 +2002,9 @@ const AggBlockRow: React.FC<{
   withDay: boolean;
   categoryName?: string;
   categoryBillable?: boolean;
-}> = ({ agg, withDay, categoryName, categoryBillable }) => (
+}> = ({ agg, withDay, categoryName, categoryBillable }) => {
+  const fmtMinutes = useFmtMinutes();
+  return (
   <div className="group flex items-center gap-2 pl-6 pr-1 py-0.5 min-w-0">
     <span className="font-mono text-[11px] text-muted-foreground/60 tabular-nums shrink-0 w-[76px] whitespace-nowrap">{formatBlockWhen(agg.firstStart, withDay)}</span>
     <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={agg.label}>{agg.label}</span>
@@ -2010,11 +2022,12 @@ const AggBlockRow: React.FC<{
     {agg.count > 1 && (
       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground/70" title={`${agg.count} identical blocks merged`}>×{agg.count}</span>
     )}
-    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">{formatMinutes(agg.minutes)}</span>
+    <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground/70 w-[52px] text-right">{fmtMinutes(agg.minutes)}</span>
     <MatterState agg={agg} />
     <BlockMoveMenu agg={agg} />
   </div>
-);
+  );
+};
 
 // A single billable/non-billable category row inside a client (or a day→client).
 // `hours` lets callers pass a day-scoped subtotal; defaults to the week total.

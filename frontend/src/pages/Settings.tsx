@@ -93,6 +93,10 @@ export default function Settings() {
   const [employeeCostRates, setEmployeeCostRates] = useState<EmployeeCostRate[]>([]);
   const [currentUserId,     setCurrentUserId]     = useState<number | null>(null);
   const [currentUserRole,   setCurrentUserRole]   = useState<string>('member');
+  // Role arrives async (whoami). Until it does we can't tell an owner from a
+  // manager, so role-gated tabs stay hidden and no redirect fires — never the
+  // other way round, which would flash cost data at the wrong person.
+  const [roleLoaded,        setRoleLoaded]        = useState(false);
 
   const showSuccess = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(null), 3000); };
   const showError   = (msg: string) => { setError(msg);   setTimeout(() => setError(null), 5000); };
@@ -102,7 +106,7 @@ export default function Settings() {
     safeFetchJson<any>(`${API_BASE}/whoami/`)
       .then(d => {
         setCurrentUserId(d.user_id);
-        if (d.role) setCurrentUserRole(d.role);
+        if (d.role) { setCurrentUserRole(d.role); setRoleLoaded(true); }
         // If whoami didn't return a role, fetch the team list to resolve it
         if (!d.role && d.user_id) {
           safeFetchJson<any[]>(`${API_BASE}/settings/team/`)
@@ -110,10 +114,11 @@ export default function Settings() {
               const me = team?.find(m => m.id === d.user_id);
               if (me?.role) setCurrentUserRole(me.role);
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => setRoleLoaded(true));
         }
       })
-      .catch(() => {});
+      .catch(() => setRoleLoaded(true));
   }, []);
 
   // Load org plan once.
@@ -201,7 +206,7 @@ export default function Settings() {
     { id: 'task-types',     label: terms.task_types,             icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
     { id: 'task-type-sets', label: `${terms.task_type} Sets`,     icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
-    { id: 'economics',    label: 'Economics',     icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS },
+    { id: 'economics',    label: 'Economics',     icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS, requiredRole: ['owner'] },
     { id: 'devices',      label: 'Devices',       icon: <Monitor className="w-4 h-4" /> },
     { id: 'deployment',   label: 'MDM Deploy',    icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner','admin'] },
   ];
@@ -215,6 +220,15 @@ export default function Settings() {
     { label: 'Connections', ids: ['integrations', 'devices', 'deployment'] },
     { label: 'Billing',     ids: ['economics'] },
   ];
+
+  // requiredRole was config-only until now: declared on six tabs, checked by
+  // nothing. The route gate (owner/admin) was doing all the work, which is why
+  // Economics — the firm's salary data — sat one URL away from every admin.
+  const canSeeTab = (tab: TabConfig) => {
+    if (!tab.requiredRole) return true;
+    if (!roleLoaded) return false;
+    return (tab.requiredRole as string[]).includes(currentUserRole);
+  };
 
   const isTabLocked = (tab: TabConfig) => {
     if (!tab.requiredPlan) return false;
@@ -230,6 +244,15 @@ export default function Settings() {
 
   const activeTabConfig = tabs.find(t => t.id === activeTab);
   const isLocked = activeTabConfig ? isTabLocked(activeTabConfig) : false;
+
+  // Deep links (?tab=economics) bypass the sidebar entirely, so the active tab
+  // gets the same role check and a non-owner lands back on Organization.
+  const activeTabPermitted = activeTabConfig ? canSeeTab(activeTabConfig) : true;
+  useEffect(() => {
+    if (roleLoaded && activeTabConfig && !canSeeTab(activeTabConfig)) {
+      setActiveTab('organization');
+    }
+  }, [roleLoaded, currentUserRole, activeTab]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-background flex">
@@ -259,7 +282,7 @@ export default function Settings() {
           {tabGroups.map(group => {
             const groupTabs = group.ids
               .map(id => tabs.find(t => t.id === id))
-              .filter((t): t is TabConfig => Boolean(t));
+              .filter((t): t is TabConfig => Boolean(t) && canSeeTab(t as TabConfig));
             if (groupTabs.length === 0) return null;
             return (
               <div key={group.label} className="space-y-0.5">
@@ -323,6 +346,14 @@ export default function Settings() {
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <RefreshCw className="w-5 h-5 text-primary animate-spin" />
+            </div>
+          ) : !activeTabPermitted ? (
+            <div className="py-16 text-center">
+              <Lock className="w-6 h-6 text-slate-300 mx-auto mb-3" />
+              <p className="text-sm font-semibold text-slate-700">Not available for your role</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Firm economics, including labor cost, is visible to owners only.
+              </p>
             </div>
           ) : isLocked ? (
             <UpgradePrompt featureName={getLockedFeatureName(activeTab)} />

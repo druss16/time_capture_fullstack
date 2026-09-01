@@ -7392,6 +7392,10 @@ def settings_org(request):
     else:
         org = membership.organization
     is_admin_or_owner = membership.role in ["owner", "admin"]
+    # Cost is owner-only — a narrower gate than the admin one that governs the
+    # rest of this payload (see tracker/cost_visibility.py).
+    from .cost_visibility import can_view_cost_data
+    can_see_cost = can_view_cost_data(request.user, org)
     profile, _ = OrgProfile.objects.get_or_create(org=org)
     if request.method == "GET":
         return Response({
@@ -7410,7 +7414,7 @@ def settings_org(request):
             "billing_email": profile.billing_email or "",
             "billing_contact": profile.billing_contact or "",
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
-            "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
+            "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
             "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
             "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
@@ -7432,7 +7436,9 @@ def settings_org(request):
             org.industry_type = new_industry
     if "billing_rate_default" in request.data:
         org.billing_rate_default = Decimal(str(request.data["billing_rate_default"]))
-    if "cost_rate_default" in request.data:
+    if "cost_rate_default" in request.data and can_see_cost:
+        # Non-owners are served "0.00" in the GET above; without this guard an
+        # admin's round-trip save would silently zero the firm's default cost.
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
     if "target_utilization" in request.data:
         try:
@@ -7471,7 +7477,7 @@ def settings_org(request):
         "billing_email": profile.billing_email or "",
         "billing_contact": profile.billing_contact or "",
         "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
-        "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if is_admin_or_owner else "0.00",
+        "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
         "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
         "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
         "message": "Settings updated"
@@ -7586,14 +7592,24 @@ def settings_team_list(request):
 # firms: set a handful of tier rates instead of a rate per employee.
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
+@permission_classes([IsAuthenticated])
 def settings_cost_rates(request):
-    """Cost tiers + member assignment. Admin/owner only."""
+    """Cost tiers + member assignment. OWNERS ONLY.
+
+    This used to sit behind IsOrgAdmin, whose docstring says admin/owner but
+    whose implementation resolves to owner/admin/**manager** — so a manager
+    could read, and rewrite, every colleague's loaded cost. Cost visibility is
+    now its own decision, not a by-product of the settings role ladder.
+    """
     from tracker.models import CostTier, EmployeeCostRate
+    from .cost_visibility import can_view_cost_data, cost_denied_response
 
     org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
+
+    if not can_view_cost_data(request.user, org):
+        return cost_denied_response()
 
     if request.method == "GET":
         memberships = list(

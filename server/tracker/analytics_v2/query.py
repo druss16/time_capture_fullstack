@@ -7,6 +7,7 @@ Flow:
   3. authorize_lens() + authorize_scope()
   4. get_lens(lens).assemble(org, scope, time, compare) → sections
   5. Build response envelope (view sentence + sections + meta)
+  6. Redact cost/margin unless the viewer is a firm owner
 """
 from __future__ import annotations
 
@@ -63,6 +64,15 @@ def execute_query(user, body: dict, org_id_override: str | None = None) -> dict:
 
     from .permissions import firm_invoices_here
     invoiceless = not firm_invoices_here(org)
+
+    # 7. Cost redaction — owners only. A manager keeps every hours/revenue/
+    # utilization figure in the payload and simply doesn't get the cost and
+    # margin columns, rather than being refused the lens outright.
+    from tracker.cost_visibility import can_view_cost_data, redact_cost_sections
+    cost_visible = can_view_cost_data(user, org)
+    section_dicts = [s.to_dict() for s in sections]
+    if not cost_visible:
+        section_dicts = redact_cost_sections(section_dicts)
     
     return {
         "view": {
@@ -72,7 +82,7 @@ def execute_query(user, body: dict, org_id_override: str | None = None) -> dict:
             "compare": compare.to_dict() if compare else None,
             "sentence": sentence,
         },
-        "sections": [s.to_dict() for s in sections],
+        "sections": section_dicts,
         "meta": {
             "org_id": org.id,
             "org_name": org.name,
@@ -82,5 +92,6 @@ def execute_query(user, body: dict, org_id_override: str | None = None) -> dict:
             "data_freshness": last_ingest.isoformat() if last_ingest else None,
             "version": "2.0.0-alpha.2",
             "invoiceless": invoiceless,
+            "cost_visible": cost_visible,
         },
     }

@@ -360,17 +360,24 @@ const WeekGrid: React.FC<{ detail: TimesheetDetail }> = ({ detail }) => {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* The grid scrolls inside itself rather than inside the drawer body.
+          It has to: `position: sticky` measures against the nearest scrolling
+          ancestor, and the old `overflow-x-auto` wrapper was one — with no
+          height, so a sticky header stuck to a box that itself scrolled away.
+          The day columns went off the top of a long week and the numbers below
+          belonged to no nameable day. Same max-height idiom as the misfile
+          ledger on the Approvals tab. */}
+      <div className="overflow-auto max-h-[46vh]">
         <table className="w-full border-collapse text-xs" style={{ minWidth: 520 }}>
-          <thead>
+          <thead className="sticky top-0 z-20">
             <tr className="border-b border-border/40 bg-white">
-              <th className="text-left px-3 py-2 font-semibold text-slate-500 text-[10px] uppercase tracking-wider bg-slate-50 min-w-[140px]">
+              <th className="text-left px-3 py-2 font-semibold text-slate-500 text-[10px] uppercase tracking-wider bg-slate-50 min-w-[140px] border-b border-border/40">
                 Client / Task
               </th>
               {days.map(day => (
                 <th key={day.date} className={cn(
-                  'text-center px-1 py-2 font-semibold min-w-[44px]',
-                  day.isWeekend ? 'bg-slate-50/80 text-slate-400' : 'bg-slate-50 text-slate-500'
+                  'text-center px-1 py-2 font-semibold min-w-[44px] border-b border-border/40',
+                  day.isWeekend ? 'bg-slate-100 text-slate-400' : 'bg-slate-50 text-slate-500'
                 )}>
                   <div className="text-[9px] uppercase tracking-wider">{day.label}</div>
                   <div className={cn(
@@ -381,7 +388,7 @@ const WeekGrid: React.FC<{ detail: TimesheetDetail }> = ({ detail }) => {
                   </div>
                 </th>
               ))}
-              <th className="text-center px-2 py-2 bg-slate-50 font-semibold text-slate-500 text-[10px] uppercase tracking-wider min-w-[44px]">
+              <th className="text-center px-2 py-2 bg-slate-50 font-semibold text-slate-500 text-[10px] uppercase tracking-wider min-w-[44px] border-b border-border/40">
                 Total
               </th>
             </tr>
@@ -450,20 +457,20 @@ const WeekGrid: React.FC<{ detail: TimesheetDetail }> = ({ detail }) => {
               );
             })}
           </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-border/50 bg-slate-50">
-              <td className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <tfoot className="sticky bottom-0 z-20">
+            <tr className="bg-slate-50 border-t-2 border-border/50">
+              <td className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50 border-t-2 border-border/50">
                 Daily Totals
               </td>
               {days.map(day => (
                 <td key={day.date} className={cn(
-                  'text-center px-1 py-1.5 font-bold tabular-nums text-[11px] text-slate-700',
-                  day.isWeekend ? 'bg-slate-100/60' : ''
+                  'text-center px-1 py-1.5 font-bold tabular-nums text-[11px] text-slate-700 border-t-2 border-border/50',
+                  day.isWeekend ? 'bg-slate-100' : 'bg-slate-50'
                 )}>
                   {formatHours(detail.daily_totals?.[day.date] || 0)}
                 </td>
               ))}
-              <td className="text-center px-2 py-1.5 font-bold text-primary tabular-nums text-[11px]">
+              <td className="text-center px-2 py-1.5 font-bold text-primary tabular-nums text-[11px] bg-slate-50 border-t-2 border-border/50">
                 {formatHours(detail.grand_total)}
               </td>
             </tr>

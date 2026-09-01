@@ -1028,104 +1028,42 @@ def weekly_timesheet_view(request):
         start_ts__lt=end_utc,
     ).select_related('block', 'block__client', 'block__task_type').order_by('start_ts'))
 
-    deleted_block_ids = set(
-        Block.objects.filter(user=user, deleted_at__isnull=False)
-        .values_list('id', flat=True)
-    )
-
-    grid = {}
+    # Day keys the span loop below is allowed to record against.
+    grid = {d: None for d in day_strings}
     day_first_lt = {}   # day_str -> earliest event local datetime (clock-in proxy)
     day_last_lt  = {}   # day_str -> latest event local datetime  (clock-out proxy)
 
-    # ── Event-based attribution (3-min cap) ───────────────────────────────────
-    for i, event in enumerate(events):
-        if i + 1 < len(events):
-            gap = (events[i + 1].start_ts - event.start_ts).total_seconds()
-            duration_min = min(gap, IDLE_CAP_SECONDS) / 60.0
-        else:
-            duration_min = 3.0
-
-        block = event.block
-        if block and block.id in deleted_block_ids:
-            block = None
-
-        if block and block.client_id:
-            client_id      = block.client_id
-            client_name    = block.client.name if block.client else 'Unassigned'
-            task_type_id   = block.task_type_id
-            task_type_name = block.task_type.name if block.task_type else 'General'
-            is_billable    = block.is_billable
-        else:
-            client_id = None; client_name = 'Unassigned'
-            task_type_id = None; task_type_name = 'General'; is_billable = False
-
+    # ── Clock-in / clock-out proxy ───────────────────────────────────────────
+    # The raw events are still the honest source for "when was this person at
+    # the machine", which is a different question from "what did they work on".
+    # This loop no longer attributes TIME — see the grid below.
+    for event in events:
         ev_lt = localtime(event.start_ts)
         day_str = ev_lt.date().isoformat()
-        if day_str not in day_strings:
+        if day_str not in grid:
             continue
-
-        # Workday span: first→last activity per day = clock-in/clock-out proxy.
         if day_str not in day_first_lt or ev_lt < day_first_lt[day_str]:
             day_first_lt[day_str] = ev_lt
         if day_str not in day_last_lt or ev_lt > day_last_lt[day_str]:
             day_last_lt[day_str] = ev_lt
 
-        key = (client_id, task_type_id)
-        if key not in grid:
-            grid[key] = {
-                'client_id': client_id, 'client_name': client_name,
-                'task_type_id': task_type_id, 'task_type_name': task_type_name,
-                'is_billable': is_billable,
-                'day_minutes': {d: 0.0 for d in day_strings},
-            }
-        grid[key]['day_minutes'][day_str] += duration_min
+    # ── The grid, from the SAME blocks Daily Review counts ───────────────────
+    # This used to attribute RawEvents with a bespoke three-minute-cap algorithm
+    # while Daily Review aggregated committed Blocks through compute_client_cards
+    # — different source table, different rules, so the two could never agree no
+    # matter how many symptoms got patched. The docstring above has claimed
+    # "Matches Daily Review exactly" the whole time.
+    #
+    # It was not slightly off. Terri's week of 2026-08-17 read 40.62h here and
+    # 20.90h in Daily Review, because the event path also counted her SUPPRESSED
+    # blocks — 15.53h of them that week — and her unconfirmed ones. A timesheet
+    # that includes deliberately-excluded time is not a timesheet.
+    from tracker.services.billing_totals import compute_week_grid
 
-    # ── Mobile blocks (no raw events) ────────────────────────────────────────
-    for block in Block.objects.filter(
-        user=user, org=org, hostname='mobile',
-        start__gte=start_utc, start__lte=end_utc,
-        is_categorized=True, client__isnull=False, deleted_at__isnull=True,
-    ).select_related('client', 'task_type'):
-        day_str = localtime(block.start).date().isoformat()
-        if day_str not in day_strings:
-            continue
-        key = (block.client_id, block.task_type_id)
-        minutes = float(block.minutes or 0)
-        if key not in grid:
-            grid[key] = {
-                'client_id': block.client_id,
-                'client_name': block.client.name,
-                'task_type_id': block.task_type_id,
-                'task_type_name': block.task_type.name if block.task_type else 'General',
-                'is_billable': block.is_billable,
-                'day_minutes': {d: 0.0 for d in day_strings},
-            }
-        grid[key]['day_minutes'][day_str] += minutes
+    grid_entries, daily_totals_hours = compute_week_grid(
+        org, week_start, user_id=user.id,
+    )
 
-    # ── Build response ────────────────────────────────────────────────────────
-    grid_entries = []
-    for data in grid.values():
-        day_hours = {}
-        row_minutes = 0.0
-        for day_str in day_strings:
-            m = data['day_minutes'][day_str]
-            day_hours[day_str] = round(m / 60, 2)
-            row_minutes += m
-        grid_entries.append({
-            'client_id': data['client_id'], 'client_name': data['client_name'],
-            'task_type_id': data['task_type_id'], 'task_type_name': data['task_type_name'],
-            'is_billable': data['is_billable'],
-            'days': day_hours, 'total': round(row_minutes / 60, 2),
-        })
-
-    grid_entries.sort(key=lambda e: (not e['is_billable'], e['client_name'] or ''))
-
-    daily_totals = {d: 0.0 for d in day_strings}
-    for data in grid.values():
-        for d, m in data['day_minutes'].items():
-            daily_totals[d] += m
-
-    daily_totals_hours = {d: round(m / 60, 2) for d, m in daily_totals.items()}
     grand_total    = round(sum(daily_totals_hours.values()), 2)
     billable_total = round(sum(e['total'] for e in grid_entries if e['is_billable']), 2)
 

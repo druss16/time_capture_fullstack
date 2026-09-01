@@ -351,10 +351,31 @@ const ApprovalQueue: React.FC = () => {
   // you search. Client-side on purpose: the whole queue is already loaded,
   // so a round trip per keystroke would buy nothing.
   const [q, setQ] = useState('');
-  // Step 2 collapses like step 1. At 40 reports the table is the tallest
-  // thing on the page, and someone who has just cleared step 1 may want it
-  // out of the way — two numbered steps should behave the same way.
-  const [openStep2, setOpenStep2] = useState(true);
+  // Step 2 collapses like step 1, and by default it waits its turn.
+  //
+  // The page used to load with both steps expanded, which is two steps only in
+  // the numbering — everything was on screen at once and nothing said where to
+  // start. Now step one leads, and step two opens the moment step one comes
+  // back clean. That handoff is the whole point of numbering them.
+  //
+  // null means the reviewer has not touched this disclosure, so it follows the
+  // flow. One click and their choice sticks, in either direction: someone who
+  // opens step two while findings are outstanding keeps it open, and someone
+  // who closes it does not have it reopened underneath them.
+  const [openStep2Pref, setOpenStep2Pref] = useState<boolean | null>(null);
+  const [step1, setStep1] = useState<{ settled: boolean; total: number }>({
+    settled: false, total: 0,
+  });
+  // Returning the previous object when nothing changed keeps this from looping:
+  // step one reports on every render of its own, and a fresh object each time
+  // would re-render the queue forever.
+  const handleStep1Status = useCallback((s: { settled: boolean; total: number }) => {
+    setStep1((prev) =>
+      prev.settled === s.settled && prev.total === s.total ? prev : s);
+  }, []);
+  const openStep2 = openStep2Pref ?? (step1.settled && step1.total === 0);
+  const setOpenStep2 = (next: boolean | ((v: boolean) => boolean)) =>
+    setOpenStep2Pref(typeof next === 'function' ? next(openStep2) : next);
   // Where an approved week actually goes for THIS firm. The footer used to
   // promise a billing workflow to everyone; org 21 has approved 125 weeks and
   // has no integration, no invoice and no push to show for any of them.
@@ -517,7 +538,12 @@ const ApprovalQueue: React.FC = () => {
           to answer BEFORE approving, not after — approving is final, and where a
           firm has an integration connected it is what sends the week onward. Numbering it says so without a paragraph of instructions, and
           the marker turns into a green tick once this step is clear. */}
-      <MisfiledTimeReview step={1} onCounts={setMisfiled} refreshKey={sweepKey} />
+      <MisfiledTimeReview
+        step={1}
+        onCounts={setMisfiled}
+        onStatus={handleStep1Status}
+        refreshKey={sweepKey}
+      />
 
       {/* ── STEP 2 ─────────────────────────────────────────────────────── */}
       <div className={cn(

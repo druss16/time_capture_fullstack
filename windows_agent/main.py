@@ -3312,11 +3312,11 @@ def run_agent():
 
     # === FORCE-INSTALL THE BROWSER EXTENSION (per-user, no admin needed) ===
     # Reaches manually-installed machines (no MDM/GPO) via normal auto-update:
-    # writes a HKCU Edge ExtensionInstallForcelist policy so Edge silently
-    # installs the URL Reporter extension. Idempotent + fail-open.
+    # writes HKCU ExtensionInstallForcelist policies so Edge AND Chrome silently
+    # install the URL Reporter extension. Idempotent + fail-open.
     try:
-        from ensure_extension import ensure_edge_extension_forceinstall
-        ensure_edge_extension_forceinstall(log=lambda m: print(m, flush=True))
+        from ensure_extension import ensure_extensions_forceinstall
+        ensure_extensions_forceinstall(log=lambda m: print(m, flush=True))
     except Exception as _ext_e:
         print(f"[EXT] force-install step skipped: {_ext_e}", flush=True)
 

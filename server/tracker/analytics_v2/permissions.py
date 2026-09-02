@@ -8,9 +8,8 @@ Two responsibilities:
 Role hierarchy (matches OrganizationMembership.role choices):
   owner   → full firm + any sub-scope, plus all admin actions
   admin   → full firm + any sub-scope
-  manager → full firm + any sub-scope, but never cost/margin (redacted in
-            tracker/cost_visibility.py, not gated here)
-  staff   → self scope only (NOTE: model still has 'member' label; migration
+  manager → no analytics access (see ANALYTICS_ROLES)
+  staff   → no analytics access (NOTE: model still has 'member' label; migration
             renames to 'staff' in the same release)
 
 Staff (Django is_staff/is_superuser) gets the v1 admin override: they can pass
@@ -59,18 +58,26 @@ class OrgNotFound(Exception):
 # Role normalization
 # ---------------------------------------------------------------------------
 
-# Roles that have firm-wide read access for analytics.
+# Roles allowed to open analytics AT ALL.
 #
-# Manager is included. Firm scope was owner/admin-only because firm-scope
-# payloads carried labor cost, and shutting the scope was the only lever
-# available -- an expensive one, since it also took away utilization, WIP and
-# realization, which are a manager's core numbers. Cost is now redacted
-# directly (tracker/cost_visibility.py), so the scope no longer has to stand in
-# for it: managers get firm-wide hours, revenue, utilization, realization and
-# WIP, and cost and margin still stop at the owners. This matches how
-# professional-services firms actually split it -- managers work from
-# realization (billed vs standard), partners from margin (billed vs cost).
-FIRM_ROLES = {"owner", "admin", "manager"}
+# Analytics is a firm-management surface, and at the only firm using it the
+# people holding the manager role do no managing in the product: of 128 approved
+# timesheets, the 21 with a recorded human approver were all approved by the two
+# owners, none by a manager. The managers' usage profile is indistinguishable
+# from staff -- similar billable hours across a similar client count -- so the
+# role is a permission tier assigned at onboarding, not a job. Against that,
+# firm-wide analytics puts every colleague's hours by name in front of them,
+# which carries a social cost in a 13-person firm and buys no operational
+# benefit for work they are not accountable for.
+#
+# This is deliberately reversible: when a firm turns up whose managers run WIP
+# and scheduling, add "manager" here (and to FIRM_ROLES) and they have it back.
+# Note that cost/margin does NOT ride on this gate -- it is owner-only
+# regardless, redacted in tracker/cost_visibility.py.
+ANALYTICS_ROLES = {"owner", "admin"}
+
+# Roles that have firm-wide read access for analytics
+FIRM_ROLES = {"owner", "admin"}
 # Roles that can see team members beyond themselves
 TEAM_ROLES = {"owner", "admin", "manager"}
 # Anyone with a membership can at least see themselves
@@ -170,6 +177,21 @@ EXECUTIVE_ONLY_LENSES = {"trends"}
 # All other lenses are available on Professional+.
 
 
+def authorize_analytics_access(role: Optional[str]) -> None:
+    """Raise PermissionDenied unless this role may open analytics at all.
+
+    Checked before scope or lens: a role that cannot use analytics should get
+    one clear refusal, not a scope error that reads like a bad selection.
+    role=None means the Django-superuser org override is active.
+    """
+    if role is None:
+        return
+    if role not in ANALYTICS_ROLES:
+        raise PermissionDenied(
+            f"Analytics is available to firm owners and admins (your role: {role})."
+        )
+
+
 def authorize_lens(org: Organization, lens: str) -> None:
     """Raise PermissionDenied if the org's plan doesn't include this lens."""
     plan = (getattr(org, "plan", "none") or "none").lower()
@@ -215,19 +237,21 @@ def authorize_scope(
     if scope.type == "firm":
         if role not in FIRM_ROLES:
             raise PermissionDenied(
-                f"Firm-wide view requires manager role or above (your role: {role})."
+                f"Firm-wide view requires owner or admin role (your role: {role})."
             )
         return _label_scope(scope, org)
     
     # --- staff scope ---
     if scope.type == "staff":
         if role in FIRM_ROLES:
-            # Any staff is fair game. Managers land here now that they hold firm
-            # scope: a manager who can see the firm-wide by-staff utilization
-            # table can already name every colleague's hours, so gating the
-            # staff *scope* below that would protect nothing. (The old
-            # direct-reports path was moot anyway -- get_direct_report_ids has
-            # no reporting hierarchy to read and returned every non-owner.)
+            # Any staff is fair game
+            return _label_scope(scope, org)
+        if role == "manager":
+            allowed = get_direct_report_ids(user, org)
+            if not set(scope.ids).issubset(allowed):
+                raise PermissionDenied(
+                    "Manager scope can only include yourself and your direct reports."
+                )
             return _label_scope(scope, org)
         # staff/member role → only self
         if set(scope.ids) != {user.id}:

@@ -68,7 +68,9 @@ export default function Navigation() {
 
   const userRole = userInfo?.role;
   const canAccessSettings  = ['owner', 'admin'].includes(userRole || '');
-  const canAccessAnalytics = ['owner', 'admin', 'manager'].includes(userRole || '');
+  // Analytics is owner/admin only — see ANALYTICS_ROLES in analytics_v2/permissions.py.
+  // The server refuses managers too; this only keeps them from clicking into a 403.
+  const canAccessAnalytics = ['owner', 'admin'].includes(userRole || '');
   const canAccessBilling   = ['owner', 'admin'].includes(userRole || '');
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');

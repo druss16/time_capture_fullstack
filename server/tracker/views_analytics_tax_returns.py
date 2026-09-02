@@ -112,7 +112,7 @@ def tax_returns_dashboard(request):
         membership = OrganizationMembership.objects.filter(
             user=user, organization=org
         ).first()
-        if not membership or membership.role not in ("owner", "admin", "manager"):
+        if not membership or membership.role not in ("owner", "admin"):
             return Response({"error": "Permission denied. Manager role or above required."}, status=403)
         plan = getattr(org, "plan", "none") or "none"
         if not any(plan.startswith(p) for p in ("professional", "executive")):

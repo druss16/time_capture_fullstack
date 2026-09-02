@@ -22,8 +22,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .analytics_v2.permissions import (
-    OrgNotFound, PermissionDenied, get_available_scopes,
-    resolve_org_for_request,
+    OrgNotFound, PermissionDenied, authorize_analytics_access,
+    get_available_scopes, resolve_org_for_request,
 )
 from .analytics_v2.query import execute_query
 from .analytics_v2.scopes import RequestParseError
@@ -112,6 +112,15 @@ def analytics_permissions(request):
             status=status.HTTP_404_NOT_FOUND,
         )
     
+    try:
+        authorize_analytics_access(role)
+    except PermissionDenied as exc:
+        return Response(
+            {"error": "permission_denied", "message": exc.message,
+             "upgrade_required": exc.upgrade_required},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     caps = get_available_scopes(request.user, role, org)
     return Response({
         "org_id": org.id,

@@ -1,54 +1,53 @@
 """Silently force-install the "TimeTracker URL Reporter" browser extension for
-the current user (Microsoft Edge), by writing a PER-USER
-ExtensionInstallForcelist policy under HKCU.
+the current user, by writing a PER-USER ExtensionInstallForcelist policy under
+HKCU — for both Microsoft Edge and Google Chrome.
 
 Why HKCU (per-user) and not HKLM (per-machine): the agent runs as a limited,
-non-admin user, so it cannot write HKLM — but it CAN write HKCU, which Edge
-honors for the current user. This lets the extension reach machines that were
-installed manually (no MDM / no GPO) through the agent's normal auto-update:
-the updated agent runs this on startup and Edge force-installs the extension.
+non-admin user, so it cannot write HKLM — but it CAN write HKCU, which Edge and
+Chrome both honor for the current user. This lets the extension reach machines
+that were installed manually (no MDM / no GPO) through the agent's normal
+auto-update: the updated agent runs this on startup and the browser
+force-installs the extension.
 
-Idempotent and fail-open: it never raises and never blocks the agent. Edge-only
-(the extension is published to the Edge Add-ons store, not the Chrome Web Store).
+Idempotent and fail-open: it never raises and never blocks the agent. Each store
+assigns its own extension id (the CRX id differs between the Edge and Chrome
+stores). A browser whose extension is not yet published/approved simply won't
+find it until it is — setting the policy early is harmless.
 """
 
 import sys
 
-# Published Edge Add-ons extension id (32-char CRX id) + the Edge store update URL.
-_EXT_ID = "bnnifiompbeebhapoojlonamdghmlifh"
-_EDGE_UPDATE_URL = "https://edge.microsoft.com/extensionwebstorebase/v1/crx"
-_VALUE = f"{_EXT_ID};{_EDGE_UPDATE_URL}"
-_EDGE_FORCELIST_KEY = r"Software\Policies\Microsoft\Edge\ExtensionInstallForcelist"
+# Per-store: the published extension id (32-char CRX id), that store's update
+# URL, and the browser's per-user force-install policy key.
+_BROWSERS = [
+    {
+        "name": "Edge",
+        "ext_id": "bnnifiompbeebhapoojlonamdghmlifh",
+        "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+        "key": r"Software\Policies\Microsoft\Edge\ExtensionInstallForcelist",
+    },
+    {
+        "name": "Chrome",
+        "ext_id": "ophdgbaogdhfdhmfnnjniegccekmgfok",
+        "update_url": "https://clients2.google.com/service/update2/crx",
+        "key": r"Software\Policies\Google\Chrome\ExtensionInstallForcelist",
+    },
+]
 
 
-def ensure_edge_extension_forceinstall(log=None):
-    """Ensure the extension is force-listed for the current user's Edge.
+def _forceinstall_one(browser, log):
+    """Force-list one browser's extension for the current user. Returns bool."""
+    import winreg
 
-    Returns True if the policy is present (already or newly written), else False.
-    Safe to call on every startup and on non-Windows (no-op).
-    """
-    def _log(msg):
-        if log:
-            try:
-                log(msg)
-            except Exception:
-                pass
-
-    if not sys.platform.startswith("win"):
-        return False
-
-    try:
-        import winreg
-    except Exception:
-        return False
-
+    ext_id = browser["ext_id"]
+    value = f'{ext_id};{browser["update_url"]}'
     try:
         key = winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER, _EDGE_FORCELIST_KEY, 0,
+            winreg.HKEY_CURRENT_USER, browser["key"], 0,
             winreg.KEY_READ | winreg.KEY_WRITE,
         )
     except Exception as e:
-        _log(f"[EXT] could not open/create Edge forcelist key: {e}")
+        log(f"[EXT] {browser['name']}: could not open/create forcelist key: {e}")
         return False
 
     try:
@@ -63,26 +62,62 @@ def ensure_edge_extension_forceinstall(log=None):
             except OSError:
                 break
             i += 1
-            if isinstance(val, str) and val.lower().startswith(_EXT_ID + ";"):
+            if isinstance(val, str) and val.lower().startswith(ext_id + ";"):
                 already = True
             if isinstance(name, str) and name.isdigit():
                 used.add(int(name))
 
         if already:
-            _log("[EXT] extension already force-listed for Edge (current user)")
+            log(f"[EXT] {browser['name']}: extension already force-listed (current user)")
             return True
 
         slot = 1
         while slot in used:
             slot += 1
-        winreg.SetValueEx(key, str(slot), 0, winreg.REG_SZ, _VALUE)
-        _log(f"[EXT] force-installed extension for Edge (current user) [slot {slot}]")
+        winreg.SetValueEx(key, str(slot), 0, winreg.REG_SZ, value)
+        log(f"[EXT] {browser['name']}: force-installed extension (current user) [slot {slot}]")
         return True
     except Exception as e:
-        _log(f"[EXT] could not write Edge force-install policy: {e}")
+        log(f"[EXT] {browser['name']}: could not write force-install policy: {e}")
         return False
     finally:
         try:
             winreg.CloseKey(key)
         except Exception:
             pass
+
+
+def ensure_extensions_forceinstall(log=None):
+    """Force-install the extension for Edge and Chrome (current user, HKCU).
+
+    Returns True if at least one browser's policy is in place. Safe to call on
+    every startup and on non-Windows (no-op). Never raises.
+    """
+    def _log(msg):
+        if log:
+            try:
+                log(msg)
+            except Exception:
+                pass
+
+    if not sys.platform.startswith("win"):
+        return False
+
+    try:
+        import winreg  # noqa: F401  — probe availability before looping
+    except Exception:
+        return False
+
+    ok = False
+    for browser in _BROWSERS:
+        try:
+            if _forceinstall_one(browser, _log):
+                ok = True
+        except Exception as e:
+            _log(f"[EXT] {browser.get('name', '?')}: unexpected error: {e}")
+    return ok
+
+
+# Backward-compatible alias — older callers referenced the Edge-only name.
+def ensure_edge_extension_forceinstall(log=None):
+    return ensure_extensions_forceinstall(log=log)

@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { fetchWhoAmI } from '@/lib/whoami';
 import { MatterPicker } from '@/components/MatterPicker';
+import { MovePopover, type ClientOption } from '@/components/CategorySummary';
 import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, CheckCircle2, Lock,
   AlertTriangle, Info, RefreshCw, Search, X, Layers, CalendarDays, Sparkles, Copy,
@@ -60,6 +61,7 @@ interface DetailBlock {
   started_at: string | null;
   ended_at: string | null;
   duration_minutes: number;
+  client_id: number | null;
   client_name: string | null;
   task_type_name: string | null;
   is_billable: boolean;
@@ -89,8 +91,10 @@ const MoveContext = React.createContext<{
   clioEnabled?: boolean;
   onSetMatter?: (blockIds: number[], projectId: number) => Promise<void>;
   taskTypes: TaskTypeOption[];
+  clients: ClientOption[];
   movingId: number | null;
-  onMove: (blockIds: number[], taskTypeId: number) => void;
+  // Either half is optional: a row can move category, client, or both at once.
+  onMove: (blockIds: number[], move: { taskTypeId?: number; clientId?: number | null }) => void;
 } | null>(null);
 
 // Index blocks by client + category (and by day) so a category row can list its
@@ -118,6 +122,7 @@ interface AggBlock {
   firstStart: string | null;
   is_billable: boolean;
   taskTypeName: string | null;
+  clientId: number | null;
   ids: number[];
   // Matter state, so the row can show it rather than the user having to open a
   // menu to find out. `matterLabel` null with matterOptions > 1 is the only
@@ -138,6 +143,9 @@ const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
       // a matter when every block in the row agrees; otherwise the row is mixed
       // and saying "00003-Vance" would be a lie about some of its time.
       if ((b.matter_label ?? null) !== ex.matterLabel) ex.matterLabel = null;
+      // Same discipline as matterLabel: a merged row only claims a client when
+      // every block in it agrees, so a move never silently retargets the odd one.
+      if ((b.client_id ?? null) !== ex.clientId) ex.clientId = null;
       ex.matterOptions = Math.max(ex.matterOptions, b.matter_options ?? 0);
       if (b.started_at && (!ex.firstStart || b.started_at < ex.firstStart)) ex.firstStart = b.started_at;
     } else {
@@ -149,6 +157,7 @@ const aggregateBlocks = (blocks: DetailBlock[]): AggBlock[] => {
         firstStart: b.started_at,
         is_billable: b.is_billable,
         taskTypeName: b.task_type_name,
+        clientId: b.client_id ?? null,
         ids: [b.id],
         matterLabel: b.matter_label ?? null,
         matterOptions: b.matter_options ?? 0,
@@ -585,6 +594,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   const [timesheetData, setTimesheetData]   = useState<TimesheetData | null>(null);
   const [detail, setDetail]                 = useState<TimesheetDetail | null>(null);
   const [taskTypes, setTaskTypes]           = useState<TaskTypeOption[]>([]);
+  const [clientOptions, setClientOptions]   = useState<ClientOption[]>([]);
   const [movingId, setMovingId]             = useState<number | null>(null);
   const [submitting, setSubmitting]         = useState(false);
   const [submitNotes, setSubmitNotes]       = useState('');
@@ -766,25 +776,38 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
     return () => { alive = false; };
   }, [weekStart, outstandingTick]);
 
-  // Category options for the per-block move menu (loaded once).
+  // Category and client options for the per-block move menu (loaded once).
   useEffect(() => {
     safeFetchJson<TaskTypeOption[]>(`${API_BASE}/options/task-types/`)
       .then(list => setTaskTypes(Array.isArray(list) ? list : []))
       .catch(() => setTaskTypes([]));
+    safeFetchJson<ClientOption[]>(`${API_BASE}/options/clients/`)
+      .then(list => setClientOptions(Array.isArray(list) ? list : []))
+      .catch(() => setClientOptions([]));
   }, []);
 
   // Move mis-filed block(s) to a different category, then reload so every view
   // (this timesheet, its totals) reflects the change. Identical captured blocks
   // are merged into one display row, so a move can span several block ids —
   // POST each, then reload once.
-  const moveBlocks = useCallback(async (blockIds: number[], taskTypeId: number) => {
+  const moveBlocks = useCallback(async (
+    blockIds: number[],
+    move: { taskTypeId?: number; clientId?: number | null },
+  ) => {
     if (!blockIds.length) return;
+    // Send only what actually changed, so the audit records a category move, a
+    // client move, or both — not a rewrite of fields nobody touched.
+    const body: Record<string, unknown> = {};
+    if (move.taskTypeId !== undefined) body.task_type_id = move.taskTypeId;
+    if (move.clientId !== undefined) body.client_id = move.clientId;
+    if (!Object.keys(body).length) return;
+
     setMovingId(blockIds[0]);
     setError(null);
     try {
       for (const id of blockIds) {
         await safeFetchJson(`${API_BASE}/blocks/${id}/move-task-type/`, {
-          method: 'POST', body: JSON.stringify({ task_type_id: taskTypeId }),
+          method: 'POST', body: JSON.stringify(body),
         });
       }
       await fetchTimesheet();
@@ -911,9 +934,9 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
 
   const moveValue = useMemo(
     () => (taskTypes.length
-      ? { taskTypes, movingId, onMove: moveBlocks, clioEnabled, onSetMatter: setMatterForBlocks }
+      ? { taskTypes, clients: clientOptions, movingId, onMove: moveBlocks, clioEnabled, onSetMatter: setMatterForBlocks }
       : null),
-    [taskTypes, movingId, moveBlocks, clioEnabled, setMatterForBlocks]
+    [taskTypes, clientOptions, movingId, moveBlocks, clioEnabled, setMatterForBlocks]
   );
 
   // Accordion: one client open at a time. Opening a client collapses any other
@@ -1798,37 +1821,55 @@ const BlockMoveMenu: React.FC<{ agg: AggBlock }> = ({ agg }) => {
   if (!ctx) return null;
   const busy = ctx.movingId != null && agg.ids.includes(ctx.movingId);
   const currentName = agg.taskTypeName || 'General';
+  const categories = React.useMemo(() => {
+    const names = ctx.taskTypes.map(t => t.name);
+    return names.includes(currentName) ? names : [currentName, ...names];
+  }, [ctx.taskTypes, currentName]);
+
+  // Reuses Daily Review's popover so a correction made here behaves the same way
+  // -- including "Remember a name for this client", which turns a one-off fix
+  // into a rule the classifier applies next time. Without it the same misfile
+  // comes back next week and gets moved again.
+  const apply = (clientId: number | null, category: string) => {
+    setOpen(false);
+    const move: { taskTypeId?: number; clientId?: number | null } = {};
+    if (category !== currentName) {
+      const tt = ctx.taskTypes.find(t => t.name === category);
+      if (tt) move.taskTypeId = tt.id;
+    }
+    if (clientId !== agg.clientId) move.clientId = clientId;
+    ctx.onMove(agg.ids, move);
+  };
+
   return (
     <span className="relative shrink-0">
       <button
         ref={btnRef}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         disabled={busy}
-        title={agg.count > 1 ? `Move these ${agg.count} blocks to another category` : 'Move this block to another category'}
+        title={agg.count > 1
+          ? `Move these ${agg.count} blocks to another client or category`
+          : 'Move this block to another client or category'}
         className="flex shrink-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
       >
         {busy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderInput className="w-3 h-3" />}
         Move
       </button>
       {open && !busy && (
-        <RowMenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)} width={224}>
-          <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">Move to category</p>
-            {ctx.taskTypes.map(tt => {
-              const isCurrent = tt.name === currentName;
-              return (
-                <button
-                  key={tt.id}
-                  onClick={(e) => { e.stopPropagation(); setOpen(false); if (!isCurrent) ctx.onMove(agg.ids, tt.id); }}
-                  className={cn('w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-muted/40',
-                    isCurrent ? 'text-muted-foreground/70' : 'text-foreground')}
-                >
-                  <span className="flex-1 truncate">{tt.name}</span>
-                  {isCurrent && <Check className="w-3.5 h-3.5 text-muted-foreground/50" />}
-                  {!isCurrent && !tt.is_billable && <span className="text-[10px] text-muted-foreground/70">non-bill</span>}
-                </button>
-              );
-            })}
-        </RowMenuPortal>
+        <MovePopover
+          anchorEl={btnRef.current}
+          clients={ctx.clients}
+          // 14% of blocks have no TaskType and display as "General", which is a
+          // UI fallback rather than a real category. Without it in the list the
+          // select has no option matching its value, so the browser paints the
+          // first one and the row looks recategorized when it is not.
+          categories={categories}
+          currentClientId={agg.clientId}
+          currentCategory={currentName}
+          label={agg.count > 1 ? `${agg.count} blocks · ${agg.label}` : agg.label}
+          onApply={apply}
+          onClose={() => setOpen(false)}
+        />
       )}
     </span>
   );

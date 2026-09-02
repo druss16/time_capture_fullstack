@@ -665,6 +665,7 @@ def timesheet_detail_view(request, pk):
             'started_at':            block.start.isoformat(),
             'ended_at':              block.end.isoformat() if block.end else None,
             'duration_minutes':      duration_minutes,
+            'client_id':             block.client_id,
             'client_name':           block.client.name if block.client else None,
             'task_type_name':        block.task_type.name if block.task_type else None,
             'is_billable':           block.is_billable,

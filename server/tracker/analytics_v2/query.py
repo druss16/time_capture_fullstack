@@ -18,8 +18,8 @@ from django.utils import timezone
 
 from .lenses import get_lens
 from .permissions import (
-    OrgNotFound, PermissionDenied, authorize_lens, authorize_scope,
-    resolve_org_for_request,
+    OrgNotFound, PermissionDenied, authorize_analytics_access, authorize_lens,
+    authorize_scope, resolve_org_for_request,
 )
 from .scopes import RequestParseError, parse_request_body
 from .types import Section
@@ -39,6 +39,7 @@ def execute_query(user, body: dict, org_id_override: str | None = None) -> dict:
     org, role = resolve_org_for_request(user, org_id_override=org_id_override)
     
     # 3. Permission checks
+    authorize_analytics_access(role)
     authorize_lens(org, lens_key)
     scope = authorize_scope(user, role, org, scope)
     

@@ -7015,7 +7015,13 @@ def set_block_matter(request, block_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def move_block_task_type(request, block_id):
-    """Move a block to a different TaskType (category) from the weekly timesheet.
+    """Move a block to a different category and/or client from the weekly timesheet.
+
+    Both moves live here rather than in recategorize_block because that endpoint
+    never touches Block.task_type, and the weekly timesheet groups by task_type --
+    pointing the timesheet at it would move the client while silently desyncing
+    the grouping, so a block would show one category here and another in Daily
+    Review. Pass task_type_id, client_id, or both.
 
     The weekly timesheet groups by Block.task_type, while Daily Review and billing
     read Block.category_hours / Block.is_billable. A category move must keep ALL
@@ -7037,13 +7043,34 @@ def move_block_task_type(request, block_id):
         return Response({"error": "Block not found"}, status=404)
 
     task_type_id = request.data.get("task_type_id")
-    if not task_type_id:
-        return Response({"error": "task_type_id required"}, status=400)
+    # Distinguish "absent" (leave the client alone) from "present and null"
+    # (move to No Client), the same way recategorize_block does.
+    client_provided = "client_id" in request.data
+    new_client_id = request.data.get("client_id")
 
-    try:
-        tt = TaskType.objects.get(id=task_type_id, org=block.org, is_active=True)
-    except TaskType.DoesNotExist:
-        return Response({"error": "TaskType not found for this organization"}, status=404)
+    if not task_type_id and not client_provided:
+        return Response({"error": "task_type_id or client_id required"}, status=400)
+
+    # A client-only move keeps the block's current category, so the row stays
+    # where it is in the timesheet and only changes which client it belongs to.
+    if task_type_id:
+        try:
+            tt = TaskType.objects.get(id=task_type_id, org=block.org, is_active=True)
+        except TaskType.DoesNotExist:
+            return Response({"error": "TaskType not found for this organization"}, status=404)
+    else:
+        tt = block.task_type
+
+    if client_provided:
+        if new_client_id is None:
+            block.client = None
+        else:
+            try:
+                block.client = Client.objects.get(id=new_client_id, org=block.org)
+            except Client.DoesNotExist:
+                return Response(
+                    {"error": "Client not found for this organization"}, status=404
+                )
 
     # Preserve the real recorded duration (category_hours != end-start for
     # idle-capped / merged blocks), mirroring recategorize_block's fallback chain.
@@ -7056,30 +7083,54 @@ def move_block_task_type(request, block_id):
         else:
             hours = 0.0
 
+    # The category name to write. With a TaskType in hand that is its name; a
+    # client-only move on a block that never had a TaskType falls back to the
+    # category already recorded, so we never blank it.
+    existing_category = next(iter(block.category_hours or {}), None)
+    category_name = tt.name if tt is not None else existing_category
+    if not category_name:
+        # ~0.25% of blocks carry neither a TaskType nor any category_hours.
+        # Inventing one here would write a category that matches no TaskType, so
+        # ask for a real one instead -- the picker offers them alongside clients.
+        return Response(
+            {"error": "This block has no category yet — pick a category as well as a client."},
+            status=400,
+        )
+
     # A No-Client block is never billable regardless of the category picked;
     # otherwise inherit the TaskType's billable flag. Block.save independently
     # enforces internal-client → non-billable, so we don't duplicate that here.
-    is_billable = bool(tt.is_billable) and block.client_id is not None
+    if tt is not None:
+        billable_category = bool(tt.is_billable)
+    else:
+        billable_category = not _is_nonbillable_category(category_name)
+    is_billable = billable_category and block.client_id is not None
 
     from tracker.services.classification_service import ClassificationService
 
-    block.task_type = tt
+    if tt is not None:
+        block.task_type = tt
     service = ClassificationService(org=block.org, user=request.user)
     service.recommit(
         block,
         user=request.user,
         override={
-            "category": tt.name,
-            "category_hours": {tt.name: round(hours, 4)},
+            "category": category_name,
+            "category_hours": {category_name: round(hours, 4)},
             "is_billable": is_billable,
         },
-        audit_detail={"action": "timesheet_move_task_type", "task_type_id": tt.id},
+        audit_detail={
+            "action": "timesheet_move",
+            "task_type_id": tt.id if tt is not None else None,
+            "client_id": block.client_id if client_provided else None,
+        },
     )
 
     return Response({
         "success": True,
         "block_id": block.id,
-        "task_type": {"id": tt.id, "name": tt.name},
+        "task_type": {"id": tt.id, "name": tt.name} if tt is not None else None,
+        "client_id": block.client_id,
         "is_billable": block.is_billable,
     })
 

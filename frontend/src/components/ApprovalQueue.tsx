@@ -1,7 +1,7 @@
 // src/components/ApprovalQueue.tsx
 // Manager dashboard — styled to match WeeklyTimesheet design system
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, AlertTriangle,
@@ -111,8 +111,10 @@ const TimesheetRow: React.FC<{
   misfiled?: { count: number; minutes: number } | undefined;
   /** The queue spans more than one week, so each row has to name its own. */
   showWeek: boolean;
-  onApprove: (id: number) => Promise<void>;
-  onReject:  (id: number, reason: string) => Promise<void>;
+  // Deliberately not promises: these return the moment the row is hidden, so a
+  // reviewer can move to the next row without waiting for the request.
+  onApprove: (id: number) => void;
+  onReject:  (id: number, reason: string) => void;
   onView:    (id: number) => void;
 }> = ({ timesheet, misfiled, showWeek, onApprove, onReject, onView }) => {
   const [expanded,        setExpanded]        = useState(false);
@@ -341,6 +343,11 @@ const ApprovalQueue: React.FC = () => {
   const [error,          setError]          = useState<string | null>(null);
   const [queueData,      setQueueData]      = useState<QueueData>({ count: 0, timesheets: [] });
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  // Rows already acted on. They leave the list the instant the button is
+  // pressed; the queue refetch that follows is what eventually agrees.
+  const [hiddenIds,      setHiddenIds]      = useState<Set<number>>(() => new Set());
+  const inFlight  = useRef(0);
+  const settleRef = useRef<number | null>(null);
   const [drawerTimesheetId, setDrawerTimesheetId] = useState<number | null>(null);
   // Per-week misfile counts from the sweep panel, so each row can warn before
   // anyone clicks Approve. Keyed by timesheet id (as a string, from JSON).
@@ -381,6 +388,30 @@ const ApprovalQueue: React.FC = () => {
   // has no integration, no invoice and no push to show for any of them.
   const [destination, setDestination] = useState<string | null>(null);
 
+  // Background refetch: same request, no `loading` flip, so the list stays on
+  // screen and keeps its scroll position while someone works down it.
+  const refetchQuiet = useCallback(async () => {
+    try {
+      const data = await safeFetchJson<QueueData>(`${API_BASE}/billing/approval-queue/`);
+      setQueueData(data);
+    } catch {
+      // A failed background refresh is not worth an error banner -- the
+      // optimistic list is still correct, and the next settle will retry.
+    }
+  }, []);
+
+  // After a burst of approvals goes quiet, true up once: refresh the queue and
+  // re-run the mis-filed sweep. Doing that per click re-scanned hundreds of
+  // blocks and was most of the cost of a single approve.
+  const scheduleSettle = useCallback(() => {
+    if (settleRef.current) window.clearTimeout(settleRef.current);
+    settleRef.current = window.setTimeout(() => {
+      if (inFlight.current > 0) { scheduleSettle(); return; }
+      refetchQuiet();
+      setSweepKey(k => k + 1);
+    }, 1200);
+  }, [refetchQuiet]);
+
   const fetchQueue = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -419,59 +450,80 @@ const ApprovalQueue: React.FC = () => {
     setTimeout(() => setSuccessMessage(null), 3000);
   };
 
-  const handleApprove = async (id: number) => {
-    try {
-      await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/approve/`, {
-        method: 'POST',
-        body: JSON.stringify({ notes: '' }),
+  // Hide the row, then fire. Requests are not awaited before the next click is
+  // possible, so approving six weeks is six clicks at your own pace rather than
+  // six round trips in series. A failure puts its row back.
+  const act = (id: number, path: string, body: unknown, done: string, failed: string) => {
+    setHiddenIds(prev => new Set(prev).add(id));
+    setError(null);
+    inFlight.current += 1;
+    safeFetchJson(`${API_BASE}/billing/timesheets/${id}/${path}/`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+      .then(() => showSuccess(done))
+      .catch((err) => {
+        setHiddenIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+        setError(err instanceof Error ? err.message : failed);
+      })
+      .finally(() => {
+        inFlight.current -= 1;
+        scheduleSettle();
       });
-      showSuccess('Timesheet approved');
-      fetchQueue();
-      setSweepKey(k => k + 1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approve failed');
-    }
   };
 
-  const handleReject = async (id: number, reason: string) => {
-    try {
-      await safeFetchJson(`${API_BASE}/billing/timesheets/${id}/reject/`, {
-        method: 'POST',
-        body: JSON.stringify({ reason }),
-      });
-      showSuccess('Timesheet rejected');
-      fetchQueue();
-      setSweepKey(k => k + 1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reject failed');
-    }
-  };
+  const handleApprove = (id: number) =>
+    act(id, 'approve', { notes: '' }, 'Timesheet approved', 'Approve failed');
+
+  const handleReject = (id: number, reason: string) =>
+    act(id, 'reject', { reason }, 'Timesheet rejected', 'Reject failed');
 
   const handleView = (id: number) => { setDrawerTimesheetId(id); };
 
+  // Everything below counts from `pending`, not queueData.timesheets, so the
+  // header total and the "N auto-submitted" warning fall as rows are actioned
+  // instead of contradicting the list underneath them.
+  const pending = useMemo(
+    () => queueData.timesheets.filter(t => !hiddenIds.has(t.id)),
+    [queueData.timesheets, hiddenIds],
+  );
+
+  useEffect(() => {
+    // Once a refetch comes back without an id we optimistically hid, the server
+    // agrees and we can stop tracking it. Anything still present stays hidden --
+    // its request is likely still in flight.
+    setHiddenIds(prev => {
+      if (!prev.size) return prev;
+      const live = new Set(queueData.timesheets.map(t => t.id));
+      const next = new Set([...prev].filter(id => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [queueData.timesheets]);
+
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return queueData.timesheets;
-    return queueData.timesheets.filter(t =>
+    if (!needle) return pending;
+    return pending.filter(t =>
       t.user_name.toLowerCase().includes(needle) ||
       t.user_email.toLowerCase().includes(needle));
-  }, [queueData.timesheets, q]);
+  }, [pending, q]);
 
-  const autoCount   = queueData.timesheets.filter(t => t.auto_submitted).length;
+  const autoCount   = pending.filter(t => t.auto_submitted).length;
+  const pendingCount = pending.length;
   // Auto-submit runs for last week only, so the queue is normally one week for
   // everybody. When it is, the date belongs in the header once instead of on
   // every row — it was the widest column on the row and said the same thing
   // six times. When the queue genuinely spans weeks, each row names its own.
   const weekKeys  = useMemo(
-    () => Array.from(new Set(queueData.timesheets.map(t => t.week_start))).sort(),
-    [queueData.timesheets],
+    () => Array.from(new Set(pending.map(t => t.week_start))).sort(),
+    [pending],
   );
   const multiWeek = weekKeys.length > 1;
   const oneWeek   = weekKeys.length === 1
-    ? queueData.timesheets.find(t => t.week_start === weekKeys[0])
+    ? pending.find(t => t.week_start === weekKeys[0])
     : undefined;
-  const totalBillable = queueData.timesheets.reduce((s, t) => s + t.billable_hours, 0);
-  const totalAmount   = queueData.timesheets.reduce((s, t) => s + t.total_amount,   0);
+  const totalBillable = pending.reduce((s, t) => s + t.billable_hours, 0);
+  const totalAmount   = pending.reduce((s, t) => s + t.total_amount,   0);
 
   if (loading) {
     return (
@@ -492,10 +544,10 @@ const ApprovalQueue: React.FC = () => {
       <div className="bg-white rounded-xl border border-border/60 px-5 h-12 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-3 shrink-0">
           <h2 className="text-base font-bold text-slate-800">Approvals</h2>
-          {queueData.count > 0 ? (
+          {pendingCount > 0 ? (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-amber-50 text-amber-700 border-amber-200">
               <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" />
-              {queueData.count} pending
+              {pendingCount} pending
             </span>
           ) : !loading && (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
@@ -567,12 +619,12 @@ const ApprovalQueue: React.FC = () => {
             <div className="min-w-0">
               <p className="text-sm font-bold text-slate-800">Approve the weeks</p>
               <p className="text-xs text-slate-400 truncate">
-                {queueData.count === 0
+                {pendingCount === 0
                   ? 'Nothing waiting'
                   : q.trim()
-                  ? `${shown.length} of ${queueData.count} shown`
+                  ? `${shown.length} of ${pendingCount} shown`
                   : [
-                      `${queueData.count} ${queueData.count === 1 ? 'week' : 'weeks'}`,
+                      `${pendingCount} ${pendingCount === 1 ? 'week' : 'weeks'}`,
                       oneWeek && formatWeekRange(oneWeek.week_start, oneWeek.week_end),
                       `${formatHours(totalBillable)} billable`,
                       formatCurrency(totalAmount),
@@ -582,7 +634,7 @@ const ApprovalQueue: React.FC = () => {
           </button>
           {/* Appears only once the list is long enough to need it — a search
               box above six rows is furniture, above forty it is the feature. */}
-          {queueData.timesheets.length >= 8 && (
+          {pending.length >= 8 && (
             <div className="relative shrink-0">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input

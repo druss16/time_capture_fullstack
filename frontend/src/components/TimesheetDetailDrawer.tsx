@@ -64,8 +64,10 @@ interface TimesheetDetail {
 interface Props {
   timesheetId: number | null;
   onClose: () => void;
-  onApprove: (id: number) => Promise<void>;
-  onReject: (id: number, reason: string) => Promise<void>;
+  // May be sync: the approvals queue hides the row and fires the request without
+  // waiting, so this returns immediately. `await` below handles both.
+  onApprove: (id: number) => void | Promise<void>;
+  onReject:  (id: number, reason: string) => void | Promise<void>;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

@@ -385,10 +385,21 @@ def is_pending_review_block(b) -> bool:
       • captured blocks with no attribution yet, material (>=2min) and non-idle.
     Suppressed / committed / already-corrected blocks never appear.
     """
-    if getattr(b, "is_categorized", False):
-        return False
     state = (getattr(b, "classification_state", "") or "")
     if state == "suppressed":
+        return False
+
+    # A block the Stage-11 gate re-opened. It WAS committed, so is_categorized
+    # is still True, but nothing in its text identifies which of several
+    # look-alike clients it belongs to and Daily Review is showing it as a
+    # pick. Checked before the is_categorized bail-out below, or the header
+    # reads "NEEDS REVIEW 0m" while the lane underneath it says "1h needs you".
+    if state == "proposed" and any(
+            isinstance(sig, dict) and sig.get("type") == "family_ambiguous"
+            for sig in (getattr(b, "proposed_signals", None) or [])):
+        return True
+
+    if getattr(b, "is_categorized", False):
         return False
     if (getattr(b, "categorized_by", "") or "") in ("manual", "correction"):
         return False
@@ -417,10 +428,15 @@ def _pending_review_by_group(org, start_utc, end_utc, can_see_all,
 
     Returns (total_min: int, {group_key: minutes:int}).
     """
+    # is_categorized=False is the ordinary pending case; `proposed` is also
+    # admitted because the Stage-11 gate re-opens blocks that were already
+    # committed (and therefore still categorized). is_pending_review_block
+    # makes the actual call — this filter only decides what it gets to see.
     qs = Block.objects.filter(
         org=org, deleted_at__isnull=True,
         start__gte=start_utc, start__lt=end_utc,
-        is_categorized=False,
+    ).filter(
+        Q(is_categorized=False) | Q(classification_state="proposed")
     ).exclude(classification_state="suppressed")
     if not can_see_all and forced_user_id:
         qs = qs.filter(user_id=forced_user_id)

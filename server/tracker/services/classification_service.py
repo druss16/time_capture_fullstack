@@ -77,6 +77,18 @@ _PATH_NOISE_SEGMENTS = {
     'google drive', 'googledrive',
 }
 
+# Articles and prepositions that a QuickBooks company name drops but a window
+# title keeps (or vice versa). "Church Of Annunciation" is the client; the title
+# reads "The Church of THE Annunciation - Clark Mills, NY". Collapsing these
+# before the contiguous check is what lets the two meet.
+_FILLER_WORDS = {'the', 'of', 'and', 'for', 'a', 'an', 'at', 'in', 'on', 'to'}
+
+
+def _collapse_filler(text: str) -> str:
+    """Drop articles/prepositions so two spellings of one name line up."""
+    return ' '.join(t for t in text.split() if t not in _FILLER_WORDS)
+
+
 def _canonical_entity_tokens(tokens):
     """Fold entity-class synonyms ("academy" -> "school") across a token set."""
     return {ENTITY_CLASS_SYNONYMS.get(t, t) for t in tokens}
@@ -2603,6 +2615,14 @@ class ClassificationService:
         # contiguous phrase at or near the start of the title is the
         # strongest evidence we can get.
         alias_pos = pre_bracket.find(alias_n)
+        if alias_pos < 0:
+            # Retry blind to articles/prepositions, so a filler-insensitive
+            # match is scored as the contiguous phrase it is rather than
+            # falling through to the capped token-coverage tier.
+            alias_c, pre_c = _collapse_filler(alias_n), _collapse_filler(pre_bracket)
+            if alias_c and alias_c in pre_c:
+                alias_n, pre_bracket = alias_c, pre_c
+                alias_pos = pre_bracket.find(alias_n)
         if alias_pos == 0:
             return 1.0
         if 0 < alias_pos < 10:
@@ -2783,6 +2803,23 @@ class ClassificationService:
         # for aliases that already matched exactly.
         if alias_n and alias_n in haystack_n:
             return True
+
+        # Same check, blind to articles and prepositions. Client 201 is called
+        # "Church Of Annunciation"; its QuickBooks title reads "The Church of
+        # THE Annunciation - Clark Mills, NY". One extra "the" broke the
+        # contiguous check above, and the token path below could not rescue it
+        # because that path demands TWO distinctive words in proximity while
+        # this client has exactly one ("church" is roster-wide noise). 70 of
+        # org 21's 328 clients have a single distinctive word, so every one of
+        # them was a stray article away from never matching its own file.
+        #
+        # Still requires a real contiguous phrase AND a word that identifies
+        # somebody: collapsing "Church of the" alone would match every parish.
+        alias_c = _collapse_filler(alias_n)
+        if alias_c and alias_c in _collapse_filler(haystack_n):
+            if any(t not in DOMAIN_COMMON_WORDS and len(t) >= 4
+                   for t in alias_c.split()):
+                return True
 
         # Token-based fallback
         alias_tokens = [

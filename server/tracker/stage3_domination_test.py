@@ -118,6 +118,28 @@ if _ok:
         C[392], set(N("St. Patrick's Church - QuickBooks").split()))
     check("absent distinguishing word is not evidence", core == {'patrick'})
 
+    print("Contiguous matching — blind to articles and prepositions:")
+    M = ClassificationService._alias_matches_safely
+    SC = ClassificationService._alias_match_score
+    T_ANN = ('The Church of the Annunciation - Clark Mills, NY (Primary)'
+             '  - QuickBooks Accountant Desktop Plus 2024')
+    check("an inserted 'the' no longer breaks the match",
+          M('Church Of Annunciation', T_ANN) is True)
+    check("and it scores as the contiguous phrase it is",
+          SC('Church Of Annunciation', T_ANN) >= 0.85)
+    check("a DIFFERENT parish still does not match",
+          M('Church of the Holy Family', T_ANN) is False)
+    check("an unrelated church still does not match",
+          M('St. James Church', T_ANN) is False)
+    # The collapse must not turn roster-wide noise into a match. "Of The
+    # Church" is not a substring of this title, so it can only arrive via the
+    # collapsed path — where it becomes bare "church" and is refused for
+    # carrying no word that identifies anybody.
+    check("collapsed alias with no identifying word is refused",
+          M('Of The Church', T_ANN) is False)
+    check("normal contiguous matches are unaffected",
+          M("St Patrick's Taberg", "St Patrick's Taberg - QuickBooks") is True)
+
     print("Stage-3 specificity-domination — the generic-family magnet:")
     T_TABERG = "St. Patrick's Church-Taberg  - QuickBooks Accountant Desktop Plus 2024"
     check("generic 130 loses to 392 when 'taberg' is in the title",

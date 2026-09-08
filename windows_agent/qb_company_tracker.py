@@ -448,6 +448,11 @@ def _paths_from_handles(diag: dict) -> list[str]:
     return sorted(found)
 
 
+# A bare company FILE NAME. _QBW_PATH_RE needs a rooted path; the shell MRU
+# carries only the leaf, so it needs its own pattern.
+_QBW_NAME_RE = re.compile(r"[\w][\w .,'&()+_-]{2,80}\.qbw", re.IGNORECASE)
+
+
 def _paths_from_mru(diag: dict) -> list[str]:
     r"""Company file paths from QuickBooks' own recently-opened list.
 
@@ -524,6 +529,100 @@ def _paths_from_mru(diag: dict) -> list[str]:
         except Exception as e:
             diag.setdefault('err', f'reg:{type(e).__name__}')
 
+    return found
+
+
+def _paths_from_comdlg_mru(diag: dict) -> list[str]:
+    r"""Company files the user PICKED, from the shell's file-dialog history.
+
+    Every other mechanism asks Windows about QuickBooks and is refused, because
+    QuickBooks runs elevated and this agent does not (see _record_environment:
+    same user, handles=AccessDenied). This one never touches QuickBooks at all.
+
+    "Open a Company" and "Open or Restore Company" are standard shell file
+    dialogs — 224 of them in a fortnight on org 21 — and the shell records
+    every pick made through one under the CURRENT USER's own hive:
+
+        HKCU\...\Explorer\ComDlg32\OpenSavePidlMRU\qbw
+
+    Same user, written by the shell rather than by QuickBooks, so elevation is
+    irrelevant. MRUListEx gives the order, newest first, which is exactly the
+    file the user just chose.
+
+    The values are PIDLs, not strings — which is why the existing scan for
+    ".qbw" text finds nothing in them. The name is present as UTF-16 (and often
+    again as ANSI), so it is recovered by decoding rather than by walking the
+    shell item structure: a full PIDL parse is far more code and more ways to
+    break for a filename we can read directly.
+
+    Returns bare FILENAMES, newest first — no directory. That is enough:
+    the server matches on the stem (qb_company_file.match_stem), and the stem is
+    the part that is specific ("st._marys_minoa.qbw") while the company name in
+    the title is the part that is generic ("St. Mary's").
+    """
+    if sys.platform != 'win32':
+        return []
+    found = []
+    try:
+        import winreg
+        key_path = (r'Software\Microsoft\Windows\CurrentVersion\Explorer'
+                    r'\ComDlg32\OpenSavePidlMRU\qbw')
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path)
+        except FileNotFoundError:
+            # The single most useful thing this function can report: the key is
+            # absent, so QuickBooks is not using a shell dialog and no amount of
+            # parsing will help. Distinguishes "wrong idea" from "bug".
+            diag['mru'] = -1
+            return []
+        except Exception as e:
+            diag['mru_err'] = type(e).__name__
+            return []
+
+        try:
+            order = []
+            values = {}
+            i = 0
+            while i < 60:
+                try:
+                    name, val, _t = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                if name == 'MRUListEx' and isinstance(val, (bytes, bytearray)):
+                    # int32 indices, newest first, terminated by 0xFFFFFFFF.
+                    for off in range(0, len(val) - 3, 4):
+                        n = int.from_bytes(val[off:off + 4], 'little')
+                        if n == 0xFFFFFFFF:
+                            break
+                        order.append(str(n))
+                elif isinstance(val, (bytes, bytearray)):
+                    values[name] = bytes(val)
+            diag['mru'] = len(values)
+
+            for name in (order or sorted(values)):
+                blob = values.get(name)
+                if not blob:
+                    continue
+                for enc in ('utf-16-le', 'latin-1'):
+                    try:
+                        text = blob.decode(enc, errors='ignore')
+                    except Exception:
+                        continue
+                    hit = None
+                    for m in _QBW_NAME_RE.finditer(text):
+                        hit = m.group(0).strip()
+                    if hit and hit not in found:
+                        found.append(hit)
+                        break
+            diag['mrunames'] = len(found)
+        finally:
+            try:
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+    except Exception as e:
+        diag.setdefault('mru_err', type(e).__name__)
     return found
 
 
@@ -844,6 +943,16 @@ def get_capture_report(window_title: str | None = None) -> dict:
             diag.update(_exact_cache['diag'])   # keep reporting why it failed
         if exact:
             report['exact'] = exact[:4]
+        else:
+            # Reported SEPARATELY from 'exact' on purpose. Handles and command
+            # line observe what is OPEN; the shell MRU records what was last
+            # PICKED, which is usually the same file but goes stale the moment
+            # someone switches through the Open Previous Company menu instead of
+            # a dialog. The server corroborates it against the company name in
+            # the title before believing it — see pick_recent_company_file.
+            picked = _paths_from_comdlg_mru(diag)
+            if picked:
+                report['picked'] = picked[:4]
     except Exception as e:
         diag.setdefault('err', type(e).__name__)
 

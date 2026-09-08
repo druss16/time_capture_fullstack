@@ -227,7 +227,7 @@ function Label({
         >
           <Info className="h-3 w-3 text-slate-400 hover:text-slate-600 cursor-help" />
           {showTooltip && (
-            <span className="absolute left-5 top-0 z-10 w-64 rounded-lg bg-slate-900 text-white text-[11px] normal-case tracking-normal p-2.5 shadow-lg leading-snug font-normal">
+            <span className="absolute left-5 top-0 z-10 w-72 rounded-lg bg-slate-900 text-white text-[11px] normal-case tracking-normal p-2.5 shadow-lg leading-snug font-normal whitespace-pre-line">
               {tile.tooltip}
             </span>
           )}

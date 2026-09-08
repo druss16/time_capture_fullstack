@@ -130,11 +130,7 @@ class WipUnassignedMetric(Metric):
     """Value of billable time that has no client and therefore cannot be billed."""
     label = "Needs a Client"
     format = "currency_0dp"
-    tooltip = (
-        "Billable time with no client attached. Not counted in WIP — it can't be "
-        "invoiced until someone assigns it — so this is the backlog to clear, "
-        "not money owed."
-    )
+    tooltip = "Needs a Client = Σ(billable value where client is empty)\n\nCan't be invoiced, so it is NOT counted in WIP.\nA cleanup backlog, not money owed."
     valid_scopes = ("firm", "client", "composite")
     delta_good_when = "down"
 
@@ -227,10 +223,7 @@ def _realizable_secondary(org, scope, time, gross_total, metric_self) -> dict | 
 class WipTotalMetric(Metric):
     label = "WIP Total"
     format = "currency_0dp"
-    tooltip = (
-        "Dollar value of confirmed billable time that hasn't been invoiced yet. "
-        "Accrues as time is captured — it does not wait for timesheet approval."
-    )
+    tooltip = "WIP = Σ(uninvoiced billable value)\n     confirmed + approved, client attached\n\nA running BALANCE — it ignores the date filter above."
     valid_scopes = ("firm", "client", "staff", "composite")
     delta_good_when = "down"  # Lower WIP = faster billing = better cash flow
 
@@ -254,10 +247,7 @@ class WipTotalMetric(Metric):
 class WipUnreviewedMetric(Metric):
     label = "Unreviewed Pipeline"
     format = "currency_0dp"
-    tooltip = (
-        "Captured billable time that hasn't been confirmed in Daily Review yet. "
-        "Real work and real money — it just isn't vetted enough to bill."
-    )
+    tooltip = "Unreviewed = Σ(captured + proposed billable value)\n\nReal time nobody has confirmed yet. Not counted in WIP."
     valid_scopes = ("firm", "client", "staff", "composite")
     delta_good_when = "down"  # A growing unreviewed pile = review backlog
 
@@ -278,9 +268,7 @@ class WipUnreviewedMetric(Metric):
 class WipAged60PlusMetric(Metric):
     label = "WIP Aged 60+"
     format = "currency_0dp"
-    tooltip = (
-        "WIP whose work date is 60+ days back. Risk of write-off — prioritize billing."
-    )
+    tooltip = "WIP 60+ = Σ(WIP where work date > 60 days ago)\n\nAged from the WORK date, not the approval date."
     valid_scopes = ("firm", "client", "staff", "composite")
     delta_good_when = "down"
 

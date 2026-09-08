@@ -112,7 +112,7 @@ def _worked_for(
 class RealizationHoursMetric(Metric):
     label = "Realization (Hours)"
     format = "percent_1dp"
-    tooltip = "Invoiced hours ÷ worked hours × 100. Flags unbilled time and scope creep."
+    tooltip = "Realization = invoiced hrs ÷ worked hrs\n\nHow much of the time worked actually reached an invoice.\nNeeds imported invoices to mean anything."
     threshold = ThresholdRange(low=85, high=100, direction="higher_is_better")
     calibration_days = 30
     valid_scopes = ("firm", "client", "composite")

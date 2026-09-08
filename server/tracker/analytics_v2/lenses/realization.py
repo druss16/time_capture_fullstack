@@ -52,9 +52,11 @@ class RealizationLens(Lens):
         worked: dict[int, dict] = defaultdict(
             lambda: {"name": "", "hours": 0.0, "value": 0.0}
         )
-        block_qs = (Block.objects
-                    .filter(org=org, day__gte=time.start, day__lte=time.end,
-                            is_billable=True, client__isnull=False)
+        from ..blocks import confirmed_qs
+        from tracker.services.billing_totals import billable_block_q
+        block_qs = (confirmed_qs(Block.objects
+                    .filter(org=org, day__gte=time.start, day__lte=time.end))
+                    .filter(billable_block_q(org))
                     .select_related("client"))
         for b in block_qs.only("client_id", "client__name", "minutes", "billing_amount", "billing_rate"):
             hours = to_float(b.minutes) / 60.0

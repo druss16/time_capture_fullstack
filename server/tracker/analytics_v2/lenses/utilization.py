@@ -72,6 +72,8 @@ class UtilizationLens(Lens):
         elif scope.type == "staff":
             qs = qs.filter(user_id__in=scope.ids)
         from ..blocks import working_qs
+        # working_qs applies the confirmed-time rules, so these tables count the
+        # same blocks as the headline metric and as Daily Review.
         return working_qs(qs, org)
 
     def _per_user(self, org, scope, time):

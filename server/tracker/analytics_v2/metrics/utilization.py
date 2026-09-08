@@ -12,6 +12,28 @@ from ..types import MetricState, MetricValue, to_float
 from .base import Metric, ThresholdRange, register_metric
 
 
+def chargeable_qs(metric, org, scope, time):
+    """Working time for the CHARGEABLE population — the one basis all three
+    utilization tiles share.
+
+    Billable Hours, Total Hours and Utilization sit in the same row and are read
+    as numerator / denominator / ratio, so they have to count the same people.
+    They didn't: Utilization dropped non-chargeable staff (admin/ops tiers) from
+    both sides while the two hour tiles kept them, so the row didn't divide —
+    880.3 / 1,472.9 read 59.8% next to a 58.8% tile. The exclusion happens at
+    firm/composite scope only; when someone explicitly scopes to a person, you
+    asked to see that individual and we show them.
+    """
+    from ..blocks import working_qs
+    qs = working_qs(metric._block_qs(org, scope, time), org)
+    if scope.type in ("firm", "composite"):
+        from ..cost_rates import non_utilization_user_ids
+        excl = non_utilization_user_ids(org)
+        if excl:
+            qs = qs.exclude(user_id__in=excl)
+    return qs
+
+
 @register_metric("billable_utilization")
 class BillableUtilizationMetric(Metric):
     label = "Capacity Utilization"
@@ -108,15 +130,7 @@ class BillableMixMetric(Metric):
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from ..blocks import working_qs
-        qs = working_qs(self._block_qs(org, scope, time), org)
-        # Same chargeable-population filter as capacity utilization: drop
-        # non-chargeable staff (admin/ops) from the firm/composite number.
-        if scope.type in ("firm", "composite"):
-            from ..cost_rates import non_utilization_user_ids
-            excl = non_utilization_user_ids(org)
-            if excl:
-                qs = qs.exclude(user_id__in=excl)
+        qs = chargeable_qs(self, org, scope, time)
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)
@@ -156,13 +170,15 @@ class BillableMixMetric(Metric):
 class BillableHoursMetric(Metric):
     label = "Billable Hours"
     format = "hours_1dp"
-    tooltip = "Total hours marked as billable in this scope and time range."
+    tooltip = ("Confirmed billable hours — the numerator of Utilization. Counts "
+               "chargeable staff only, so this divided by Total Hours equals the "
+               "Utilization tile.")
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
-    
+
     def compute(self, org, scope, time):
-        from ..blocks import working_qs, billable_q
-        qs = working_qs(self._block_qs(org, scope, time), org).filter(billable_q(org))
+        from ..blocks import billable_q
+        qs = chargeable_qs(self, org, scope, time).filter(billable_q(org))
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)
@@ -173,13 +189,14 @@ class BillableHoursMetric(Metric):
 class TotalHoursMetric(Metric):
     label = "Total Hours"
     format = "hours_1dp"
-    tooltip = "All active tracked hours (billable + non-billable). Idle/lock time is excluded."
+    tooltip = ("Confirmed active hours of chargeable staff (billable + non-billable) "
+               "— the denominator of Utilization. Idle/lock time and non-chargeable "
+               "admin/ops staff are excluded, so the row divides.")
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from ..blocks import working_qs
-        qs = working_qs(self._block_qs(org, scope, time), org)
+        qs = chargeable_qs(self, org, scope, time)
         total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
         if total_min == 0:
             return MetricValue(state=MetricState.EMPTY)

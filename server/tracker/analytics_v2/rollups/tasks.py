@@ -72,10 +72,11 @@ def _rollup_client_daily_for_org_date(org: Organization, target_date: date) -> i
         "explicit_rate_amount": 0.0, "default_rate_amount": 0.0,
     })
     
-    block_qs = Block.objects.filter(
+    from ..blocks import confirmed_qs
+    block_qs = confirmed_qs(Block.objects.filter(
         org=org, day=target_date, client__isnull=False,
-    ).only("client_id", "minutes", "is_billable", "billing_amount",
-           "billing_rate", "user_id")
+    )).only("client_id", "minutes", "is_billable", "billing_amount",
+            "billing_rate", "user_id")
     
     for b in block_qs:
         cid = b.client_id
@@ -178,7 +179,8 @@ def _rollup_staff_daily_for_org_date(org: Organization, target_date: date) -> in
         "billing_amount": 0.0, "cost_amount": 0.0,
     })
     
-    block_qs = Block.objects.filter(org=org, day=target_date).only(
+    from ..blocks import confirmed_qs
+    block_qs = confirmed_qs(Block.objects.filter(org=org, day=target_date)).only(
         "user_id", "minutes", "is_billable", "billing_amount", "billing_rate"
     )
     

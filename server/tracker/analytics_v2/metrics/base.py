@@ -147,20 +147,35 @@ class Metric:
     # ------------------------------------------------------------------------
     
     def _block_qs(self, org: Organization, scope: Scope, time: TimeRange,
-                  billable_only: bool = False) -> QuerySet:
+                  billable_only: bool = False, confirmed: bool = True) -> QuerySet:
         """
         Return a Block QuerySet filtered by org + scope + time.
         Subclasses call this and add their own annotations.
+
+        `confirmed=True` (the default) reports the same time Daily Review,
+        Reports and the timesheets count — committed, not suppressed, not
+        soft-deleted, no in-flight proposals. `billable_only=True` then applies
+        the canonical billing rule, which also requires a client and excludes
+        internal work. Both rules live in `services.billing_totals`.
+
+        Pass `confirmed=False` only for a metric that deliberately reports
+        unreviewed time as its own tier (WIP's accrual ladder).
         """
+        from ..blocks import confirmed_qs
+
         qs = Block.objects.filter(
             org=org,
             day__gte=time.start,
             day__lte=time.end,
         )
-        
+
+        if confirmed:
+            qs = confirmed_qs(qs)
+
         if billable_only:
-            qs = qs.filter(is_billable=True)
-        
+            from tracker.services.billing_totals import billable_block_q
+            qs = qs.filter(billable_block_q(org))
+
         return self._apply_scope(qs, scope)
     
     def _apply_scope(self, qs: QuerySet, scope: Scope) -> QuerySet:

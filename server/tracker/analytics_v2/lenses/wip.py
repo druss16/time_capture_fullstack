@@ -9,7 +9,8 @@ from django.utils import timezone
 
 from ..metrics.wip import (
     TIER_BILLABLE_READY, TIER_UNREVIEWED, WIP_FIELDS, block_age_days,
-    block_amount, compute_wip_aging_bands, default_rate_for, wip_qs,
+    block_amount, compute_wip_aging_bands, default_rate_for, unassigned_qs,
+    wip_qs,
 )
 from ..types import (
     ChartCardPayload, DataTablePayload, MetricState, Scope, Section, TimeRange,
@@ -35,6 +36,12 @@ class WipLens(Lens):
 
         if scope.is_firm() or scope.type == "composite":
             sections.append(self._top_clients_section(org, scope))
+            # Billable time with no client can't be invoiced, so it isn't WIP —
+            # but it mustn't disappear either. Only shown when there's something
+            # to clear.
+            unassigned = self._unassigned_section(org, scope)
+            if unassigned is not None:
+                sections.append(unassigned)
 
         return sections
 
@@ -123,6 +130,80 @@ class WipLens(Lens):
             id="by_client",
             type="section",
             title="By Client",
+            collapsible=True,
+            children=[table],
+        )
+
+    def _unassigned_section(self, org, scope) -> Section | None:
+        """Who has billable time with no client attached.
+
+        This is the backlog `wip_qs` correctly refuses to count as money owed.
+        Grouped by person because that's who can fix it.
+        """
+        from django.contrib.auth import get_user_model
+
+        default = default_rate_for(org)
+        today = timezone.localdate()
+        per_user: dict[int, dict] = defaultdict(
+            lambda: {"amount": 0.0, "minutes": 0.0, "blocks": 0, "oldest_days": 0}
+        )
+
+        for b in unassigned_qs(org, scope).only("user_id", *WIP_FIELDS):
+            row = per_user[b.user_id]
+            row["amount"] += block_amount(b, default)
+            row["minutes"] += float(b.minutes or 0)
+            row["blocks"] += 1
+            row["oldest_days"] = max(row["oldest_days"], block_age_days(b, today))
+
+        if not per_user:
+            return None
+
+        User = get_user_model()
+        names = {
+            u.id: (f"{u.first_name} {u.last_name}".strip() or u.username)
+            for u in User.objects.filter(id__in=per_user.keys())
+            .only("id", "first_name", "last_name", "username")
+        }
+
+        rows = [
+            {
+                "user_id": uid,
+                "staff_name": names.get(uid, f"User {uid}"),
+                "amount": round(d["amount"], 2),
+                "hours": round(d["minutes"] / 60.0, 2),
+                "blocks": d["blocks"],
+                "oldest_days": d["oldest_days"],
+            }
+            for uid, d in per_user.items()
+        ]
+        rows.sort(key=lambda r: -r["amount"])
+
+        total = sum(r["amount"] for r in rows)
+        hours = sum(r["hours"] for r in rows)
+        blocks = sum(r["blocks"] for r in rows)
+
+        table = DataTablePayload(
+            id="wip_unassigned_by_staff",
+            title="Billable time with no client",
+            subtitle=(f"${total:,.0f} · {hours:,.1f} h · {blocks} blocks — "
+                      f"not counted in WIP, because it can't be invoiced until "
+                      f"someone assigns it"),
+            columns=[
+                column("staff_name", "Staff", "text"),
+                column("amount", "Value $", "currency_0dp",
+                       tooltip="What it would be worth once assigned"),
+                column("hours", "Hours", "hours_1dp"),
+                column("blocks", "Blocks", "number_0dp"),
+                column("oldest_days", "Oldest", "days_1dp"),
+            ],
+            rows=rows,
+            default_sort={"key": "amount", "direction": "desc"},
+            state=MetricState.READY,
+        )
+        return Section(
+            id="unassigned",
+            type="section",
+            title="Needs a Client",
             collapsible=True,
             children=[table],
         )

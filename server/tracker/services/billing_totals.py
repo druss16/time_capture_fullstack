@@ -48,6 +48,61 @@ from collections import defaultdict
 _ACTIVITY_SLICE = 25
 
 
+# ---------------------------------------------------------------------------
+# ORM-level rules, for callers that window on `day` instead of `start`
+# ---------------------------------------------------------------------------
+# `committed_block_qs` below windows on the UTC `start` timestamp, which is what
+# Daily Review and Reports need. Analytics windows on the local `day` field and
+# builds its own querysets, so it can't reuse that function wholesale — but it
+# MUST apply the same rules or its dollars diverge from every other screen.
+# These two helpers are that shared definition; `_block_queryset` in
+# views_reports composes the first one, so there is still exactly one place
+# where "confirmed time" is defined.
+
+
+def confirmed_state_q():
+    """Q for CONFIRMED time: committed (or a legacy is_categorized row), and
+    never an in-flight `proposed` re-attribution. Mirrors the committed_only
+    branch of `views_reports._block_queryset`."""
+    from django.db.models import Q
+    return Q(classification_state="committed") | Q(is_categorized=True)
+
+
+def apply_confirmed_rules(qs):
+    """Restrict a Block queryset to confirmed, live time.
+
+    Drops soft-deleted rows, drops suppressed blocks (a human explicitly killed
+    that time), and keeps only committed/categorized blocks that aren't proposed.
+    This is the state half of the billable rule; pair it with `billable_block_q`
+    for the "does it bill" half."""
+    return (qs.filter(deleted_at__isnull=True)
+              .exclude(classification_state="suppressed")
+              .filter(confirmed_state_q())
+              .exclude(classification_state="proposed"))
+
+
+def internal_client_ids(org) -> set[int]:
+    """Client ids for the firm's own internal-work clients — never billable."""
+    from tracker.industry_categories import is_internal_client_name
+    from tracker.models import Client
+    return {
+        cid for cid, name in Client.objects.filter(org=org).values_list("id", "name")
+        if is_internal_client_name(name or "")
+    }
+
+
+def billable_block_q(org):
+    """ORM equivalent of `views_reports._is_billable_block`: marked billable AND
+    tied to a client AND not internal firm work. Kept as a Q (not a per-object
+    predicate) so aggregate callers don't have to walk every row in Python."""
+    from django.db.models import Q
+    q = Q(is_billable=True) & Q(client__isnull=False)
+    internal = internal_client_ids(org)
+    if internal:
+        q &= ~Q(client_id__in=internal)
+    return q
+
+
 def committed_block_qs(org, start_utc, end_utc, *, user_id=None, can_see_all=True):
     """The confirmed-time block queryset for a window — the exact set Reports and
     Daily Review both count. Thin wrapper over `_block_queryset(committed_only=True)`.

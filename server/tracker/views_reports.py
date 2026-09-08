@@ -314,9 +314,10 @@ def _block_queryset(org, start_utc, end_utc, can_see_all, forced_user_id,
         # is_categorized=True from a first-pass attribution the second pass is
         # trying to correct, so an is_categorized fallback alone would leak that
         # mis-attributed time back in as billable.
-        qs = qs.filter(
-            Q(classification_state="committed") | Q(is_categorized=True)
-        ).exclude(classification_state="proposed")
+        # The rule itself lives in services.billing_totals so analytics (which
+        # windows on `day`, not `start`) applies the identical definition.
+        from tracker.services.billing_totals import confirmed_state_q
+        qs = qs.filter(confirmed_state_q()).exclude(classification_state="proposed")
     else:
         # The review pile — match get_categorization_data() EXACTLY so the
         # report's Uncategorized number agrees with the Categorize tab badge.

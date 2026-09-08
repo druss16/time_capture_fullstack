@@ -67,21 +67,94 @@ def apply_scope(qs: QuerySet, scope: Scope) -> QuerySet:
 
 def wip_qs(org: Organization, scope: Scope | None = None,
            tier: str = TIER_BILLABLE_READY) -> QuerySet:
-    """Uninvoiced billable blocks for this scope, at the given accrual tier."""
-    qs = Block.objects.filter(org=org, invoiced=False, is_billable=True)
+    """Uninvoiced billable blocks for this scope, at the given accrual tier.
+
+    The accrual ladder below is WIP's own concept, so this does NOT apply the
+    committed-only rule the period metrics use — reporting unreviewed time as a
+    named tier is the point. It does apply the rest of the shared billing rule
+    (`services.billing_totals.billable_block_q`) plus the soft-delete guard, so
+    WIP is drawn from the same population as revenue: no deleted rows, no
+    internal work, and nothing without a client — you cannot invoice an hour
+    that isn't attached to anybody.
+    """
+    from tracker.services.billing_totals import billable_block_q
+
+    # Suppressed is excluded HERE, not per-tier. The module contract has always
+    # said "suppressed blocks are never WIP", but the billable-ready tier is
+    # `committed OR approved`, so a suppressed block sitting on an approved
+    # timesheet satisfied the OR and was counted as money owed — $9,176 of
+    # already-killed time on org 21, 642 blocks of it also clientless.
+    qs = (Block.objects
+          .filter(org=org, invoiced=False, deleted_at__isnull=True)
+          .exclude(classification_state="suppressed")
+          .filter(billable_block_q(org)))
 
     if tier == TIER_BILLABLE_READY:
         qs = qs.filter(Q(classification_state__in=COMMITTED_STATES) | Q(approved=True))
     elif tier == TIER_UNREVIEWED:
         qs = qs.filter(classification_state__in=UNREVIEWED_STATES, approved=False)
     elif tier == TIER_ALL:
-        qs = qs.exclude(classification_state="suppressed")
+        pass  # suppressed already excluded above
     else:
         raise ValueError(f"Unknown WIP tier: {tier!r}")
 
     if scope is not None:
         qs = apply_scope(qs, scope)
     return qs
+
+
+def unassigned_qs(org: Organization, scope: Scope | None = None) -> QuerySet:
+    """Uninvoiced billable time with NO client — the work that can never bill.
+
+    These blocks used to sit inside WIP as an "Unassigned" row, which was wrong:
+    you cannot invoice an hour that isn't attached to anybody, so counting it in
+    a receivable-like figure overstated WIP (by $8,918 on org 21). Now that
+    `wip_qs` requires a client, this is the queryset that keeps the signal
+    visible instead of letting it vanish — it's a data-quality backlog, not
+    money owed.
+
+    Deliberately spans every classification state except suppressed: a block
+    with no client is worth surfacing whether or not anyone confirmed it.
+    """
+    qs = (Block.objects
+          .filter(org=org, invoiced=False, deleted_at__isnull=True,
+                  is_billable=True, client__isnull=True)
+          .exclude(classification_state="suppressed"))
+    if scope is not None:
+        qs = apply_scope(qs, scope)
+    return qs
+
+
+@register_metric("wip_unassigned")
+class WipUnassignedMetric(Metric):
+    """Value of billable time that has no client and therefore cannot be billed."""
+    label = "Needs a Client"
+    format = "currency_0dp"
+    tooltip = (
+        "Billable time with no client attached. Not counted in WIP — it can't be "
+        "invoiced until someone assigns it — so this is the backlog to clear, "
+        "not money owed."
+    )
+    valid_scopes = ("firm", "client", "composite")
+    delta_good_when = "down"
+
+    def compute(self, org, scope, time):
+        default = default_rate_for(org)
+        total = 0.0
+        blocks = 0
+        minutes = 0.0
+        for b in unassigned_qs(org, scope).only(*WIP_FIELDS):
+            total += block_amount(b, default)
+            minutes += to_float(b.minutes)
+            blocks += 1
+        if total == 0:
+            return MetricValue(state=MetricState.EMPTY)
+        return MetricValue(
+            value=round(total, 2),
+            secondary_value=round(minutes / 60.0, 1),
+            secondary_label=f"{blocks} blocks with no client",
+            secondary_format="hours_1dp",
+        )
 
 
 # Fields every WIP walk needs. Keep in sync with block_amount/block_age_days.

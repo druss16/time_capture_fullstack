@@ -270,6 +270,39 @@ RECENT_MAX_AGE_SECONDS = 60 * 60
 SIGNAL_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
+# Vocabulary an entire book of parishes shares, so it can never say WHICH one.
+# Deliberately local rather than imported from classification_service: that
+# module imports this one, and a module-level import back would be a cycle.
+_COMPANY_STOPWORDS = frozenset({
+    'saint', 'saints', 'st', 'church', 'churches', 'catholic', 'parish',
+    'cemetery', 'school', 'academy', 'chapel', 'fund', 'foundation',
+    'diocese', 'ministry', 'mission', 'community', 'company', 'incorporated',
+    'inc', 'llc', 'ltd', 'corp', 'the', 'and', 'of', 'our', 'lady',
+    'qbw', 'qb', 'file', 'files', 'data', 'backup', 'copy', 'restored',
+    'primary', 'secondary', 'current', 'new', 'old',
+})
+
+
+def _identifying_words(text):
+    """Words from a company name or file stem that actually name somebody.
+
+    Drops separators and the vocabulary every parish shares, so "St. Mary's
+    Church" and "st._marys_minoa.qbw" meet on {mary} while "St. Patrick's
+    Taberg" shares nothing with either.
+    """
+    import re as _re
+    out = set()
+    for w in _re.split(r"[^a-z0-9]+", (text or '').lower()):
+        # Stem the possessive: a company name says "St. Mary's Church" and the
+        # file says "st._marys_minoa.qbw". Without this they share nothing and
+        # the corroboration silently never fires.
+        if len(w) >= 5 and w.endswith('s'):
+            w = w[:-1]
+        if len(w) >= 4 and w not in _COMPANY_STOPWORDS:
+            out.add(w)
+    return out
+
+
 def pick_recent_company_file(reports, companies):
     """Choose the company file this block was working in, or None.
 
@@ -292,6 +325,27 @@ def pick_recent_company_file(reports, companies):
             for path in r['exact']:
                 if path:
                     return path, 'exact'
+
+    # 1b. The user PICKED this file in a shell Open dialog (agent: 'picked',
+    # read from the current user's ComDlg32 MRU — the one mechanism elevation
+    # cannot block). Not believed outright the way 'exact' is: the MRU records
+    # the last file CHOSEN, which goes stale when someone switches company
+    # through the Open Previous Company menu instead of a dialog.
+    #
+    # So it must agree with the block about WHO this is. The title carries the
+    # generic company name ("St. Mary's Church"); the filename carries the
+    # specific one ("st._marys_minoa.qbw"). Requiring them to share an
+    # identifying word means the MRU only ever decides WHICH St. Mary's — never
+    # that a St. Patrick's file belongs to a St. Mary's block. With no company
+    # name anywhere in the block there is nothing to agree with, so abstain.
+    picked = [p for r in reports if isinstance(r, dict) for p in (r.get('picked') or []) if p]
+    if picked and companies:
+        company_words = set()
+        for name in companies:
+            company_words |= _identifying_words(name)
+        for path in picked:
+            if _identifying_words(clean_stem(path)) & company_words:
+                return path, 'picked'
 
     # Freshest observation wins per file: the same file appears in every event's
     # report, ageing as the block runs.

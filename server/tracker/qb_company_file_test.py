@@ -223,5 +223,36 @@ check("a 4-char alias cannot claim a file",
 check("normalizer strips punctuation and case",
       norm("St. Mary's Church– Clinton") == "stmaryschurchclinton")
 
+print("\n=== the shell file-dialog MRU ('picked') ===")
+# The agent reads the current user's ComDlg32 MRU — what was PICKED in an
+# "Open a Company" dialog. It is the one mechanism elevation cannot block, but
+# it goes stale when someone switches company through the Open Previous menu,
+# so it is corroborated against the company name the block's title carries
+# rather than believed the way 'exact' is.
+from tracker.services.qb_company_file import pick_recent_company_file as pick
+
+
+def picked(files, companies):
+    got = pick([{"picked": files, "recent": []}], set(companies))
+    return got[0] if got else None
+
+
+check("the file the user picked decides WHICH St. Mary's",
+      picked(["st._marys_minoa.qbw"], ["St. Mary's Church"]) == "st._marys_minoa.qbw")
+check("a possessive in the title still meets a possessive in the filename",
+      picked(["st_marys_clinton.qbw"], ["St Mary Church"]) == "st_marys_clinton.qbw")
+check("a file from ANOTHER family is refused",
+      picked(["st_patricks_taberg.qbw"], ["St. Mary's Church"]) is None)
+check("the agreeing file is chosen from several",
+      picked(["st_patricks_taberg.qbw", "st._marys_minoa.qbw"],
+             ["St. Mary's Church"]) == "st._marys_minoa.qbw")
+check("with no company named anywhere, abstain",
+      picked(["st._marys_minoa.qbw"], []) is None)
+check("agreeing only on words every parish shares is not agreement",
+      picked(["st_church_2024.qbw"], ["St. Mary's Church"]) is None)
+check("'exact' still outranks 'picked'",
+      pick([{"exact": ["Q:\\QB\\real.qbw"], "picked": ["other.qbw"], "recent": []}],
+           {"St. Mary's Church"})[0] == "Q:\\QB\\real.qbw")
+
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

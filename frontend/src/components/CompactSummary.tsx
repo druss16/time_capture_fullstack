@@ -22,7 +22,7 @@ import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } f
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, suggestAliasFromTitle, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
-import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate } from "@/lib/dailyReviewLanes";
+import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate, AmbiguousGroup } from "@/lib/dailyReviewLanes";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -219,6 +219,24 @@ export default function CompactSummary({
       showToast(`Moved ${targets.length} blocks to ${targets[0].looks_like_client_name}`, "success");
       onRefresh();
     } catch { onRevertRows(ids); showToast("Failed to move", "error"); }
+  }, [onConfirmRows, onRevertRows, onRefresh, showToast]);
+
+  // "Which one?": the title named a group of look-alike clients but not which.
+  // One pick fans out to every block in the work session — same mechanism as
+  // "Switch all", so nothing is merged and billing totals are unaffected.
+  const resolveAmbiguous = useCallback(async (g: AmbiguousGroup, clientId: number, clientName: string) => {
+    const category = g.category || "General Client Work";
+    onConfirmRows(g.block_ids.map((id) => ({ blockId: id, clientId, category })));
+    try {
+      await Promise.all(g.block_ids.map((id) => recategorize(id, clientId, category)));
+      showToast(
+        g.block_ids.length === 1
+          ? `Filed under ${clientName}`
+          : `Filed ${g.block_ids.length} blocks under ${clientName}`,
+        "success",
+      );
+      onRefresh();
+    } catch { onRevertRows(g.block_ids); showToast("Failed to file", "error"); }
   }, [onConfirmRows, onRevertRows, onRefresh, showToast]);
 
   // ── Per-row detail (/why/) + Split ──────────────────────────────────────────
@@ -635,7 +653,16 @@ export default function CompactSummary({
 
           {needsYou.count > 0 && (
             <div className="flex flex-col">
-              {/* Unassigned + pending, then mismatches — each block already minutes-desc. */}
+              {/* "Which one?" first — the only rows where nothing can proceed
+                  without an answer — then unassigned + pending, then mismatches. */}
+              {needsYou.ambiguous.map((g) => (
+                <AmbiguousGroupRow
+                  key={`a${g.block_ids[0]}`} g={g} busy={busy}
+                  onPickClient={(cid, name) => resolveAmbiguous(g, cid, name)}
+                  onPickOther={(anchor) =>
+                    openMove(anchor, g.block_ids, null, g.category || catList[0], "Which client?", null, true, suggestAliasFromTitle(g.window_title || ""))}
+                />
+              ))}
               {needsYou.pending.map((b) => (
                 <PendingRow
                   key={`p${b.block_id}`} b={b} busy={busy}
@@ -822,6 +849,72 @@ const CHIP_AMBER = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-amber-500/[0.14] 
 const PILL_TEAL = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-primary/50 bg-primary/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-primary shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-primary/20 disabled:opacity-50";
 const PILL_AMBER = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400";
 const PILL_GHOST = "inline-flex w-[104px] items-center justify-center gap-0.5 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
+
+/** "Which one?": the title names a GROUP of look-alike clients but not which
+ *  member — a dozen org-21 QuickBooks company files are all named "St. Mary's
+ *  Church". Nothing downstream can resolve it, so instead of committing a guess
+ *  the classifier proposes and asks here.
+ *
+ *  Two things keep this cheap to answer. The buttons carry only the DECIDING
+ *  part of each name ("Hamilton", not "St. Mary's Church-Hamilton") — the shared
+ *  part is already in the title above, so the button is the whole decision. And
+ *  the row is a work SESSION, not a block: one pick files every block in the
+ *  sitting. Recently-worked clients sort first and carry a marker, so the answer
+ *  is usually the leftmost button.
+ */
+const PILL_PICK = "inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400";
+const PILL_PICK_QUIET = "inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
+
+const MAX_VISIBLE_CANDIDATES = 5;
+
+function AmbiguousGroupRow({ g, busy, onPickClient, onPickOther }: {
+  g: AmbiguousGroup;
+  busy: boolean;
+  onPickClient: (clientId: number, clientName: string) => void;
+  onPickOther: (anchor: HTMLElement) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? g.candidates : g.candidates.slice(0, MAX_VISIBLE_CANDIDATES);
+  const hidden = g.candidates.length - visible.length;
+  const span = `${fmtClock(g.start)}\u2013${fmtClock(g.end)}`;
+
+  return (
+    <div className={ROW}>
+      <span className={CHIP_AMBER}>{fmtMin(g.minutes || 0)}</span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-mono text-[12.5px] text-foreground">{g.window_title || "(untitled)"}</div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
+          <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-semibold text-muted-foreground">
+            {g.block_count === 1 ? "1 block" : `${g.block_count} blocks`} · {span}
+          </span>
+          <span className="text-muted-foreground">The file name doesn’t say which one</span>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {visible.map((c) => (
+            <button
+              key={c.client_id}
+              onClick={() => onPickClient(c.client_id, c.client_name)}
+              disabled={busy}
+              title={c.client_name}
+              className={c.recent ? PILL_PICK : PILL_PICK_QUIET}
+            >
+              {c.recent && <Check className="h-3 w-3 shrink-0" aria-hidden />}
+              <span className="max-w-[190px] truncate">{c.short_name || c.client_name}</span>
+            </button>
+          ))}
+          {hidden > 0 && (
+            <button onClick={() => setShowAll(true)} disabled={busy} className={PILL_PICK_QUIET}>
+              {hidden} more
+            </button>
+          )}
+          <button onClick={(e) => onPickOther(e.currentTarget)} disabled={busy} className={PILL_PICK_QUIET}>
+            Someone else…
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Fold mismatch rows for the *identical* file into one group, so eight 1-minute
  *  slivers of the same document don't list as eight rows. Grouped by exact title
@@ -1010,6 +1103,14 @@ function sourceLabel(app?: string): string | null {
       a.includes("edge") || a.includes("opera") || a.includes("brave")) return "Web";
   const cleaned = (app || "").replace(/\.exe$/i, "").trim();
   return cleaned || null;
+}
+
+// ISO timestamp -> local "9:05" / "13:40". Used to show an ambiguous group's
+// span, which is how the user recognizes WHICH sitting they're answering about.
+function fmtClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 // minutes -> "1h 13m" / "45m" / "2h"

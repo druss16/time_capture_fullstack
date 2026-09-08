@@ -6700,6 +6700,14 @@ DOMAIN_COMMON_WORDS = {
     # Contracting LLC" to false-match an IRS tax-research haystack
     # containing "complex tax topics". Same risk applies to other
     # qualifier words — they don't uniquely identify a client.
+    # QuickBooks window chrome, not identity. QB Accountant appends "(Primary)"
+    # / "(Secondary)" to the company name when two files are open, and org 21
+    # has four clients whose ALIASES captured that chrome verbatim — e.g. 105's
+    # 'Church of Sacred Heart and St. Mary (Primary)'. Left distinctive, the
+    # word matched any "(Primary)" title carrying one of the client's other
+    # words, which is how 105 became the single biggest source of ambiguous
+    # St. Mary attribution. Generic here, so it can never single anyone out.
+    'primary', 'secondary',
     'complete', 'comprehensive', 'professional', 'premium', 'standard',
     'national', 'regional', 'local', 'global', 'advanced', 'integrated',
     'unified', 'universal', 'modern', 'classic', 'essential', 'onedrive', 

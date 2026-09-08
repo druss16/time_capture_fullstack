@@ -35,10 +35,7 @@ class RevenueMetric(Metric):
     the hourly estimate so the two revenue sources never double-count."""
     label = "Revenue"
     format = "currency_0dp"
-    tooltip = (
-        "Estimated revenue: hourly time value (billing_amount) plus pro-rated "
-        "flat-fee/retainer fees. For invoiced truth, see Invoiced Revenue."
-    )
+    tooltip = "Revenue = Σ(confirmed billable hrs × rate)\n      + pro-rated retainers\n\nRate ladder: block → client → tier → firm default.\nAn ESTIMATE — no invoices have been imported."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
 
@@ -90,7 +87,7 @@ class InvoicedRevenueMetric(Metric):
     """Actual invoiced revenue (Invoice.amount). Truth source for profitability."""
     label = "Invoiced Revenue"
     format = "currency_0dp"
-    tooltip = "Actual invoiced revenue from imported invoices."
+    tooltip = "Invoiced Revenue = Σ(invoice amounts in period)\n\nActual money billed. Empty until invoices are imported."
     valid_scopes = ("firm", "client", "composite")
     delta_good_when = "up"
     
@@ -116,7 +113,7 @@ class LaborCostMetric(Metric):
     """Total labor cost (hours × EmployeeCostRate)."""
     label = "Labor Cost"
     format = "currency_0dp"
-    tooltip = "Loaded labor cost for hours worked, using EmployeeCostRate per user."
+    tooltip = "Labor Cost = Σ(confirmed billable hrs × cost rate)\n\nCost rate: person override → tier → firm default.\nOnly as “loaded” as the rates you entered — if those\nare raw wages, this understates true cost."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "down"
     
@@ -141,11 +138,7 @@ class GrossMarginMetric(Metric):
     firm hasn't imported invoices) and labor cost."""
     label = "Gross Margin"
     format = "percent_1dp"
-    tooltip = (
-        "(Recognized revenue − labor cost) ÷ recognized revenue × 100. "
-        "Uses invoiced revenue when available, otherwise estimated revenue "
-        "(hourly time value + pro-rated retainers)."
-    )
+    tooltip = "Gross Margin = (Revenue − Labor Cost) ÷ Revenue\n\nDelivery margin. Does NOT charge firm overhead."
     threshold = ThresholdRange(low=20, high=40, direction="higher_is_better")
     valid_scopes = ("firm", "client", "composite")
     delta_good_when = "up"
@@ -177,10 +170,7 @@ class OverheadCostMetric(Metric):
     until a firm flags an overhead tier in Settings → Cost Tiers."""
     label = "Overhead Cost"
     format = "currency_0dp"
-    tooltip = (
-        "Labor cost of non-chargeable staff (tiers marked not billable). "
-        "The firm's overhead, separate from the direct cost of billable delivery."
-    )
+    tooltip = "Overhead = Σ(ALL confirmed hrs × cost rate)\n      for staff in tiers marked non-chargeable\n\nWages of non-billing staff ONLY.\nNOT rent, software, insurance or any other expense."
     valid_scopes = ("firm", "composite")
     delta_good_when = "down"
 
@@ -212,11 +202,7 @@ class OperatingMarginMetric(Metric):
     tier not-billable in Settings → Cost Tiers."""
     label = "Operating Margin"
     format = "percent_1dp"
-    tooltip = (
-        "(Recognized revenue − direct billable labor − overhead labor) ÷ revenue. "
-        "The bottom line after the cost of running the firm, not just delivery. "
-        "Flag your admin/ops tier as non-billable for this to reflect overhead."
-    )
+    tooltip = "Operating Margin =\n (Revenue − direct labor − overhead) ÷ Revenue\n\nOverhead here is only non-chargeable staff wages,\nso this is NOT a true bottom line."
     threshold = ThresholdRange(low=10, high=25, direction="higher_is_better")
     valid_scopes = ("firm", "composite")
     delta_good_when = "up"
@@ -272,10 +258,7 @@ class RevenueLeakageMetric(Metric):
     """
     label = "Revenue Leakage"
     format = "currency_0dp"
-    tooltip = (
-        "Standard-rate value of billable time not yet billed or committed. "
-        "The gap between time worked and time that will actually be billed."
-    )
+    tooltip = "Leakage = worked value − billed value\nbilled = invoiced revenue, else committed value\n\nNo invoices imported, so this currently measures only\nthe UNREVIEWED queue — not money actually lost."
     valid_scopes = ("firm", "client", "composite")
     delta_good_when = "down"
 
@@ -326,7 +309,7 @@ class EffectiveRateMetric(Metric):
     """Effective hourly rate = revenue / billable hours."""
     label = "Effective Rate"
     format = "currency_0dp"
-    tooltip = "Total billing amount ÷ total billable hours. Your actual blended rate."
+    tooltip = "Effective Rate = billing amount ÷ billable hrs\n\nYour actual blended rate. It equals the standard rate\nexactly when every block bills at the firm default."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
     

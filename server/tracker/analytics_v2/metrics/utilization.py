@@ -38,7 +38,7 @@ def chargeable_qs(metric, org, scope, time):
 class BillableUtilizationMetric(Metric):
     label = "Capacity Utilization"
     format = "percent_1dp"
-    tooltip = "Billable hours ÷ available capacity × 100. NOTE: tracked time excludes idle/away time, so against a full wall-clock capacity this reads low — it's a secondary signal. See Utilization (billable ÷ tracked) for the headline efficiency number. Capacity = each person's weekly hours (Settings → Cost Tiers)."
+    tooltip = "Capacity Util = billable hrs ÷ scheduled capacity\n\nCapacity from each tier's weekly hours / work calendar.\nReads low by design: tracked time excludes idle."
     # in_band: too low = under-utilized, too high = burnout/can't sustain.
     # The band is resolved per-org from Organization.target_utilization in compute().
     threshold = ThresholdRange(low=75, high=85, direction="in_band")
@@ -122,9 +122,7 @@ class BillableMixMetric(Metric):
     utilization, which divides active time by wall-clock hours)."""
     label = "Utilization"
     format = "percent_1dp"
-    tooltip = ("Billable ÷ tracked (active) time. Of the time actually spent at "
-               "the computer, how much was billable. Idle/away time is excluded "
-               "from tracked time, so this is the true efficiency number.")
+    tooltip = "Utilization = billable hrs ÷ tracked hrs\n\nBoth sides: confirmed, active (idle excluded),\nchargeable staff only. Unreviewed time is in neither."
     threshold = ThresholdRange(low=55, high=75, direction="higher_is_better")
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
@@ -170,9 +168,7 @@ class BillableMixMetric(Metric):
 class BillableHoursMetric(Metric):
     label = "Billable Hours"
     format = "hours_1dp"
-    tooltip = ("Confirmed billable hours — the numerator of Utilization. Counts "
-               "chargeable staff only, so this divided by Total Hours equals the "
-               "Utilization tile.")
+    tooltip = "Billable Hours = numerator of Utilization\n\nConfirmed billable time of chargeable staff,\nincluding clients flagged as billable effort."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
 
@@ -189,9 +185,7 @@ class BillableHoursMetric(Metric):
 class TotalHoursMetric(Metric):
     label = "Total Hours"
     format = "hours_1dp"
-    tooltip = ("Confirmed active hours of chargeable staff (billable + non-billable) "
-               "— the denominator of Utilization. Idle/lock time and non-chargeable "
-               "admin/ops staff are excluded, so the row divides.")
+    tooltip = "Total Hours = denominator of Utilization\n\nConfirmed active time of chargeable staff.\nIdle/lock time and admin/ops staff excluded."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
 

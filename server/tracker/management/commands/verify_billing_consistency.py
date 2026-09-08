@@ -168,10 +168,21 @@ class Command(BaseCommand):
 def check_analytics_basis(org, start, end) -> bool:
     """Assert analytics' billable hours reconcile to billing_totals' for a window.
 
-    The two are not identical by construction: analytics also counts clients
-    flagged `counts_billable_utilization` (real productive effort that isn't
-    invoiced through the tool). That difference is measured and subtracted, and
-    what's left must be zero.
+    The two are not identical by construction, and both differences are
+    measured rather than tolerated:
+
+      + billable-effort clients   analytics counts clients flagged
+                                  `counts_billable_utilization` (real productive
+                                  effort not invoiced through the tool)
+      - non-chargeable staff      the utilization tiles report the chargeable
+                                  population only, so admin/ops billable time is
+                                  in billing_totals but not in the tile
+
+    analytics == billing_totals + billable_effort - non_chargeable, exactly.
+
+    The second term is why this can't be trusted on a single quiet day: an org
+    whose admin happened not to bill that day reconciles by accident. Run it
+    over a week or more.
     """
     from datetime import datetime, time as dtime, timezone as dtz
     from django.db.models import Sum
@@ -189,17 +200,27 @@ def check_analytics_basis(org, start, end) -> bool:
     end_utc = datetime.combine(end, dtime.min, tzinfo=dtz.utc) + timedelta(days=1)
     billing_h = compute_totals(org, start_utc, end_utc)["billable_hours"]
 
+    from tracker.analytics_v2.blocks import billable_q
+    from tracker.analytics_v2.cost_rates import non_utilization_user_ids
+
+    q = working_qs(Block.objects.filter(org=org, day__gte=start, day__lte=end), org)
+
     eff = billable_effort_client_ids(org)
     eff_h = 0.0
     if eff:
-        q = working_qs(
-            Block.objects.filter(org=org, day__gte=start, day__lte=end), org
-        ).filter(client_id__in=eff)
-        eff_h = (q.aggregate(s=Sum("minutes"))["s"] or 0) / 60.0
+        eff_h = (q.filter(client_id__in=eff)
+                  .aggregate(s=Sum("minutes"))["s"] or 0) / 60.0
 
-    residual = analytics_h - billing_h - eff_h
-    info(f"analytics {analytics_h:.2f}h − billing_totals {billing_h:.2f}h "
-         f"− billable-effort {eff_h:.2f}h = {residual:+.2f}h")
+    excl = non_utilization_user_ids(org)
+    nch_h = 0.0
+    if excl:
+        nch_h = (q.filter(billable_q(org)).filter(user_id__in=excl)
+                  .aggregate(s=Sum("minutes"))["s"] or 0) / 60.0
+
+    residual = analytics_h - billing_h - eff_h + nch_h
+    info(f"analytics {analytics_h:.2f}h \u2212 billing_totals {billing_h:.2f}h "
+         f"\u2212 billable-effort {eff_h:.2f}h + non-chargeable {nch_h:.2f}h "
+         f"= {residual:+.2f}h")
     # Tolerance covers each side's independent 2-dp rounding.
     if abs(residual) <= 0.25:
         ok(f"Analytics basis reconciles to billing_totals ({residual:+.2f}h)")

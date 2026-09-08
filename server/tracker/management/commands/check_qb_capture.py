@@ -2,8 +2,15 @@
 Is the QuickBooks company-FILE capture actually working in the field?
 
 READ-ONLY. Answers the one question that decides whether Stage 4.5 does
-anything: can the agent read the open .qbw path off qbw.exe's handle table on
-real machines, including files on a network share?
+anything: can the agent read the open .qbw path on real machines?
+
+Four mechanisms try, each blocked differently and each SILENTLY — the handle
+table (denied, because QuickBooks runs elevated and the agent does not), the
+command line (readable but empty, because companies are opened from inside a
+running QuickBooks), the file share (defeated by narrowing on a company name
+that is deliberately generic), and the shell's file-dialog MRU (the file the
+user PICKED, the one route elevation cannot block). This says which is
+working.
 
 That question cannot be answered on a dev machine without QuickBooks, and it
 cannot be answered by reading the code — psutil.open_files() may return
@@ -62,6 +69,7 @@ class Command(BaseCommand):
         share = Counter()        # what the share scan could see
         elev = Counter()         # is the agent elevated?
         recent = Counter()       # age of the freshest company file
+        mru = Counter()          # the shell file-dialog MRU — the file they PICKED
         named = 0
         reporting_hosts, qb_hosts = set(), set()
 
@@ -74,6 +82,9 @@ class Command(BaseCommand):
             if isinstance(rep, dict):
                 rd = rep.get('diag') or {}
                 elev[f"agent_is_admin={rd.get('admin', '?')}"] += 1
+                mru[(rd.get('mru', 'absent'), rd.get('mrunames', 'absent'),
+                     rd.get('mru_err'), rd.get('handles', 0),
+                     rd.get('cmd', 0))] += 1
                 for item in (rep.get('recent') or [])[:1]:
                     try:
                         recent[f"freshest_file_age_seconds={int(item.get('age')):,}"] += 1
@@ -151,6 +162,33 @@ class Command(BaseCommand):
                 "       publishes a fresh timestamp and the share route is dead.")
         if named:
             self.stdout.write(f"\n  events whose title carried a company name: {named:,}")
+
+        if mru:
+            self.stdout.write(
+                "\n  the shell file-dialog MRU — the file the user PICKED:")
+            for (m, names, err, handles, cmd), n in mru.most_common(6):
+                if handles:
+                    verdict = "WORKING — reading qbw.exe's open handles directly"
+                elif cmd:
+                    verdict = 'WORKING — the path is on the QuickBooks command line'
+                elif m == 'absent':
+                    verdict = ('OLD AGENT — this build predates the file-dialog '
+                               'reader (v1.7.22+); nothing to judge yet')
+                elif m == -1:
+                    verdict = ('NO REGISTRY KEY — QuickBooks is not using a shell '
+                               'dialog, so this route cannot work here')
+                elif not names:
+                    verdict = (f'KEY FOUND ({m} entries) but no filenames decoded '
+                               f'— the reader needs fixing, the idea is sound')
+                else:
+                    verdict = f'WORKING — {names} company filenames captured'
+                self.stdout.write(
+                    f"    {n:6,}x  mru={m} mrunames={names}"
+                    + (f" mru_err={err}" if err else ''))
+                self.stdout.write(f"            -> {verdict}")
+            self.stdout.write(
+                "    -> this is the one route elevation cannot block: the shell\n"
+                "       records the pick under the user's own hive, not QuickBooks'.")
 
         if share:
             self.stdout.write("\n  share scan (reads the drive, not the process):")

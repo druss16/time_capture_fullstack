@@ -152,9 +152,11 @@ class ProfitabilityLens(Lens):
         worked: dict[int, dict] = defaultdict(
             lambda: {"name": "", "cost": 0.0, "hours": 0.0, "est": 0.0}
         )
-        block_qs = (Block.objects
-                    .filter(org=org, day__gte=time.start, day__lte=time.end,
-                            is_billable=True, client__isnull=False)
+        from ..blocks import confirmed_qs
+        from tracker.services.billing_totals import billable_block_q
+        block_qs = (confirmed_qs(Block.objects
+                    .filter(org=org, day__gte=time.start, day__lte=time.end))
+                    .filter(billable_block_q(org))
                     .select_related("client"))
         for b in block_qs.only("client_id", "client__name", "minutes", "user_id",
                                "billing_amount", "billing_rate"):
@@ -241,9 +243,12 @@ class ProfitabilityLens(Lens):
         )
     
     def _service_breakdown_chart(self, org, scope, time) -> ChartCardPayload:
-        qs = (Block.objects
+        from ..blocks import confirmed_qs
+        from tracker.services.billing_totals import billable_block_q
+        qs = (confirmed_qs(Block.objects
               .filter(org=org, day__gte=time.start, day__lte=time.end,
-                      is_billable=True, client_id__in=scope.ids)
+                      client_id__in=scope.ids))
+              .filter(billable_block_q(org))
               .select_related("task_type"))
         
         by_service: dict[str, float] = defaultdict(float)
@@ -279,9 +284,12 @@ class ProfitabilityLens(Lens):
         default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
 
-        qs = (Block.objects
+        from ..blocks import confirmed_qs
+        from tracker.services.billing_totals import billable_block_q
+        qs = (confirmed_qs(Block.objects
               .filter(org=org, day__gte=time.start, day__lte=time.end,
-                      user_id__in=scope.ids, is_billable=True))
+                      user_id__in=scope.ids))
+              .filter(billable_block_q(org)))
         
         per_user: dict[int, dict] = defaultdict(lambda: {"revenue": 0.0, "hours": 0.0, "cost": 0.0})
         for b in qs.only("user_id", "minutes", "billing_amount", "billing_rate"):

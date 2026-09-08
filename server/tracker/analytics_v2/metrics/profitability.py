@@ -264,6 +264,11 @@ class RevenueLeakageMetric(Metric):
 
     leakage = worked_value_at_standard_rate − billed_value
       billed_value = invoiced revenue if imported, else value of COMMITTED blocks
+
+    BASIS: this is the one period metric that deliberately reads UNCONFIRMED
+    time as well (`confirmed=False`) — the unreviewed pile is exactly what
+    leaks. Every other metric here reports confirmed time only, matching Daily
+    Review and the timesheets.
     """
     label = "Revenue Leakage"
     format = "currency_0dp"
@@ -276,8 +281,12 @@ class RevenueLeakageMetric(Metric):
 
     def compute(self, org, scope, time):
         exclude_ids = flat_fee_client_ids(org) | non_billable_client_ids(org)
-        qs = (self._block_qs(org, scope, time, billable_only=True)
-              .filter(client__isnull=False)
+        # confirmed=False on purpose: leakage is the gap between time WORKED and
+        # time that will actually be billed, so the worked side has to include
+        # the unconfirmed pile. On the confirmed-only basis every other metric
+        # uses, worked and committed are the same set and leakage is always 0.
+        qs = (self._block_qs(org, scope, time, billable_only=True, confirmed=False)
+              .filter(deleted_at__isnull=True)
               .exclude(classification_state="suppressed"))
         if exclude_ids:
             qs = qs.exclude(client_id__in=exclude_ids)

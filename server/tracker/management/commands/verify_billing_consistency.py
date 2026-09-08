@@ -8,6 +8,11 @@ tracker.services.billing_totals, so this is the regression guard that they stay
 in agreement on real data. Run it after any change to the billing math, the
 today_time view, or the reports helpers.
 
+--analytics additionally checks that the Analytics screen counts the SAME time.
+Analytics used to read raw blocks and so billed suppressed, unconfirmed and
+clientless time that Daily Review refused — 13.4% of org 21's Q3 revenue. It now
+composes the same rules; this asserts the two stay reconciled.
+
 Usage
 -----
 # Today, first org found:
@@ -46,6 +51,9 @@ class Command(BaseCommand):
         parser.add_argument("--org", default=None, help="Org slug or id (default: first org found)")
         parser.add_argument("--date", default=None, help="Anchor day YYYY-MM-DD (default: today)")
         parser.add_argument("--days", type=int, default=1, help="Number of days back from --date to check")
+        parser.add_argument("--analytics", action="store_true",
+                            help="Also assert the Analytics screen counts the same time "
+                                 "as billing_totals over the --days window")
 
     def handle(self, *args, **opts):
         from tracker.models import Organization, OrganizationMembership, Block
@@ -114,8 +122,17 @@ class Command(BaseCommand):
         print(f"{BOLD}Checked {checked} user-days: "
               f"{GREEN}{passed} passed{RESET}, "
               f"{(RED if failed else GREEN)}{failed} failed{RESET}")
+
+        analytics_ok = True
+        if opts["analytics"]:
+            print()
+            info(f"{BOLD}Analytics basis{RESET} ({target_dates[-1]} → {target_dates[0]})")
+            analytics_ok = check_analytics_basis(org, target_dates[-1], target_dates[0])
+
         if failed:
             raise CommandError(f"{failed} user-day(s) disagree between Daily Review and Reports.")
+        if not analytics_ok:
+            raise CommandError("Analytics does not count the same time as billing_totals.")
 
     # ── Endpoint callers (authenticate AS the user → self scope) ─────────────
     def _today_time(self, factory, user, d):
@@ -146,3 +163,48 @@ class Command(BaseCommand):
             "review": row.get("uncategorized_hours", 0),
             "total": row.get("total_hours", 0),
         }
+
+
+def check_analytics_basis(org, start, end) -> bool:
+    """Assert analytics' billable hours reconcile to billing_totals' for a window.
+
+    The two are not identical by construction: analytics also counts clients
+    flagged `counts_billable_utilization` (real productive effort that isn't
+    invoiced through the tool). That difference is measured and subtracted, and
+    what's left must be zero.
+    """
+    from datetime import datetime, time as dtime, timezone as dtz
+    from django.db.models import Sum
+    from tracker.models import Block
+    from tracker.services.billing_totals import compute_totals
+    from tracker.analytics_v2.types import Scope, TimeRange
+    from tracker.analytics_v2.metrics.base import get_metric
+    from tracker.analytics_v2.blocks import billable_effort_client_ids, working_qs
+
+    scope = Scope(type="firm")
+    tr = TimeRange(start=start, end=end, label="verify")
+    analytics_h = get_metric("billable_hours").compute(org, scope, tr).value or 0.0
+
+    start_utc = datetime.combine(start, dtime.min, tzinfo=dtz.utc)
+    end_utc = datetime.combine(end, dtime.min, tzinfo=dtz.utc) + timedelta(days=1)
+    billing_h = compute_totals(org, start_utc, end_utc)["billable_hours"]
+
+    eff = billable_effort_client_ids(org)
+    eff_h = 0.0
+    if eff:
+        q = working_qs(
+            Block.objects.filter(org=org, day__gte=start, day__lte=end), org
+        ).filter(client_id__in=eff)
+        eff_h = (q.aggregate(s=Sum("minutes"))["s"] or 0) / 60.0
+
+    residual = analytics_h - billing_h - eff_h
+    info(f"analytics {analytics_h:.2f}h − billing_totals {billing_h:.2f}h "
+         f"− billable-effort {eff_h:.2f}h = {residual:+.2f}h")
+    # Tolerance covers each side's independent 2-dp rounding.
+    if abs(residual) <= 0.25:
+        ok(f"Analytics basis reconciles to billing_totals ({residual:+.2f}h)")
+        return True
+    fail(f"Analytics basis DIVERGED from billing_totals by {residual:+.2f}h — "
+         f"an analytics queryset is no longer composing "
+         f"blocks.confirmed_qs / billing_totals.billable_block_q")
+    return False

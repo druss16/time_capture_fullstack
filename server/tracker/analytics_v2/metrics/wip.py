@@ -67,8 +67,21 @@ def apply_scope(qs: QuerySet, scope: Scope) -> QuerySet:
 
 def wip_qs(org: Organization, scope: Scope | None = None,
            tier: str = TIER_BILLABLE_READY) -> QuerySet:
-    """Uninvoiced billable blocks for this scope, at the given accrual tier."""
-    qs = Block.objects.filter(org=org, invoiced=False, is_billable=True)
+    """Uninvoiced billable blocks for this scope, at the given accrual tier.
+
+    The accrual ladder below is WIP's own concept, so this does NOT apply the
+    committed-only rule the period metrics use — reporting unreviewed time as a
+    named tier is the point. It does apply the rest of the shared billing rule
+    (`services.billing_totals.billable_block_q`) plus the soft-delete guard, so
+    WIP is drawn from the same population as revenue: no deleted rows, no
+    internal work, and nothing without a client — you cannot invoice an hour
+    that isn't attached to anybody.
+    """
+    from tracker.services.billing_totals import billable_block_q
+
+    qs = (Block.objects
+          .filter(org=org, invoiced=False, deleted_at__isnull=True)
+          .filter(billable_block_q(org)))
 
     if tier == TIER_BILLABLE_READY:
         qs = qs.filter(Q(classification_state__in=COMMITTED_STATES) | Q(approved=True))

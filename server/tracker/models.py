@@ -72,6 +72,17 @@ class Organization(models.Model):
         default=Decimal('75.00'),
         help_text="Default hourly employee cost (for margin calculations)"
     )
+    payroll_burden_multiplier = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        help_text=(
+            "Multiplier applied to every cost rate to turn a raw wage into a "
+            "loaded cost — payroll taxes, benefits, PTO, occupancy. 1.00 means "
+            "the rates you entered are already fully loaded. Firms typically "
+            "run 1.15-1.40; at 1.25 a $25/hr wage costs the firm $31.25/hr."
+        ),
+    )
     wip_auto_relief = models.BooleanField(
         default=False,
         help_text=(
@@ -3208,29 +3219,42 @@ class Timesheet(models.Model):
         
         return True, None
     
-    def recalculate_totals(self):
+    def recalculate_totals(self, commit=True):
         """
         Recalculate totals from linked blocks.
         Call this after blocks are added/modified.
+
+        `commit=False` populates the fields in memory without saving, so a
+        caller can compare current vs recomputed values — that's what the
+        backfill command's dry run reads.
         """
         from django.db.models import Sum, Case, When, F, DecimalField
         from decimal import Decimal
-        
-        blocks = self.blocks.all()
-        
-        # Sum up minutes and convert to hours
+        from tracker.services.billing_totals import (
+            apply_confirmed_rules, billable_block_q,
+        )
+
+        # Same rules as Daily Review, Reports and Analytics. This used to
+        # aggregate self.blocks.all() with a bare is_billable=True, so a
+        # timesheet's stored billable_hours counted suppressed time, unconfirmed
+        # proposals, and time with no client. The approvals list reads this
+        # field, so managers were approving one number while every other screen
+        # showed another.
+        blocks = apply_confirmed_rules(self.blocks.all())
+        bill_q = billable_block_q(self.org)
+
         totals = blocks.aggregate(
             total_mins=Sum('minutes'),
             billable_mins=Sum(
                 Case(
-                    When(is_billable=True, then=F('minutes')),
+                    When(bill_q, then=F('minutes')),
                     default=0,
                     output_field=models.IntegerField()
                 )
             ),
             total_amt=Sum(
                 Case(
-                    When(is_billable=True, then=F('minutes') * F('billing_rate') / 60),
+                    When(bill_q, then=F('minutes') * F('billing_rate') / 60),
                     default=Decimal('0'),
                     output_field=DecimalField(max_digits=12, decimal_places=2)
                 )
@@ -3242,7 +3266,10 @@ class Timesheet(models.Model):
         self.non_billable_hours = self.total_hours - self.billable_hours
         self.total_amount = totals['total_amt'] or Decimal('0.00')
         
-        self.save(update_fields=['total_hours', 'billable_hours', 'non_billable_hours', 'total_amount', 'updated_at'])
+        if commit:
+            self.save(update_fields=['total_hours', 'billable_hours',
+                                     'non_billable_hours', 'total_amount',
+                                     'updated_at'])
     
     def _holds_misfiled_time(self):
         """True if this week's confirmed time is booked to the wrong client.

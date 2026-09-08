@@ -28,11 +28,28 @@ from .helpers import column, kpi_tile
 _HERO_METRICS = [
     "revenue",              # recognized revenue (hourly + retainers)
     "gross_margin",         # profit after the labor that did the work
-    "operating_margin",     # after overhead too (diverges once admin tier flagged)
     "effective_rate",       # true $/hour earned
     "billable_mix",         # billable share of tracked (active) time — headline utilization
-    "revenue_leakage",      # worked-but-unbilled value (our wedge)
 ]
+
+# Deliberately NOT in the hero row. Both still compute, and both are still
+# registered metrics a lens or saved view can ask for — they're withheld from
+# the default dashboard because for a firm in this state they mislead:
+#
+#   operating_margin  Its "overhead" is only the wages of staff in tiers marked
+#                     non-chargeable. No firm ever enters rent, software,
+#                     insurance or payroll-service cost, because the model has
+#                     nowhere to put them. At org 21 that made "the bottom line
+#                     after the cost of running the firm" one admin's wages.
+#                     Bring it back when real firm expenses exist.
+#
+#   revenue_leakage   leakage = worked − billed, and `billed` falls back to
+#                     COMMITTED value when no invoices are imported. With zero
+#                     invoices it therefore measures the unreviewed queue and
+#                     nothing else — it cannot read high, so a small number
+#                     reads as reassurance about billing that was never tested.
+#                     Bring it back once invoices are imported.
+_WITHHELD_METRICS = ["operating_margin", "revenue_leakage"]
 
 _BILLING_TYPE_LABEL = {
     "hourly": "Hourly",
@@ -138,7 +155,8 @@ class ProfitabilityLens(Lens):
         from ..cost_rates import cost_rate_map, bill_rate_map
         cost_rates = cost_rate_map(org)
         bill_rates = bill_rate_map(org)
-        default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        from ..cost_rates import default_cost_rate
+        default_cost = default_cost_rate(org)
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
 
         # Per-client billing type (hourly / flat_fee / non_billable)
@@ -281,7 +299,8 @@ class ProfitabilityLens(Lens):
         from ..cost_rates import cost_rate_map, bill_rate_map
         cost_rates = cost_rate_map(org)
         bill_rates = bill_rate_map(org)
-        default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        from ..cost_rates import default_cost_rate
+        default_cost = default_cost_rate(org)
         default_rate = to_float(getattr(org, "billing_rate_default", 0))
 
         from ..blocks import confirmed_qs

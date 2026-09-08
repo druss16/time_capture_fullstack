@@ -42,6 +42,11 @@ from tracker.services.classification_service import (
 )
 
 # A block whose client a PERSON chose. Never re-decide these.
+#
+# `approved_by` counts too, and is checked separately: org 21 has 28,813
+# approved blocks — essentially the whole dataset — because approval is mostly
+# applied in bulk with no approver recorded. So `approved` alone does NOT mean
+# a human vouched for the client, but a NAMED approver does.
 HUMAN_SOURCES = {'manual', 'correction', 'user_edit', 'user'}
 
 # Signals that identify a client on their own — mirrors the Stage-11 gate, so a
@@ -85,7 +90,8 @@ class Command(BaseCommand):
         skipped_human = 0
 
         for block in blocks:
-            if (block.state_changed_by or '') in HUMAN_SOURCES:
+            if ((block.state_changed_by or '') in HUMAN_SOURCES
+                    or block.approved_by_id is not None):
                 skipped_human += 1
                 continue
 
@@ -140,7 +146,8 @@ class Command(BaseCommand):
                 continue  # the text does name one, and naming it was safe
             reopens.append((block, lookalikes.rank(candidates, words), words))
 
-        self._report(blocks, corrections, reopens, skipped_human, names, apply_changes)
+        self._report(blocks, corrections, reopens, skipped_human, names,
+                     opts['reopen_ambiguous'])
 
         if not apply_changes:
             self.stdout.write(self.style.WARNING(
@@ -203,12 +210,13 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------ report
 
-    def _report(self, blocks, corrections, reopens, skipped_human, names, apply_changes):
+    def _report(self, blocks, corrections, reopens, skipped_human, names,
+                reopen_requested):
         w = self.stdout.write
         mins = lambda rows: sum((r[0].minutes or 0) for r in rows)  # noqa: E731
 
         w(f"\nscanned {len(blocks)} attributed blocks "
-          f"({skipped_human} skipped — a person had already decided them)")
+          f"({skipped_human} skipped — a person had already decided or approved them)")
         w(f"\nCORRECT  {len(corrections):5d} blocks  {mins(corrections) / 60:7.1f} h "
           f"— the title names a different client than the one they're booked to")
         pairs = Counter()
@@ -217,6 +225,12 @@ class Command(BaseCommand):
         for (was, now), m in pairs.most_common(20):
             w(f"    {m:6d}m  {was[:36]:36} -> {now}")
 
+        if not reopen_requested:
+            # Without the flag this phase never ran. Printing "REOPEN 0 blocks"
+            # reads as "nothing to reopen", which is the opposite of the truth.
+            w('\nREOPEN   not requested — pass --reopen-ambiguous to also send '
+              'blocks nothing can identify back for a pick')
+            return
         w(f"\nREOPEN   {len(reopens):5d} blocks  {mins(reopens) / 60:7.1f} h "
           f"— nothing identifies which client; would go back for a pick")
         by_title = defaultdict(int)
@@ -247,7 +261,13 @@ class Command(BaseCommand):
                 block.proposed_signals = signals
                 block.client_id = target
                 block.state_changed_by = 'backfill_lookalike'
-                block.save(update_fields=[
+                # Block.save() refuses to touch a "protected" block, which is
+                # anything categorized/approved/locked — i.e. every committed
+                # block there is. force_classifier is the documented path for a
+                # classifier-driven correction to a committed block, and is what
+                # ClassificationService.apply() uses; it still refuses anything
+                # outside captured/proposed/committed.
+                block.save(force_classifier=True, update_fields=[
                     'client_id', 'state_changed_by', 'proposed_signals',
                 ])
 
@@ -277,7 +297,7 @@ class Command(BaseCommand):
                     'The title names a group of look-alike clients but not which one'
                 )
                 block.state_changed_by = 'backfill_lookalike'
-                block.save(update_fields=[
+                block.save(force_classifier=True, update_fields=[
                     'proposed_signals', 'classification_state', 'needs_review',
                     'review_reason', 'state_changed_by',
                 ])

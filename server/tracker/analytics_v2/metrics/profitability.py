@@ -120,7 +120,8 @@ class LaborCostMetric(Metric):
     def compute(self, org, scope, time):
         qs = self._block_qs(org, scope, time, billable_only=True)
         rates = _cost_rates_map(org)
-        default = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        from ..cost_rates import default_cost_rate
+        default = default_cost_rate(org)
         
         total = 0.0
         for b in qs.only("minutes", "user_id"):
@@ -182,7 +183,8 @@ class OverheadCostMetric(Metric):
         # ALL tracked time of overhead staff (not billable_only) × cost rate.
         qs = self._block_qs(org, scope, time).filter(user_id__in=overhead_ids)
         rates = _cost_rates_map(org)
-        default = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        from ..cost_rates import default_cost_rate
+        default = default_cost_rate(org)
         total = 0.0
         for b in qs.only("minutes", "user_id"):
             total += (to_float(b.minutes) / 60.0) * rates.get(b.user_id, default)
@@ -215,7 +217,8 @@ class OperatingMarginMetric(Metric):
         from ..cost_rates import non_utilization_user_ids
         overhead_ids = non_utilization_user_ids(org)
         rates = _cost_rates_map(org)
-        default = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+        from ..cost_rates import default_cost_rate
+        default = default_cost_rate(org)
 
         # Direct labor = billable cost of CHARGEABLE staff (exclude overhead
         # staff so their time isn't double-counted — it's in overhead below).

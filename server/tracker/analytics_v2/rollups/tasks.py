@@ -62,7 +62,8 @@ def _rollup_client_daily_for_org_date(org: Organization, target_date: date) -> i
     from ..cost_rates import cost_rate_map, bill_rate_map
     cost_rates = cost_rate_map(org, as_of=target_date)
     bill_rates = bill_rate_map(org)
-    default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+    from ..cost_rates import default_cost_rate
+    default_cost = default_cost_rate(org)
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     
     # Aggregate blocks by client
@@ -171,7 +172,8 @@ def _rollup_staff_daily_for_org_date(org: Organization, target_date: date) -> in
     from ..cost_rates import cost_rate_map, bill_rate_map
     cost_rates = cost_rate_map(org, as_of=target_date)
     bill_rates = bill_rate_map(org)
-    default_cost = to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+    from ..cost_rates import default_cost_rate
+    default_cost = default_cost_rate(org)
     default_rate = to_float(getattr(org, "billing_rate_default", 0))
     
     by_user: dict[int, dict] = defaultdict(lambda: {

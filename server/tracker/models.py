@@ -72,6 +72,17 @@ class Organization(models.Model):
         default=Decimal('75.00'),
         help_text="Default hourly employee cost (for margin calculations)"
     )
+    payroll_burden_multiplier = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        help_text=(
+            "Multiplier applied to every cost rate to turn a raw wage into a "
+            "loaded cost — payroll taxes, benefits, PTO, occupancy. 1.00 means "
+            "the rates you entered are already fully loaded. Firms typically "
+            "run 1.15-1.40; at 1.25 a $25/hr wage costs the firm $31.25/hr."
+        ),
+    )
     wip_auto_relief = models.BooleanField(
         default=False,
         help_text=(

@@ -21,6 +21,19 @@ def _to_float(v) -> float:
         return 0.0
 
 
+def default_cost_rate(org) -> float:
+    """The org's blended fallback cost rate, carrying the same payroll burden
+    that `cost_rate_map` applies to per-person rates.
+
+    Metrics resolve a person's cost as ``rates.get(uid, default)``. If the
+    default skipped the burden, an unmapped member would be costed on a
+    different basis than everyone else — cheaper, and silently so.
+    """
+    rate = _to_float(getattr(org, "cost_rate_default", 75.0)) or 75.0
+    burden = _to_float(getattr(org, "payroll_burden_multiplier", 1) or 1) or 1.0
+    return rate * burden
+
+
 def cost_rate_map(org, as_of=None) -> dict[int, float]:
     """Return {user_id: resolved_cost_rate} for an org.
 
@@ -66,6 +79,16 @@ def cost_rate_map(org, as_of=None) -> dict[int, float]:
         in_force = next((e for e in ers if e.effective_date <= as_of), None)
         # ers is newest-first, so the last entry is the earliest rate on file.
         rates[uid] = _to_float((in_force or ers[-1]).cost_rate)
+
+    # 0) Payroll burden. Firms enter what payroll pays — a raw hourly wage —
+    # which is not what an hour of that person costs the firm. Rather than ask
+    # every firm to pre-multiply (and silently rot when wages change), the
+    # assumption lives on the org as one number and is applied here, in the one
+    # resolver every cost calculation already goes through. 1.00 is a no-op, so
+    # firms that entered genuinely loaded rates are unaffected.
+    burden = _to_float(getattr(org, "payroll_burden_multiplier", 1) or 1)
+    if burden and burden != 1.0:
+        rates = {uid: r * burden for uid, r in rates.items()}
 
     return rates
 

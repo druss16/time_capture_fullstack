@@ -42,6 +42,32 @@ export type SplitSlice = {
   suggested_category?: string;
 };
 
+/** One choice offered on an ambiguous group's picker. */
+export type AmbiguousCandidate = {
+  client_id: number;
+  client_name: string;
+  /** Just the deciding part of the name ("Hamilton") — the shared part is
+   *  already on screen in the title above the buttons. */
+  short_name: string;
+  /** This user worked the client recently; it sorts first and shows a marker. */
+  recent: boolean;
+};
+
+/** A run of blocks whose title names a GROUP of look-alike clients but not
+ *  which one — a dozen org-21 QuickBooks files are all named "St. Mary's
+ *  Church". Folded into one row per work session so a single pick settles the
+ *  whole sitting instead of asking the same question a dozen times. */
+export type AmbiguousGroup = {
+  block_ids: number[];
+  window_title: string;
+  minutes: number;
+  block_count: number;
+  start: string;
+  end: string;
+  category: string;
+  candidates: AmbiguousCandidate[];
+};
+
 /** A committed block whose activities point at 2+ clients → offer a split. */
 export type SplitCandidate = {
   block_id: number;
@@ -87,6 +113,7 @@ export type Lanes = {
     pending: ProposedInline[];  // guessed + no-guess, minutes desc
     mismatch: MismatchBlock[];  // minutes desc
     split: SplitCandidate[];    // multi-client blocks to split, minutes desc
+    ambiguous: AmbiguousGroup[]; // "which St. Mary's?" picks, minutes desc
     count: number;
     minutes: number;
   };
@@ -214,10 +241,15 @@ export function deriveLanes(
   mismatchBlocks: MismatchBlock[],
   ignored: Set<string>,
   splitCandidates: SplitCandidate[] = [],
+  ambiguousGroups: AmbiguousGroup[] = [],
 ): Lanes {
   // Active (non-ignored) mismatches, indexed by the block they flag.
   const activeMismatch = mismatchBlocks.filter((m) => !ignored.has(String(m.block_id)));
   const activeSplit = splitCandidates.filter((s) => !ignored.has(String(s.block_id)));
+  // A group is dismissed as a unit, keyed on its first block.
+  const activeAmbiguous = ambiguousGroups.filter(
+    (g) => !ignored.has(String(g.block_ids[0])),
+  );
   // Blocks pulled out of the Certain browse (shown in Needs-you instead).
   const pulledIds = new Set<number>([
     ...activeMismatch.map((m) => m.block_id),
@@ -339,10 +371,14 @@ export function deriveLanes(
   const pending = [...proposedInline].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const mismatch = [...activeMismatch].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const split = [...activeSplit].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+  const ambiguous = [...activeAmbiguous].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+  // Ambiguous blocks are `proposed`, so they never sat in the Certain browse
+  // and nothing has to be pulled back out of a client's total for them.
   const needsMinutes =
     pending.reduce((s, p) => s + (p.minutes || 0), 0) +
     mismatch.reduce((s, m) => s + (m.minutes || 0), 0) +
-    split.reduce((s, x) => s + (x.minutes || 0), 0);
+    split.reduce((s, x) => s + (x.minutes || 0), 0) +
+    ambiguous.reduce((s, g) => s + (g.minutes || 0), 0);
 
   return {
     certain: {
@@ -356,7 +392,8 @@ export function deriveLanes(
       pending,
       mismatch,
       split,
-      count: pending.length + mismatch.length + split.length,
+      ambiguous,
+      count: pending.length + mismatch.length + split.length + ambiguous.length,
       minutes: needsMinutes,
     },
   };

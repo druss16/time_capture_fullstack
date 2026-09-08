@@ -4821,6 +4821,46 @@ def today_time(request):
         mismatch_blocks = []
         split_candidates = []
 
+    # ── Ambiguous groups: the title names a GROUP of look-alike clients ──
+    # Stage 11 refuses to auto-commit a client the block's own text can't single
+    # out (a dozen org-21 QuickBooks files are all named "St. Mary's Church")
+    # and leaves the candidates on the block. Here those blocks are folded into
+    # work sessions so one pick settles a whole sitting instead of asking the
+    # same question a dozen times. Defensive like the scans above — a hiccup
+    # here must never take down Daily Review.
+    ambiguous_groups = []
+    try:
+        from tracker.services.ambiguous_groups import build_groups, SIGNAL_TYPE
+        _amb = [
+            _b for _b in Block.objects.filter(
+                org=org, user=user, start__gte=start_utc, start__lt=end_utc,
+                classification_state='proposed',
+            ).only(
+                'id', 'user_id', 'window_title', 'title', 'minutes', 'start',
+                'end', 'category_hours', 'proposed_signals',
+            )[:300]
+            if any(
+                isinstance(_s, dict) and _s.get('type') == SIGNAL_TYPE
+                for _s in (_b.proposed_signals or [])
+            )
+        ]
+        if _amb:
+            # This user's recently-worked clients, most recent first — decides
+            # which button lands leftmost.
+            _recent = []
+            for _cid in Block.objects.filter(
+                org=org, user=user, client__isnull=False,
+                start__lt=end_utc, classification_state='committed',
+            ).order_by('-start').values_list('client_id', flat=True)[:120]:
+                if _cid not in _recent:
+                    _recent.append(_cid)
+            _client_names = {
+                c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')
+            }
+            ambiguous_groups = build_groups(_amb, _client_names, _recent)
+    except Exception:
+        ambiguous_groups = []
+
     return Response({
         'clients':            result,
         'global_hours':       global_hours,
@@ -4833,6 +4873,7 @@ def today_time(request):
         'mismatch_flags':     mismatch_flags,
         'mismatch_blocks':    mismatch_blocks,
         'split_candidates':   split_candidates,
+        'ambiguous_groups':   ambiguous_groups,
 
     })
 

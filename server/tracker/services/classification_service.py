@@ -77,22 +77,36 @@ _PATH_NOISE_SEGMENTS = {
     'google drive', 'googledrive',
 }
 
-def _is_proper_contiguous_subsequence(short_toks, long_toks) -> bool:
-    """True iff `short_toks` appears as a CONTIGUOUS run inside `long_toks` and
-    is strictly shorter (proper containment).
+def _canonical_entity_tokens(tokens):
+    """Fold entity-class synonyms ("academy" -> "school") across a token set."""
+    return {ENTITY_CLASS_SYNONYMS.get(t, t) for t in tokens}
 
-    The substring-domination rule in Stage 3 uses this to decide when one
-    client's whole name is embedded inside a longer, more-specific client's
-    name (e.g. ['assumption','church'] inside ['saint','mary','of','the',
-    'assumption','church']). Contiguity + proper-length is deliberate: it must
-    NOT fire on shared-token OVERLAP (['sacred','heart','cicero'] vs
-    ['sacred','heart','rome']) or the same-family collision deferral would
-    collapse into a wrong pick.
+
+def _name_tokens(client) -> tuple:
+    """Split a client's name + aliases into ``(distinctive, entity)`` words.
+
+    ``distinctive`` — words that actually identify THIS client: "taberg",
+        "baldwinsville", "contracting". Structural filler and words the whole
+        roster shares ("church", "services", "complete") are dropped, so what
+        remains is what a piece of text must contain before it can be said to
+        name this client.
+    ``entity`` — the entity-class nouns ("church", "cemetery", "school",
+        "fund"). Too common to identify anyone on their own, but within a
+        family they are sometimes the only difference, so they are kept apart
+        rather than discarded.
     """
-    s, l = len(short_toks), len(long_toks)
-    if s == 0 or s >= l:
-        return False
-    return any(long_toks[i:i + s] == short_toks for i in range(l - s + 1))
+    entity_class = set().union(*EXCLUSIVE_ENTITY_CLASSES)
+    distinctive, entity = set(), set()
+    for raw in [client.name] + list(client.aliases or []):
+        for t in ClassificationService._normalize_name(raw or '').split():
+            if len(t) < 4 or t in ALIAS_STOP_WORDS or t in ALIAS_GENERIC_SUFFIXES:
+                continue
+            canon = ENTITY_CLASS_SYNONYMS.get(t, t)
+            if canon in entity_class:
+                entity.add(canon)
+            elif t not in DOMAIN_COMMON_WORDS:
+                distinctive.add(t)
+    return distinctive, entity
 
 
 def _is_office_protected_view(window_title) -> bool:
@@ -327,6 +341,7 @@ class ClassificationService:
         self.org = org
         self.user = user
         self._context_loaded = False
+        self._lookalikes = None  # Stage 11 look-alike roster, built on first use
 
         # Lazy-loaded context — populated on first classify() call
         self._clients: Optional[List] = None
@@ -474,7 +489,125 @@ class ClassificationService:
         if not skip_ai:
             self._stage_10_ai_inference(block, decision)
 
-        return self._finalize_decision(decision, block)
+        decision = self._finalize_decision(decision, block)
+
+        # Stage 11 — the evidence gate. Runs last, on the FINAL answer, and can
+        # only ever downgrade a commit to a proposal.
+        return self._gate_family_ambiguity(block, decision)
+
+    # Signals that identify a client from actual evidence rather than from
+    # context. Two kinds, and a block carrying either is not guessing:
+    #
+    #   * It knows WITHOUT the text — a QuickBooks company file path, a vendor
+    #     fingerprint inside the file, a firm routing rule, a calendar invite,
+    #     a mail thread. These name the parish the window title can't.
+    #   * It read the text and was sure — a Stage-3 title or file-path match.
+    #     Stage 3 runs its own same-family collision check and DEFERS rather
+    #     than picking when the text names a group, so a match that survives it
+    #     is not a coin flip. Re-gating those would stop "R&G Transportation
+    #     Servives LLC" (a typo'd but unmistakable title) to ask which
+    #     transportation company it is.
+    #
+    # What is left for the gate is exactly the void-fillers: agent stickiness,
+    # AI inference, temporal brackets, learned patterns, safe defaults.
+    IDENTIFYING_EVIDENCE_TYPES = frozenset({
+        'qb_company_file', 'qb_vendor_fingerprint', 'org_rule', 'tax_software',
+        'calendar', 'mail',
+        'title_match_domain', 'title_match_title_alias', 'title_match_file_path',
+    })
+
+    def _gate_family_ambiguity(self, block, decision: ClassificationDecision):
+        """
+        Refuse to auto-commit a client the evidence cannot single out.
+
+        A CPA firm with 30 parishes has a dozen QuickBooks files whose company
+        name reads exactly "St. Mary's Church". Stage 3 correctly declines to
+        pick one. The gap then gets filled by whatever runs next — agent
+        stickiness, AI inference, a temporal bracket — and the result commits at
+        0.85 with nothing behind it. Measured on org 21: 27% of all booked time,
+        1,366 blocks, committed without a single word of distinguishing
+        evidence, and nothing ever asked a human.
+
+        So when the block's own text names a GROUP of look-alike clients but
+        not which one, this proposes instead of committing and records the
+        candidates. Daily Review renders them as a one-tap pick.
+
+        Deliberately narrow, because the cost of asking is the user's attention:
+
+          * It only fires when the text names the group. A contentless block
+            ("Print Checks - Confirmation") has no candidates at all, so it is
+            never gated — it keeps inheriting the session's answer, which is
+            what makes the volume ~11 picks a day instead of 45.
+          * It never fires when some signal actually knows (see
+            UNAMBIGUOUS_EVIDENCE_TYPES) — a .qbw path or a vendor fingerprint
+            identifies the parish the title can't.
+          * It only downgrades. It never picks a different client, never
+            commits, and never touches a block another stage already resolved.
+        """
+        if decision.recommended_state != 'committed':
+            return decision
+        client_id = decision.client_id or next(
+            (s.proposed_client_id for s in decision.matched_signals
+             if s.proposed_client_id is not None), None)
+        if not client_id:
+            return decision
+        if any(s.type in self.IDENTIFYING_EVIDENCE_TYPES
+               and s.proposed_client_id == client_id
+               for s in decision.matched_signals):
+            return decision
+
+        try:
+            from tracker.services import client_families
+            # Memoized per service instance: one instance classifies many
+            # blocks, and re-fetching (and unpickling) the whole roster from
+            # the shared cache once per block would dominate the gate's cost.
+            if getattr(self, '_lookalikes', None) is None:
+                self._lookalikes = client_families.for_org(self.org.id)
+            lookalikes = self._lookalikes
+            words = client_families.text_words(
+                getattr(block, 'window_title', '') or getattr(block, 'title', '') or '',
+                getattr(block, 'file_path', '') or '',
+                getattr(block, 'url', '') or '',
+            )
+            candidates = lookalikes.candidates_for(words)
+            # Nothing to be confused with, or the block was filed somewhere the
+            # text never pointed (inherited context) — leave it alone.
+            if len(candidates) < 2 or client_id not in candidates:
+                return decision
+            # The text DOES single one out — that's evidence, not a guess.
+            if lookalikes.resolve(words) is not None:
+                return decision
+
+            ranked = lookalikes.rank(candidates, words)
+            decision.recommended_state = 'proposed'
+            decision.needs_review = True
+            decision.review_reason = (
+                'The title names a group of look-alike clients but not which one'
+            )
+            decision.matched_signals.append(Signal(
+                type='family_ambiguous',
+                strength=0.5,
+                evidence=(
+                    f"{len(candidates)} clients fit this text; nothing in it "
+                    f"says which"
+                ),
+                detail={
+                    'chosen_client_id': client_id,
+                    'candidate_client_ids': ranked,
+                    'candidate_labels': {
+                        str(c): lookalikes.short_name(c, words) for c in ranked
+                    },
+                },
+            ))
+            logger.info(
+                f"[STAGE-11-AMBIGUOUS] Block {getattr(block, 'pk', '?')}: "
+                f"{len(candidates)} look-alike clients fit "
+                f"{(getattr(block, 'window_title', '') or '')[:50]!r} -- "
+                f"proposing {client_id} instead of committing"
+            )
+        except Exception as e:  # never let the gate break classification
+            logger.warning(f"[STAGE-11-AMBIGUOUS] gate failed: {e}", exc_info=True)
+        return decision
 
     @transaction.atomic
     def apply(self, block, decision: ClassificationDecision, source: str = 'classifier'):
@@ -2034,48 +2167,80 @@ class ClassificationService:
             else []
         )
 
-        # SUBSTRING DOMINATION (v-specific-name-wins): when a shorter client's
-        # WHOLE name is embedded as a contiguous run inside a longer, more-
-        # specific client's name AND both matched, the longer client is the real
-        # subject — drop the embedded shorter one before the tie/clear-winner
-        # logic. Example: title "St Mary of the Assumption Church" matches both
-        # "Assumption Church" (169) and "St Mary of the Assumption Church" (395);
-        # since {assumption, church} is a contiguous run of {st, mary, of, the,
-        # assumption, church}, 169 is dropped and 395 wins.
+        # SPECIFICITY DOMINATION (v-specific-name-wins): when two clients both
+        # matched, and the text says everything it says about client A AND more
+        # about client B, A is the less specific reading of the same words —
+        # drop it before the tie / clear-winner logic. Example: title "St Mary
+        # of the Assumption Church" matches both "Assumption Church" (169,
+        # contributing {assumption}) and "St Mary of the Assumption" (395,
+        # contributing {assumption, mary}); {assumption} is a strict subset, so
+        # 169 is dropped and 395 wins.
         #
-        # Gated STRICTLY on proper contiguous token-subsequence containment
-        # (never shared-token overlap), so same-family collisions where no name
-        # contains another — "St Marys Church Jordan" vs "…Taberg", the Sacred
-        # Heart siblings (each has a unique 3rd token) — are untouched and still
-        # defer below. A short name that matched ALONE is never dropped: a
-        # container must be a DIFFERENT client that also matched.
+        # Gated STRICTLY on the text's own evidence, never on the client names
+        # in isolation. This matters in both directions:
+        #
+        #   * It FIRES where name-shape containment cannot. "St. Patrick's
+        #     Church-Taberg" matches client 130 (named the bare "St. Patrick's
+        #     Church" — contiguous at position 0, spec 1.0) and client 392 ("St
+        #     Patrick's Taberg" — scattered, spec 0.5). Neither name contains
+        #     the other, so the old contiguous-subsequence gate never fired and
+        #     the clear-winner shortcut handed the block to the wrong parish.
+        #     {patrick} ⊂ {patrick, taberg} drops 130 and 392 wins.
+        #
+        #   * It ABSTAINS where name shape alone would over-fire. On a bare
+        #     "Christ Our Hope Church" both 197 and 198 ("…-Boonville", which
+        #     carries 197's whole name as an alias) contribute exactly {christ,
+        #     hope} — "boonville" is nowhere in the text. Equal, not a subset,
+        #     so nothing is dropped and the genuine ambiguity still defers
+        #     instead of silently booking the parish next door. Same-family
+        #     collisions with no deciding word (Sacred Heart siblings, "St
+        #     Marys Church Jordan" vs "…Taberg") are likewise untouched.
+        #
+        # A client that matched ALONE is never dropped: a dominator must be a
+        # DIFFERENT client that also matched.
         if best_match_type in ('title_alias', 'file_path') and len(_active_hits) >= 2:
             _by_id = {c.id: c for c in self._clients}
-
-            def _names_n(cid):
-                c = _by_id.get(cid)
-                if not c:
-                    return []
-                raw = [c.name] + list(c.aliases or [])
-                out = []
-                for x in raw:
-                    n = self._normalize_name(x or '')
-                    if n:
-                        out.append(n.split())
-                return out
-
             _hit_ids = [cid for cid, _, _ in _active_hits]
+
+            # What each competing client's names CONTRIBUTED to this text.
+            # 130 ("St. Patrick's Church") contributes {patrick}; 392 ("St
+            # Patrick's Taberg") contributes {patrick, taberg}. Domain-common
+            # words ("saint", "church") are excluded — they are what the whole
+            # family shares and can never separate its members.
+            _dom_text = (title_surface if best_match_type == 'title_alias'
+                         else file_path_searchable)
+            _dom_toks = set(self._normalize_name(_dom_text or '').split())
+            _evidence = {
+                cid: self._text_evidence(_by_id[cid], _dom_toks)
+                for cid in _hit_ids if cid in _by_id
+            }
+
+            def _loses_to(a, b):
+                """Is client a's evidence strictly weaker than client b's?
+
+                Lexicographic: the distinctive core decides; entity-class words
+                only break a core tie. "St Patrick's Church-Taberg" -> 130's
+                core {patrick} is a strict subset of 392's {patrick, taberg},
+                so 130 loses. "St Peter's Cemetery" -> cores tie at {peter} and
+                the entity tier separates {} from {cemetery}, so the church
+                loses to the cemetery.
+                """
+                (ca, ea), (cb, eb) = _evidence[a], _evidence[b]
+                if ca != cb:
+                    return ca < cb
+                return ea < eb
+
             _dominated = set()
             for _a in _hit_ids:
-                a_names = _names_n(_a)
-                for _b in _hit_ids:
-                    if _b == _a:
-                        continue
-                    b_names = _names_n(_b)
-                    if any(_is_proper_contiguous_subsequence(an, bn)
-                           for an in a_names for bn in b_names):
-                        _dominated.add(_a)
-                        break
+                # A client contributing NO evidence at all is skipped, not
+                # dropped: the empty set is a subset of everything, so it would
+                # otherwise lose automatically to any other hit.
+                if _a not in _evidence or not any(_evidence[_a]):
+                    continue
+                if any(_b in _evidence and _b != _a and _loses_to(_a, _b)
+                       for _b in _hit_ids):
+                    _dominated.add(_a)
+
             if _dominated and len(_dominated) < len(_hit_ids):
                 _active_hits = [h for h in _active_hits if h[0] not in _dominated]
                 # Re-derive the winner from the surviving hits so best_* reflects
@@ -2327,7 +2492,13 @@ class ClassificationService:
             required in the no-space branch so "start"/"stone" are untouched
           - strip apostrophes ("Mary's" == "Marys")
           - stem possessive 's on 4+ char words ("theresas" -> "theresa")
-          - split punctuation/&/hyphens/brackets so distinctive tokens are reachable
+          - split punctuation/&/hyphens/underscores/brackets so distinctive
+            tokens are reachable. Underscores matter: this roster has clients
+            named "St Patricks_St Anthony_Chadwicks" and "CAMEZA_Champions
+            Fitness", and filenames like "St James_JULY 2026_Financials.xlsx"
+            glue the client name to the next word. Regex word characters
+            include the underscore, so without this the whole run stays one
+            unmatchable token.
           - collapse whitespace
         """
         import re
@@ -2336,10 +2507,39 @@ class ClassificationService:
         s = re.sub(r'\bmt\.?\s', 'mount ', s)
         s = re.sub(r'\bft\.?\s', 'fort ', s)
         s = s.replace("'", "").replace("’", "")
+        # Split separators BEFORE stemming, not after. Regex word characters
+        # include the underscore, so "St James_JULY" hides "james" inside one
+        # token: the possessive stemmer's trailing word boundary never fires
+        # and the client name "St. James Church" (which DOES stem, to "jame")
+        # no longer matches its own file. Splitting first keeps the stemmer
+        # symmetric across client names and block text.
+        s = re.sub(r'[.,()&/\\|:;!?"*–—_\-\[\]{}]+', ' ', s)
         s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
-        s = re.sub(r'[.,()&/\\|:;!?"*–—\-\[\]{}]+', ' ', s)
         s = re.sub(r'\s+', ' ', s).strip()
         return s
+
+    @staticmethod
+    def _text_evidence(client, text_tokens: set):
+        """
+        What this client's names CONTRIBUTED to a piece of matched text, as
+        ``(core, entity)`` — its distinctive and entity-class words (see
+        _name_tokens) narrowed to the ones the text actually contains.
+
+        Stage-3 specificity domination compares the two tiers
+        lexicographically: core decides, entity only breaks a core tie. Keeping
+        entity out of the first tier is load-bearing — otherwise the
+        boilerplate "Church" in client 130's name ("St. Patrick's Church")
+        counts against the sibling that actually owns the title, "St Patrick's
+        Taberg". Keeping it at all is equally load-bearing — "St Peter's
+        Church" and "St Peter's Cemetery" are two separate clients whose only
+        difference IS the head noun.
+
+        ``text_tokens`` must already be normalized via _normalize_name.
+        """
+        distinctive, entity = _name_tokens(client)
+        # Fold the text's entity words too, so a client named "…School" is
+        # credited by a file named "…Academy".
+        return distinctive & text_tokens, entity & _canonical_entity_tokens(text_tokens)
 
     @staticmethod
     def _alias_match_score(alias: str, haystack: str) -> float:
@@ -2559,13 +2759,15 @@ class ClassificationService:
         # so "St Mary's Church Cemetery" excludes the church client and keeps the
         # cemetery client. Pre-bracket only, so QB vendor-center names inside
         # " - [ ... ]" can't flip the head noun.
-        alias_class_tokens = set(alias_n.split())
+        alias_class_tokens = _canonical_entity_tokens(alias_n.split())
         _raw_bracket_pos = haystack.find(' - [')
         _pre_bracket_n = (
             _normalize(haystack[:_raw_bracket_pos])
             if _raw_bracket_pos > 0 else haystack_n
         )
-        _pre_bracket_tokens = _pre_bracket_n.split()
+        _pre_bracket_tokens = [
+            ENTITY_CLASS_SYNONYMS.get(t, t) for t in _pre_bracket_n.split()
+        ]
         for class_group in EXCLUSIVE_ENTITY_CLASSES:
             alias_classes = class_group & alias_class_tokens
             if not alias_classes:
@@ -2748,8 +2950,8 @@ class ClassificationService:
         # often has church + cemetery + fund as DIFFERENT accounting clients —
         # matching one to the other is always wrong.
         for class_group in EXCLUSIVE_ENTITY_CLASSES:
-            alias_classes = class_group & set(alias_tokens)
-            haystack_classes = class_group & haystack_token_set
+            alias_classes = class_group & _canonical_entity_tokens(alias_tokens)
+            haystack_classes = class_group & _canonical_entity_tokens(haystack_token_set)
             # If both sides have an entity class word from this group,
             # they must agree (be the same word). If they disagree,
             # reject.
@@ -5020,6 +5222,45 @@ class ClassificationService:
         if not client_id or confidence < 0.5:
             return None
 
+        # GROUNDING GATE: the model has to be able to POINT at the client it
+        # named. Stage 10 is handed a shortlist of client names and asked which
+        # one a window title belongs to, and it will always find a story — a
+        # File Explorer copy dialog titled "99% complete" was confidently
+        # (0.85) booked to "CNY Complete Contracting LLC" and auto-committed,
+        # because "complete" is a word in both. The deterministic matcher had
+        # already, correctly, abstained on that title.
+        #
+        # So require at least one word that actually identifies the chosen
+        # client to be present somewhere in the block's own evidence — its
+        # title, file path, url, or the co-open windows around it. Words the
+        # whole roster shares ("church", "services", "complete") don't count;
+        # _text_evidence already excludes them. An ungrounded pick is not
+        # demoted to a proposal — a moderate ai_client signal can still reach
+        # auto-commit by combining with the AI's own category signal — it is
+        # dropped, and the block falls through to the no-client path where a
+        # human decides.
+        _picked = next((c for c in self._clients if c.id == client_id), None)
+        if _picked is not None:
+            _primary, _context = self._build_haystack_segments(block)
+            _evidence_text = self._normalize_name(f'{_primary} {_context}')
+            _core, _ = self._text_evidence(_picked, set(_evidence_text.split()))
+            if not _core:
+                # Second chance for run-together text a token split can't reach:
+                # domains ("cnywebinnovations.com"), snake/camel filenames.
+                _collapsed = ''.join(ch for ch in _evidence_text if ch.isalnum())
+                _core = {
+                    t for t in _name_tokens(_picked)[0]
+                    if len(t) >= 5 and t in _collapsed
+                }
+            if not _core:
+                logger.info(
+                    f"[STAGE-10-UNGROUNDED] Block {getattr(block, 'pk', '?')}: "
+                    f"AI named {client_id} ({client_name!r}) at {confidence:.2f} "
+                    f"but no word identifying it appears in {title[:60]!r} "
+                    f"-- dropping the pick"
+                )
+                return None
+
         # Strength is the raw AI confidence, capped at 0.95 to leave room
         # for category signal combination via noisy-OR. AI client at 0.95
         # paired with AI category at 0.85 gives combined ~0.99, plenty
@@ -6387,6 +6628,19 @@ EXCLUSIVE_ENTITY_CLASSES = [
     # Business entity types
     {'inc', 'llc', 'cemetery', 'fund'},
 ]
+
+# Different words for the SAME entity class, folded before the class comparison.
+# A parish school is a separate client from its church (org 21 has 790
+# "St. Mary's Church Baldwinsville" and 791 "St. Mary's School Baldwinsville"),
+# but its files are named "St Mary Academy JUN26 P&L" — never "School". Folding
+# academy->school lets the school claim its own files AND excludes the church
+# from them. Adding "academy" to the exclusive group instead would do the
+# opposite: it would read as a class the school does NOT have, and reject 791
+# from its own balance sheet.
+ENTITY_CLASS_SYNONYMS = {
+    'academy': 'school',
+    'preschool': 'school',
+}
 
 DOMAIN_COMMON_WORDS = {
     # Religious

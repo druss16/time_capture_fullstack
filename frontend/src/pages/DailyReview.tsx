@@ -22,7 +22,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
 import NoTimeYet from "@/components/NoTimeYet";
 import { MatterPicker } from "@/components/MatterPicker";
-import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
+import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type AmbiguousGroup, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
 
@@ -183,6 +183,7 @@ type TodayTimeResponse = {
   mismatch_flags?: Record<string, string>;
   mismatch_blocks?: MismatchBlock[];
   split_candidates?: SplitCandidate[];
+  ambiguous_groups?: AmbiguousGroup[];
 };
 
 
@@ -353,6 +354,7 @@ export default function DailyReview() {
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [mismatchBlocks, setMismatchBlocks] = useState<MismatchBlock[]>([]);
   const [splitCandidates, setSplitCandidates] = useState<SplitCandidate[]>([]);
+  const [ambiguousGroups, setAmbiguousGroups] = useState<AmbiguousGroup[]>([]);
   // Optimistically-hidden block ids: as soon as a Needs You row is acted on we
   // drop it from the lanes so the user can keep confirming, WITHOUT waiting for
   // the (slow) today-time reload. Reconciled below once fresh data lands.
@@ -462,6 +464,7 @@ export default function DailyReview() {
     setProposedInline(json.proposed_inline || []);
     setMismatchBlocks(json.mismatch_blocks || []);
     setSplitCandidates(json.split_candidates || []);
+    setAmbiguousGroups(json.ambiguous_groups || []);
   }, []);
   // `background: true` runs the reload SILENTLY — it does NOT flip `busy`, so the
   // Needs You action buttons stay live and the user can keep confirming while
@@ -782,6 +785,7 @@ export default function DailyReview() {
       ...proposedInline.map((p) => p.block_id),
       ...mismatchBlocks.map((m) => m.block_id),
       ...splitCandidates.map((s) => s.block_id),
+      ...ambiguousGroups.flatMap((g) => g.block_ids),
     ]);
     setHiddenIds((prev) => {
       if (!prev.size) return prev;
@@ -795,7 +799,7 @@ export default function DailyReview() {
       prev.forEach((v, id) => { if (live.has(id)) next.set(id, v); });
       return next.size === prev.size ? prev : next;
     });
-  }, [proposedInline, mismatchBlocks, splitCandidates]);
+  }, [proposedInline, mismatchBlocks, splitCandidates, ambiguousGroups]);
 
   // ── Confidence lanes (single source for the header numbers + the body) ──────
   const lanes = useMemo(
@@ -806,11 +810,19 @@ export default function DailyReview() {
         ? mismatchBlocks.filter((m) => !hiddenIds.has(m.block_id)) : mismatchBlocks;
       const visibleSplit = hiddenIds.size
         ? splitCandidates.filter((s) => !hiddenIds.has(s.block_id)) : splitCandidates;
-      const base = deriveLanes(timeSummary, visiblePending, visibleMismatch, ignoredMismatch, visibleSplit);
+      // A group hides once ANY of its blocks is optimistically resolved — the
+      // pick applies to the whole session, so a partially-hidden group would
+      // flicker back as a smaller row before the reload lands.
+      const visibleAmbiguous = hiddenIds.size
+        ? ambiguousGroups.filter((g) => !g.block_ids.some((id) => hiddenIds.has(id)))
+        : ambiguousGroups;
+      const base = deriveLanes(
+        timeSummary, visiblePending, visibleMismatch, ignoredMismatch, visibleSplit, visibleAmbiguous,
+      );
       return optimisticConfirms.size
         ? mergeOptimisticConfirms(base, Array.from(optimisticConfirms.values())) : base;
     },
-    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, hiddenIds, optimisticConfirms],
+    [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, ambiguousGroups, hiddenIds, optimisticConfirms],
   );
   const needsYouCount = lanes.needsYou.count;
   const autoFiled = lanes.certain.minutes > 0;

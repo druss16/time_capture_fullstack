@@ -24,9 +24,11 @@ def _to_float(v) -> float:
 def cost_rate_map(org, as_of=None) -> dict[int, float]:
     """Return {user_id: resolved_cost_rate} for an org.
 
-    ``as_of`` (a date) bounds the per-person override to rates effective on or
-    before that day — used by the historical daily rollups. Tier assignment is
-    current-state in Phase 1 (not effective-dated).
+    ``as_of`` (a date) picks the per-person override in force on that day —
+    used by the historical daily rollups. If a person has overrides but none is
+    effective by ``as_of`` yet, their earliest rate is used rather than falling
+    back to the tier (see below). Tier assignment is current-state in Phase 1
+    (not effective-dated).
     """
     from tracker.models import EmployeeCostRate, OrganizationMembership
 
@@ -41,15 +43,29 @@ def cost_rate_map(org, as_of=None) -> dict[int, float]:
             rates[m.user_id] = _to_float(cr)
 
     # 1) Per-person override wins over the tier.
-    q = EmployeeCostRate.objects.filter(organization=org)
-    if as_of is not None:
-        q = q.filter(effective_date__lte=as_of)
-    seen: set[int] = set()
-    for er in q.order_by("user_id", "-effective_date"):
-        if er.user_id in seen:
+    #
+    # `as_of` picks the rate in force on that day. But a firm that enters its
+    # payroll for the first time stamps every rate with TODAY's effective date,
+    # and then every earlier day has no rate in force. Falling through to the
+    # tier rate there is worse than useless: org 21's partners would cost $200/h
+    # for July and August against a real $25, turning a +64.8% quarter into
+    # -53.0%. So when a person has overrides but none effective yet, we use
+    # their EARLIEST one rather than dropping to the tier placeholder.
+    #
+    # Effective-dating still does its job going forward: add a raise dated later
+    # and history before it keeps the older rate.
+    by_user: dict[int, list] = {}
+    for er in (EmployeeCostRate.objects.filter(organization=org)
+               .order_by("user_id", "-effective_date")):
+        by_user.setdefault(er.user_id, []).append(er)
+
+    for uid, ers in by_user.items():
+        if as_of is None:
+            rates[uid] = _to_float(ers[0].cost_rate)
             continue
-        seen.add(er.user_id)
-        rates[er.user_id] = _to_float(er.cost_rate)
+        in_force = next((e for e in ers if e.effective_date <= as_of), None)
+        # ers is newest-first, so the last entry is the earliest rate on file.
+        rates[uid] = _to_float((in_force or ers[-1]).cost_rate)
 
     return rates
 

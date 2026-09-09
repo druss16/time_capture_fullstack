@@ -2200,7 +2200,13 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   const [endDate, setEndDate] = useState(today);
   const [data, setData] = useState<DRResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // A true accordion: ONE client open at a time. Opening a client used to dump
+  // every user, every category and every sample activity at once, and with
+  // several clients held open the page became unreadable.
+  const [openClient, setOpenClient] = useState<string | null>(null);
+  // Users nested inside the open client, collapsed by default for the same
+  // reason. Keyed `${clientKey}:${userId}` so it survives switching clients.
+  const [openUsers, setOpenUsers] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     if (!filterOrg) { flash("Select a firm above first.", "err"); return; }
@@ -2211,7 +2217,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
       else { p.set("date", date); }
       const d: DRResponse = await apiFetch(`/mavops/daily-review/?${p.toString()}`);
       setData(d);
-      setExpanded(new Set());
+      setOpenClient(null);
+      setOpenUsers(new Set());
     } catch { flash("Failed to load daily review.", "err"); }
     finally { setLoading(false); }
   }, [apiFetch, flash, filterOrg, rangeMode, date, startDate, endDate]);
@@ -2219,7 +2226,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   // Auto-load when the firm changes (date changes require the Load button).
   useEffect(() => { if (filterOrg) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterOrg]);
 
-  const toggle = (key: string) => setExpanded(prev => {
+  const toggleClient = (key: string) => setOpenClient(prev => (prev === key ? null : key));
+  const toggleUser = (key: string) => setOpenUsers(prev => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
@@ -2337,11 +2345,11 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
           {data.clients.map(c => {
             const key = clientKey(c);
-            const isOpen = expanded.has(key);
+            const isOpen = openClient === key;
             const unassigned = c.client_id == null;
             return (
-              <div key={key} style={{ ...card, marginBottom: 8, padding: 0, overflow: "hidden", borderColor: unassigned ? T.yellow + "55" : T.border }}>
-                <div onClick={() => toggle(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", cursor: "pointer", background: unassigned ? T.yellow + "0e" : "transparent" }}>
+              <div key={key} style={{ ...card, marginBottom: 8, padding: 0, overflow: "hidden", borderColor: isOpen ? T.teal + "66" : unassigned ? T.yellow + "55" : T.border }}>
+                <div onClick={() => toggleClient(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", cursor: "pointer", background: isOpen ? T.surfaceHi : unassigned ? T.yellow + "0e" : "transparent" }}>
                   <span style={{ color: T.textMuted, fontSize: 12, width: 12 }}>{isOpen ? "▾" : "▸"}</span>
                   <span style={{ fontSize: 14, fontWeight: 600, color: unassigned ? T.yellow : T.text, fontStyle: unassigned ? "italic" as const : "normal" as const }}>
                     {c.client}{unassigned ? "  (unattributed)" : ""}
@@ -2356,13 +2364,22 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${T.border}`, padding: "6px 18px 14px 42px" }}>
-                    {c.users.map(u => (
-                      <div key={u.user_id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}55` }}>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                    {c.users.map(u => {
+                      const uKey = `${key}:${u.user_id}`;
+                      const uOpen = openUsers.has(uKey);
+                      const blocks = u.categories.reduce((n, cat) => n + (cat.block_count || 0), 0);
+                      return (
+                      <div key={u.user_id} style={{ padding: "4px 0", borderBottom: `1px solid ${T.border}55` }}>
+                        <div onClick={() => toggleUser(uKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", cursor: "pointer" }}>
+                          <span style={{ color: T.textMuted, fontSize: 11, width: 10 }}>{uOpen ? "▾" : "▸"}</span>
                           <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{u.name}</span>
                           <span style={{ ...mono, fontSize: 12, color: T.teal }}>{fmtH(u.total_hours)}</span>
+                          <div style={{ flex: 1 }} />
+                          <span style={{ ...mono, fontSize: 11, color: T.textMuted }}>
+                            {u.categories.length} categor{u.categories.length === 1 ? "y" : "ies"} · {blocks} block{blocks === 1 ? "" : "s"}
+                          </span>
                         </div>
-                        {u.categories.map((cat, i) => (
+                        {uOpen && u.categories.map((cat, i) => (
                           <div key={i} style={{ marginBottom: 6, paddingLeft: 12 }}>
                             <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12, ...mono }}>
                               <span style={{ color: T.purple }}>{cat.name}</span>
@@ -2388,7 +2405,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                           </div>
                         ))}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

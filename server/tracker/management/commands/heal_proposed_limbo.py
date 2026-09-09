@@ -37,6 +37,21 @@ Two modes:
            AI guessed on the non-conflicting blocks — including same-family client
            collisions — without a human check. Use with care.
 
+  evidenced (RECOMMENDED for a big pile): hybrid, but it reads the block's text
+           before trusting the client on it. A block whose title carries a word
+           that actually distinguishes its client from the look-alikes commits;
+           one whose title names a group ("St. Mary's Church", fourteen of them)
+           or names nobody is surfaced for a pick instead.
+
+           This is the difference the other two modes cannot express. On org 21's
+           3,300-block pile, `surface` asks a human about 88.8 h that is not in
+           dispute — the fastest way to train people to click without reading —
+           while `hybrid` bills 120.2 h to parishes nothing ever proved. Splitting
+           on evidence commits the 88.8 h and asks about the 120.2 h.
+
+           Uses the same scoring as `attribution_audit`, so the mode and the
+           report agree about what "evidenced" means.
+
 Human decisions are never touched: categorized_by IN ('manual','correction')
 and state_changed_by IN ('user','user_edit','correction') are skipped.
 
@@ -50,6 +65,10 @@ Usage:
   # Hybrid (auto-commit non-conflicting) — preview then apply
   python manage.py heal_proposed_limbo --org-id 21 --mode hybrid
   python manage.py heal_proposed_limbo --org-id 21 --mode hybrid --apply
+
+  # Commit only what the text backs; ask about the rest
+  python manage.py heal_proposed_limbo --org-id 21 --mode evidenced
+  python manage.py heal_proposed_limbo --org-id 21 --mode evidenced --apply
 
   # All orgs, or a single user
   python manage.py heal_proposed_limbo --apply
@@ -80,10 +99,12 @@ class Command(BaseCommand):
                             help='Only heal blocks with day >= this (YYYY-MM-DD)')
         parser.add_argument('--end', type=str, default=None,
                             help='Only heal blocks with day <= this (YYYY-MM-DD, inclusive)')
-        parser.add_argument('--mode', choices=['surface', 'hybrid'],
+        parser.add_argument('--mode', choices=['surface', 'hybrid', 'evidenced'],
                             default='surface',
-                            help="'surface' (default, nothing auto-billed) or "
-                                 "'hybrid' (auto-commit non-conflicting blocks)")
+                            help="'surface' (default, nothing auto-billed), "
+                                 "'hybrid' (auto-commit non-conflicting blocks), or "
+                                 "'evidenced' (auto-commit only the ones whose text "
+                                 "backs the client; surface the look-alike guesses)")
         parser.add_argument('--apply', action='store_true',
                             help='Write changes. Omit for a dry run (default).')
 
@@ -108,6 +129,47 @@ class Command(BaseCommand):
         if opts.get('end'):
             qs = qs.filter(day__lte=opts['end'])
         return qs
+
+    def _evidence_split(self, qs):
+        """(evidenced_ids, unevidenced_ids, minutes) for blocks that have a client.
+
+        Evidenced means the block's own text carries a word that distinguishes
+        the client it is booked to from the look-alikes it could be confused
+        with — the same scoring `attribution_audit` reports, so the mode and the
+        report can never disagree about what the word means.
+
+        Walked per block rather than in SQL because the question is about text,
+        not columns. keyset_iter because .iterator() dies on the Neon pooler.
+        """
+        from tracker.services import client_families
+        from tracker.services.attribution_audit import (
+            classify_block, AMBIGUOUS, NO_EVIDENCE,
+        )
+        from tracker.utils.db_iter import keyset_iter
+
+        rosters = {}
+        evidenced, unevidenced = [], []
+        minutes = {'evidenced': 0, 'unevidenced': 0}
+        for block in keyset_iter(qs, 400):
+            roster = rosters.get(block.org_id)
+            if roster is None:
+                roster = rosters[block.org_id] = client_families.for_org(block.org_id)
+            bucket = classify_block(block, roster)
+            if bucket in (AMBIGUOUS, NO_EVIDENCE):
+                unevidenced.append(block.id)
+                minutes['unevidenced'] += block.minutes or 0
+            else:
+                evidenced.append(block.id)
+                minutes['evidenced'] += block.minutes or 0
+        return evidenced, unevidenced, minutes
+
+    @staticmethod
+    def _update_in_chunks(model_qs, ids, **fields):
+        """`.update()` over an id list without building a 3,000-term IN clause."""
+        done = 0
+        for i in range(0, len(ids), 500):
+            done += model_qs.filter(id__in=ids[i:i + 500]).update(**fields)
+        return done
 
     def handle(self, *args, **opts):
         if opts.get('org_id'):
@@ -160,7 +222,23 @@ class Command(BaseCommand):
                 self.stdout.write(f"  org {row['org_id']}: {row['n']} blocks, "
                                   f"{row['m'] or 0} min")
 
-        if opts['mode'] == 'surface':
+        # `evidenced` splits B on what the text actually says, so it has to look
+        # at the blocks before it can report — the other two modes are pure SQL.
+        ev_ids = un_ids = None
+        if opts['mode'] == 'evidenced':
+            ev_ids, un_ids, split_m = self._evidence_split(has_client_no_conflict)
+            ev_m, un_m = split_m['evidenced'], split_m['unevidenced']
+            self.stdout.write(self.style.WARNING(
+                "\nevidenced mode — commits only what the text backs:"))
+            self.stdout.write(
+                f"  A ({gc_n}) -> SURFACE for review (is_categorized=False)\n"
+                f"  B-evidenced ({len(ev_ids)}, {ev_m} min / {ev_m/60:.1f} h) -> "
+                f"COMMIT under current client (billable now)\n"
+                f"  B-look-alike ({len(un_ids)}, {un_m} min / {un_m/60:.1f} h) -> "
+                f"SURFACE for a pick — the title names a group, not a member\n"
+                f"  C ({nc_n}) -> is_categorized=False, state='captured' "
+                f"(assign-a-client review)\n")
+        elif opts['mode'] == 'surface':
             self.stdout.write(self.style.WARNING(
                 "\nsurface mode — nothing auto-billed. All blocks routed to the "
                 "confirm/review queue:"))
@@ -195,7 +273,30 @@ class Command(BaseCommand):
 
         now = timezone.now()
         with transaction.atomic():
-            if opts['mode'] == 'surface':
+            if opts['mode'] == 'evidenced':
+                a = genuine_change.update(
+                    is_categorized=False,
+                    state_changed_by='admin_bulk', state_changed_at=now)
+                b_ok = self._update_in_chunks(
+                    has_client_no_conflict, ev_ids,
+                    classification_state='committed',
+                    categorized_by='ai', categorized_at=now,
+                    state_changed_by='admin_bulk', state_changed_at=now)
+                b_ask = self._update_in_chunks(
+                    has_client_no_conflict, un_ids,
+                    is_categorized=False,
+                    proposed_client_id=F('client_id'),
+                    state_changed_by='admin_bulk', state_changed_at=now)
+                c = no_client.update(
+                    is_categorized=False,
+                    classification_state='captured',
+                    state_changed_by='admin_bulk', state_changed_at=now)
+                self.stdout.write(self.style.SUCCESS(
+                    f"\n✅ Healed {a + b_ok + b_ask + c} blocks: committed {b_ok} "
+                    f"whose text backs the client (now billable), surfaced "
+                    f"{b_ask} look-alike guesses + {a} genuine-change + {c} "
+                    f"no-client for a human pick."))
+            elif opts['mode'] == 'surface':
                 a = genuine_change.update(
                     is_categorized=False,
                     state_changed_by='admin_bulk', state_changed_at=now)

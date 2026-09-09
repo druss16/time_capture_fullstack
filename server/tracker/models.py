@@ -84,11 +84,13 @@ class Organization(models.Model):
         ),
     )
     wip_auto_relief = models.BooleanField(
-        default=False,
+        default=True,
         help_text=(
-            "Nightly, apply synced invoices against uninvoiced WIP so WIP drains "
-            "as the firm bills (services/wip_relief.py). Off until the firm's "
-            "invoice feed is trusted — run the relieve_wip command dry first."
+            "Match imported invoices against uninvoiced time each night so WIP "
+            "falls when the firm bills. On by default — a firm has no reason to "
+            "want a WIP figure that only grows. Support can switch it off for an "
+            "org whose invoice feed is duplicating or misdated, while "
+            "`manage.py relieve_wip --org N` is run dry to check it."
         ),
     )
     target_utilization = models.DecimalField(

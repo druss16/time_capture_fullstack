@@ -6,6 +6,7 @@ import {
   SuggestRulesWizard,
   ExplainBlockModal,
 } from "./MavOpsAdminRules";
+import MavOpsCompanyReview from "./MavOpsCompanyReview";
 
 const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
@@ -2287,35 +2288,12 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
             <StatCard label="Needs Review" value={fmtH(data.totals.needs_review_hours)} color={data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted} />
           </div>
 
-          {/* ── Anomalies: titles that clearly name a different client than booked ── */}
-          {data.anomalies.length > 0 && (
-            <div style={{ ...card, marginBottom: 20, borderColor: T.red + "66", background: T.red + "0c" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                <span style={{ color: T.red, fontSize: 13, fontWeight: 700 }}>⚠ Anomalies</span>
-                <span style={{ ...mono, fontSize: 12, color: T.red }}>{data.anomaly_counts.client} client</span>
-                {data.anomaly_counts.internal > 0 && (
-                  <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>· {data.anomaly_counts.internal} internal</span>
-                )}
-                <span style={{ ...mono, fontSize: 11, color: T.textMuted }}>— title names a different client than the one it's booked to</span>
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
-                <tbody>
-                  {data.anomalies.map(a => (
-                    <tr key={a.block_id} style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "5px 8px", color: T.textMuted, whiteSpace: "nowrap" as const, verticalAlign: "top" }}>{a.user || "—"}</td>
-                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" as const, verticalAlign: "top" }}>
-                        <span style={{ color: T.text }}>{a.booked_client_name}</span>
-                        <span style={{ color: T.red, margin: "0 6px" }}>→</span>
-                        <span style={{ color: T.yellow }}>{a.looks_like_client_name}</span>
-                        {a.bucket === "internal" && <span style={{ color: T.textMuted, marginLeft: 6, fontSize: 10 }}>(internal)</span>}
-                      </td>
-                      <td style={{ padding: "5px 8px", color: T.textSub, verticalAlign: "top" }}>{a.window_title}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {/* Anomalies used to print a flat red table of every title-vs-booked
+              mismatch here. It is gone: the Needs You mode lists the same rows
+              across the whole firm AND fixes them in one click, and the
+              Mismatches tab already carries the standalone list. What stays is
+              the part only an audit can give you — the ⚠ badges below, which
+              show WHERE in the client rollup the suspect time is sitting. */}
 
           {/* ── Per-user summary ── */}
           {data.user_summary.length > 0 && (
@@ -2567,6 +2545,11 @@ export default function MavOpsAdmin() {
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
   const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping">("orgs");
+
+  // The Daily Review tab has two jobs: WORK the firm's queue ("Needs You" —
+  // every user's pending picks in one actionable list) or AUDIT what was
+  // already booked. Needs You leads, because that is the one that changes data.
+  const [drMode, setDrMode] = useState<"needs" | "audit">("needs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -3392,9 +3375,34 @@ export default function MavOpsAdmin() {
           <QboMappingTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
         )}
 
-        {/* ══ DAILY REVIEW (firm-wide accuracy audit) ══ */}
+        {/* ══ DAILY REVIEW — work the queue, or audit what was booked ══ */}
         {tab === "daily-review" && (
-          <DailyReviewTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+          <>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              {([["needs", "Needs You"], ["audit", "Audit"]] as const).map(([m, label]) => (
+                <button key={m} onClick={() => setDrMode(m)}
+                  style={{
+                    background: drMode === m ? T.teal + "22" : "transparent",
+                    border: `1px solid ${drMode === m ? T.teal : T.border}`,
+                    color: drMode === m ? T.teal : T.textSub,
+                    padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono,
+                  }}>
+                  {label}
+                </button>
+              ))}
+              <span style={{ color: T.textMuted, fontSize: 11.5, alignSelf: "center", ...mono }}>
+                {drMode === "needs"
+                  ? "every user's unclassified time in one list — changes are written as that user"
+                  : "read-only rollup of what is already booked, client by client"}
+              </span>
+            </div>
+
+            {drMode === "needs" ? (
+              <MavOpsCompanyReview apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+            ) : (
+              <DailyReviewTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+            )}
+          </>
         )}
       </div>
 

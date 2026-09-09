@@ -10,6 +10,7 @@ from . import views_day_review
 from . import views_capture_status
 from . import views_review_misfiled
 from . import views_outstanding_weeks
+from . import views_readiness
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -151,6 +152,7 @@ urlpatterns = [
     # Settings endpoints
     # -------------------------------
     path("settings/org/", views.settings_org, name="settings_org"),
+    path("settings/readiness/", views_readiness.setup_readiness, name="setup_readiness"),
     # path("settings/ai/", views.org_ai_settings, name="org_ai_settings"),
     path("settings/team/", views.settings_team_list, name="settings_team_list"),
     path("settings/cost-rates/", views.settings_cost_rates, name="settings_cost_rates"),

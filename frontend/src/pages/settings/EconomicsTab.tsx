@@ -2,7 +2,7 @@
 // One place for everything Analytics uses for revenue, cost, and margin:
 // tiers (main setup), per-client rate overrides, and firm-wide defaults.
 import { useEffect, useState } from 'react';
-import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag, CalendarDays, Gauge } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag, CalendarDays, Gauge, ClipboardCheck } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
@@ -12,6 +12,7 @@ import BillingRatesTab from './BillingRatesTab';
 import ClientFlatFeeTab from './ClientFlatFeeTab';
 import TaskTypeRatesTab from './TaskTypeRatesTab';
 import EngagementBudgetsTab from './EngagementBudgetsTab';
+import SetupReadiness from './SetupReadiness';
 import EconomicsImportModal from './EconomicsImportModal';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -122,6 +123,15 @@ export default function EconomicsTab({
 
       <div className="space-y-4">
         {/* Tiers — the main setup */}
+        <SettingsSection
+          {...acc('readiness')}
+          icon={<ClipboardCheck className="w-4 h-4 text-primary" />}
+          title="Setup checklist"
+          sub="What we have from you, and what's still missing."
+        >
+          <SetupReadiness />
+        </SettingsSection>
+
         <SettingsSection
           {...acc('tiers')}
           icon={<Layers className="w-4 h-4 text-primary" />}

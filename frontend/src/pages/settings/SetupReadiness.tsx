@@ -18,6 +18,8 @@ import { API_BASE, safeFetchJson } from '@/lib/api';
 
 interface Check {
   id: string;
+  tier: 'required' | 'optional' | 'health';
+  only_if?: string;
   title: string;
   status: 'ok' | 'partial' | 'missing';
   detail: string;
@@ -64,23 +66,30 @@ export default function SetupReadiness() {
   if (!data) return null;
 
   const { checks, summary } = data;
-  const outstanding = checks.filter(c => c.status !== 'ok');
-  const finished = checks.filter(c => c.status === 'ok');
+  // Split by tier, not just by status. An undifferentiated list makes everything
+  // look equally urgent and so makes nothing urgent.
+  const blocking  = checks.filter(c => c.tier === 'required' && c.status !== 'ok');
+  const optional  = checks.filter(c => c.tier === 'optional' && c.status !== 'ok');
+  const health    = checks.filter(c => c.tier === 'health');
+  const finished  = checks.filter(c => c.status === 'ok' && c.tier !== 'health');
 
   return (
     <div className="space-y-3">
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-semibold text-slate-900 tabular-nums">
-          {summary.done} of {summary.total} ready
+          {summary.done} of {summary.total} essentials done
         </span>
-        {summary.blocking > 0 && (
-          <span className="text-[12px] text-rose-600">
-            {summary.blocking} still {summary.blocking === 1 ? 'blocks' : 'block'} numbers you'd want to show a client
-          </span>
-        )}
+        {summary.blocking === 0
+          ? <span className="text-[12px] text-emerald-700">
+              Everything the numbers depend on is in.
+            </span>
+          : <span className="text-[12px] text-rose-600">
+              {summary.blocking} still {summary.blocking === 1 ? 'blocks' : 'block'} numbers
+              you'd want to show a client
+            </span>}
       </div>
 
-      {outstanding.map(c => {
+      {blocking.map(c => {
         const s = STYLE[c.status];
         return (
           <div key={c.id}
@@ -100,6 +109,49 @@ export default function SetupReadiness() {
           </div>
         );
       })}
+
+      {optional.length > 0 && (
+        <div className="pt-1">
+          <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-1.5">
+            Optional — only if you use it
+          </div>
+          {optional.map(c => (
+            <div key={c.id}
+                 className="rounded-lg border border-border/70 bg-white p-3 flex gap-3 mb-2">
+              <CircleDashed className="w-4 h-4 shrink-0 mt-0.5 text-slate-400" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-slate-800">
+                  {c.title}
+                  {c.only_if && (
+                    <span className="font-normal text-slate-400"> — if {c.only_if}</span>
+                  )}
+                </div>
+                <p className="text-[12.5px] text-slate-600 mt-0.5">{c.detail}</p>
+                <Link to={c.link}
+                      className="text-[12px] font-medium text-primary hover:underline mt-1.5 inline-block">
+                  {c.where} →
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {health.map(c => (
+        <div key={c.id}
+             className="rounded-lg border border-border/70 bg-slate-50 p-3 flex gap-3">
+          <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${
+            c.status === 'ok' ? 'text-emerald-600'
+            : c.status === 'partial' ? 'text-amber-600' : 'text-slate-500'}`} />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-slate-800">
+              {c.title}
+              <span className="font-normal text-slate-400"> — not a setup step</span>
+            </div>
+            <p className="text-[12.5px] text-slate-600 mt-0.5">{c.detail}</p>
+          </div>
+        </div>
+      ))}
 
       {finished.length > 0 && (
         <div className="rounded-lg border border-border/70 bg-white px-3 py-2">

@@ -12,6 +12,15 @@ wasn't that the data was missing; it was that its absence was invisible.
 Each check answers three questions in the firm's own terms: is this done, what
 does it unlock, and where do I go. Checks that pass say so briefly and get out
 of the way — this is a to-do list, not a dashboard.
+
+Checks are tiered, because an undifferentiated list makes everything look
+equally urgent and so makes nothing urgent. Only `required` items genuinely
+stop the product doing its job — for a firm that has rates and clients in, that
+is invoices and nothing else. `optional` items switch on a feature the firm may
+not use; a firm ignoring the Engagements tab forever is a legitimate way to run.
+`health` is not setup at all and cannot be fixed here — agent coverage belongs
+on the list because it caps every figure above it, but calling it a setup step
+would be a lie, since nobody completes it in Settings.
 """
 from __future__ import annotations
 
@@ -22,6 +31,7 @@ from rest_framework.response import Response
 from tracker.views_billing import get_user_org
 
 OK, PARTIAL, MISSING = "ok", "partial", "missing"
+REQUIRED, OPTIONAL, HEALTH = "required", "optional", "health"
 
 
 @api_view(["GET"])
@@ -47,6 +57,7 @@ def setup_readiness(request):
     n_inv = Invoice.objects.filter(org=org).count()
     checks.append({
         "id": "invoices",
+        "tier": REQUIRED,
         "title": "Import your invoices",
         "status": OK if n_inv else MISSING,
         "detail": (f"{n_inv:,} invoices imported."
@@ -71,6 +82,7 @@ def setup_readiness(request):
         missing = n_members - len(covered)
         checks.append({
             "id": "cost_rates",
+            "tier": REQUIRED,
             "title": "Set what each person costs",
             "status": OK if not missing else (PARTIAL if covered else MISSING),
             "detail": (f"{len(rated)} of {n_members} have their own rate; "
@@ -85,6 +97,7 @@ def setup_readiness(request):
         burden = Decimal(str(getattr(org, "payroll_burden_multiplier", 1) or 1))
         checks.append({
             "id": "burden",
+            "tier": REQUIRED,
             "title": "Say what payroll really costs",
             "status": OK if burden > 1 else MISSING,
             "detail": (f"Wages are multiplied by {burden:g} to cover taxes, "
@@ -106,7 +119,9 @@ def setup_readiness(request):
     if pairs:
         checks.append({
             "id": "engagement_budgets",
+            "tier": OPTIONAL,
             "title": "Enter what each job is worth",
+            "only_if": "you want the Engagements tab",
             "status": (OK if len(manual_pairs) == len(pairs)
                        else PARTIAL if manual_pairs else MISSING),
             "detail": (f"{len(manual_pairs)} of {len(pairs)} jobs have a fee you set. "
@@ -118,25 +133,16 @@ def setup_readiness(request):
             "link": "/settings?tab=economics",
         })
 
-    # ── 4. does billed work drain WIP ──────────────────────────────────────
-    checks.append({
-        "id": "wip_relief",
-        "title": "Let invoices drain WIP",
-        "status": OK if getattr(org, "wip_auto_relief", False) else MISSING,
-        "detail": ("Invoices are matched against uninvoiced time each night."
-                   if getattr(org, "wip_auto_relief", False) else
-                   "Off — so WIP will keep climbing even after you import "
-                   "invoices."),
-        "unlocks": "WIP that falls when you bill",
-        "where": "Settings → Economics → Firm defaults",
-        "link": "/settings?tab=economics",
-    })
+    # WIP auto-relief used to be a check here. It defaults on now and a firm has
+    # no reason to want it off, so putting it on a to-do list only invited
+    # someone to switch off a correct number. Support owns the exception.
 
     # ── 5. coverage: not config, but it caps everything above ──────────────
     cov = _coverage_pct(org)
     if cov is not None:
         checks.append({
             "id": "coverage",
+            "tier": HEALTH,
             "title": "Get the agent running everywhere",
             "status": OK if cov >= 80 else (PARTIAL if cov >= 50 else MISSING),
             "detail": (f"About {cov:.0f}% of scheduled hours are reaching the "
@@ -151,6 +157,7 @@ def setup_readiness(request):
     n_clients = Client.objects.filter(org=org, is_active=True).count()
     checks.append({
         "id": "clients",
+        "tier": REQUIRED,
         "title": "Have your client list in",
         "status": OK if n_clients else MISSING,
         "detail": f"{n_clients:,} active clients.",
@@ -159,13 +166,16 @@ def setup_readiness(request):
         "link": "/settings?tab=clients",
     })
 
-    done = sum(1 for c in checks if c["status"] == OK)
+    req = [c for c in checks if c["tier"] == REQUIRED]
     return Response({
         "checks": checks,
         "summary": {
-            "total": len(checks),
-            "done": done,
-            "blocking": sum(1 for c in checks if c["status"] == MISSING),
+            # "Ready" counts the required set only. Counting optional items in
+            # means a firm that has everything it needs still reads 5 of 7, and
+            # a checklist you can never finish is one people stop reading.
+            "total": len(req),
+            "done": sum(1 for c in req if c["status"] == OK),
+            "blocking": sum(1 for c in req if c["status"] != OK),
         },
     })
 

@@ -47,7 +47,7 @@ export default function EconomicsTab({
     onToggle: () => setOpenSection(s => (s === id ? null : id)),
   });
   const [form, setForm] = useState({
-    billing_rate_default: '150.00', cost_rate_default: '75.00', payroll_burden_multiplier: '1.00', wip_auto_relief: false, target_utilization: '75',
+    billing_rate_default: '150.00', cost_rate_default: '75.00', payroll_burden_multiplier: '1.00', target_utilization: '75',
     capacity_hours_per_week: '40',
   });
 
@@ -57,7 +57,6 @@ export default function EconomicsTab({
         billing_rate_default: orgInfo.billing_rate_default || '150.00',
         cost_rate_default: orgInfo.cost_rate_default || '75.00',
         payroll_burden_multiplier: orgInfo.payroll_burden_multiplier || '1.00',
-        wip_auto_relief: orgInfo.wip_auto_relief ?? false,
         target_utilization: orgInfo.target_utilization || '75',
         capacity_hours_per_week: orgInfo.capacity_hours_per_week || '40',
       });
@@ -287,27 +286,6 @@ export default function EconomicsTab({
                 </>
               )}
             </div>
-          )}
-
-          {isAdmin && (
-            <label className="mt-4 flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.wip_auto_relief}
-                onChange={e => setForm({ ...form, wip_auto_relief: e.target.checked })}
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
-              />
-              <span className="text-sm">
-                <span className="font-medium text-slate-800">
-                  Drain WIP automatically as invoices arrive
-                </span>
-                <span className="block text-[12px] text-slate-500 mt-0.5">
-                  Each night, imported invoices are matched against uninvoiced time so
-                  WIP goes down when you bill. Leave this off and WIP only ever grows —
-                  importing invoices won't move it.
-                </span>
-              </span>
-            </label>
           )}
 
           <button onClick={saveDefaults} disabled={saving} className={`${primaryBtnClass} mt-4`}>

@@ -25,7 +25,8 @@ from django.db.models import Sum
 from tracker.models import Block
 
 from ..types import (
-    DataTablePayload, InsightCardPayload, MetricState, Section, to_float,
+    ChartCardPayload, DataTablePayload, InsightCardPayload, MetricState,
+    Section, to_float,
 )
 from .base import Lens, register_lens
 from .helpers import column, headline_row
@@ -106,6 +107,28 @@ class ReviewLens(Lens):
         } for label, h, d, becomes in steps]
 
         kept = (billable / captured * 100) if captured else 0.0
+
+        # The funnel, as a shape. Five descending bars say "we bill a third of
+        # what we capture" faster than five rows of numbers do, and the table
+        # below carries the exact figures — chart for the shape, table for the
+        # arithmetic. Short labels because the y-axis is 120px and anything
+        # longer is silently truncated; the table holds the full wording.
+        chart = ChartCardPayload(
+            id="hours_funnel",
+            title="From captured to billable",
+            subtitle=f"{time.label} · each bar is what survives the step before it",
+            chart_type="horizontal_bar",
+            data=[
+                {"stage": "Captured", "hours": round(captured, 1)},
+                {"stage": "Active", "hours": round(no_idle, 1)},
+                {"stage": "Confirmed", "hours": round(confirmed, 1)},
+                {"stage": "Chargeable", "hours": round(chargeable, 1)},
+                {"stage": "Billable", "hours": round(billable, 1)},
+            ],
+            series=[{"key": "hours", "label": "Hours"}],
+            state=MetricState.READY if captured else MetricState.EMPTY,
+        )
+
         table = DataTablePayload(
             id="hours_waterfall",
             title="Where the hours went",
@@ -123,7 +146,7 @@ class ReviewLens(Lens):
         )
         return Section(
             id="waterfall", type="section", title="How The Hours Add Up",
-            collapsible=False, children=[table],
+            collapsible=False, children=[chart, table],
         )
 
     # ── 2. how much of the week we see ──────────────────────────────────────
@@ -163,6 +186,19 @@ class ReviewLens(Lens):
         capacity = sum(r["capacity_hours"] for r in rows)
         firm_cov = (tracked / capacity * 100) if capacity else 0.0
 
+        # Sorted worst-first, so the eye lands on the people whose work isn't
+        # reaching the system before it lands on anyone's percentage.
+        cov_chart = ChartCardPayload(
+            id="coverage_chart",
+            title="How much of each person's week we see",
+            subtitle=f"{firm_cov:.0f}% firm-wide · lowest coverage first",
+            chart_type="horizontal_bar",
+            data=[{"who": r["name"].split(" ")[0].split(" \u00b7")[0],
+                   "coverage": r["coverage"]} for r in rows],
+            series=[{"key": "coverage", "label": "Coverage %"}],
+            state=MetricState.READY,
+        )
+
         table = DataTablePayload(
             id="coverage_by_staff",
             title="How much of the week we see",
@@ -183,7 +219,7 @@ class ReviewLens(Lens):
         )
         return Section(
             id="coverage", type="section", title="What We Can And Can't See",
-            collapsible=False, children=[table],
+            collapsible=False, children=[cov_chart, table],
         )
 
     # ── 3. what these numbers are, and are not ──────────────────────────────

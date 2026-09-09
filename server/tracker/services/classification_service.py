@@ -528,6 +528,31 @@ class ClassificationService:
         'title_match_domain', 'title_match_title_alias', 'title_match_file_path',
     })
 
+    @classmethod
+    def _is_identifying(cls, signal) -> bool:
+        """Does this signal actually know who the client is?
+
+        Accepts a Signal or the plain dict form stored on the block, so the
+        runtime gate and the Daily Review payload ask the same question.
+
+        Its TYPE is usually enough, but not always: the desktop agent does its
+        own matching and reports the result as `agent_inference`, naming what
+        it used in `inference_evidence_sources`. An agent inference drawn from
+        the open QuickBooks company file is file evidence that happens to have
+        travelled through the agent — reading only the type calls it a guess,
+        gates the block, and Daily Review then shows the same block twice: once
+        as "which parish?" and once already answered at 0.88.
+        """
+        sig_type = signal.get('type') if isinstance(signal, dict) else signal.type
+        detail = (signal.get('detail') if isinstance(signal, dict)
+                  else signal.detail) or {}
+        if sig_type in cls.IDENTIFYING_EVIDENCE_TYPES:
+            return True
+        if sig_type == 'agent_inference':
+            sources = detail.get('inference_evidence_sources') or []
+            return any(src in cls.IDENTIFYING_EVIDENCE_TYPES for src in sources)
+        return False
+
     def _gate_family_ambiguity(self, block, decision: ClassificationDecision):
         """
         Refuse to auto-commit a client the evidence cannot single out.
@@ -563,8 +588,7 @@ class ClassificationService:
              if s.proposed_client_id is not None), None)
         if not client_id:
             return decision
-        if any(s.type in self.IDENTIFYING_EVIDENCE_TYPES
-               and s.proposed_client_id == client_id
+        if any(self._is_identifying(s) and s.proposed_client_id == client_id
                for s in decision.matched_signals):
             return decision
 

@@ -250,6 +250,14 @@ export function deriveLanes(
   const activeAmbiguous = ambiguousGroups.filter(
     (g) => !ignored.has(String(g.block_ids[0])),
   );
+  // Every block in a group is ALSO a proposed block with a client guess, so it
+  // arrives in `proposedInline` too and would render twice — once as "which
+  // parish?" and once as an already-answered row. Worse than untidy: answering
+  // one row leaves the other behind, and the two disagree on whether we know.
+  // The pick wins, because it is the honest one.
+  const inAmbiguousGroup = new Set<number>(
+    activeAmbiguous.flatMap((g) => g.block_ids),
+  );
   // Blocks pulled out of the Certain browse (shown in Needs-you instead).
   const pulledIds = new Set<number>([
     ...activeMismatch.map((m) => m.block_id),
@@ -368,7 +376,9 @@ export function deriveLanes(
   });
 
   // ── Needs-you lane: pending + mismatch + split (each minutes desc) ──────────
-  const pending = [...proposedInline].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
+  const pending = proposedInline
+    .filter((p) => !inAmbiguousGroup.has(p.block_id))
+    .sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const mismatch = [...activeMismatch].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const split = [...activeSplit].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));
   const ambiguous = [...activeAmbiguous].sort((a, b) => (b.minutes || 0) - (a.minutes || 0));

@@ -2049,6 +2049,77 @@ def push_timesheet_to_clio_task(timesheet_id, force_conflicts=None):
     return result
 
 
+class TimesheetSendContextView(APIView):
+    """
+    GET /api/billing/timesheets/<id>/send-context/
+
+    What this week's submission actually represents, said at the one moment it
+    can still change behaviour.
+
+    A pushed entry looks the same whether it carries all of someone's Tuesday or
+    half of it. Downstream — Clio, Karbon, whatever bills — it reads as a
+    complete claim, and a firm billing straight off it under-bills without ever
+    seeing why. We capture the time; we don't decide the fee. This is the number
+    that lets someone check before it becomes a bill.
+
+    Three figures, all already computed elsewhere and reused here rather than
+    recomputed, so this dialog can't disagree with Daily Review or the Review
+    tab: confirmed hours going out, hours still sitting unreviewed for the same
+    week, and how much of that person's scheduled week reached the system at all.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from datetime import datetime, time as dtime, timedelta, timezone as dtz
+
+        from django.db.models import Sum
+
+        from tracker.analytics_v2.capacity import capacity_hours_map
+        from tracker.services.billing_totals import compute_totals
+        from tracker.models import Block
+
+        membership = OrganizationMembership.objects.filter(
+            user=request.user
+        ).select_related('organization').first()
+        if not membership:
+            return Response({'error': 'No organization membership'}, status=403)
+        org = membership.organization
+
+        timesheet = get_object_or_404(
+            Timesheet, pk=pk, org=org, user=request.user,
+        )
+        start = timesheet.week_start
+        end = start + timedelta(days=6)
+        s_utc = datetime.combine(start, dtime.min, tzinfo=dtz.utc)
+        e_utc = s_utc + timedelta(days=7)
+
+        totals = compute_totals(org, s_utc, e_utc,
+                                user_id=request.user.id, can_see_all=False)
+
+        # Unreviewed: real client time nobody has confirmed, so it is NOT in the
+        # figures above and will not be sent.
+        unreviewed_min = (Block.objects.filter(
+            org=org, user=request.user, day__gte=start, day__lte=end,
+            classification_state__in=("captured", "proposed"),
+            deleted_at__isnull=True, client__isnull=False,
+        ).aggregate(s=Sum("minutes"))["s"] or 0)
+
+        cap = capacity_hours_map(org, [request.user.id], start, end).get(
+            request.user.id, 0.0)
+        tracked = float(totals.get("total_hours") or 0)
+        coverage = round(tracked / cap * 100, 0) if cap else None
+
+        return Response({
+            "week_start": start.isoformat(),
+            "week_end": end.isoformat(),
+            "billable_hours": totals.get("billable_hours"),
+            "total_hours": tracked,
+            "unreviewed_hours": round(unreviewed_min / 60.0, 2),
+            "capacity_hours": round(cap, 1) if cap else None,
+            "coverage_pct": coverage,
+        })
+
+
 class TimesheetClioPreviewView(APIView):
     """
     GET /api/billing/timesheets/<id>/clio-preview/

@@ -239,6 +239,7 @@ urlpatterns = [
 
     path('billing/timesheets/<int:pk>/submit/', views_billing.TimesheetSubmitView.as_view(), name='timesheet-submit'),
     path('billing/timesheets/<int:pk>/clio-preview/', views_billing.TimesheetClioPreviewView.as_view(), name='timesheet-clio-preview'),
+    path('billing/timesheets/<int:pk>/send-context/', views_billing.TimesheetSendContextView.as_view(), name='timesheet-send-context'),
     path('billing/timesheets/<int:pk>/approve/', views_billing.TimesheetApproveView.as_view(), name='timesheet-approve'),
     path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
     path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),

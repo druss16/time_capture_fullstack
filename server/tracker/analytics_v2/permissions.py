@@ -383,7 +383,11 @@ def _all_lens_keys_for_plan(org: Organization) -> set[str]:
     plan = (getattr(org, "plan", "none") or "none").lower()
     base = {"pulse", "review", "profitability", "utilization", "wip", "realization"}
     if plan.startswith(("executive", "trial")):
-        base.add("trends")
+        # engagements was registered, given a lens, a sidebar entry and an icon,
+        # and then never added here — so it was greyed out for every org on
+        # every plan, executive included. TL Wall is executive and has 334
+        # engagements carrying budgets.
+        base.update({"trends", "engagements"})
     return base
 
 def firm_invoices_here(org) -> bool:

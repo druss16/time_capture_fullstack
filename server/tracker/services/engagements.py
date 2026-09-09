@@ -323,13 +323,48 @@ def derive_budgets(org: Organization, *, dry_run: bool = True,
 # 3. Burn vs progress
 # ---------------------------------------------------------------------------
 
+# Recurring work spread across a period — a month of bookkeeping, a payroll
+# cycle — has no phases anybody will hand-set, and TL Wall proves it: 383
+# engagements, 334 with budgets, ZERO with a phase. Phase-only progress means
+# those all return None and produce no pace signal whatsoever.
+#
+# For that work the honest progress proxy is the calendar: a month of
+# bookkeeping is about a third done a third of the way through the month. That
+# is emphatically NOT true of a tax return — a 1040 due 15 April is not half
+# finished on 1 March — so this applies only to period-based types, and the
+# basis is reported alongside the number so a calendar guess is never mistaken
+# for someone's assessment of the actual work.
+PERIOD_BASED_TYPES = {"bookkeeping", "payroll"}
+
+
+def elapsed_progress(engagement, today=None) -> float | None:
+    """Fraction of the engagement's period that has elapsed, 0..1.
+
+    None when the type isn't period-based, the dates are missing, or the period
+    hasn't started. Clamped at 1.0 once the period closes — past the end date
+    the work is due in full, however much of it happened.
+    """
+    if engagement.engagement_type not in PERIOD_BASED_TYPES:
+        return None
+    start, end = engagement.period_start, engagement.period_end
+    if not start or not end or end <= start:
+        return None
+    today = today or date.today()
+    if today < start:
+        return None
+    span = (end - start).days + 1
+    gone = (min(today, end) - start).days + 1
+    return max(0.0, min(1.0, gone / span))
+
+
 @dataclass
 class EngagementStats:
     engagement: Engagement
     actual_hours: float
     budget_hours: float | None
     burn_pct: float | None       # 0..100+ — hours spent / budget
-    progress_pct: float | None   # 0..100 — phase-weighted completion
+    progress_pct: float | None   # 0..100 — phase-weighted, or period-elapsed
+    progress_basis: str | None   # "phase" | "elapsed" | None — never conflate
     overrun_pts: float | None    # burn − progress, in points. >0 = trouble
     projected_hours: float | None
     projected_overrun_hours: float | None
@@ -354,6 +389,7 @@ class EngagementStats:
             "budget_source": e.budget_source,
             "burn_pct": self.burn_pct,
             "progress_pct": self.progress_pct,
+            "progress_basis": self.progress_basis,
             "overrun_pts": self.overrun_pts,
             "projected_overrun_hours": self.projected_overrun_hours,
             "projected_overrun_dollars": self.projected_overrun_dollars,
@@ -366,6 +402,10 @@ def engagement_stats(engagement: Engagement, *, hours: float | None = None,
     actual = actual_hours(engagement) if hours is None else hours
     budget = float(engagement.budget_hours) if engagement.budget_hours else None
     progress = phase_progress(engagement.engagement_type, engagement.phase)
+    basis = "phase" if progress is not None else None
+    if progress is None:
+        progress = elapsed_progress(engagement)
+        basis = "elapsed" if progress is not None else None
 
     burn_pct = round(actual / budget * 100, 1) if budget else None
     progress_pct = round(progress * 100, 1) if progress is not None else None
@@ -392,6 +432,7 @@ def engagement_stats(engagement: Engagement, *, hours: float | None = None,
         budget_hours=budget,
         burn_pct=burn_pct,
         progress_pct=progress_pct,
+        progress_basis=basis,
         overrun_pts=overrun_pts,
         projected_hours=projected,
         projected_overrun_hours=projected_over_hours,

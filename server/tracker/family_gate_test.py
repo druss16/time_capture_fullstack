@@ -38,7 +38,7 @@ def check(label, cond):
 
 try:
     from tracker.services import client_families
-    from tracker.services.ambiguous_groups import build_groups
+    from tracker.services.ambiguous_groups import build_groups, is_open_question
     _ok = True
 except Exception as e:  # ModuleNotFoundError / ImproperlyConfigured on bare python
     _ok = False
@@ -170,6 +170,26 @@ if _ok:
     check("a block with no Stage-11 signal is ignored",
           build_groups([plain], NAMES) == [])
     check("no gated blocks -> no rows", build_groups([], NAMES) == [])
+
+    print("Still an open question — what Confirm-all must not answer:")
+    gated = FakeBlock(11, 30, 0, [388, 790])
+    check("a gated block is an open question", is_open_question(gated) is True)
+    plain2 = FakeBlock(12, 30, 0, [388, 790])
+    plain2.proposed_signals = [{'type': 'agent_inference', 'detail': {}}]
+    check("an ungated block is not", is_open_question(plain2) is False)
+    answered = FakeBlock(13, 30, 0, [388, 790])
+    answered.proposed_signals = answered.proposed_signals + [
+        {'type': 'qb_company_file', 'detail': {}},
+    ]
+    check("gated but since answered by the QuickBooks file is not",
+          is_open_question(answered) is False)
+    agent_from_file = FakeBlock(14, 30, 0, [388, 790])
+    agent_from_file.proposed_signals = agent_from_file.proposed_signals + [
+        {'type': 'agent_inference',
+         'detail': {'inference_evidence_sources': ['qb_company_file']}},
+    ]
+    check("...and so is an agent inference drawn from that file",
+          is_open_question(agent_from_file) is False)
 
     print("Ambiguous groups — recency decides the leftmost button:")
     recent_first = build_groups([FakeBlock(1, 20, 0, [388, 790])], NAMES,

@@ -2802,11 +2802,20 @@ def confirm_all_blocks(request):
     # all" == "accept every green button", so bulk-confirming never silently
     # files a context-attributable block as No Client (non-billable).
     from tracker.views_block_evidence import suggested_client_for, title_names_family
+    from tracker.services.ambiguous_groups import is_open_question
 
     svc = ClassificationService(org=org, user=user)
     with_client = no_client = skipped = left_for_you = 0
     for b in pending:
         try:
+            # Stage 11 already refused to commit this one: its text names a
+            # group of look-alike clients and nothing says which. It carries a
+            # proposed client all the same, so committing here would book the
+            # exact guess the gate threw out — in bulk, in one click. Daily
+            # Review is asking about it; leave it for the answer.
+            if is_open_question(b):
+                left_for_you += 1
+                continue
             override = None
             if b.proposed_client_id is None and b.client_id is None:
                 sid = suggested_client_for(b, org)
@@ -4843,8 +4852,7 @@ def today_time(request):
     # here must never take down Daily Review.
     ambiguous_groups = []
     try:
-        from tracker.services.ambiguous_groups import build_groups, SIGNAL_TYPE
-        from tracker.services.classification_service import ClassificationService
+        from tracker.services.ambiguous_groups import build_groups, is_open_question
         _amb = [
             _b for _b in Block.objects.filter(
                 org=org, user=user, start__gte=start_utc, start__lt=end_utc,
@@ -4853,19 +4861,10 @@ def today_time(request):
                 'id', 'user_id', 'window_title', 'title', 'minutes', 'start',
                 'end', 'category_hours', 'proposed_signals',
             )[:300]
-            if any(
-                isinstance(_s, dict) and _s.get('type') == SIGNAL_TYPE
-                for _s in (_b.proposed_signals or [])
-            )
-            # A block gated earlier and RESOLVED since (the QuickBooks company
-            # file capture reached this machine, say) still carries its old
-            # family_ambiguous signal. Asking "which parish?" about a block
-            # that now has an answer is the worst of both: the same block
-            # appears twice, and picking on one row leaves the other behind.
-            and not any(
-                isinstance(_s, dict) and ClassificationService._is_identifying(_s)
-                for _s in (_b.proposed_signals or [])
-            )
+            # Gated by Stage 11 and still unanswered — the same predicate
+            # Confirm-all uses to leave these alone, so the row asking the
+            # question and the bulk action skipping it can never disagree.
+            if is_open_question(_b)
         ]
         if _amb:
             # This user's recently-worked clients, most recent first — decides

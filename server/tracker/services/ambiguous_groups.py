@@ -33,6 +33,29 @@ def _signal(block):
     return None
 
 
+def is_open_question(block):
+    """Is this block still waiting on a human to say WHICH client?
+
+    True when Stage 11 gated it and nothing has answered it since. The second
+    half matters: a block gated this morning and resolved this afternoon (the
+    QuickBooks company file capture finally reached that machine) still carries
+    its old ``family_ambiguous`` signal, and treating it as unanswered shows the
+    same block twice — once as "which parish?" and once already decided.
+
+    Shared by the Daily Review lane (which renders the question) and Confirm-all
+    (which must not answer it), so a bulk action can never quietly commit the
+    guess the gate deliberately refused to commit.
+    """
+    if not _signal(block):
+        return False
+    from tracker.services.classification_service import ClassificationService
+    return not any(
+        ClassificationService._is_identifying(sig)
+        for sig in (block.proposed_signals or [])
+        if isinstance(sig, dict)
+    )
+
+
 def build_groups(blocks, client_names, recent_client_ids=()):
     """
     Fold gated blocks into one row per work session.

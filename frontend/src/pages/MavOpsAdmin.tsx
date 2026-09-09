@@ -867,7 +867,7 @@ function CopyRulesModal({
 // Reads: GET /api/mavops/mismatches/?org_id=&days=   (via apiFetch)
 // The response splits into two buckets:
 //   client   — real client<->client mismatches (billing-impacting, e.g. UltraTax
-//              forward-fill). The verdict + histogram lead with THIS.
+//              forward-fill). The verdict leads with THIS.
 //   internal — firm/admin bucket noise (Internal - Tax ↔ Internal - Accounting,
 //              CS Connect firm window). Real + accurate, but not a billing error;
 //              shown collapsed below so it never inflates the client signal.
@@ -922,15 +922,23 @@ interface MismatchesTabProps {
   filterOrg: number | null;
 }
 
-// Shared renderer for one bucket's histogram + pairs + flagged list.
+// Shared renderer for one bucket's worst pairs + flagged list. The per-day
+// histogram this used to draw is gone; `histogram` survives in the payload
+// because the verdict still reads its last date to decide "ongoing".
 // `onReconcile` is only passed for the client bucket (the internal bucket is
 // never reconciled). `clientFilter` narrows the flagged list to one booked
 // client name (or "" for all).
 function BucketDetail({
-  bucket, tone, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
+  bucket, tone, label, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
 }: {
   bucket: MismatchBucket;
   tone: string;
+  // Which bucket this is. Three buckets render through this one component and
+  // used to differ ONLY by `tone`, so three identically-worded "Worst pairs" /
+  // "Flagged blocks" headers stacked down the tab and nothing on screen said
+  // which was the billing-impacting one. Colour alone was carrying meaning it
+  // cannot carry. Every header now names its bucket.
+  label: string;
   // Explicitly `| undefined`: under exactOptionalPropertyTypes, passing a
   // conditional (`filterOrg ? fn : undefined`) is not assignable to a plain
   // optional prop.
@@ -954,37 +962,25 @@ function BucketDetail({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const peak = bucket.histogram.length ? Math.max(...bucket.histogram.map(h => h.count)) : 1;
   const rows = clientFilter
     ? bucket.mismatches.filter(m => m.booked_client_name === clientFilter)
     : bucket.mismatches;
   const rowIds = rows.map(r => r.block_id);
   return (
     <>
-      {bucket.histogram.length > 0 && (
-        <div style={{ ...card, marginBottom: 20 }}>
-          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 14, fontWeight: 600 }}>
-            Mismatches per day — clustering in the past = already fixed
-          </div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90 }}>
-            {bucket.histogram.map(h => (
-              <div key={h.date} title={`${h.date}: ${h.count}`}
-                style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <div style={{ width: "100%", height: `${Math.max(6, (h.count / peak) * 74)}px`, background: tone, borderRadius: "2px 2px 0 0", minWidth: 3 }} />
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, color: T.textMuted, fontSize: 10, ...mono }}>
-            <span>{bucket.histogram[0].date}</span>
-            <span>{bucket.histogram[bucket.histogram.length - 1].date}</span>
-          </div>
-        </div>
-      )}
+      {/* The "mismatches per day" bar chart lived here. Removed: the detector is
+          deliberately near-silent, so the series is a handful of points — two
+          bars on a real 30-day window — and a two-bar chart carries no shape to
+          read. Its caption ("clustering in the past = already fixed") asserted a
+          conclusion the data cannot support: a flag's DATE says when the work
+          happened, not whether anyone has since fixed it. Worst pairs and the
+          flagged-block list below say the same things without the guesswork. */}
 
       {bucket.top_pairs.length > 0 && (
-        <div style={{ ...card, marginBottom: 20 }}>
-          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
-            Worst pairs — booked → looks like
+        <div style={{ ...card, marginBottom: 20, borderLeft: `3px solid ${tone}` }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
+            <span style={{ color: tone }}>{label}</span>
+            <span style={{ color: T.textMuted }}> · worst pairs — booked → looks like</span>
           </div>
           {bucket.top_pairs.map((p, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: i < bucket.top_pairs.length - 1 ? `1px solid ${T.border}` : "none" }}>
@@ -998,8 +994,9 @@ function BucketDetail({
       {rows.length > 0 && (
         <>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-            <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600, ...mono }}>
-              Flagged blocks ({rows.length}{clientFilter ? ` · ${clientFilter}` : ` of ${bucket.total}`})
+            <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600, ...mono }}>
+              <span style={{ color: tone }}>{label}</span>
+              <span style={{ color: T.textMuted }}> · flagged blocks ({rows.length}{clientFilter ? ` · ${clientFilter}` : ` of ${bucket.total}`})</span>
             </div>
             {onReconcile && rowIds.length > 0 && !hideBulkButton && (
               <button
@@ -1462,6 +1459,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 <BucketDetail
                   bucket={data.unsure}
                   tone={T.yellow}
+                  label="Wrong, target unclear"
                   resolve={filterOrg ? {
                     clients: orgClients,
                     busy: resolveBusy,
@@ -1523,6 +1521,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               <BucketDetail
                 bucket={data.client}
                 tone={T.red}
+                label="Client mismatches"
                 onReconcile={filterOrg ? reconcile : undefined}
                 reconcileBusy={reconcileBusy}
                 hideBulkButton
@@ -1584,7 +1583,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 </span>
                 <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showInternal ? "hide" : "show"}</span>
               </button>
-              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} />}
+              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} label="Internal / admin" />}
             </div>
           )}
 

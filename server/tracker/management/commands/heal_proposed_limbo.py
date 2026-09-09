@@ -390,9 +390,9 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(
                     f"\n✅ Healed {a + b_ok + b_ask + c} blocks: committed {b_ok} "
                     f"whose text backs the client (now billable), surfaced "
-                    f"{b_ask} look-alike guesses ({len(needs_signal)} newly "
-                    f"foldable into the picker) + {a} genuine-change + {c} "
-                    f"no-client for a human pick."))
+                    f"{b_ask} look-alike guesses ({len(needs_signal)} of them "
+                    f"newly signalled; the rest already carried one) + {a} "
+                    f"genuine-change + {c} no-client for a human pick."))
             elif opts['mode'] == 'surface':
                 a = genuine_change.update(
                     is_categorized=False,

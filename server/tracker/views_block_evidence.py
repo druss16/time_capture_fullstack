@@ -662,6 +662,12 @@ def _title_client_suggestion(block, org):
     return None
 
 
+# Words that are not a name on their own. "St. Patrick's Church-Jordan" and
+# "St Patricks_St Anthony_Chadwicks" share exactly "St", and a sentence reading
+# "The title names St" names nothing at all.
+_TRIVIAL_SHARED = {'st', 'saint', 'the', 'our', 'of', 'and'}
+
+
 def _shared_name_part(names) -> str:
     """The leading words every one of these client names has in common.
 
@@ -680,7 +686,11 @@ def _shared_name_part(names) -> str:
             out.append(head)
         else:
             break
-    return " ".join(out).strip(" -,&")
+    shared = " ".join(out).strip(" -,&")
+    words = [w.lower().strip(".,'’-") for w in shared.split()]
+    if words and all(w in _TRIVIAL_SHARED for w in words):
+        return ""   # an honorific the whole roster shares is not a name
+    return shared
 
 
 # Process-local memo for the look-alike roster. `client_families.for_org` is
@@ -848,12 +858,15 @@ def _compose_why(local_time: str, co_open_client, surrounding: dict, title_clien
     # entirely). So stop here, name the family back, and let the human pick.
     if title_family and len(title_family.get("candidates") or []) >= 2:
         n = len(title_family["candidates"])
-        shared = title_family.get("shared") or "a client"
-        return (
+        shared = title_family.get("shared")
+        sentence = (
             f"The title names {shared} — but {n} clients share that name, "
-            f"and nothing else here says which.",
-            "family", None, None,
+            f"and nothing else here says which."
+            if shared else
+            f"The title names a client, but {n} on your roster answer to it — "
+            f"nothing here says which."
         )
+        return (sentence, "family", None, None)
 
     sug = (surrounding or {}).get("suggestion") or {}
     if sug.get("reason"):

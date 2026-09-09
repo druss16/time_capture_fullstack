@@ -142,6 +142,14 @@ if _ok:
 
     NAMES = {c.id: c.name for c in ROSTER}
 
+    print("Picker labels — two buttons must never read the same:")
+    _t = W("St Patrick's Church Cemetery Fund  - QuickBooks")
+    _cands = [390, 391]   # Church-Jordan  vs  Jordan Cemetery
+    check("without the candidate set the two labels collide",
+          L.short_name(390, _t) == L.short_name(391, _t))
+    check("given the set, each button says what makes IT unique",
+          L.short_name(390, _t, _cands) != L.short_name(391, _t, _cands))
+
     print("Ambiguous groups — one question per sitting, not per block:")
     run = [FakeBlock(1, 20, 0, [388, 790]), FakeBlock(2, 5, 25, [388, 790]),
            FakeBlock(3, 15, 35, [388, 790])]
@@ -170,6 +178,35 @@ if _ok:
     check("a block with no Stage-11 signal is ignored",
           build_groups([plain], NAMES) == [])
     check("no gated blocks -> no rows", build_groups([], NAMES) == [])
+
+    print("Stored candidates are re-narrowed at render time:")
+    from tracker.services.ambiguous_groups import narrow_to_live_family, _signal
+
+    class _StubRoster:
+        """for_org is patched to this so the test needs no database."""
+        @staticmethod
+        def for_org(_org_id, use_cache=True):
+            return L
+
+    wide = FakeBlock(21, 20, 0, [388, 409, 790, 791, 300], title='St Mary Baldwinsville Notes')
+    wide.client_id, wide.file_path, wide.url = 790, '', ''
+    import tracker.services.client_families as _cf
+    _real_for_org = _cf.for_org
+    _cf.for_org = _StubRoster.for_org
+    try:
+        narrow_to_live_family([wide], 21)
+    finally:
+        _cf.for_org = _real_for_org
+    _after = (_signal(wide).get('detail') or {}).get('candidate_client_ids', [])
+    check("a five-candidate signal narrows to the real question",
+          set(_after) == {790, 791})
+    check("...and the block's own client survives the narrowing", 790 in _after)
+
+    tight = FakeBlock(22, 20, 0, [388, 790], title="St. Mary's Church")
+    tight.client_id, tight.file_path, tight.url = 790, '', ''
+    narrow_to_live_family([tight], 21)
+    check("an already-tight signal is left alone",
+          (_signal(tight).get('detail') or {}).get('candidate_client_ids') == [388, 790])
 
     print("Still an open question — what Confirm-all must not answer:")
     gated = FakeBlock(11, 30, 0, [388, 790])

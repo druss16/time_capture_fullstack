@@ -45,7 +45,7 @@ export default function EconomicsTab({
     onToggle: () => setOpenSection(s => (s === id ? null : id)),
   });
   const [form, setForm] = useState({
-    billing_rate_default: '150.00', cost_rate_default: '75.00', target_utilization: '75',
+    billing_rate_default: '150.00', cost_rate_default: '75.00', payroll_burden_multiplier: '1.00', target_utilization: '75',
     capacity_hours_per_week: '40',
   });
 
@@ -54,11 +54,22 @@ export default function EconomicsTab({
       setForm({
         billing_rate_default: orgInfo.billing_rate_default || '150.00',
         cost_rate_default: orgInfo.cost_rate_default || '75.00',
+        payroll_burden_multiplier: orgInfo.payroll_burden_multiplier || '1.00',
         target_utilization: orgInfo.target_utilization || '75',
         capacity_hours_per_week: orgInfo.capacity_hours_per_week || '40',
       });
     }
   }, [orgInfo]);
+
+  // Show the multiplier's effect on a real number — "1.25x" means nothing on
+  // its own, "$25.00 wage becomes $31.25" is the thing an owner can sanity-check.
+  const burdenHint = (() => {
+    const b = parseFloat(form.payroll_burden_multiplier);
+    if (!b || b === 1) return 'Rates you enter are already fully loaded.';
+    const wage = parseFloat(form.cost_rate_default);
+    if (!wage) return `Every cost rate is multiplied by ${b}.`;
+    return `A $${wage.toFixed(2)} wage costs $${(wage * b).toFixed(2)}.`;
+  })();
 
   const saveDefaults = async () => {
     setSaving(true);
@@ -160,7 +171,7 @@ export default function EconomicsTab({
           title="Firm defaults"
           sub="Used when no tier or client rate applies."
         >
-          <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
+          <div className={`grid gap-4 ${isAdmin ? 'sm:grid-cols-2 lg:grid-cols-5' : 'sm:grid-cols-3'}`}>
             <div>
               <label className={labelClass}>Default Bill Rate</label>
               <div className="relative">
@@ -179,6 +190,20 @@ export default function EconomicsTab({
                     onChange={e => setForm({ ...form, cost_rate_default: e.target.value })}
                     className={`${inputClass} pl-7`} />
                 </div>
+              </div>
+            )}
+            {isAdmin && (
+              <div>
+                <label className={labelClass}>Payroll Burden</label>
+                <div className="relative">
+                  <input type="number" step="0.05" min="1" max="3" value={form.payroll_burden_multiplier}
+                    onChange={e => setForm({ ...form, payroll_burden_multiplier: e.target.value })}
+                    className={`${inputClass} pr-7`} />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">×</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {burdenHint}
+                </p>
               </div>
             )}
             <div>

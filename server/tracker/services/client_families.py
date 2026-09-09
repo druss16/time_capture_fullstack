@@ -185,6 +185,12 @@ class ClientLookalikes:
             self._lookalike_cache[client_id] = len(self.candidates_for(own)) > 1
         return self._lookalike_cache[client_id]
 
+    def identifying_words(self, client_id):
+        """The words of this client's name that name SOMEBODY — its own name and
+        aliases minus the ones every client shares ("church", "saint", "llc").
+        Exposed so callers can ask how much of a name a piece of text carries."""
+        return set(self._ident.get(client_id, set()))
+
     def distinguishing_words(self, client_id, candidates):
         """Words this client owns that no OTHER candidate shares."""
         others = set().union(

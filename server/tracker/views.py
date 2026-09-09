@@ -2801,10 +2801,10 @@ def confirm_all_blocks(request):
     # (co-open file / temporal "sandwich" / day-dominant). This keeps "Confirm
     # all" == "accept every green button", so bulk-confirming never silently
     # files a context-attributable block as No Client (non-billable).
-    from tracker.views_block_evidence import suggested_client_for
+    from tracker.views_block_evidence import suggested_client_for, title_names_family
 
     svc = ClassificationService(org=org, user=user)
-    with_client = no_client = skipped = 0
+    with_client = no_client = skipped = left_for_you = 0
     for b in pending:
         try:
             override = None
@@ -2812,6 +2812,13 @@ def confirm_all_blocks(request):
                 sid = suggested_client_for(b, org)
                 if sid:
                     override = {"client_id": sid, "category": (b.proposed_category or "General Client Work")}
+                elif title_names_family(b, org):
+                    # The title names a client family ("St. Francis") and nothing
+                    # says which member. Committing it either way is a guess:
+                    # to a sibling, or to No Client, which zeroes billable time.
+                    # Leave it in Needs You, where it is now a one-tap pick.
+                    left_for_you += 1
+                    continue
             svc.commit(b, user=user, override=override)
             if b.client_id:
                 with_client += 1
@@ -2825,6 +2832,9 @@ def confirm_all_blocks(request):
         "confirmed_with_client": with_client,
         "confirmed_no_client": no_client,
         "skipped": skipped,
+        # Left deliberately: their title names a look-alike group, so only a
+        # human can say which member.
+        "left_for_you": left_for_you,
         "total": with_client + no_client,
     })
 
@@ -4611,9 +4621,9 @@ def today_time(request):
         # Embed the /why/ suggestion + reason up front so the pending row's green
         # client + explanation paint with the page (no per-row /why/ fetch → no lag).
         try:
-            _why_reason, _why_sid, _why_sname = why_summary(_b, org)
+            _why_reason, _why_sid, _why_sname, _why_cands = why_summary(_b, org)
         except Exception:
-            _why_reason, _why_sid, _why_sname = ('', None, None)
+            _why_reason, _why_sid, _why_sname, _why_cands = ('', None, None, [])
         # Learning progress for the suggested client — powers the "Learning… ~N
         # more to auto-file" hint so a repeated suggestion visibly graduates.
         _learning = None
@@ -4637,6 +4647,9 @@ def today_time(request):
             'why_explanation':          _why_reason,
             'why_suggested_client_id':  _why_sid,
             'why_suggested_client_name': _why_sname,
+            # The title names a family of look-alike clients but not which one —
+            # the row offers these as one-tap picks instead of a green guess.
+            'why_candidates':           _why_cands,
             'learning':                 _learning,
         })
 

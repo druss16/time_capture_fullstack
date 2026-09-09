@@ -447,9 +447,20 @@ def review_misfiled_resolve(request):
             b.state_changed_by = 'correction'
             b.state_changed_at = timezone.now()
             b.categorized_by = 'correction'
+            # ...and a person settling it is the whole definition of committed.
+            # Without this a block already stranded in proposed-limbo (state
+            # 'proposed' but is_categorized=True) STAYS there after a human
+            # re-files it: billing skips it for being proposed, the review queue
+            # skips it for being categorized, and the correction that was
+            # supposed to fix it changes nothing anyone can see. 125 org-21
+            # blocks reached August that way.
+            if b.classification_state != 'committed':
+                b.classification_state = 'committed'
+                b.is_categorized = True
             b.save(
                 update_fields=['client_id', 'state_changed_by',
-                               'state_changed_at', 'categorized_by'],
+                               'state_changed_at', 'categorized_by',
+                               'classification_state', 'is_categorized'],
                 force_classifier=True,
             )
 

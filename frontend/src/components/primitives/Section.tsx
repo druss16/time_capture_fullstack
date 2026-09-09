@@ -24,7 +24,9 @@ interface Props {
 }
 
 export function Section({ section, onDrilldown, onTileClick }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Sections can ask to start folded (the low-materiality client tail, say).
+  // Only the initial value — once someone opens it, it stays open.
+  const [collapsed, setCollapsed] = useState(section.collapsed ?? false);
 
   if (section.type === "kpi_row") {
     return (

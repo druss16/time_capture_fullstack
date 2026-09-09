@@ -211,12 +211,53 @@ class ClientLookalikes:
             self._lookalike_cache[client_id] = len(self.candidates_for(own)) > 1
         return self._lookalike_cache[client_id]
 
+    def identifying_words(self, client_id):
+        """The words of this client's name that name SOMEBODY — its own name and
+        aliases minus the ones every client shares ("church", "saint", "llc").
+        Exposed so callers can ask how much of a name a piece of text carries."""
+        return set(self._ident.get(client_id, set()))
+
     def distinguishing_words(self, client_id, candidates):
         """Words this client owns that no OTHER candidate shares."""
         others = set().union(
             *[self._words[c] for c in candidates if c != client_id]
         ) if len(candidates) > 1 else set()
         return self._words.get(client_id, set()) - others
+
+    def family_for(self, words, candidates=None):
+        """The look-alike group this text is ASKING about, best guess first.
+
+        `candidates_for` is deliberately generous: it collects everyone the text
+        could mean so `resolve` can check whether a sibling also fits, and one
+        shared word is enough to get on the list. That is the wrong list to put
+        in front of a person. "Home - File Explorer" collects a funeral home, a
+        home-inspection firm and two others with nothing else in common, and
+        asking which of THOSE four a shell window belongs to is worse than
+        asking nothing.
+
+        So a real question needs a root that at least two candidates share —
+        several clients answering to the same word is what makes it a NAME
+        rather than an incidental word — and members that could actually be
+        confused with the leader. Returns [] when there is no question worth
+        asking, which callers should read as "say nothing".
+        """
+        words = set(words)
+        if candidates is None:
+            candidates = self.candidates_for(words)
+        by_word = {}
+        for cid in candidates:
+            for word in self._ident.get(cid, set()) & words:
+                by_word.setdefault(word, []).append(cid)
+        families = [(w, cids) for w, cids in by_word.items() if len(cids) >= 2]
+        if not families:
+            return []
+        # Most specific root wins: "St Mary Baldwinsville" should ask
+        # church-or-school, not line up all fourteen St. Mary's.
+        _root, family = min(families, key=lambda f: (len(f[1]), -len(f[0])))
+        ranked = self.rank(family, words)
+        head, rest = ranked[0], ranked[1:]
+        ranked = [head] + [c for c in rest if self.are_lookalikes(head, c)]
+        return ranked if len(ranked) >= 2 else []
 
     def resolve(self, words):
         """The one client this text names, or None when it can't tell.

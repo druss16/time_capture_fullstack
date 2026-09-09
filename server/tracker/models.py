@@ -314,7 +314,13 @@ class Organization(models.Model):
     def default_margin(self):
         """Calculate default profit margin percentage"""
         if self.billing_rate_default and self.billing_rate_default > 0:
-            margin = self.billing_rate_default - (self.cost_rate_default or Decimal('0'))
+            # cost_rate_default is a WAGE, same basis as every per-person rate,
+            # so the burden has to land on it before it can be compared to a
+            # bill rate. Without this the property reported org 21's defaults as
+            # a 0.0% margin when the real implied figure was -15%.
+            burden = self.payroll_burden_multiplier or Decimal('1.00')
+            loaded = (self.cost_rate_default or Decimal('0')) * burden
+            margin = self.billing_rate_default - loaded
             return round((margin / self.billing_rate_default) * 100, 1)
         return 0
 

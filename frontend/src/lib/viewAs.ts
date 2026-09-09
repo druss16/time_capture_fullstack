@@ -119,7 +119,12 @@ export function installViewAsFetch(): void {
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
-    headers.set(VIEW_AS_HEADER, session.userId);
+    // An explicit header from the caller wins over the ambient session. The
+    // MavOps company review fans one request out across every member of a firm
+    // and names the owner per request; without this the admin's own (unrelated)
+    // view-as session in localStorage would overwrite all of them and every
+    // read/write would land on one user.
+    if (!headers.has(VIEW_AS_HEADER)) headers.set(VIEW_AS_HEADER, session.userId);
 
     return original(input as RequestInfo, { ...(init || {}), headers });
   }) as typeof window.fetch;

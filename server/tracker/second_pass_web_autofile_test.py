@@ -119,6 +119,50 @@ if _ok:
                   url='https://www.msn.com/en-us/news/other/thing', app='Msedge')
     check("msn news url -> auto non-billable", act(msnnews) == 'commit_nb')
 
+    # --- deterministic consumer-DOMAIN sweep: works with the flag OFF and with
+    #     no OpenAI key/credits (the whole point of the host list) ---
+    msn_ent = blk("Fired '60 Minutes' producer ruins MAGA-friendly boss' big day - Work",
+                  url='https://www.msn.com/en-us/entertainment/tv/fired-60-minutes', app='Msedge')
+    check("msn non-/news/ path -> auto non-billable (flag ON)", act(msn_ent) == 'commit_nb')
+    check("msn non-/news/ path -> auto non-billable (flag OFF)",
+          act(msn_ent, web=False) == 'commit_nb')
+
+    fox_home = blk("Fox News - Breaking News Updates", url='https://www.foxnews.com/', app='Msedge')
+    check("foxnews.com host -> swept with flag OFF", act(fox_home, web=False) == 'commit_nb')
+
+    # HARD hosts outrank WORKHINT: a news story about tax is still news.
+    msn_tax = blk("Trump's new tax plan explained", url='https://www.msn.com/en-us/money/taxes/x',
+                  app='Msedge')
+    check("news headline with WORKHINT word -> still swept",
+          act(msn_tax, web=False) == 'commit_nb')
+
+    # SOFT hosts still defer to WORKHINT.
+    amz_plain = blk("Amazon.com Order History", url='https://www.amazon.com/gp/history', app='Msedge')
+    check("amazon (soft) -> swept when no work keyword", act(amz_plain, web=False) == 'commit_nb')
+    amz_work = blk("Order history - invoice for client", url='https://www.amazon.com/gp/history',
+                   app='Msedge')
+    check("amazon (soft) + WORKHINT -> NOT swept", act(amz_work, web=False) != 'commit_nb')
+
+    # Host match is dotted-suffix, never a loose substring.
+    lookalike = blk("Client portal", url='https://notmsn.com/reports', app='Msedge')
+    check("'notmsn.com' does not match msn.com", act(lookalike, web=False) != 'commit_nb')
+    sub = blk("Story", url='https://edition.cnn.com/2026/story', app='Msedge')
+    check("subdomain of a consumer host matches", act(sub, web=False) == 'commit_nb')
+
+    # AI assistants live on a consumer host but are plausibly work -> protected.
+    grok = blk("Grok / X and 1 more page - Work", url='https://x.com/i/grok', app='Msedge')
+    check("Grok on x.com -> protected work tool, not swept",
+          act(grok, web=False) == 'propose_needs' and 'work tool' in reason(grok, web=False))
+
+    # A consumer URL must never beat a work-tool signal (stale captured url).
+    stale = blk("QuickBooks Online - Work", url='https://www.msn.com/en-us/news/x', app='Msedge')
+    check("work tool title beats consumer url", act(stale, web=False) == 'propose_needs'
+          and 'work tool' in reason(stale, web=False))
+
+    # Non-browser app with a consumer url is never swept by this path.
+    xl = blk("Book1 - Excel", url='https://www.foxnews.com/', app='Excel.Exe')
+    check("non-browser + consumer url -> not swept", act(xl, web=False) != 'commit_nb')
+
     # --- non-browser residuals are never routed through web autofile ---
     excel = blk("Book1 - Excel", url='', app='Excel.Exe')
     check("non-browser residual -> unrecognized nag, not LLM/sweep",

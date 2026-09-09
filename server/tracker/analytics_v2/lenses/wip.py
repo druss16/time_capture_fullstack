@@ -13,7 +13,8 @@ from ..metrics.wip import (
     wip_qs,
 )
 from ..types import (
-    ChartCardPayload, DataTablePayload, MetricState, Scope, Section, TimeRange,
+    ChartCardPayload, DataTablePayload, InsightCardPayload, MetricState, Scope,
+    Section, TimeRange,
 )
 from .base import Lens, register_lens
 from .helpers import column, headline_row
@@ -31,6 +32,10 @@ class WipLens(Lens):
             org, scope, time, compare,
             section_id="headline",
         ))
+
+        basis = self._basis_section(org, scope)
+        if basis is not None:
+            sections.append(basis)
 
         sections.append(self._aging_chart_section(org, scope))
 
@@ -206,4 +211,48 @@ class WipLens(Lens):
             title="Needs a Client",
             collapsible=True,
             children=[table],
+        )
+
+    def _basis_section(self, org, scope) -> Section | None:
+        """Say plainly what this number is when no invoice data exists.
+
+        TimeTracker is a record of time, not a billing system. Without imported
+        invoices there is no signal that anything was ever billed, so nothing
+        ever leaves this figure — it is every confirmed billable hour since the
+        firm started tracking, not a receivable. Org 21's reads $86k going back
+        to March, roughly 45% of it work from before the current quarter that
+        has almost certainly been invoiced and paid.
+
+        Shown only while that's true. Once invoices land, relief runs and the
+        caveat retires itself.
+        """
+        from ..permissions import firm_invoices_here
+        from ..metrics.wip import wip_qs, TIER_BILLABLE_READY
+
+        if firm_invoices_here(org):
+            return None
+
+        qs = wip_qs(org, scope, TIER_BILLABLE_READY)
+        oldest = qs.exclude(day=None).order_by("day").values_list("day", flat=True).first()
+        if oldest is None:
+            return None
+
+        card = InsightCardPayload(
+            id="wip_no_invoice_basis",
+            severity="info",
+            headline="This is unbilled as far as we know — not a receivable",
+            body=(
+                f"No invoice data has been imported, so nothing has ever left this "
+                f"figure. It's every confirmed billable hour recorded since "
+                f"{oldest:%d %b %Y}, whether or not the client has since been billed "
+                f"for it. TimeTracker records time; it doesn't invoice. "
+                f"Import invoices — or tell us the date through which everything "
+                f"has been billed — and the older work drops out."
+            ),
+            source="rule",
+            dismissible=False,
+        )
+        return Section(
+            id="wip_basis", type="section", title="What This Number Is",
+            collapsible=False, children=[card],
         )

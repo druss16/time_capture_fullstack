@@ -6,6 +6,7 @@ import {
   SuggestRulesWizard,
   ExplainBlockModal,
 } from "./MavOpsAdminRules";
+import MavOpsCompanyReview from "./MavOpsCompanyReview";
 
 const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
@@ -866,7 +867,7 @@ function CopyRulesModal({
 // Reads: GET /api/mavops/mismatches/?org_id=&days=   (via apiFetch)
 // The response splits into two buckets:
 //   client   — real client<->client mismatches (billing-impacting, e.g. UltraTax
-//              forward-fill). The verdict + histogram lead with THIS.
+//              forward-fill). The verdict leads with THIS.
 //   internal — firm/admin bucket noise (Internal - Tax ↔ Internal - Accounting,
 //              CS Connect firm window). Real + accurate, but not a billing error;
 //              shown collapsed below so it never inflates the client signal.
@@ -921,15 +922,23 @@ interface MismatchesTabProps {
   filterOrg: number | null;
 }
 
-// Shared renderer for one bucket's histogram + pairs + flagged list.
+// Shared renderer for one bucket's worst pairs + flagged list. The per-day
+// histogram this used to draw is gone; `histogram` survives in the payload
+// because the verdict still reads its last date to decide "ongoing".
 // `onReconcile` is only passed for the client bucket (the internal bucket is
 // never reconciled). `clientFilter` narrows the flagged list to one booked
 // client name (or "" for all).
 function BucketDetail({
-  bucket, tone, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
+  bucket, tone, label, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
 }: {
   bucket: MismatchBucket;
   tone: string;
+  // Which bucket this is. Three buckets render through this one component and
+  // used to differ ONLY by `tone`, so three identically-worded "Worst pairs" /
+  // "Flagged blocks" headers stacked down the tab and nothing on screen said
+  // which was the billing-impacting one. Colour alone was carrying meaning it
+  // cannot carry. Every header now names its bucket.
+  label: string;
   // Explicitly `| undefined`: under exactOptionalPropertyTypes, passing a
   // conditional (`filterOrg ? fn : undefined`) is not assignable to a plain
   // optional prop.
@@ -953,37 +962,25 @@ function BucketDetail({
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const peak = bucket.histogram.length ? Math.max(...bucket.histogram.map(h => h.count)) : 1;
   const rows = clientFilter
     ? bucket.mismatches.filter(m => m.booked_client_name === clientFilter)
     : bucket.mismatches;
   const rowIds = rows.map(r => r.block_id);
   return (
     <>
-      {bucket.histogram.length > 0 && (
-        <div style={{ ...card, marginBottom: 20 }}>
-          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 14, fontWeight: 600 }}>
-            Mismatches per day — clustering in the past = already fixed
-          </div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 90 }}>
-            {bucket.histogram.map(h => (
-              <div key={h.date} title={`${h.date}: ${h.count}`}
-                style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <div style={{ width: "100%", height: `${Math.max(6, (h.count / peak) * 74)}px`, background: tone, borderRadius: "2px 2px 0 0", minWidth: 3 }} />
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, color: T.textMuted, fontSize: 10, ...mono }}>
-            <span>{bucket.histogram[0].date}</span>
-            <span>{bucket.histogram[bucket.histogram.length - 1].date}</span>
-          </div>
-        </div>
-      )}
+      {/* The "mismatches per day" bar chart lived here. Removed: the detector is
+          deliberately near-silent, so the series is a handful of points — two
+          bars on a real 30-day window — and a two-bar chart carries no shape to
+          read. Its caption ("clustering in the past = already fixed") asserted a
+          conclusion the data cannot support: a flag's DATE says when the work
+          happened, not whether anyone has since fixed it. Worst pairs and the
+          flagged-block list below say the same things without the guesswork. */}
 
       {bucket.top_pairs.length > 0 && (
-        <div style={{ ...card, marginBottom: 20 }}>
-          <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
-            Worst pairs — booked → looks like
+        <div style={{ ...card, marginBottom: 20, borderLeft: `3px solid ${tone}` }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
+            <span style={{ color: tone }}>{label}</span>
+            <span style={{ color: T.textMuted }}> · worst pairs — booked → looks like</span>
           </div>
           {bucket.top_pairs.map((p, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: i < bucket.top_pairs.length - 1 ? `1px solid ${T.border}` : "none" }}>
@@ -997,8 +994,9 @@ function BucketDetail({
       {rows.length > 0 && (
         <>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-            <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600, ...mono }}>
-              Flagged blocks ({rows.length}{clientFilter ? ` · ${clientFilter}` : ` of ${bucket.total}`})
+            <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600, ...mono }}>
+              <span style={{ color: tone }}>{label}</span>
+              <span style={{ color: T.textMuted }}> · flagged blocks ({rows.length}{clientFilter ? ` · ${clientFilter}` : ` of ${bucket.total}`})</span>
             </div>
             {onReconcile && rowIds.length > 0 && !hideBulkButton && (
               <button
@@ -1461,6 +1459,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 <BucketDetail
                   bucket={data.unsure}
                   tone={T.yellow}
+                  label="Wrong, target unclear"
                   resolve={filterOrg ? {
                     clients: orgClients,
                     busy: resolveBusy,
@@ -1522,6 +1521,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               <BucketDetail
                 bucket={data.client}
                 tone={T.red}
+                label="Client mismatches"
                 onReconcile={filterOrg ? reconcile : undefined}
                 reconcileBusy={reconcileBusy}
                 hideBulkButton
@@ -1583,7 +1583,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 </span>
                 <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showInternal ? "hide" : "show"}</span>
               </button>
-              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} />}
+              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} label="Internal / admin" />}
             </div>
           )}
 
@@ -2199,7 +2199,15 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   const [endDate, setEndDate] = useState(today);
   const [data, setData] = useState<DRResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // A true accordion: ONE client open at a time. Opening a client used to dump
+  // every user, every category and every sample activity at once, and with
+  // several clients held open the page became unreadable.
+  const [openClient, setOpenClient] = useState<string | null>(null);
+  // Users nested inside the open client, collapsed by default for the same
+  // reason. Keyed `${clientKey}:${userId}` so it survives switching clients.
+  const [openUsers, setOpenUsers] = useState<Set<string>>(new Set());
+  // "By User" starts closed — see the block's own note.
+  const [showUsers, setShowUsers] = useState(false);
 
   const load = useCallback(async () => {
     if (!filterOrg) { flash("Select a firm above first.", "err"); return; }
@@ -2210,7 +2218,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
       else { p.set("date", date); }
       const d: DRResponse = await apiFetch(`/mavops/daily-review/?${p.toString()}`);
       setData(d);
-      setExpanded(new Set());
+      setOpenClient(null);
+      setOpenUsers(new Set());
     } catch { flash("Failed to load daily review.", "err"); }
     finally { setLoading(false); }
   }, [apiFetch, flash, filterOrg, rangeMode, date, startDate, endDate]);
@@ -2218,7 +2227,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   // Auto-load when the firm changes (date changes require the Load button).
   useEffect(() => { if (filterOrg) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterOrg]);
 
-  const toggle = (key: string) => setExpanded(prev => {
+  const toggleClient = (key: string) => setOpenClient(prev => (prev === key ? null : key));
+  const toggleUser = (key: string) => setOpenUsers(prev => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
@@ -2272,55 +2282,60 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
       {data && (
         <>
-          {/* ── Header + firm totals ── */}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "20px 0 12px" }}>
+          {/* ── Header + firm totals ──
+              The totals used to be four full-width StatCards. Three of them
+              (billable / non-billable / total) are ambient context you read
+              once, and they were pushing the two things this tab exists for —
+              By User and Clients — below the fold. They live on the header line
+              now: same numbers, one row, no click. A collapse toggle would have
+              been worse than shrinking them, since it costs a click to see a
+              number you always want. */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "20px 0 14px", flexWrap: "wrap" as const }}>
             <span style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{data.org_name}</span>
             <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>
               {data.window.mode === "range" ? `${data.window.start} → ${data.window.end}` : data.window.start} · {data.timezone}
             </span>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-            <StatCard label="Billable" value={fmtH(data.totals.billable_hours)} color={T.green} />
-            <StatCard label="Non-billable" value={fmtH(data.totals.non_billable_hours)} color={T.textSub} />
-            <StatCard label="Total" value={fmtH(data.totals.total_hours)} color={T.text} />
-            <StatCard label="Needs Review" value={fmtH(data.totals.needs_review_hours)} color={data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted} />
-          </div>
-
-          {/* ── Anomalies: titles that clearly name a different client than booked ── */}
-          {data.anomalies.length > 0 && (
-            <div style={{ ...card, marginBottom: 20, borderColor: T.red + "66", background: T.red + "0c" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                <span style={{ color: T.red, fontSize: 13, fontWeight: 700 }}>⚠ Anomalies</span>
-                <span style={{ ...mono, fontSize: 12, color: T.red }}>{data.anomaly_counts.client} client</span>
-                {data.anomaly_counts.internal > 0 && (
-                  <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>· {data.anomaly_counts.internal} internal</span>
-                )}
-                <span style={{ ...mono, fontSize: 11, color: T.textMuted }}>— title names a different client than the one it's booked to</span>
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
-                <tbody>
-                  {data.anomalies.map(a => (
-                    <tr key={a.block_id} style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "5px 8px", color: T.textMuted, whiteSpace: "nowrap" as const, verticalAlign: "top" }}>{a.user || "—"}</td>
-                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" as const, verticalAlign: "top" }}>
-                        <span style={{ color: T.text }}>{a.booked_client_name}</span>
-                        <span style={{ color: T.red, margin: "0 6px" }}>→</span>
-                        <span style={{ color: T.yellow }}>{a.looks_like_client_name}</span>
-                        {a.bucket === "internal" && <span style={{ color: T.textMuted, marginLeft: 6, fontSize: 10 }}>(internal)</span>}
-                      </td>
-                      <td style={{ padding: "5px 8px", color: T.textSub, verticalAlign: "top" }}>{a.window_title}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ flex: 1 }} />
+            <div style={{ display: "flex", alignItems: "baseline", gap: 14, ...mono, fontSize: 12.5 }}>
+              <span style={{ color: T.green }}>{fmtH(data.totals.billable_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>billable</span></span>
+              <span style={{ color: T.textSub }}>{fmtH(data.totals.non_billable_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>non-bill</span></span>
+              <span style={{ color: T.text }}>{fmtH(data.totals.total_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>total</span></span>
+              <span style={{ color: data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted }}>
+                {data.totals.needs_review_hours > 0 ? "⚠ " : ""}{fmtH(data.totals.needs_review_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>needs review</span>
+              </span>
             </div>
-          )}
+          </div>
 
-          {/* ── Per-user summary ── */}
-          {data.user_summary.length > 0 && (
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>By User</div>
+          {/* Anomalies used to print a flat red table of every title-vs-booked
+              mismatch here. It is gone: the Needs You mode lists the same rows
+              across the whole firm AND fixes them in one click, and the
+              Mismatches tab already carries the standalone list. What stays is
+              the part only an audit can give you — the ⚠ badges below, which
+              show WHERE in the client rollup the suspect time is sitting. */}
+
+          {/* ── Per-user summary ──
+              Thirteen rows tall on a real firm, and most of them are usually
+              zeros. Collapsed by default, with the three facts worth knowing
+              printed on the closed header — how many people, how many booked
+              nothing at all, and how much time is waiting on a human. Expand for
+              the per-user breakdown. This is the block that earns a collapse:
+              it is big, and its headline compresses honestly. */}
+          {data.user_summary.length > 0 && (() => {
+            const idle = data.user_summary.filter(u => u.total_hours === 0).length;
+            const review = data.user_summary.reduce((n, u) => n + (u.needs_review_hours || 0), 0);
+            return (
+            <div style={{ ...card, marginBottom: 20, padding: showUsers ? 20 : "14px 20px" }}>
+              <div onClick={() => setShowUsers(v => !v)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: showUsers ? 12 : 0 }}>
+                <span style={{ color: T.textMuted, fontSize: 11, width: 10 }}>{showUsers ? "▾" : "▸"}</span>
+                <span style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600 }}>By User</span>
+                <div style={{ flex: 1 }} />
+                <span style={{ ...mono, fontSize: 11.5, color: T.textMuted }}>
+                  {data.user_summary.length} users
+                  {idle > 0 && <span> · {idle} with no time</span>}
+                  {review > 0 && <span style={{ color: T.yellow }}> · {fmtH(review)} needs review</span>}
+                </span>
+              </div>
+              {showUsers && (
               <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
                 <thead>
                   <tr style={{ color: T.textMuted, textAlign: "left" as const }}>
@@ -2345,8 +2360,10 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                   ))}
                 </tbody>
               </table>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {/* ── Clients (client-major) ── */}
           <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600 }}>
@@ -2359,11 +2376,11 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
           {data.clients.map(c => {
             const key = clientKey(c);
-            const isOpen = expanded.has(key);
+            const isOpen = openClient === key;
             const unassigned = c.client_id == null;
             return (
-              <div key={key} style={{ ...card, marginBottom: 8, padding: 0, overflow: "hidden", borderColor: unassigned ? T.yellow + "55" : T.border }}>
-                <div onClick={() => toggle(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", cursor: "pointer", background: unassigned ? T.yellow + "0e" : "transparent" }}>
+              <div key={key} style={{ ...card, marginBottom: 8, padding: 0, overflow: "hidden", borderColor: isOpen ? T.teal + "66" : unassigned ? T.yellow + "55" : T.border }}>
+                <div onClick={() => toggleClient(key)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", cursor: "pointer", background: isOpen ? T.surfaceHi : unassigned ? T.yellow + "0e" : "transparent" }}>
                   <span style={{ color: T.textMuted, fontSize: 12, width: 12 }}>{isOpen ? "▾" : "▸"}</span>
                   <span style={{ fontSize: 14, fontWeight: 600, color: unassigned ? T.yellow : T.text, fontStyle: unassigned ? "italic" as const : "normal" as const }}>
                     {c.client}{unassigned ? "  (unattributed)" : ""}
@@ -2378,13 +2395,22 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
                 {isOpen && (
                   <div style={{ borderTop: `1px solid ${T.border}`, padding: "6px 18px 14px 42px" }}>
-                    {c.users.map(u => (
-                      <div key={u.user_id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}55` }}>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                    {c.users.map(u => {
+                      const uKey = `${key}:${u.user_id}`;
+                      const uOpen = openUsers.has(uKey);
+                      const blocks = u.categories.reduce((n, cat) => n + (cat.block_count || 0), 0);
+                      return (
+                      <div key={u.user_id} style={{ padding: "4px 0", borderBottom: `1px solid ${T.border}55` }}>
+                        <div onClick={() => toggleUser(uKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", cursor: "pointer" }}>
+                          <span style={{ color: T.textMuted, fontSize: 11, width: 10 }}>{uOpen ? "▾" : "▸"}</span>
                           <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{u.name}</span>
                           <span style={{ ...mono, fontSize: 12, color: T.teal }}>{fmtH(u.total_hours)}</span>
+                          <div style={{ flex: 1 }} />
+                          <span style={{ ...mono, fontSize: 11, color: T.textMuted }}>
+                            {u.categories.length} categor{u.categories.length === 1 ? "y" : "ies"} · {blocks} block{blocks === 1 ? "" : "s"}
+                          </span>
                         </div>
-                        {u.categories.map((cat, i) => (
+                        {uOpen && u.categories.map((cat, i) => (
                           <div key={i} style={{ marginBottom: 6, paddingLeft: 12 }}>
                             <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12, ...mono }}>
                               <span style={{ color: T.purple }}>{cat.name}</span>
@@ -2410,7 +2436,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                           </div>
                         ))}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2567,6 +2594,11 @@ export default function MavOpsAdmin() {
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
   const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping">("orgs");
+
+  // The Daily Review tab has two jobs: WORK the firm's queue ("Needs You" —
+  // every user's pending picks in one actionable list) or AUDIT what was
+  // already booked. Needs You leads, because that is the one that changes data.
+  const [drMode, setDrMode] = useState<"needs" | "audit">("needs");
 
   const [filterOrg, setFilterOrg] = useState<number | null>(null);
   const [filterHostname, setFilterHostname] = useState("");
@@ -3392,9 +3424,34 @@ export default function MavOpsAdmin() {
           <QboMappingTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
         )}
 
-        {/* ══ DAILY REVIEW (firm-wide accuracy audit) ══ */}
+        {/* ══ DAILY REVIEW — work the queue, or audit what was booked ══ */}
         {tab === "daily-review" && (
-          <DailyReviewTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+          <>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              {([["needs", "Needs You"], ["audit", "Audit"]] as const).map(([m, label]) => (
+                <button key={m} onClick={() => setDrMode(m)}
+                  style={{
+                    background: drMode === m ? T.teal + "22" : "transparent",
+                    border: `1px solid ${drMode === m ? T.teal : T.border}`,
+                    color: drMode === m ? T.teal : T.textSub,
+                    padding: "6px 16px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono,
+                  }}>
+                  {label}
+                </button>
+              ))}
+              <span style={{ color: T.textMuted, fontSize: 11.5, alignSelf: "center", ...mono }}>
+                {drMode === "needs"
+                  ? "every user's unclassified time in one list — changes are written as that user"
+                  : "read-only rollup of what is already booked, client by client"}
+              </span>
+            </div>
+
+            {drMode === "needs" ? (
+              <MavOpsCompanyReview apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+            ) : (
+              <DailyReviewTab apiFetch={apiFetch} flash={flash} filterOrg={filterOrg} setFilterOrg={setFilterOrg} orgs={orgs} />
+            )}
+          </>
         )}
       </div>
 

@@ -373,3 +373,75 @@
 .stagger-children > *:nth-child(4) { animation-delay: 150ms; }
 .stagger-children > *:nth-child(5) { animation-delay: 200ms; }
 .stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Print — Analytics on paper.
+
+   The dashboard is built to be scrolled and clicked; a print-out is neither.
+   Component-level `print:` variants handle the app chrome (sidebar, buttons).
+   These are the rules Tailwind variants can't express: page geometry, breaking
+   behaviour, and the scroll containers that would otherwise clip a wide table
+   at the viewport edge and silently drop columns off the sheet.
+
+   Deliberately WYSIWYG — a folded section stays folded. Someone who collapsed
+   the low-materiality client tail before printing meant to leave it out.
+   ────────────────────────────────────────────────────────────────────────── */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  html, body {
+    background: #fff !important;
+  }
+
+  /* The app shell — global nav, toasts, floating help — is all chrome. */
+  body > header,
+  nav[role="navigation"],
+  [data-radix-popper-content-wrapper],
+  [role="tooltip"],
+  .toaster,
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+
+  /* A clipped table drops columns off the sheet with no indication it did.
+     Let anything that scrolls sideways on screen lay out fully on paper. */
+  .overflow-x-auto,
+  .overflow-y-auto,
+  .overflow-auto {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Don't split a card, a table row, or a KPI tile across two sheets. */
+  table { break-inside: auto; }
+  tr, img, svg { break-inside: avoid; }
+  thead { display: table-header-group; }   /* repeat headers on every page */
+  tfoot { display: table-footer-group; }
+
+  section > div,
+  [class*="rounded-xl"],
+  [class*="rounded-2xl"] {
+    break-inside: avoid;
+  }
+
+  /* Section headings shouldn't be orphaned at the foot of a page. */
+  h1, h2, h3 {
+    break-after: avoid;
+    color: #000 !important;
+  }
+
+  /* Backgrounds and semantic colour (margin red, threshold green) carry
+     meaning here, so keep them rather than letting the browser drop them. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Animations mid-print produce half-drawn frames. */
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

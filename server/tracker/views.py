@@ -2801,17 +2801,33 @@ def confirm_all_blocks(request):
     # (co-open file / temporal "sandwich" / day-dominant). This keeps "Confirm
     # all" == "accept every green button", so bulk-confirming never silently
     # files a context-attributable block as No Client (non-billable).
-    from tracker.views_block_evidence import suggested_client_for
+    from tracker.views_block_evidence import suggested_client_for, title_names_family
+    from tracker.services.ambiguous_groups import is_open_question
 
     svc = ClassificationService(org=org, user=user)
-    with_client = no_client = skipped = 0
+    with_client = no_client = skipped = left_for_you = 0
     for b in pending:
         try:
+            # Stage 11 already refused to commit this one: its text names a
+            # group of look-alike clients and nothing says which. It carries a
+            # proposed client all the same, so committing here would book the
+            # exact guess the gate threw out — in bulk, in one click. Daily
+            # Review is asking about it; leave it for the answer.
+            if is_open_question(b):
+                left_for_you += 1
+                continue
             override = None
             if b.proposed_client_id is None and b.client_id is None:
                 sid = suggested_client_for(b, org)
                 if sid:
                     override = {"client_id": sid, "category": (b.proposed_category or "General Client Work")}
+                elif title_names_family(b, org):
+                    # The title names a client family ("St. Francis") and nothing
+                    # says which member. Committing it either way is a guess:
+                    # to a sibling, or to No Client, which zeroes billable time.
+                    # Leave it in Needs You, where it is now a one-tap pick.
+                    left_for_you += 1
+                    continue
             svc.commit(b, user=user, override=override)
             if b.client_id:
                 with_client += 1
@@ -2825,6 +2841,9 @@ def confirm_all_blocks(request):
         "confirmed_with_client": with_client,
         "confirmed_no_client": no_client,
         "skipped": skipped,
+        # Left deliberately: their title names a look-alike group, so only a
+        # human can say which member.
+        "left_for_you": left_for_you,
         "total": with_client + no_client,
     })
 
@@ -4611,9 +4630,9 @@ def today_time(request):
         # Embed the /why/ suggestion + reason up front so the pending row's green
         # client + explanation paint with the page (no per-row /why/ fetch → no lag).
         try:
-            _why_reason, _why_sid, _why_sname = why_summary(_b, org)
+            _why_reason, _why_sid, _why_sname, _why_cands = why_summary(_b, org)
         except Exception:
-            _why_reason, _why_sid, _why_sname = ('', None, None)
+            _why_reason, _why_sid, _why_sname, _why_cands = ('', None, None, [])
         # Learning progress for the suggested client — powers the "Learning… ~N
         # more to auto-file" hint so a repeated suggestion visibly graduates.
         _learning = None
@@ -4637,6 +4656,9 @@ def today_time(request):
             'why_explanation':          _why_reason,
             'why_suggested_client_id':  _why_sid,
             'why_suggested_client_name': _why_sname,
+            # The title names a family of look-alike clients but not which one —
+            # the row offers these as one-tap picks instead of a green guess.
+            'why_candidates':           _why_cands,
             'learning':                 _learning,
         })
 
@@ -4830,8 +4852,7 @@ def today_time(request):
     # here must never take down Daily Review.
     ambiguous_groups = []
     try:
-        from tracker.services.ambiguous_groups import build_groups, SIGNAL_TYPE
-        from tracker.services.classification_service import ClassificationService
+        from tracker.services.ambiguous_groups import build_groups, is_open_question
         _amb = [
             _b for _b in Block.objects.filter(
                 org=org, user=user, start__gte=start_utc, start__lt=end_utc,
@@ -4843,19 +4864,10 @@ def today_time(request):
                 'id', 'user_id', 'window_title', 'title', 'minutes', 'start',
                 'end', 'category_hours', 'proposed_signals',
             )[:300]
-            if any(
-                isinstance(_s, dict) and _s.get('type') == SIGNAL_TYPE
-                for _s in (_b.proposed_signals or [])
-            )
-            # A block gated earlier and RESOLVED since (the QuickBooks company
-            # file capture reached this machine, say) still carries its old
-            # family_ambiguous signal. Asking "which parish?" about a block
-            # that now has an answer is the worst of both: the same block
-            # appears twice, and picking on one row leaves the other behind.
-            and not any(
-                isinstance(_s, dict) and ClassificationService._is_identifying(_s)
-                for _s in (_b.proposed_signals or [])
-            )
+            # Gated by Stage 11 and still unanswered — the same predicate
+            # Confirm-all uses to leave these alone, so the row asking the
+            # question and the bulk action skipping it can never disagree.
+            if is_open_question(_b)
         ]
         if _amb:
             # This user's recently-worked clients, most recent first — decides
@@ -7520,6 +7532,7 @@ def settings_org(request):
             "billing_contact": profile.billing_contact or "",
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
+            "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
             "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
             "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
@@ -7545,6 +7558,15 @@ def settings_org(request):
         # Non-owners are served "0.00" in the GET above; without this guard an
         # admin's round-trip save would silently zero the firm's default cost.
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
+    if "payroll_burden_multiplier" in request.data and can_see_cost:
+        # Cost data, so owner-only on the same gate. Clamped to a sane band:
+        # below 1.0 would mean an hour costs less than the wage, and no real
+        # burden reaches 3x.
+        try:
+            v = Decimal(str(request.data["payroll_burden_multiplier"]))
+            org.payroll_burden_multiplier = max(Decimal("1.00"), min(Decimal("3.00"), v))
+        except (TypeError, ValueError, InvalidOperation):
+            pass
     if "target_utilization" in request.data:
         try:
             v = Decimal(str(request.data["target_utilization"]))
@@ -7583,6 +7605,7 @@ def settings_org(request):
         "billing_contact": profile.billing_contact or "",
         "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
         "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
+        "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
         "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
         "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
         "message": "Settings updated"

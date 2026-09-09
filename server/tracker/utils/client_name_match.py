@@ -259,10 +259,53 @@ def score_title_against_client(title_tokens: set[str], cid: int, index: dict) ->
 # parishes apart, and dropping it here cost 25 detections on the same window.
 _APP_CHROME_RE = re.compile(r"\s*[-–]\s*QuickBooks\b[^-\[]*", re.I)
 
+# Browser banners. These were NOT stripped before, and the omission cost real
+# detections: a web PDF captured in Edge arrives as
+#
+#     "9-8-2026 St. Mary's Cemetery bills etc_.pdf and 1 more page - Work - Microsoft Edge"
+#
+# and the surviving word "edge" scored 5.8 distinctive mass against a client
+# actually named "Cutting Edge Decks, Inc". That is not enough to WIN, but it is
+# enough to look like a second opinion — so the ambiguity gate concluded the
+# title fingerprinted two clients and suppressed a correct, high-confidence
+# match on "St. Mary's Cemetery Bville" (7.4 mass, booked to St. Joseph's
+# Church). Browser chrome cannot arbitrate between clients; it is noise, and it
+# has to be gone before scoring.
+#
+# The optional middle group is Edge's profile segment ("- Work -", "- Personal -",
+# "- Profile 1 -"). It is bounded and may not itself contain a dash, so it eats
+# the profile name and never document text.
+#
+# Only the unambiguous multi-word banners are listed. Bare "Safari" / "Opera" /
+# "Brave" are ordinary words that can legitimately end a document name, and a
+# wrong strip here silently deletes evidence.
+_BROWSER_CHROME_RE = re.compile(
+    r"\s*[-–—]\s*(?:[^-–—]{0,40}\s*[-–—]\s*)?"
+    r"(?:Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox)"
+    r"\s*$",
+    re.I,
+)
+
+# Zero-width and other invisible characters, stripped before anything is matched
+# or tokenised. Edge injects U+200B into its own banner — the real title above is
+# "Microsoft\u200b Edge" — so a literal "Microsoft Edge" pattern misses it, and
+# a name split by one of these tokenises as two words that match nothing. 86 of
+# org 21's 4,232 committed blocks in a 30-day window carry one.
+_ZERO_WIDTH = dict.fromkeys(
+    map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"), None
+)
+
 
 def strip_app_chrome(title: str) -> str:
     """Remove application-banner noise so only document text is scored."""
-    return _APP_CHROME_RE.sub(" ", title or "")
+    text = (title or "").translate(_ZERO_WIDTH)
+    # Loop: a title may carry a banner behind a profile segment behind another
+    # dash. Each pass must match a browser name, so this cannot run away.
+    previous = None
+    while previous != text:
+        previous = text
+        text = _BROWSER_CHROME_RE.sub("", text)
+    return _APP_CHROME_RE.sub(" ", text)
 
 
 # ── Tunables (strict defaults) ──────────────────────────────────────────────

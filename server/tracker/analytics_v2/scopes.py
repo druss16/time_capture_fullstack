@@ -156,7 +156,20 @@ def _quarter_label(start: date) -> str:
 # ---------------------------------------------------------------------------
 
 VALID_SCOPE_TYPES: set[str] = {"firm", "client", "staff", "service", "engagement", "composite"}
-VALID_LENS_KEYS: set[str] = {"pulse", "profitability", "utilization", "wip", "realization", "trends", "engagements"}
+def _valid_lens_keys() -> set[str]:
+    """Every registered lens, read from the registry rather than repeated here.
+
+    This used to be a hardcoded set, which made it the fourth of eight places a
+    new lens had to be listed — and the only one with no import, no type error
+    and no test to catch the omission. The `review` lens was registered, wired
+    into permissions, given a sidebar entry and a LensKey in both languages, and
+    still returned HTTP 400 on every request because this line hadn't been
+    touched. Deriving it means registering a lens is enough to make it callable.
+
+    Imported lazily: lenses import types, which imports this module.
+    """
+    from .lenses import all_lens_keys
+    return set(all_lens_keys())
 
 
 def parse_scope(raw: Any) -> Scope:
@@ -202,9 +215,10 @@ def parse_scope(raw: Any) -> Scope:
 def parse_lens(raw: Any) -> LensKey:
     if not isinstance(raw, str):
         raise RequestParseError("lens must be a string")
-    if raw not in VALID_LENS_KEYS:
+    valid = _valid_lens_keys()
+    if raw not in valid:
         raise RequestParseError(
-            f"lens must be one of {sorted(VALID_LENS_KEYS)}, got '{raw}'"
+            f"lens must be one of {sorted(valid)}, got '{raw}'"
         )
     return raw  # type: ignore[return-value]
 

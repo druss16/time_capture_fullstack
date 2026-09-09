@@ -9,7 +9,7 @@ export type ScopeType =
   | "firm" | "client" | "staff" | "service" | "engagement" | "composite";
 
 export type LensKey =
-  | "pulse" | "profitability" | "utilization" | "wip" | "realization" | "trends"
+  | "pulse" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
   | "engagements";
 
 export interface Scope {
@@ -155,6 +155,8 @@ export interface Section {
   id: string;
   title: string;
   collapsible: boolean;
+  /** Start folded. Caller can still expand it. */
+  collapsed?: boolean;
   children: SectionChild[];
 }
 

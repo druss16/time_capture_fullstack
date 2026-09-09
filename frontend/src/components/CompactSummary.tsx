@@ -735,6 +735,7 @@ type WhyData = {
   suggested_client_name: string | null;
   personal?: boolean;
   breakdown?: Slice[];
+  candidates?: { client_id: number; client_name: string; short_name: string }[];
 };
 
 /** Pending: accept the green suggested client in one tap (with the contextual
@@ -753,6 +754,7 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
   // back to a lazy /why/ fetch only if the backend didn't embed it (deploy skew).
   const hasEmbedded = b.why_suggested_client_id !== undefined || b.why_explanation !== undefined;
   const [why, setWhy] = useState<WhyData | null>(null);
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
   useEffect(() => {
     if (hasEmbedded) return;
     let alive = true;
@@ -770,6 +772,16 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
   const whyReason = (hasEmbedded ? b.why_explanation : why?.explanation) || "";
   const guessId = whyId ?? b.proposed_client_id ?? null;
   const guessName = whyId != null ? whyName : b.proposed_client_name;
+  // The title named a client family but not the member. There is deliberately no
+  // green guess here — the temporal tiers that used to fill this gap were
+  // answering with whatever was open beforehand, which on a roster of look-alike
+  // parishes is a different client entirely. Ask instead, in one tap.
+  const candidates = (hasEmbedded ? b.why_candidates : why?.candidates) || [];
+  const askCandidates = guessId == null ? candidates : [];
+  const visibleCandidates = showAllCandidates
+    ? askCandidates
+    : askCandidates.slice(0, MAX_VISIBLE_CANDIDATES);
+  const hiddenCandidates = askCandidates.length - visibleCandidates.length;
   const reason = ((whyId != null ? whyReason : (b.proposed_reasoning || whyReason)) || "").trim();
 
   return (
@@ -792,6 +804,26 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
           )}
         </div>
         {reason && <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
+        {askCandidates.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {visibleCandidates.map((c) => (
+              <button
+                key={c.client_id}
+                onClick={() => onAccept(c.client_id)}
+                disabled={busy}
+                title={`Book to ${c.client_name}`}
+                className={PILL_PICK_QUIET}
+              >
+                <span className="max-w-[190px] truncate">{c.short_name || c.client_name}</span>
+              </button>
+            ))}
+            {hiddenCandidates > 0 && (
+              <button onClick={() => setShowAllCandidates(true)} disabled={busy} className={PILL_PICK_QUIET}>
+                {hiddenCandidates} more
+              </button>
+            )}
+          </div>
+        )}
         {guessId != null && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             {b.learning && !b.learning.mature && b.learning.remaining != null && (
@@ -831,7 +863,10 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
           </>
         ) : (
           <>
-            <button onClick={(e) => onPick(e.currentTarget)} disabled={busy} className={PILL_AMBER}>Pick a client…</button>
+            <button onClick={(e) => onPick(e.currentTarget)} disabled={busy}
+              className={askCandidates.length ? PILL_GHOST_WIDE : PILL_AMBER}>
+              {askCandidates.length ? "Someone else…" : "Pick a client…"}
+            </button>
             <button onClick={onNotBillable} disabled={busy} className={PILL_GHOST}>Not billable</button>
           </>
         )}
@@ -848,6 +883,7 @@ const CHIP_AMBER = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-amber-500/[0.14] 
 // Fixed widths so the action buttons line up into clean columns across rows.
 const PILL_TEAL = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-primary/50 bg-primary/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-primary shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-primary/20 disabled:opacity-50";
 const PILL_AMBER = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-400";
+const PILL_GHOST_WIDE = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
 const PILL_GHOST = "inline-flex w-[104px] items-center justify-center gap-0.5 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-muted-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
 
 /** "Which one?": the title names a GROUP of look-alike clients but not which

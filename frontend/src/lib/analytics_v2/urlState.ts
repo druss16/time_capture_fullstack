@@ -10,11 +10,6 @@
  */
 import type { AnalyticsQueryBody, LensKey, Scope, ScopeType } from "./types";
 
-const VALID_LENSES = new Set<LensKey>([
-  "pulse", "profitability", "utilization", "wip", "realization", "trends",
-  "engagements",
-]);
-
 const VALID_SCOPE_TYPES = new Set<ScopeType>([
   "firm", "client", "staff", "service", "engagement", "composite",
 ]);
@@ -27,8 +22,13 @@ export function parseUrlState(search: string): AnalyticsQueryBody {
   const params = new URLSearchParams(search);
 
   // Lens
+  // Checked against LENS_OPTIONS rather than a second hardcoded list. There was
+  // one, and it silently broke the Review tab: clicking it wrote ?lens=review to
+  // the URL, this parser didn't recognise the value, and the view fell back to
+  // pulse — so the tab looked enabled, did nothing, and reported no error.
+  // Deriving from the menu means anything offered can also be selected.
   const rawLens = params.get("lens");
-  const lens: LensKey = (rawLens && VALID_LENSES.has(rawLens as LensKey))
+  const lens: LensKey = (rawLens && LENS_OPTIONS.some(o => o.value === rawLens))
     ? (rawLens as LensKey)
     : "pulse";
 
@@ -152,6 +152,7 @@ export const COMPARE_OPTIONS: Array<{ value: string; label: string }> = [
 
 export const LENS_OPTIONS: Array<{ value: LensKey; label: string; description: string }> = [
   { value: "pulse",         label: "Pulse",          description: "Curated daily overview" },
+  { value: "review",        label: "Review",         description: "The numbers, and where they came from" },
   { value: "profitability", label: "Profitability",  description: "Revenue, margin, labor cost" },
   { value: "realization",   label: "Realization",    description: "Billing efficiency" },
   { value: "utilization",   label: "Utilization",    description: "Billable share of tracked time" },

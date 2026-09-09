@@ -14,6 +14,7 @@ import json
 import hashlib
 import logging
 import urllib.request
+from urllib.parse import urlparse
 from datetime import timedelta
 from collections import defaultdict
 from django.conf import settings
@@ -76,7 +77,12 @@ WORK_TOOL_HINT = ('onvio','cocounsel','thomsonreuters','thomson reuters','quickb
   'pinnacle employee','employee check stub','check stubs','paystub','pay stub',
   'ultratax','proconnect','proseries','lacerte','drake','bill.com','xero','sage ',
   'netsuite','workday','cbna.com','business connect',
-  'quickbooks online','onedrive','sharepoint','sage intacct','freshbooks')
+  'quickbooks online','onedrive','sharepoint','sage intacct','freshbooks',
+  # AI assistants. Ambiguous but plausibly work research, and they live on
+  # consumer hosts (x.com/i/grok), so they must be claimed here or the
+  # consumer-domain sweep below would file them non-billable.
+  'chatgpt.com','grok','claude.ai','perplexity.ai',
+  'copilot.microsoft.com','gemini.google.com')
 
 # Consumer news outlets (title or url). Matched with word-ish boundaries where a
 # bare token would be risky. NOTE: "reuters" alone is excluded on purpose — it
@@ -96,6 +102,47 @@ PERSONAL_EXTRA = ('iheart','crazygames','monkeyhappy','prankdial','prankcaller',
   'crossword','wordle','sudoku','ticketmaster','stubhub','zillow','realtor.com',
   'tripadvisor','expedia','airbnb','pandora','soundcloud')
 
+# ---------------------------------------------------------------------------
+# Curated consumer DOMAINS. Matched against the URL's HOSTNAME (exact host or a
+# dotted suffix), never as a loose substring — "axios" as a substring can hit a
+# client named Axios; host matching cannot. These are national consumer
+# properties that are never billable client work for an accounting firm, so the
+# rule is deterministic and needs no LLM (which is the point: the AI fallback is
+# a bonus, not a dependency).
+#
+# HARD: news/opinion/politics/sports/entertainment/music/games/social. A work
+# keyword in the headline ("tax", "bank", "payroll") does NOT rescue these —
+# reading a news story about tax policy is not time billable to a client, and
+# WORKHINT was letting exactly those headlines through.
+CONSUMER_HOSTS_HARD = (
+  # national news / opinion
+  'msn.com','foxnews.com','cnn.com','nbcnews.com','abcnews.go.com','cbsnews.com',
+  'nytimes.com','washingtonpost.com','bbc.com','bbc.co.uk','theguardian.com',
+  'usatoday.com','newsmax.com','thehill.com','politico.com','buzzfeed.com',
+  'huffpost.com','dailymail.co.uk','breitbart.com','newsweek.com','vox.com',
+  'axios.com','npr.org','thedailybeast.com','realclearpolitics.com','apnews.com',
+  'nypost.com','people.com','tmz.com','dailykos.com','salon.com','slate.com',
+  'mediaite.com','rawstory.com','alternet.org','independent.co.uk','mirror.co.uk',
+  # local (org21 is Central New York)
+  'localsyr.com','syracuse.com','cnycentral.com','spectrumlocalnews.com',
+  # sports / entertainment / music / games / social
+  'espn.com','bleacherreport.com','milb.com','mlb.com','nfl.com',
+  'iheart.com','spotify.com','pandora.com','soundcloud.com','netflix.com',
+  'hulu.com','youtube.com','twitch.tv','crazygames.com','monkeyhappy.com',
+  'tiktok.com','pinterest.com','instagram.com','facebook.com','x.com',
+  'twitter.com','reddit.com',
+)
+
+# SOFT: shopping / food / travel / real estate. Same sweep, but a work keyword
+# still vetoes — an accountant really can end up on amazon.com or zillow.com
+# chasing a client receipt or an estate valuation.
+CONSUMER_HOSTS_SOFT = (
+  'amazon.com','ebay.com','etsy.com','wayfair.com','doordash.com','grubhub.com',
+  'dunkindonuts.com','starbucks.com','wegmans.com','ticketmaster.com','stubhub.com',
+  'zillow.com','realtor.com','tripadvisor.com','expedia.com','airbnb.com',
+  'booking.com','tickets-center.com',
+)
+
 NONBILL_CAT = 'Personal/Non-Billable'
 
 
@@ -110,19 +157,62 @@ def _is_browser(app_name):
     return _norm_app(app_name) in BROWSER_APPS
 
 
-def web_autofile_enabled(org_id):
-    """Master gate for the web auto-file behavior. Disabled => second_pass keeps
-    today's exact behavior. Requires an OpenAI key (the LLM fallback is core to
-    the design) and the SECOND_PASS_WEB_AUTOFILE flag; an optional org-id allowlist
-    scopes rollout."""
-    if not getattr(settings, 'OPENAI_API_KEY', ''):
+def _url_host(block):
+    """Hostname of the block's captured url, lowercased, 'www.' stripped.
+    Empty string when the browser extension reported no url."""
+    raw = (getattr(block, 'url', '') or '').strip()
+    if not raw:
+        return ''
+    if '://' not in raw:
+        raw = 'http://' + raw
+    try:
+        host = (urlparse(raw).hostname or '').lower()
+    except ValueError:
+        return ''
+    return host[4:] if host.startswith('www.') else host
+
+
+def _host_in(host, domains):
+    """True when host IS one of domains or is a subdomain of one. Suffix match is
+    dotted so 'notmsn.com' never matches 'msn.com'."""
+    if not host:
         return False
+    return any(host == d or host.endswith('.' + d) for d in domains)
+
+
+def consumer_host_verdict(block):
+    """'hard' | 'soft' | '' for a browser block whose url is a known consumer
+    domain. Deterministic — no network, no flag, no OpenAI."""
+    if not _is_browser(block.app_name):
+        return ''
+    host = _url_host(block)
+    if _host_in(host, CONSUMER_HOSTS_HARD):
+        return 'hard'
+    if _host_in(host, CONSUMER_HOSTS_SOFT):
+        return 'soft'
+    return ''
+
+
+def web_autofile_enabled(org_id):
+    """Master gate for the EXPANDED web auto-file behavior: the loose title/url
+    substring hints and the gpt-4o-mini fallback for signature-less browser
+    blocks. The deterministic consumer-DOMAIN sweep in classify_block is NOT
+    behind this flag and needs no OpenAI key.
+
+    No longer requires OPENAI_API_KEY: the key check lives in llm_web_verdict,
+    which degrades to 'unsure' (keep nagging) when the key is missing or the
+    account is out of credits. Gating the whole feature on the key meant an
+    expired OpenAI balance silently disabled the free heuristics too."""
     if not getattr(settings, 'SECOND_PASS_WEB_AUTOFILE', False):
         return False
     allow = getattr(settings, 'SECOND_PASS_WEB_AUTOFILE_ORG_IDS', None) or []
     if allow:
         return org_id in allow
     return True
+
+
+_LLM_COOLDOWN_KEY = 'sp_web_verdict:cooldown'
+_LLM_COOLDOWN_SEC = 1800
 
 
 def llm_web_verdict(block):
@@ -141,6 +231,12 @@ def llm_web_verdict(block):
 
     api_key = getattr(settings, 'OPENAI_API_KEY', '') or ''
     if not api_key:
+        return 'unsure'
+
+    # Circuit breaker. An exhausted OpenAI balance answers 429 to EVERY call, so
+    # without this a nightly run burns the whole per-run budget on failures (and
+    # a wall of warnings) to learn the same thing 300 times.
+    if cache.get(_LLM_COOLDOWN_KEY):
         return 'unsure'
 
     sig = hashlib.md5(f'{title}|{url}'.encode('utf-8')).hexdigest()
@@ -197,8 +293,14 @@ def llm_web_verdict(block):
         else:
             verdict = 'unsure'
     except Exception as e:  # network/parse/quota — degrade to "keep nagging"
-        logger.warning('second_pass llm_web_verdict failed: %s', e)
-        return 'unsure'  # do NOT cache transient failures
+        status = getattr(e, 'code', None)
+        if status in (401, 403, 429):  # bad key / no credits / rate limited
+            cache.set(_LLM_COOLDOWN_KEY, 1, _LLM_COOLDOWN_SEC)
+            logger.warning('second_pass llm_web_verdict disabled for %ss (HTTP %s); '
+                           'deterministic sweep continues', _LLM_COOLDOWN_SEC, status)
+        else:
+            logger.warning('second_pass llm_web_verdict failed: %s', e)
+        return 'unsure'  # do NOT cache transient failures as a verdict
 
     cache.set(ckey, verdict, getattr(settings, 'AI_CLASSIFY_CACHE_TTL', 86400 * 7))
     return verdict
@@ -283,12 +385,25 @@ def classify_block(block, client_forms, title_index, web_autofile=False):
         if cids and len(cids) == 1:
             return ('propose_high', list(cids)[0], 0.80, 'second-pass: matches your committed same-title')
 
-    # ---- Web auto-file guardrails (only when enabled) ----------------------
+    # ---- Web guardrails ----------------------------------------------------
     # Protect known professional web tools / client portals FIRST. Their titles
     # often lack any work keyword, so without this they'd be swept as "personal".
     # They need a human to pick the client, but must never be auto-non-billable.
-    if web_autofile and _is_browser(block.app_name) and any(wt in hay for wt in WORK_TOOL_HINT):
+    # Unflagged: it can only ever turn a sweep into a nag, never the reverse, and
+    # it must outrank the consumer-domain sweep below when a stale captured url
+    # disagrees with the title actually on screen.
+    if _is_browser(block.app_name) and any(wt in hay for wt in WORK_TOOL_HINT):
         return ('propose_needs', None, 0.30, 'second-pass: work tool, needs client')
+
+    # Known consumer domain in the captured URL -> commit non-billable. This is
+    # the deterministic half of web auto-file and runs UNFLAGGED, same as the
+    # PERSONAL_LOW rule below: the host is hard evidence, not a guess, so it does
+    # not need the feature flag or a working OpenAI key. HARD hosts (news, sports,
+    # entertainment) ignore WORKHINT — a headline about tax or a bank is still
+    # news; SOFT hosts (shopping, travel, real estate) still defer to it.
+    ch = consumer_host_verdict(block)
+    if ch == 'hard' or (ch == 'soft' and not any(w in tl for w in WORKHINT)):
+        return ('commit_nb', None, 0.0, 'second-pass: consumer site (%s)' % _url_host(block))
 
     # Affirmatively personal -> commit non-billable
     if any(p in tl for p in PERSONAL_LOW) and not any(w in tl for w in WORKHINT):

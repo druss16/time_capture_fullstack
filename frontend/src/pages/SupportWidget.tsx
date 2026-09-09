@@ -35,11 +35,21 @@ const PROMPTS_BY_ROLE = {
   ],
 };
 // admin sees the same set as owner
-PROMPTS_BY_ROLE.admin = PROMPTS_BY_ROLE.owner;
+(PROMPTS_BY_ROLE as Record<string, string[]>).admin = PROMPTS_BY_ROLE.owner;
 
-function promptsForRole(role) {
-  return PROMPTS_BY_ROLE[role] || PROMPTS_BY_ROLE.member;
+function promptsForRole(role: string): string[] {
+  return (PROMPTS_BY_ROLE as Record<string, string[]>)[role] || PROMPTS_BY_ROLE.member;
 }
+
+/** One chat turn. Untyped `useState([])` inferred `never[]`, so every read of
+ *  m.role / m.content / m.sources downstream was a type error — 25 of them from
+ *  this single omission. */
+type Source = { title: string };
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  sources?: Source[];
+};
 
 function authHeaders() {
   const token =
@@ -52,8 +62,8 @@ function authHeaders() {
 
 export default function SupportWidget() {
   const [open, setOpen] = useState(false);
-  const [convId, setConvId] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [convId, setConvId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [escalate, setEscalate] = useState(false);
@@ -61,7 +71,7 @@ export default function SupportWidget() {
   const [ticketMode, setTicketMode] = useState(false); // showing the report form
   const [ticketText, setTicketText] = useState("");
   const [ticketSending, setTicketSending] = useState(false);
-  const scrollRef = useRef(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Fetch the user's role once, when the widget first opens.
   useEffect(() => {
@@ -80,7 +90,7 @@ export default function SupportWidget() {
 
   // Core send — takes explicit text so suggested-prompt chips can call it
   // directly without waiting on input state to update.
-  async function sendMessage(text) {
+  async function sendMessage(text: string) {
     const trimmed = (text ?? "").trim();
     if (!trimmed || loading) return;
     setInput("");
@@ -196,7 +206,7 @@ export default function SupportWidget() {
               Hi! Ask anything about TimeTracker — or pick a question below to get started.
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-              {promptsForRole(role).map((q) => (
+              {promptsForRole(role).map((q: string) => (
                 <button
                   key={q}
                   onClick={() => sendMessage(q)}
@@ -230,9 +240,9 @@ export default function SupportWidget() {
                 <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
               )}
             </div>
-            {m.sources?.length > 0 && (
+            {m.sources && m.sources.length > 0 && (
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
-                Sources: {m.sources.map((s) => s.title).join(", ")}
+                Sources: {m.sources.map((s: Source) => s.title).join(", ")}
               </div>
             )}
           </div>

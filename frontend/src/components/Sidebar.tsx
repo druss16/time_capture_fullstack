@@ -11,7 +11,7 @@
  * gated on the can_pick_any_client / can_pick_any_staff capabilities. Client
  * and staff lists reuse the Settings endpoints. (Multi-select is a later add.)
  */
-import { Building2, Briefcase, User, Layers, FilePieChart, BarChart3, Clock4, TrendingUp, Sparkles, Gauge } from "lucide-react";
+import { Building2, Briefcase, User, Layers, FilePieChart, BarChart3, Clock4, TrendingUp, Sparkles, Gauge, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import {
   useAnalyticsPermissions, useAnalyticsClients, useAnalyticsStaff,
@@ -38,6 +38,7 @@ const SCOPE_ICONS: Record<ScopeType, any> = {
 
 const LENS_ICONS: Record<LensKey, any> = {
   pulse: Sparkles,
+  review: ClipboardList,
   profitability: FilePieChart,
   realization: TrendingUp,
   utilization: Clock4,
@@ -48,7 +49,7 @@ const LENS_ICONS: Record<LensKey, any> = {
 
 export default function Sidebar({ body, onChange }: Props) {
   const { data: perms } = useAnalyticsPermissions();
-  const availableLenses = new Set(perms?.capabilities?.available_lenses ?? ["pulse", "profitability", "realization", "utilization", "wip", "engagements"]);
+  const availableLenses = new Set(perms?.capabilities?.available_lenses ?? ["pulse", "review", "profitability", "realization", "utilization", "wip", "engagements"]);
   const canFirm = perms?.capabilities?.can_firm ?? false;
   const canPickClient = perms?.capabilities?.can_pick_any_client ?? false;
   const canPickStaff = perms?.capabilities?.can_pick_any_staff ?? false;
@@ -74,7 +75,7 @@ export default function Sidebar({ body, onChange }: Props) {
 
   return (
     <aside
-      className="w-64 shrink-0 border-r border-border/70 px-4 py-6 space-y-6 overflow-y-auto"
+      className="w-64 shrink-0 border-r border-border/70 px-4 py-6 space-y-6 overflow-y-auto print:hidden"
       style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
     >
       {/* Scope section */}

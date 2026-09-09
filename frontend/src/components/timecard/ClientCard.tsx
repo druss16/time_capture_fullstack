@@ -56,7 +56,7 @@ export const ClientCard: React.FC<ClientCardProps> = ({
               />
             )}
             <div className="flex-1">
-              <h3 className={DESIGN_SYSTEM.typography.heading3}>
+              <h3 className={DESIGN_SYSTEM.typography.h3}>
                 {client.client_name}
               </h3>
               {client.tasks && client.tasks.length > 0 && (
@@ -97,7 +97,7 @@ export const ClientCard: React.FC<ClientCardProps> = ({
               <h4 className={DESIGN_SYSTEM.typography.label + " mb-3"}>
                 Categories
               </h4>
-              <div className={`flex flex-wrap ${DESIGN_SYSTEM.spacing.gap}`}>
+              <div className={`flex flex-wrap gap-4`}>
                 {Object.entries(client.categories || {})
                   .filter(
                     ([k]) =>

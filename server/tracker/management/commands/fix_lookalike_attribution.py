@@ -144,7 +144,16 @@ class Command(BaseCommand):
                 continue
             if resolved and not unsafe_swap:
                 continue  # the text does name one, and naming it was safe
-            reopens.append((block, lookalikes.rank(candidates, words), words))
+            # Ask the same question the live suggestion asks. candidates_for is
+            # generous by design, and a reopen spends someone's attention: over
+            # org 21 since June it offers 118 blocks, 41 of which are candidate
+            # piles that share one incidental word and no family. family_for
+            # also narrows the real ones — a "St Marys Baldwinsville" title goes
+            # from fourteen buttons to the two that differ (church vs school).
+            family = lookalikes.family_for(words, candidates)
+            if not family or block.client_id not in family:
+                continue
+            reopens.append((block, family, words))
 
         self._report(blocks, corrections, reopens, skipped_human, names,
                      opts['reopen_ambiguous'])
@@ -292,12 +301,19 @@ class Command(BaseCommand):
                 })
                 block.proposed_signals = signals
                 block.classification_state = 'proposed'
+                # is_categorized marks a block as CONFIRMED, and the invariant
+                # apply() enforces is is_categorized == (state == 'committed').
+                # Reopening a committed block without clearing it strands the
+                # block in the proposed-limbo state: today_time's review pile
+                # and Confirm-all both filter is_categorized=False, so the block
+                # disappears from the queue that is supposed to ask about it.
+                block.is_categorized = False
                 block.needs_review = True
                 block.review_reason = (
                     'The title names a group of look-alike clients but not which one'
                 )
                 block.state_changed_by = 'backfill_lookalike'
                 block.save(force_classifier=True, update_fields=[
-                    'proposed_signals', 'classification_state', 'needs_review',
-                    'review_reason', 'state_changed_by',
+                    'proposed_signals', 'classification_state', 'is_categorized',
+                    'needs_review', 'review_reason', 'state_changed_by',
                 ])

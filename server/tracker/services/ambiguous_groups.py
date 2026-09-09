@@ -56,6 +56,48 @@ def is_open_question(block):
     )
 
 
+def narrow_to_live_family(blocks, org_id):
+    """Re-narrow each gated block's candidate list to what the matcher says NOW.
+
+    The candidates on a block are a snapshot of what the roster view thought when
+    the block was gated, and older snapshots are wide: a "St Mary Baldwinsville"
+    title stored fourteen candidates, because the list was built before the
+    narrowing that keeps only clients sharing a root AND confusable with the
+    leader. Fourteen buttons is not a question a person can answer.
+
+    Re-asking at render time fixes every stored signal without a data migration,
+    and keeps one definition of "who could this be" — if the matcher improves
+    again, yesterday's gated blocks improve with it. Purely in-memory: the caller
+    renders these, it never saves them.
+
+    Narrowing only ever removes candidates, and only when the live answer still
+    contains the client the block is actually on — so a roster change that makes
+    the stored answer unrecognizable leaves it alone rather than emptying it.
+    """
+    from tracker.services import client_families
+    roster = client_families.for_org(org_id)
+    for block in blocks:
+        sig = _signal(block)
+        if not sig:
+            continue
+        detail = sig.get('detail') or {}
+        stored = [int(c) for c in detail.get('candidate_client_ids', [])]
+        if len(stored) < 3:
+            continue          # already as tight as it gets
+        words = client_families.text_words(
+            block.window_title or block.title or '',
+            getattr(block, 'file_path', '') or '',
+            getattr(block, 'url', '') or '')
+        live = [c for c in roster.family_for(words) if c in stored]
+        if len(live) < 2 or block.client_id not in live:
+            continue
+        labels = roster.short_names(live, words)
+        detail['candidate_client_ids'] = live
+        detail['candidate_labels'] = {str(c): labels[c] for c in live}
+        sig['detail'] = detail
+    return blocks
+
+
 def build_groups(blocks, client_names, recent_client_ids=()):
     """
     Fold gated blocks into one row per work session.

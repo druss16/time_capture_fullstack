@@ -27,7 +27,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   isLoading,
 }) => {
   return (
-    <div className={`mb-8 flex items-center ${DESIGN_SYSTEM.spacing.gap} flex-wrap`}>
+    <div className={`mb-8 flex items-center gap-4 flex-wrap`}>
       <Input
         type="date"
         value={date}

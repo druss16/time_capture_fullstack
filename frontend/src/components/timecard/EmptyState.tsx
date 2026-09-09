@@ -36,7 +36,7 @@ interface ErrorBannerProps {
 export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message }) => {
   return (
     <div
-      className={`mb-6 p-4 ${DESIGN_SYSTEM.radius.md} ${DESIGN_SYSTEM.colors.destructive} text-sm`}
+      className={`mb-6 p-4 ${DESIGN_SYSTEM.radius.md} ${DESIGN_SYSTEM.colors.textDestructive} text-sm`}
     >
       {message}
     </div>

@@ -9,7 +9,7 @@ export type ScopeType =
   | "firm" | "client" | "staff" | "service" | "engagement" | "composite";
 
 export type LensKey =
-  | "pulse" | "profitability" | "utilization" | "wip" | "realization" | "trends"
+  | "pulse" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
   | "engagements";
 
 export interface Scope {

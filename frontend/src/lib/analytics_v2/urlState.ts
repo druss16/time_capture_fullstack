@@ -152,6 +152,7 @@ export const COMPARE_OPTIONS: Array<{ value: string; label: string }> = [
 
 export const LENS_OPTIONS: Array<{ value: LensKey; label: string; description: string }> = [
   { value: "pulse",         label: "Pulse",          description: "Curated daily overview" },
+  { value: "review",        label: "Review",         description: "The numbers, and where they came from" },
   { value: "profitability", label: "Profitability",  description: "Revenue, margin, labor cost" },
   { value: "realization",   label: "Realization",    description: "Billing efficiency" },
   { value: "utilization",   label: "Utilization",    description: "Billable share of tracked time" },

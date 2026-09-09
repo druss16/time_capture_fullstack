@@ -63,6 +63,19 @@ export default function EconomicsTab({
 
   // Show the multiplier's effect on a real number — "1.25x" means nothing on
   // its own, "$25.00 wage becomes $31.25" is the thing an owner can sanity-check.
+  // The two defaults are only meaningful against each other. Org 21 sat at a
+  // $75 bill rate with a $75 wage default and a 1.15 burden — an $86.25 cost
+  // against a $75 rate, a guaranteed loss on anyone who fell through to it, and
+  // nothing on screen said so.
+  const impliedMargin = (() => {
+    const bill = parseFloat(form.billing_rate_default);
+    const wage = parseFloat(form.cost_rate_default);
+    const b = parseFloat(form.payroll_burden_multiplier) || 1;
+    if (!bill || !wage) return null;
+    const loaded = wage * b;
+    return { loaded, pct: ((bill - loaded) / bill) * 100 };
+  })();
+
   const burdenHint = (() => {
     const b = parseFloat(form.payroll_burden_multiplier);
     if (!b || b === 1) return 'Rates you enter are already fully loaded.';
@@ -183,13 +196,16 @@ export default function EconomicsTab({
             </div>
             {isAdmin && (
               <div>
-                <label className={labelClass}>Blended Cost / Hour</label>
+                <label className={labelClass}>Blended Wage / Hour</label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
                   <input type="number" step="0.01" min="0" value={form.cost_rate_default}
                     onChange={e => setForm({ ...form, cost_rate_default: e.target.value })}
                     className={`${inputClass} pl-7`} />
                 </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  A wage, like every per-person rate. Burden applies on top.
+                </p>
               </div>
             )}
             {isAdmin && (
@@ -223,6 +239,35 @@ export default function EconomicsTab({
               <p className="text-[11px] text-slate-400 mt-1">Denominator for utilization.</p>
             </div>
           </div>
+
+          {isAdmin && impliedMargin && (
+            <div
+              className={`mt-3 rounded-lg px-3 py-2 text-[12px] ${
+                impliedMargin.pct <= 0
+                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                  : 'bg-slate-50 text-slate-600 border border-slate-200'
+              }`}
+            >
+              {impliedMargin.pct <= 0 ? (
+                <>
+                  <strong>These defaults lose money.</strong> A $
+                  {parseFloat(form.cost_rate_default).toFixed(2)} wage costs $
+                  {impliedMargin.loaded.toFixed(2)} loaded, against a $
+                  {parseFloat(form.billing_rate_default).toFixed(2)} bill rate —{' '}
+                  {impliedMargin.pct.toFixed(1)}% margin on anyone who falls
+                  through to them. Lower the wage or raise the bill rate.
+                </>
+              ) : (
+                <>
+                  Implied margin on the defaults:{' '}
+                  <strong>{impliedMargin.pct.toFixed(1)}%</strong> — $
+                  {impliedMargin.loaded.toFixed(2)} loaded cost against a $
+                  {parseFloat(form.billing_rate_default).toFixed(2)} bill rate.
+                </>
+              )}
+            </div>
+          )}
+
           <button onClick={saveDefaults} disabled={saving} className={`${primaryBtnClass} mt-4`}>
             {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             Save Defaults

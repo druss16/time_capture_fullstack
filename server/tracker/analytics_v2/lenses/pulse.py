@@ -57,8 +57,12 @@ class PulseLens(Lens):
         if scope.type == "firm":
             if invoiceless:
                 # Block-based revenue, no realization (it'd be 0% and misleading).
-                # Leakage still works: worked-but-uncommitted billable value.
-                return ["revenue", "revenue_leakage",
+                # Leakage is out for the same reason it left the Profitability
+                # hero row: with no invoices imported, `billed` falls back to
+                # committed value, so leakage can only ever measure the size of
+                # the unreviewed queue — it cannot read high, and a small number
+                # reads as reassurance about billing that was never tested.
+                return ["revenue", "billable_hours",
                         "billable_mix", "wip_total"]
             return ["invoiced_revenue", "realization_dollar",
                     "revenue_leakage", "wip_total"]

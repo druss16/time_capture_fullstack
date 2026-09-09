@@ -381,7 +381,7 @@ def get_available_scopes(user: AbstractUser, role: Optional[str], org: Organizat
 
 def _all_lens_keys_for_plan(org: Organization) -> set[str]:
     plan = (getattr(org, "plan", "none") or "none").lower()
-    base = {"pulse", "profitability", "utilization", "wip", "realization"}
+    base = {"pulse", "review", "profitability", "utilization", "wip", "realization"}
     if plan.startswith(("executive", "trial")):
         base.add("trends")
     return base

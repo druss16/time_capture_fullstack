@@ -156,10 +156,32 @@ const loadDismissed = (): Set<string> => {
 };
 
 /**
- * Run `fn` over `items` with at most `limit` in flight. today-time re-derives
- * why / mismatch / split for a whole day, so a 12-person firm fired off at once
- * is a bad neighbour to the API; four at a time keeps the queue filling visibly
- * without a stampede.
+ * How many members' `today-time` calls are in flight at once.
+ *
+ * Each one re-derives why / mismatch / split for a whole day, so this is the
+ * dial between "fills fast" and "stampedes the API". The real ceiling is the
+ * backend's worker count, not this number — past that, extra requests just
+ * queue server-side and nothing gets faster.
+ */
+const FANOUT_CONCURRENCY = 8;
+
+/**
+ * Lanes already fetched, keyed by firm + window + user.
+ *
+ * Module-level on purpose: the Needs You / Audit toggle unmounts this
+ * component, and re-paying a 13-request fan-out to glance at the audit and come
+ * back is the slowest thing about the screen. A write invalidates just that
+ * user's entry (see `invalidateUser`) so a remount refetches the one person
+ * whose data actually changed — without it, a row you just fixed would come
+ * back from cache looking unfixed.
+ */
+const laneCache = new Map<string, Lanes>();
+const cacheKey = (orgId: number, windowKey: string, uid: number) => `${orgId}|${windowKey}|${uid}`;
+const invalidateUser = (orgId: number, windowKey: string, uid: number) =>
+  laneCache.delete(cacheKey(orgId, windowKey, uid));
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight.
  */
 async function pooled<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
   let cursor = 0;
@@ -343,6 +365,9 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
 
   // Guards a slow fan-out from writing into a newer one's results.
   const runId = useRef(0);
+  // The window key the currently-loaded slices belong to, so a write can drop
+  // exactly that user's cache entry.
+  const windowKeyRef = useRef("");
 
   // ── Requests as a given member ─────────────────────────────────────────────
   /**
@@ -370,7 +395,8 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
   );
 
   // ── Load ───────────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
+  /** `force` = the admin pressed Load, so refetch everyone and ignore the cache. */
+  const load = useCallback(async (force = false) => {
     if (!filterOrg) {
       flash("Select a firm above first.", "err");
       return;
@@ -385,6 +411,12 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
     const dateQuery = rangeMode
       ? `start=${startDate}&end=${endDate}`
       : `date=${date}`;
+    windowKeyRef.current = dateQuery;
+    if (force) {
+      for (const k of [...laneCache.keys()]) {
+        if (k.startsWith(`${filterOrg}|${dateQuery}|`)) laneCache.delete(k);
+      }
+    }
 
     try {
       const [membersResp, clientResp] = await Promise.all([
@@ -401,10 +433,18 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
           .map((c: any) => ({ id: c.id, name: c.name }))
           .filter((c: ClientOpt) => c.id != null && c.name),
       );
-      setSlices(members.map((m) => ({ member: m, lanes: null, error: null })));
-      setProgress({ done: 0, total: members.length });
+      // Members already in cache paint immediately; only the rest are fetched.
+      setSlices(
+        members.map((m) => ({
+          member: m,
+          lanes: laneCache.get(cacheKey(filterOrg, dateQuery, m.user_id)) || null,
+          error: null,
+        })),
+      );
+      const toFetch = members.filter((m) => !laneCache.has(cacheKey(filterOrg, dateQuery, m.user_id)));
+      setProgress({ done: members.length - toFetch.length, total: members.length });
 
-      await pooled(members, 4, async (m) => {
+      await pooled(toFetch, FANOUT_CONCURRENCY, async (m) => {
         let patch: Partial<UserSlice>;
         try {
           const d: TodayTime = await asUser(m.user_id, `/today-time/?${dateQuery}`);
@@ -419,6 +459,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
             ),
             error: null,
           };
+          if (patch.lanes) laneCache.set(cacheKey(filterOrg, dateQuery, m.user_id), patch.lanes);
         } catch (e: any) {
           patch = { lanes: null, error: e?.message || "failed" };
         }
@@ -517,6 +558,14 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
       return next;
     });
 
+  /** A write changed this user's day; their cached lanes are now stale. */
+  const dropCache = useCallback(
+    (uid: number) => {
+      if (filterOrg) invalidateUser(filterOrg, windowKeyRef.current, uid);
+    },
+    [filterOrg],
+  );
+
   /** Apply one client decision to every block behind a row. */
   const applyRow = useCallback(
     async (row: Row, clientId: number | null, category: string, label: string, source?: string) => {
@@ -527,6 +576,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
         await Promise.all(
           row.blockIds.map((id) => recategorize(row.uid, id, clientId, category, source)),
         );
+        dropCache(row.uid);
         flash(
           `${row.who}: ${row.blockIds.length > 1 ? `${row.blockIds.length} blocks ` : ""}→ ${label}`,
           "ok",
@@ -542,7 +592,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
         markBusy(row.key, false);
       }
     },
-    [flash, recategorize],
+    [dropCache, flash, recategorize],
   );
 
   /** "Always file titles like this here" — confirm AND make it a firm-wide rule. */
@@ -558,6 +608,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
           body: JSON.stringify({ client_id: clientId }),
         });
         await recategorize(row.uid, row.item.block_id, clientId, category, "single_confirm");
+        dropCache(row.uid);
         flash(r?.alias ? `Now always filing “${r.alias}” → ${name}` : `Rule created → ${name}`, "ok");
       } catch (e: any) {
         setHandled((prev) => {
@@ -570,7 +621,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
         markBusy(row.key, false);
       }
     },
-    [asUser, flash, recategorize],
+    [asUser, dropCache, flash, recategorize],
   );
 
   /** Carve a mixed block so each activity books to its own suggested client. */
@@ -591,6 +642,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
           method: "POST",
           body: JSON.stringify({ assignments }),
         });
+        dropCache(row.uid);
         flash(`${row.who}: split into ${sc.slices.length} entries`, "ok");
       } catch {
         setHandled((prev) => {
@@ -603,7 +655,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
         markBusy(row.key, false);
       }
     },
-    [asUser, flash],
+    [asUser, dropCache, flash],
   );
 
   /** Local-only "leave it alone", same as the customer screen's Keep / Skip. */
@@ -856,7 +908,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
           date range
         </label>
 
-        <ActionBtn label={loading ? "loading…" : "load"} onClick={load} disabled={loading || !filterOrg} />
+        <ActionBtn label={loading ? "loading…" : "load"} onClick={() => load(true)} disabled={loading || !filterOrg} />
 
         {loading && progress.total > 0 && (
           <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>

@@ -3307,7 +3307,14 @@ class ClassificationService:
                 for r in reports:
                     if isinstance(r, dict) and r.get('company'):
                         companies.add(r['company'])
-                picked, via = pick_recent_company_file(reports, companies)
+                # The company on THIS block's own active title, kept apart
+                # from the block-wide set: the 'picked' route must agree with
+                # what was on screen, not merely with something the block saw.
+                primary_company = extract_qb_company(
+                    self._strip_qb_screen_bracket(
+                        block.window_title or block.title or ''))
+                picked, via = pick_recent_company_file(
+                    reports, companies, primary_company=primary_company)
                 if picked:
                     path = picked
         except Exception:

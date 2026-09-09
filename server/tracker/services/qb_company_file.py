@@ -147,6 +147,27 @@ def match_stem(path: str, candidates):
 
     if not best or len({b[0] for b in best}) > 1:
         return None
+
+    # The FILE must not out-specify the client. "St. Mary's Cemetery Rome" and
+    # "St. Mary's Cemetery Central SQ" are real files on this share with no
+    # client of their own; client 125's generic alias "St. Mary's Cemetery"
+    # covers most of each name and MIN_COVERAGE happily lets it claim both, so
+    # a Rome cemetery's books land on a Baldwinsville one. A place or name word
+    # in the FILE that appears in none of the client's names means the file is
+    # naming a different entity, and no-answer beats a coin flip.
+    #
+    # Every word is weighed against ALL of that client's matchables, not just
+    # the one that matched: client 105 is named "Sacred Heart & St. Mary's
+    # Church" but carries "Sacred Heart NY Mills", and its file needs both
+    # halves to be accounted for.
+    winner_id = best[0][0]
+    client_words = set()
+    for cid, _cname, matchable in candidates:
+        if cid == winner_id:
+            client_words |= _identifying_words(matchable)
+    file_words = _identifying_words(clean_stem(path))
+    if (file_words - client_words) and (client_words - file_words):
+        return None
     return best[0]
 
 
@@ -283,6 +304,22 @@ _COMPANY_STOPWORDS = frozenset({
 })
 
 
+# Mutually exclusive kinds of entity. A parish keeps its church, its cemetery
+# and its school as SEPARATE clients with separate books, so a title naming one
+# can never be satisfied by a file naming another — however many words they
+# share. Local to this module for the same reason _COMPANY_STOPWORDS is.
+_ENTITY_CLASSES = frozenset({'church', 'cemetery', 'school', 'academy',
+                             'fund', 'foundation'})
+
+
+def _entity_class(text):
+    """Which kind of entity this name claims, if any."""
+    import re as _re
+    words = {w for w in _re.split(r"[^a-z0-9]+", (text or '').lower())}
+    return {w[:-1] if w.endswith('s') and w[:-1] in _ENTITY_CLASSES else w
+            for w in words} & _ENTITY_CLASSES
+
+
 def _identifying_words(text):
     """Words from a company name or file stem that actually name somebody.
 
@@ -303,7 +340,7 @@ def _identifying_words(text):
     return out
 
 
-def pick_recent_company_file(reports, companies):
+def pick_recent_company_file(reports, companies, primary_company=None):
     """Choose the company file this block was working in, or None.
 
     `reports`  — ctx.qb_report dicts from the block's events.
@@ -339,13 +376,61 @@ def pick_recent_company_file(reports, companies):
     # that a St. Patrick's file belongs to a St. Mary's block. With no company
     # name anywhere in the block there is nothing to agree with, so abstain.
     picked = [p for r in reports if isinstance(r, dict) for p in (r.get('picked') or []) if p]
-    if picked and companies:
+    if picked:
+        # Corroborate against the ACTIVE title's company, not every company the
+        # block ever saw. A block whose window title read "Sacred Heart" was
+        # given Divine Mercy Parish because a Divine Mercy window existed
+        # somewhere in the same block: the user had picked that file earlier,
+        # then switched company through the Open Previous menu, which leaves
+        # the MRU pointing at the old one. Checking the whole set made the
+        # staleness invisible — the picked file agreed with SOMETHING, just not
+        # with what was on screen.
+        #
+        # With no company on the active title (a modal like "Print Checks"),
+        # fall back to the block's wider set, but only when it names exactly
+        # ONE company: two different companies in a block means we cannot tell
+        # which the MRU is supposed to agree with.
+        if primary_company:
+            target = {primary_company}
+        elif len(companies or ()) == 1:
+            target = set(companies)
+        else:
+            target = set()
         company_words = set()
-        for name in companies:
+        for name in target:
             company_words |= _identifying_words(name)
-        for path in picked:
-            if _identifying_words(clean_stem(path)) & company_words:
-                return path, 'picked'
+        target_class = set()
+        for name in target:
+            target_class |= _entity_class(name)
+        if company_words:
+            agreeing = []
+            for path in picked:
+                stem = clean_stem(path)
+                if not (_identifying_words(stem) & company_words):
+                    continue
+                # Sharing a saint's name is not agreement. "St. Mary - St.
+                # Peter's Church" and "St. Mary's Cemetery Bville" overlap on
+                # "mary" and nothing else, and they are two different clients
+                # with two different sets of books.
+                file_class = _entity_class(stem)
+                if target_class and file_class and not (target_class & file_class):
+                    continue
+                if path not in agreeing:
+                    agreeing.append(path)
+            # Exactly one DISTINCT file may answer. Deduplication is not
+            # cosmetic: every raw event in the block carries the same MRU, so a
+            # 44-event block offers the same 4 files 44 times, and counting
+            # them raw made every block look ambiguous.
+            #
+            # Two open companies can share one
+            # generic name — "St. Mary's Church" is both Minoa's company name
+            # and Clinton's — and then the MRU holds a file for each, both
+            # agreeing with the title equally well. Taking the newer one is a
+            # coin flip between two parishes reported at full confidence, which
+            # is the failure this module exists to remove. Abstain and let the
+            # Stage-11 picker ask.
+            if len(agreeing) == 1:
+                return agreeing[0], 'picked'
 
     # Freshest observation wins per file: the same file appears in every event's
     # report, ageing as the block runs.

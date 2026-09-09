@@ -223,6 +223,30 @@ check("a 4-char alias cannot claim a file",
 check("normalizer strips punctuation and case",
       norm("St. Mary's Church– Clinton") == "stmaryschurchclinton")
 
+print("\n=== the file must not CONTRADICT the client ===")
+# Real files on org 21's share with no client of their own. Client 125's
+# generic alias "St. Mary's Cemetery" covers most of each name, and
+# MIN_COVERAGE alone happily let it claim both — a Rome cemetery's books
+# landing on a Baldwinsville one.
+_CEM = [(125, "St. Mary's Cemetery Bville", "St. Mary's Cemetery Bville"),
+        (125, "St. Mary's Cemetery Bville", "St Marys Cemetery"),
+        (125, "St. Mary's Cemetery Bville", "St. Mary's Cemetery")]
+check("a cemetery in ANOTHER town is refused",
+      match(path("St. Mary's Cemetery Rome_QB2024.qbw"), _CEM) is None)
+check("and so is one in Central Square",
+      match(path("St. Mary's Cemetery Central SQ_QB2024.qbw"), _CEM) is None)
+check("its OWN file still matches",
+      match(path("St. Mary's Cemetery Bville_QB2024.qbw"), _CEM)[0] == 125)
+
+# One-directional extra detail is normal and must NOT abstain: the file often
+# appends the town to a client whose name never carried one.
+_DM = [(500, 'Divine Mercy Parish', 'Divine Mercy Parish')]
+check("a town appended to the client's own name is kept",
+      match(path('Divine Mercy Parish_Central SQ_QB2024.QBW'), _DM)[0] == 500)
+_FX = [(501, 'St. Francis Xavier Church', 'St. Francis Xavier Church')]
+check("...even when the client name has no town at all",
+      match(path('St. Francis Xavier Church Marcellus_QB2024.QBW'), _FX)[0] == 501)
+
 print("\n=== the shell file-dialog MRU ('picked') ===")
 # The agent reads the current user's ComDlg32 MRU — what was PICKED in an
 # "Open a Company" dialog. It is the one mechanism elevation cannot block, but
@@ -250,6 +274,36 @@ check("with no company named anywhere, abstain",
       picked(["st._marys_minoa.qbw"], []) is None)
 check("agreeing only on words every parish shares is not agreement",
       picked(["st_church_2024.qbw"], ["St. Mary's Church"]) is None)
+# The MRU records the last file CHOSEN, and switching company through the Open
+# Previous menu leaves it pointing at the old one. Seen live: a block whose
+# window title read "Sacred Heart" was handed Divine Mercy Parish because a
+# Divine Mercy window existed elsewhere in the same block.
+def picked_active(files, active, companies=()):
+    got = pick([{"picked": files, "recent": []}], set(companies),
+               primary_company=active)
+    return got[0] if got else None
+
+
+check("a stale pick that contradicts the ACTIVE title is refused",
+      picked_active(['Divine Mercy Parish_Central SQ_QB2024.QBW'],
+                    'Sacred Heart', ['Sacred Heart', 'Divine Mercy Parish']) is None)
+check("the active title's own file is still taken",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], "St. Mary's Church")
+      == "St. Mary's Church_Clinton_QB2024.QBW")
+check("sharing a saint's name is not agreement across entity kinds",
+      picked_active(["St. Mary's Cemetery Bville_QB2024.QBW"],
+                    "St. Mary - St. Peter's Church") is None)
+check("a cemetery title DOES take a cemetery file",
+      picked_active(["St. Mary's Cemetery Bville_QB2024.QBW"],
+                    "St. Mary's Cemetery Bville")
+      == "St. Mary's Cemetery Bville_QB2024.QBW")
+check("a modal with no company falls back to a SINGLE block company",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], None,
+                    ["St. Mary's Church"]) == "St. Mary's Church_Clinton_QB2024.QBW")
+check("...but not when the block saw two companies",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], None,
+                    ["St. Mary's Church", 'Divine Mercy Parish']) is None)
+
 check("'exact' still outranks 'picked'",
       pick([{"exact": ["Q:\\QB\\real.qbw"], "picked": ["other.qbw"], "recent": []}],
            {"St. Mary's Church"})[0] == "Q:\\QB\\real.qbw")

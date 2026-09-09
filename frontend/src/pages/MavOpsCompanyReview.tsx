@@ -181,6 +181,20 @@ const invalidateUser = (orgId: number, windowKey: string, uid: number) =>
   laneCache.delete(cacheKey(orgId, windowKey, uid));
 
 /**
+ * The firm's roster and client list, per org.
+ *
+ * These matter more than they look. Caching the lanes alone did not make the
+ * Needs You / Audit toggle instant, because `load` still awaited the members
+ * and clients calls before it could so much as look at the lane cache — a fully
+ * cached return still paid a round trip and flashed empty. With all three
+ * cached, a return paints synchronously and issues no request at all.
+ *
+ * Neither changes within a sitting; the Load button clears both.
+ */
+const memberCache = new Map<number, Member[]>();
+const clientCache = new Map<number, ClientOpt[]>();
+
+/**
  * Run `fn` over `items` with at most `limit` in flight.
  */
 async function pooled<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
@@ -308,7 +322,11 @@ function ClientPicker({
       </div>
       <div style={{ maxHeight: 190, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 6 }}>
         {matches.length === 0 && (
-          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>no clients match</span>
+          // The client list is fetched alongside the fan-out rather than ahead
+          // of it, so on a cold load the picker can open before it lands.
+          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>
+            {clients.length === 0 ? "loading clients…" : "no clients match"}
+          </span>
         )}
         {matches.map((c) => (
           <button
@@ -395,53 +413,93 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
   );
 
   // ── Load ───────────────────────────────────────────────────────────────────
-  /** `force` = the admin pressed Load, so refetch everyone and ignore the cache. */
+  /** `force` = the admin pressed Load, so refetch everything and ignore the cache. */
   const load = useCallback(async (force = false) => {
     if (!filterOrg) {
       flash("Select a firm above first.", "err");
       return;
     }
     const mine = ++runId.current;
-    setLoading(true);
-    setSlices([]);
     setHandled(new Set());
     setPicking(null);
-    setProgress({ done: 0, total: 0 });
 
     const dateQuery = rangeMode
       ? `start=${startDate}&end=${endDate}`
       : `date=${date}`;
     windowKeyRef.current = dateQuery;
+
     if (force) {
       for (const k of [...laneCache.keys()]) {
         if (k.startsWith(`${filterOrg}|${dateQuery}|`)) laneCache.delete(k);
       }
+      memberCache.delete(filterOrg);
+      clientCache.delete(filterOrg);
     }
 
-    try {
-      const [membersResp, clientResp] = await Promise.all([
-        apiFetch(`/mavops/orgs/${filterOrg}/members/`),
-        // Clients are org-wide; ?org_id= is the staff override the console
-        // already uses elsewhere, so this needs no view-as.
-        apiFetch(`/options/clients/?org_id=${filterOrg}`).catch(() => []),
-      ]);
-      if (runId.current !== mine) return;
-
-      const members: Member[] = membersResp?.members || [];
-      setClients(
-        (Array.isArray(clientResp) ? clientResp : [])
-          .map((c: any) => ({ id: c.id, name: c.name }))
-          .filter((c: ClientOpt) => c.id != null && c.name),
-      );
-      // Members already in cache paint immediately; only the rest are fetched.
+    // ── Paint whatever is cached, synchronously, before awaiting anything ────
+    // This branch is the whole point of the cache: on a toggle back it renders
+    // the queue on the first frame with no request and no empty flash.
+    const knownMembers = memberCache.get(filterOrg);
+    const knownClients = clientCache.get(filterOrg);
+    if (knownClients) setClients(knownClients);
+    if (knownMembers) {
       setSlices(
-        members.map((m) => ({
+        knownMembers.map((m) => ({
           member: m,
           lanes: laneCache.get(cacheKey(filterOrg, dateQuery, m.user_id)) || null,
           error: null,
         })),
       );
-      const toFetch = members.filter((m) => !laneCache.has(cacheKey(filterOrg, dateQuery, m.user_id)));
+      const missing = knownMembers.filter(
+        (m) => !laneCache.has(cacheKey(filterOrg, dateQuery, m.user_id)),
+      );
+      setProgress({ done: knownMembers.length - missing.length, total: knownMembers.length });
+      if (!missing.length && knownClients) {
+        // Nothing left to fetch. Press Load for fresh data.
+        setLoading(false);
+        return;
+      }
+    } else {
+      setSlices([]);
+      setProgress({ done: 0, total: 0 });
+    }
+
+    setLoading(true);
+    try {
+      const members: Member[] =
+        knownMembers ||
+        ((await apiFetch(`/mavops/orgs/${filterOrg}/members/`))?.members ?? []);
+      if (runId.current !== mine) return;
+      memberCache.set(filterOrg, members);
+
+      if (!knownClients) {
+        // Clients are org-wide; ?org_id= is the staff override the console
+        // already uses elsewhere, so this needs no view-as. Not awaited with the
+        // roster — it only feeds the "pick a client" popover, and blocking the
+        // whole queue on it would trade the fan-out's head start for nothing.
+        apiFetch(`/options/clients/?org_id=${filterOrg}`)
+          .then((resp: any) => {
+            const list: ClientOpt[] = (Array.isArray(resp) ? resp : [])
+              .map((c: any) => ({ id: c.id, name: c.name }))
+              .filter((c: ClientOpt) => c.id != null && c.name);
+            clientCache.set(filterOrg, list);
+            if (runId.current === mine) setClients(list);
+          })
+          .catch(() => { /* picker falls back to an empty list */ });
+      }
+
+      if (!knownMembers) {
+        setSlices(
+          members.map((m) => ({
+            member: m,
+            lanes: laneCache.get(cacheKey(filterOrg, dateQuery, m.user_id)) || null,
+            error: null,
+          })),
+        );
+      }
+      const toFetch = members.filter(
+        (m) => !laneCache.has(cacheKey(filterOrg, dateQuery, m.user_id)),
+      );
       setProgress({ done: members.length - toFetch.length, total: members.length });
 
       await pooled(toFetch, FANOUT_CONCURRENCY, async (m) => {

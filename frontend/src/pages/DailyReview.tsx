@@ -734,6 +734,7 @@ export default function DailyReview() {
         confirmed_with_client: number;
         confirmed_no_client: number;
         skipped: number;
+        left_for_you?: number;
         total: number;
       }>(`${API_BASE}/blocks/confirm-all/`, {
         method: "POST",
@@ -747,12 +748,20 @@ export default function DailyReview() {
       const wc = res.confirmed_with_client;
       const nc = res.confirmed_no_client;
       const total = res.total;
+      // Blocks whose title names a look-alike group ("St. Francis") are left
+      // behind on purpose — only a human can say which member, and the row
+      // downstairs is now a one-tap pick. Say so, or the rows still sitting in
+      // Needs You after "Confirmed everything" read as a bug.
+      const left = res.left_for_you || 0;
+      const leftNote = left
+        ? ` \u2014 ${left} left for you to pick a client`
+        : "";
       if (total === 0) {
-        showToast("Nothing to confirm", "success");
+        showToast(left ? `Nothing to confirm${leftNote}` : "Nothing to confirm", "success");
       } else {
         showToast(
           `Confirmed ${total} ${total === 1 ? "block" : "blocks"} \u2014 ` +
-          `${wc} billable, ${nc} non-billable`,
+          `${wc} billable, ${nc} non-billable${leftNote}`,
           "success"
         );
       }

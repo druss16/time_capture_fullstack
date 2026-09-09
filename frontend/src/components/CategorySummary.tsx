@@ -103,6 +103,10 @@ export type ProposedInline = {
   why_explanation?: string;
   why_suggested_client_id?: number | null;
   why_suggested_client_name?: string | null;
+  /** The title names a family of look-alike clients ("St. Francis") but not
+   *  which member. There is no single suggestion to offer, so the row asks —
+   *  these are the one-tap answers, best guess first. */
+  why_candidates?: { client_id: number; client_name: string; short_name: string }[];
   // Learned-pattern maturity for the suggested client (the "Learning… ~N more to
   // auto-file" hint). null = no pattern yet; {mature} = will auto-file already.
   learning?: { mature?: boolean; seen?: number; remaining?: number } | null;

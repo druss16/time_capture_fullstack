@@ -28,6 +28,7 @@ from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 import os
 import re
+import time
 import logging
 
 from django.core.cache import cache
@@ -661,7 +662,185 @@ def _title_client_suggestion(block, org):
     return None
 
 
-def _compose_why(local_time: str, co_open_client, surrounding: dict, title_client=None) -> "tuple[str, str, Optional[int], Optional[str]]":
+def _shared_name_part(names) -> str:
+    """The leading words every one of these client names has in common.
+
+    "St. Francis of Assisi Church" + "St. Francis Xavier Church" -> "St. Francis":
+    the part the title actually said, which is what the sentence should name back
+    to the user. Empty when they share nothing up front.
+    """
+    parts = [re.split(r"[\s_]+", (n or "").strip()) for n in names if n]
+    if not parts:
+        return ""
+    out = []
+    for column in zip(*parts):
+        head = column[0]
+        key = head.lower().strip(".,'’-")
+        if key and all(w.lower().strip(".,'’-") == key for w in column):
+            out.append(head)
+        else:
+            break
+    return " ".join(out).strip(" -,&")
+
+
+# Process-local memo for the look-alike roster. `client_families.for_org` is
+# already cached, but that cache round-trips through pickle, and today-time asks
+# this question once per pending row — paying the unpickle 50 times a page load
+# is the same cost Stage 11 memoized away on its own service instance.
+_LOOKALIKES_MEMO: "dict[int, tuple[float, Any]]" = {}
+_LOOKALIKES_TTL = 120
+
+
+def _lookalikes_cached(org_id):
+    now = time.monotonic()
+    hit = _LOOKALIKES_MEMO.get(org_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    from tracker.services import client_families
+    lookalikes = client_families.for_org(org_id)
+    _LOOKALIKES_MEMO[org_id] = (now + _LOOKALIKES_TTL, lookalikes)
+    return lookalikes
+
+
+def _names_enough(lookalikes, client_id, words) -> bool:
+    """Does this text carry enough of the client's name to be NAMING it?
+
+    `candidates_for` is deliberately generous — it collects everyone a text
+    could mean so the gate can check whether a sibling also fits, and one shared
+    word is enough to get on that list. Generous is wrong for a suggestion: on
+    this roster a single common word turns "Quarterly Sales tax" into "All Round
+    Repair & Sales Corp" and the bare QuickBooks window (…Desktop Plus 2024)
+    into "Inventory Plus, Inc".
+
+    So a positive attribution wants either two of the client's identifying
+    words, or all of them — the whole name of "Church Of Annunciation" is one
+    word, and a title saying "Annunciation" has genuinely said it.
+    """
+    ident = lookalikes.identifying_words(client_id)
+    hit = ident & set(words)
+    return bool(ident) and (len(hit) >= 2 or hit == ident)
+
+
+def _shared_root(lookalikes, candidates, words):
+    """(family, root) — the candidates that collide on ONE word this text says.
+
+    The same bar as `_names_enough`, in its plural form. A title naming a family
+    ("St Francis 6-21.pdf") gives every member the same single matched word, and
+    the fact that several clients answer to it is what makes it a NAME rather
+    than an incidental word: nobody else on the roster shares "sales" with All
+    Round Repair. When several roots qualify, the most specific one wins — a
+    title saying "St Mary Baldwinsville" should ask church-or-school, not line
+    up all fourteen St. Mary's.
+    """
+    by_word = {}
+    for cid in candidates:
+        for word in lookalikes.identifying_words(cid) & set(words):
+            by_word.setdefault(word, []).append(cid)
+    families = [(w, cids) for w, cids in by_word.items() if len(cids) >= 2]
+    if not families:
+        return [], ""
+    root, family = min(families, key=lambda f: (len(f[1]), -len(f[0])))
+    return family, root
+
+
+def _title_family(block, org):
+    """What the block's OWN text says about WHO — via the look-alike roster.
+
+    `_title_client_suggestion` only fires on a whole client name-form (8+ chars)
+    sitting in the title, so a PDF called "St Francis 6-21 & 6-28.pdf" names
+    nobody as far as it is concerned, and the suggestion falls through to "right
+    before this you were working on…". But the text plainly DOES name a client —
+    the roster just holds two St. Francises. That distinction is the whole point
+    of client_families: it is the same view Stage 11 gates commits with.
+
+    Returns None when the text names nobody at all, else
+    ``{'resolved': cid|None, 'resolved_name': str|None, 'candidates': [...],
+       'shared': 'St. Francis'}`` — exactly one of resolved / candidates is set.
+    """
+    try:
+        from tracker.services import client_families
+        lookalikes = _lookalikes_cached(getattr(org, "id", org))
+        words = client_families.text_words(
+            getattr(block, "window_title", "") or getattr(block, "title", "") or "",
+            getattr(block, "file_path", "") or "",
+            getattr(block, "url", "") or "",
+        )
+        candidates = lookalikes.candidates_for(words)
+        if not candidates:
+            return None
+        resolved = lookalikes.resolve(words)
+        if resolved is not None:
+            if not _names_enough(lookalikes, resolved, words):
+                return None  # one incidental word is not a name
+            client = lookalikes.by_id.get(resolved)
+            return {
+                "resolved": resolved,
+                "resolved_name": getattr(client, "name", "") or "",
+                "candidates": [],
+                "shared": "",
+            }
+        family, _root = _shared_root(lookalikes, candidates, words)
+        ranked = lookalikes.rank(family, words) if len(family) >= 2 else []
+        if ranked:
+            # Sharing one word is not being a family. "Home - File Explorer"
+            # collects a funeral home, a home-inspection firm and two others
+            # that have nothing else in common, and asking which of THOSE four a
+            # shell window belongs to is worse than saying nothing. Keep only
+            # the clients that could genuinely be confused with the best guess —
+            # the same pairwise test the gate uses.
+            head, rest = ranked[0], ranked[1:]
+            ranked = [head] + [c for c in rest if lookalikes.are_lookalikes(head, c)]
+        if len(ranked) < 2:
+            return None  # a pile of unrelated single-word brushes, not a family
+        rows = []
+        for cid in ranked:
+            client = lookalikes.by_id.get(cid)
+            if not client:
+                continue
+            rows.append({
+                "client_id": cid,
+                "client_name": client.name,
+                "short_name": lookalikes.short_name(cid, words) or client.name,
+            })
+        return {
+            "resolved": None,
+            "resolved_name": None,
+            "candidates": rows,
+            "shared": _shared_name_part([r["client_name"] for r in rows]),
+        }
+    except Exception:
+        return None
+
+
+def _title_who(block, org):
+    """(title_client, title_family) — everything the block's own text says about
+    who the work belongs to.
+
+    The look-alike resolver leads, because it is the only one of the two that
+    checks whether a SIBLING also fits. The strict matcher looks for a whole
+    client name-form in the title and stops at the first hit, so on this roster
+    "St Patricks Chadwicks Client Information.xlsx" matches the bare
+    "St. Patrick's Church" — a magnet name that is a prefix of three others —
+    and never notices that "Chadwicks" was in the title naming a specific one.
+    The resolver reads the same title and returns St Patricks_St Anthony_
+    Chadwicks, because that is the candidate holding a word the text actually
+    says.
+
+    The strict matcher stays as the fallback for text the roster view finds no
+    candidate for at all (no shared word long enough to be identifying)."""
+    fam = _title_family(block, org)
+    if fam and fam.get("resolved"):
+        return {"client_id": fam["resolved"], "client_name": fam["resolved_name"]}, fam
+    # The text names a group and cannot pick a member. That is an answer — do
+    # NOT let the strict matcher break the tie by grabbing whichever sibling's
+    # name happens to be a substring of the others.
+    if fam and len(fam.get("candidates") or []) >= 2:
+        return None, fam
+    return _title_client_suggestion(block, org), fam
+
+
+def _compose_why(local_time: str, co_open_client, surrounding: dict, title_client=None,
+                 title_family=None) -> "tuple[str, str, Optional[int], Optional[str]]":
     """Return (sentence, tier, suggested_client_id, suggested_client_name).
 
     The suggestion is deliberately offered even at LOWER confidence than the
@@ -688,6 +867,21 @@ def _compose_why(local_time: str, co_open_client, surrounding: dict, title_clien
         return (
             f"The title names {title_client['client_name']}.",
             "title", title_client.get("client_id"), title_client.get("client_name"),
+        )
+
+    # The title names somebody, it just doesn't say WHICH of the look-alikes —
+    # "St Francis 6-21 & 6-28.pdf" with two St. Francises on the roster. That is
+    # still the text naming a client, and it OUTRANKS everything below: the
+    # temporal tiers would answer a question the title already asked, and answer
+    # it with whatever happened to be open beforehand (a different parish
+    # entirely). So stop here, name the family back, and let the human pick.
+    if title_family and len(title_family.get("candidates") or []) >= 2:
+        n = len(title_family["candidates"])
+        shared = title_family.get("shared") or "a client"
+        return (
+            f"The title names {shared} — but {n} clients share that name, "
+            f"and nothing else here says which.",
+            "family", None, None,
         )
 
     sug = (surrounding or {}).get("suggestion") or {}
@@ -772,9 +966,15 @@ def suggested_client_for(block, org):
     # Otherwise the block's own title naming a client beats the temporal tiers below.
     # Not applied to browser tabs — a portal/news title isn't the client.
     if not _is_browser(block):
-        tc = _title_client_suggestion(block, org)
+        tc, fam = _title_who(block, org)
         if tc:
             return tc["client_id"]
+        # ...and when the title names a GROUP of look-alikes but not which one,
+        # that is an answer too: nobody. Falling through to the temporal tiers
+        # here is how "St Francis …pdf" got booked to the parish that happened to
+        # be open beforehand — and via Confirm-all, in bulk, without a question.
+        if fam and len(fam.get("candidates") or []) >= 2:
+            return None
     # A browser tab shouldn't inherit a client from temporal adjacency — a news or
     # social tab is not "the client you worked before/after it". Leave it No client.
     if _is_browser(block):
@@ -787,8 +987,37 @@ def suggested_client_for(block, org):
     return suggested_id
 
 
+def title_names_family(block, org) -> bool:
+    """True when the block's own text names a GROUP of look-alike clients and
+    nothing in it says which — the one question a bulk action must not answer.
+
+    Callers use it to LEAVE a block alone. Before this, "St Francis 6-21 &
+    6-28.pdf" reached Confirm-all with a temporal-neighbour suggestion and got
+    booked, in bulk, to a parish that was merely open beforehand. With the
+    neighbour tier now blocked, the same block would sweep the other way and
+    commit as No Client — billable time quietly zeroed. Neither is an answer:
+    skip it, and let the one-tap pick in Needs You settle it."""
+    if _is_browser(block):
+        return False
+    try:
+        from tracker.services.classification_service import ClassificationService
+        # Something already KNOWS (a .qbw path, a vendor fingerprint, a calendar
+        # invite). The title being ambiguous doesn't make the block ambiguous.
+        if any(ClassificationService._is_identifying(sig)
+               for sig in (getattr(block, "proposed_signals", None) or [])
+               if isinstance(sig, dict)):
+            return False
+    except Exception:
+        pass
+    try:
+        tc, fam = _title_who(block, org)
+    except Exception:
+        return False
+    return bool(tc is None and fam and len(fam.get("candidates") or []) >= 2)
+
+
 def why_summary(block, org):
-    """(explanation, suggested_client_id, suggested_client_name) — the pending-row
+    """(explanation, suggested_client_id, suggested_client_name, candidates) — the pending-row
     parts of the /why/ explanation, so Daily Review can embed them in the
     today-time payload and the frontend needn't fetch /why/ per row (kills the
     post-load lag on the green suggested-client pills). Read-only; mirrors
@@ -802,11 +1031,15 @@ def why_summary(block, org):
         surrounding = {} if _is_browser(block) else (_build_surrounding(block) or {})
     except Exception:
         surrounding = {}
-    tc = None if _is_browser(block) else _title_client_suggestion(block, org)
-    sentence, _tier, sid, sname = _compose_why("", co, surrounding, title_client=tc)
+    tc, fam = (None, None) if _is_browser(block) else _title_who(block, org)
+    sentence, tier, sid, sname = _compose_why(
+        "", co, surrounding, title_client=tc, title_family=fam)
     if _is_browser(block) and not (co and co.get("client_id")):
         sid, sname = None, None
-    return (sentence, sid, sname)
+    # On the family tier there is no single answer to offer — the row renders the
+    # candidates as one-tap buttons instead of a (wrong) green client.
+    candidates = fam["candidates"] if tier == "family" else []
+    return (sentence, sid, sname, candidates)
 
 
 # Trailing " - <x>" app/mode segments to peel off a window title for a clean label.
@@ -1122,19 +1355,19 @@ def block_why(request, block_id: int):
     if _is_browser(block) and not has_co_client:
         surrounding = {}
 
-    tc = None if _is_browser(block) else _title_client_suggestion(block, org)
+    tc, fam = (None, None) if _is_browser(block) else _title_who(block, org)
     explanation, tier, suggested_id, suggested_name = _compose_why(
-        local_time, co_open_client, surrounding, title_client=tc
+        local_time, co_open_client, surrounding, title_client=tc, title_family=fam
     )
     # A title that names a client outranks the personal/timesheet heuristics — those
     # guess from app shape, but the title is explicit about whose work this is.
-    if personal and not has_co_client and tier != "title":
+    if personal and not has_co_client and tier not in ("title", "family"):
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
         suggested_id = suggested_name = None
     # A personal timesheet touches many clients — the temporal-neighbor guess would
     # misleadingly name whoever came next. Label it honestly and suggest no client.
-    elif not has_co_client and tier != "title" and _looks_like_timesheet(block):
+    elif not has_co_client and tier not in ("title", "family") and _looks_like_timesheet(block):
         explanation = "Looks like your own timesheet — internal, not tied to one client."
         tier = "timesheet"
         suggested_id = suggested_name = None
@@ -1160,6 +1393,9 @@ def block_why(request, block_id: int):
         "breakdown": breakdown,
         "suggested_client_id": suggested_id,
         "suggested_client_name": suggested_name,
+        # Only on the "family" tier: the look-alike clients the title is
+        # consistent with, best guess first, for a one-tap pick.
+        "candidates": (fam or {}).get("candidates") or [] if tier == "family" else [],
         "co_open_files": co_open_files[:5],
         "surrounding": surrounding or None,
     })

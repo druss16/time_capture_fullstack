@@ -862,8 +862,12 @@ const PILL_GHOST = "inline-flex w-[104px] items-center justify-center gap-0.5 ro
  *  sitting. Recently-worked clients sort first and carry a marker, so the answer
  *  is usually the leftmost button.
  */
+// Every button in this row is the same kind of thing — an answer to the
+// question above it — so they all carry the amber "needs you" weight. An
+// earlier version tinted only the recently-worked ones, which meant a row with
+// no recent client rendered entirely in white and stopped reading as a prompt.
+// Recency is shown by the check mark instead.
 const PILL_PICK = "inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-amber-700 shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400";
-const PILL_PICK_QUIET = "inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 font-sans text-[11px] font-medium text-foreground shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-muted disabled:opacity-50";
 
 const MAX_VISIBLE_CANDIDATES = 5;
 
@@ -896,18 +900,18 @@ function AmbiguousGroupRow({ g, busy, onPickClient, onPickOther }: {
               onClick={() => onPickClient(c.client_id, c.client_name)}
               disabled={busy}
               title={c.client_name}
-              className={c.recent ? PILL_PICK : PILL_PICK_QUIET}
+              className={PILL_PICK}
             >
               {c.recent && <Check className="h-3 w-3 shrink-0" aria-hidden />}
               <span className="max-w-[190px] truncate">{c.short_name || c.client_name}</span>
             </button>
           ))}
           {hidden > 0 && (
-            <button onClick={() => setShowAll(true)} disabled={busy} className={PILL_PICK_QUIET}>
+            <button onClick={() => setShowAll(true)} disabled={busy} className={PILL_PICK}>
               {hidden} more
             </button>
           )}
-          <button onClick={(e) => onPickOther(e.currentTarget)} disabled={busy} className={PILL_PICK_QUIET}>
+          <button onClick={(e) => onPickOther(e.currentTarget)} disabled={busy} className={PILL_PICK}>
             Someone else…
           </button>
         </div>

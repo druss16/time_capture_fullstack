@@ -91,9 +91,12 @@ def narrow_to_live_family(blocks, org_id):
         live = [c for c in roster.family_for(words) if c in stored]
         if len(live) < 2 or block.client_id not in live:
             continue
-        labels = roster.short_names(live, words)
         detail['candidate_client_ids'] = live
-        detail['candidate_labels'] = {str(c): labels[c] for c in live}
+        # Relabel against the NARROWED set: a button should say what makes that
+        # client unique among the ones still on screen, not among fourteen.
+        detail['candidate_labels'] = {
+            str(c): roster.short_name(c, words, live) for c in live
+        }
         sig['detail'] = detail
     return blocks
 

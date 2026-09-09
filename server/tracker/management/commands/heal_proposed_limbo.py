@@ -37,6 +37,15 @@ Two modes:
            AI guessed on the non-conflicting blocks — including same-family client
            collisions — without a human check. Use with care.
 
+  --commit-only (with evidenced): take the billable half and leave the rest alone.
+           The evidenced blocks commit; the look-alike, genuine-change and
+           no-client ones stay exactly as they are. Use it when the surfacing
+           would swamp somebody: org 21's June sweep surfaces 1,209 rows that
+           fold into nothing (439 of them onto one person), while the 937
+           evidenced blocks in the same pile are 82 h that costs no attention at
+           all to recover. The un-surfaced half is no worse off than before —
+           it stays invisible, which is where it already was.
+
   evidenced (RECOMMENDED for a big pile): hybrid, but it reads the block's text
            before trusting the client on it. A block whose title carries a word
            that actually distinguishes its client from the look-alikes commits;
@@ -102,6 +111,10 @@ class Command(BaseCommand):
                             help='Only heal blocks with day >= this (YYYY-MM-DD)')
         parser.add_argument('--end', type=str, default=None,
                             help='Only heal blocks with day <= this (YYYY-MM-DD, inclusive)')
+        parser.add_argument('--commit-only', action='store_true',
+                            help="evidenced mode only: commit the blocks whose text "
+                                 "backs the client and LEAVE the rest as they are, "
+                                 "instead of surfacing them for review")
         parser.add_argument('--mode', choices=['surface', 'hybrid', 'evidenced'],
                             default='surface',
                             help="'surface' (default, nothing auto-billed), "
@@ -292,7 +305,13 @@ class Command(BaseCommand):
                 f"so they FOLD into the Daily Review picker\n"
                 f"     (without it each is its own pending row)\n"
                 f"  C ({nc_n}) -> is_categorized=False, state='captured' "
-                f"(assign-a-client review)\n")
+                f"(assign-a-client review)\n"
+                if not opts['commit_only'] else
+                f"  A ({gc_n}) -> LEFT AS IS (--commit-only)\n"
+                f"  B-evidenced ({len(ev_ids)}, {ev_m} min / {ev_m/60:.1f} h) -> "
+                f"COMMIT under current client (billable now)\n"
+                f"  B-look-alike ({len(un_ids)}) -> LEFT AS IS (--commit-only)\n"
+                f"  C ({nc_n}) -> LEFT AS IS (--commit-only)\n")
         elif opts['mode'] == 'surface':
             self.stdout.write(self.style.WARNING(
                 "\nsurface mode — nothing auto-billed. All blocks routed to the "
@@ -328,7 +347,23 @@ class Command(BaseCommand):
 
         now = timezone.now()
         with transaction.atomic():
-            if opts['mode'] == 'evidenced':
+            if opts['mode'] == 'evidenced' and opts['commit_only']:
+                # Recovering the billable half costs nobody any attention, and
+                # the other half is no worse off than it was this morning — it
+                # stays invisible, which is exactly where it already was. Split
+                # them so the 82 h does not have to wait on a decision about
+                # 1,200 review rows.
+                b_ok = self._update_in_chunks(
+                    has_client_no_conflict, ev_ids,
+                    classification_state='committed',
+                    categorized_by='ai', categorized_at=now,
+                    state_changed_by='admin_bulk', state_changed_at=now)
+                self.stdout.write(self.style.SUCCESS(
+                    f"\n✅ Committed {b_ok} blocks whose text backs the client "
+                    f"(now billable). {len(un_ids)} look-alike + {gc_n} "
+                    f"genuine-change + {nc_n} no-client left untouched — rerun "
+                    f"without --commit-only when you want them reviewed."))
+            elif opts['mode'] == 'evidenced':
                 a = genuine_change.update(
                     is_categorized=False,
                     state_changed_by='admin_bulk', state_changed_at=now)

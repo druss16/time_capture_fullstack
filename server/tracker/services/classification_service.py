@@ -2872,6 +2872,30 @@ class ClassificationService:
                    for t in alias_c.split()):
                 return True
 
+        # LEADING-PREFIX: the text carries the FRONT of the client's name.
+        # "CNY Coin Client Information - Excel" names client 207, whose every
+        # name form reads "CNY Coin & Silver, Inc." — but the whole phrase is
+        # not in the title, and the token path needs TWO matching words while
+        # the title supplies only "coin", because "CNY" is three characters and
+        # is dropped as too short everywhere. One word, rejected, and a temporal
+        # neighbour filled the gap with an unrelated parish.
+        #
+        # Requires a contiguous run of 2+ leading tokens carrying a word that
+        # identifies somebody, so "St. Mary" still matches every St. Mary and
+        # collides into the picker rather than picking one. It is a prefix of
+        # the CLIENT's name, never of the title, so a longer client name can
+        # never be claimed by a shorter mention of something else.
+        alias_prefix_tokens = alias_n.split()
+        for _k in range(len(alias_prefix_tokens) - 1, 1, -1):
+            _prefix = ' '.join(alias_prefix_tokens[:_k])
+            if _prefix not in haystack_n:
+                continue
+            if any(len(t) >= 4 and t not in DOMAIN_COMMON_WORDS
+                   and t not in ALIAS_STOP_WORDS
+                   for t in alias_prefix_tokens[:_k]):
+                return True
+            break
+
         # Token-based fallback
         alias_tokens = [
             t for t in alias_n.split()

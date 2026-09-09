@@ -292,12 +292,19 @@ class Command(BaseCommand):
                 })
                 block.proposed_signals = signals
                 block.classification_state = 'proposed'
+                # is_categorized marks a block as CONFIRMED, and the invariant
+                # apply() enforces is is_categorized == (state == 'committed').
+                # Reopening a committed block without clearing it strands the
+                # block in the proposed-limbo state: today_time's review pile
+                # and Confirm-all both filter is_categorized=False, so the block
+                # disappears from the queue that is supposed to ask about it.
+                block.is_categorized = False
                 block.needs_review = True
                 block.review_reason = (
                     'The title names a group of look-alike clients but not which one'
                 )
                 block.state_changed_by = 'backfill_lookalike'
                 block.save(force_classifier=True, update_fields=[
-                    'proposed_signals', 'classification_state', 'needs_review',
-                    'review_reason', 'state_changed_by',
+                    'proposed_signals', 'classification_state', 'is_categorized',
+                    'needs_review', 'review_reason', 'state_changed_by',
                 ])

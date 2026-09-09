@@ -1652,7 +1652,18 @@ def mavops_assign_mismatches(request):
             b.state_changed_by = 'correction'
             b.state_changed_at = timezone.now()
             b.categorized_by = 'correction'
-            update_fields += ['state_changed_by', 'state_changed_at', 'categorized_by']
+            # ...and a person settling it is the whole definition of committed.
+            # Without this a block already stranded in proposed-limbo (state
+            # 'proposed' but is_categorized=True) STAYS there after a human
+            # re-files it: billing skips it for being proposed, the review queue
+            # skips it for being categorized, and the correction that was
+            # supposed to fix it changes nothing anyone can see. 125 org-21
+            # blocks reached August that way.
+            if b.classification_state != 'committed':
+                b.classification_state = 'committed'
+                b.is_categorized = True
+            update_fields += ['state_changed_by', 'state_changed_at', 'categorized_by',
+                              'classification_state', 'is_categorized']
             b.save(update_fields=update_fields, force_classifier=True)
 
             ClassificationAudit.objects.create(

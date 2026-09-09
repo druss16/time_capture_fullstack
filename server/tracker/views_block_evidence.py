@@ -721,28 +721,6 @@ def _names_enough(lookalikes, client_id, words) -> bool:
     return bool(ident) and (len(hit) >= 2 or hit == ident)
 
 
-def _shared_root(lookalikes, candidates, words):
-    """(family, root) — the candidates that collide on ONE word this text says.
-
-    The same bar as `_names_enough`, in its plural form. A title naming a family
-    ("St Francis 6-21.pdf") gives every member the same single matched word, and
-    the fact that several clients answer to it is what makes it a NAME rather
-    than an incidental word: nobody else on the roster shares "sales" with All
-    Round Repair. When several roots qualify, the most specific one wins — a
-    title saying "St Mary Baldwinsville" should ask church-or-school, not line
-    up all fourteen St. Mary's.
-    """
-    by_word = {}
-    for cid in candidates:
-        for word in lookalikes.identifying_words(cid) & set(words):
-            by_word.setdefault(word, []).append(cid)
-    families = [(w, cids) for w, cids in by_word.items() if len(cids) >= 2]
-    if not families:
-        return [], ""
-    root, family = min(families, key=lambda f: (len(f[1]), -len(f[0])))
-    return family, root
-
-
 def _title_family(block, org):
     """What the block's OWN text says about WHO — via the look-alike roster.
 
@@ -779,19 +757,12 @@ def _title_family(block, org):
                 "candidates": [],
                 "shared": "",
             }
-        family, _root = _shared_root(lookalikes, candidates, words)
-        ranked = lookalikes.rank(family, words) if len(family) >= 2 else []
-        if ranked:
-            # Sharing one word is not being a family. "Home - File Explorer"
-            # collects a funeral home, a home-inspection firm and two others
-            # that have nothing else in common, and asking which of THOSE four a
-            # shell window belongs to is worse than saying nothing. Keep only
-            # the clients that could genuinely be confused with the best guess —
-            # the same pairwise test the gate uses.
-            head, rest = ranked[0], ranked[1:]
-            ranked = [head] + [c for c in rest if lookalikes.are_lookalikes(head, c)]
-        if len(ranked) < 2:
-            return None  # a pile of unrelated single-word brushes, not a family
+        # The group actually worth asking about — a shared root, and members
+        # that could be confused with each other (see family_for). Empty when
+        # the candidates are just unrelated single-word brushes.
+        ranked = lookalikes.family_for(words, candidates)
+        if not ranked:
+            return None
         rows = []
         for cid in ranked:
             client = lookalikes.by_id.get(cid)

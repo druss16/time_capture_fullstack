@@ -144,7 +144,16 @@ class Command(BaseCommand):
                 continue
             if resolved and not unsafe_swap:
                 continue  # the text does name one, and naming it was safe
-            reopens.append((block, lookalikes.rank(candidates, words), words))
+            # Ask the same question the live suggestion asks. candidates_for is
+            # generous by design, and a reopen spends someone's attention: over
+            # org 21 since June it offers 118 blocks, 41 of which are candidate
+            # piles that share one incidental word and no family. family_for
+            # also narrows the real ones — a "St Marys Baldwinsville" title goes
+            # from fourteen buttons to the two that differ (church vs school).
+            family = lookalikes.family_for(words, candidates)
+            if not family or block.client_id not in family:
+                continue
+            reopens.append((block, family, words))
 
         self._report(blocks, corrections, reopens, skipped_human, names,
                      opts['reopen_ambiguous'])

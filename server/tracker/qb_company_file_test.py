@@ -274,6 +274,36 @@ check("with no company named anywhere, abstain",
       picked(["st._marys_minoa.qbw"], []) is None)
 check("agreeing only on words every parish shares is not agreement",
       picked(["st_church_2024.qbw"], ["St. Mary's Church"]) is None)
+# The MRU records the last file CHOSEN, and switching company through the Open
+# Previous menu leaves it pointing at the old one. Seen live: a block whose
+# window title read "Sacred Heart" was handed Divine Mercy Parish because a
+# Divine Mercy window existed elsewhere in the same block.
+def picked_active(files, active, companies=()):
+    got = pick([{"picked": files, "recent": []}], set(companies),
+               primary_company=active)
+    return got[0] if got else None
+
+
+check("a stale pick that contradicts the ACTIVE title is refused",
+      picked_active(['Divine Mercy Parish_Central SQ_QB2024.QBW'],
+                    'Sacred Heart', ['Sacred Heart', 'Divine Mercy Parish']) is None)
+check("the active title's own file is still taken",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], "St. Mary's Church")
+      == "St. Mary's Church_Clinton_QB2024.QBW")
+check("sharing a saint's name is not agreement across entity kinds",
+      picked_active(["St. Mary's Cemetery Bville_QB2024.QBW"],
+                    "St. Mary - St. Peter's Church") is None)
+check("a cemetery title DOES take a cemetery file",
+      picked_active(["St. Mary's Cemetery Bville_QB2024.QBW"],
+                    "St. Mary's Cemetery Bville")
+      == "St. Mary's Cemetery Bville_QB2024.QBW")
+check("a modal with no company falls back to a SINGLE block company",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], None,
+                    ["St. Mary's Church"]) == "St. Mary's Church_Clinton_QB2024.QBW")
+check("...but not when the block saw two companies",
+      picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], None,
+                    ["St. Mary's Church", 'Divine Mercy Parish']) is None)
+
 check("'exact' still outranks 'picked'",
       pick([{"exact": ["Q:\\QB\\real.qbw"], "picked": ["other.qbw"], "recent": []}],
            {"St. Mary's Church"})[0] == "Q:\\QB\\real.qbw")

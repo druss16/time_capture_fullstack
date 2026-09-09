@@ -33,9 +33,15 @@ class UtilizationLens(Lens):
         # ONE utilization number: Mix (billable ÷ tracked active time) — the
         # honest efficiency figure for an activity tracker, and the one directly
         # comparable to the "~75% of working time should be billable" benchmark.
-        # Capacity Utilization is not in the hero (it reads artificially low
-        # because tracked time excludes idle); it lives in the By-Staff table as
-        # the "Cap. Util" column for anyone who wants it.
+        #
+        # Capacity Utilization used to sit in the By-Staff table as a "Cap. Util"
+        # column. It's gone: billable ÷ wall-clock capacity divides active-only
+        # time by hours that include every gap the agent doesn't see, so it reads
+        # artificially low and invites exactly the wrong conclusion about a
+        # person. Coverage (tracked ÷ capacity, in the by-tier table) is the
+        # honest version of that question — it asks how much of the week we
+        # captured, without dressing it up as productivity. The metric stays
+        # registered for the v1/v2 reconcile command; it just isn't shown.
         sections.append(headline_row(
             ["billable_mix", "billable_hours", "total_hours"],
             org, scope, time, compare,
@@ -121,24 +127,15 @@ class UtilizationLens(Lens):
     def _by_staff_section(self, org, scope, time) -> Section:
         per_user, excluded_ids, _ = self._per_user(org, scope, time)
 
-        # Capacity is a whole-person concept (available hours), so it's only
-        # meaningful when the rows ARE the whole person — firm or staff scope.
-        # At client/service scope the billable/tracked numbers are just this
-        # client's slice, so dividing by full capacity is nonsense — drop the
-        # capacity columns entirely there.
-        cap_meaningful = scope.type in ("firm", "staff")
-
         def _row(uid, d):
-            bh, th, cap = d["billable_h"], d["total_h"], d["cap_h"]
+            bh, th = d["billable_h"], d["total_h"]
             util = (bh / th * 100) if th > 0 else 0.0       # billable ÷ tracked
-            cap_util = (bh / cap * 100) if cap > 0 else 0.0  # billable ÷ capacity
             return {
                 "user_id": uid,
                 "name": d["name"],
                 "billable_hours": round(bh, 2),
                 "tracked_hours": round(th, 2),
                 "utilization": round(util, 1),
-                "cap_util": round(cap_util, 1),
             }
 
         cols = [
@@ -150,9 +147,6 @@ class UtilizationLens(Lens):
             column("utilization", "Utilization", "percent_1dp",
                    tooltip="Billable ÷ Tracked. Of the time actually spent working at the computer, how much was billable. The one utilization number — comparable to the ~75% 'billable share of working time' benchmark."),
         ]
-        if cap_meaningful:
-            cols.append(column("cap_util", "Cap. Util", "percent_1dp",
-                   tooltip="Billable ÷ Capacity (available wall-clock hours). The traditional utilization definition; reads lower here because tracked time excludes idle/away time. Not shown at client scope, where capacity isn't per-client."))
 
         main_rows = sorted(
             (_row(uid, d) for uid, d in per_user.items() if uid not in excluded_ids),

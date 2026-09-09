@@ -14,7 +14,7 @@
  * is the one number that doesn't depend on how much we managed to record.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Check, RefreshCw, Search, AlertTriangle } from 'lucide-react';
+import { Check, RefreshCw, Search, AlertTriangle, Upload } from 'lucide-react';
 import { API_BASE, safeFetchJson } from '@/lib/api';
 import { inputClass, labelClass, primaryBtnClass } from './ui';
 
@@ -27,6 +27,8 @@ interface Row {
   budget_mixed: boolean;
   budget_fee: number | null;
   budget_source: string;
+  typical_hours: number;
+  typical_value: number | null;
 }
 interface Payload {
   bill_rate: number;
@@ -55,6 +57,38 @@ export default function EngagementBudgetsTab({
   const [onlyUnset, setOnlyUnset] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [upload, setUpload] = useState<any | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  // Preview first, always. A fee schedule is 166 rows of somebody's typing and
+  // a mis-keyed client name should surface before it writes, not after.
+  const sendCsv = async (file: File, applyIt: boolean) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (applyIt) fd.append('apply', 'true');
+      const res = await fetch(`${API_BASE}/engagements/budget-csv/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')
+                   || localStorage.getItem('tt_auth_token') || ''}` },
+        body: fd,
+      });
+      const body = await res.json();
+      if (!res.ok) { onError(body.error || 'Upload failed'); return; }
+      setUpload({ ...body, file });
+      if (applyIt) {
+        onSuccess(`${body.summary.rows} jobs updated across ${body.summary.periods} periods`);
+        setUpload(null);
+        load();
+      }
+    } catch (e: any) {
+      onError(e?.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
 
   const key = (r: Row) => `${r.client_id}:${r.engagement_type}`;
 
@@ -138,6 +172,62 @@ export default function EngagementBudgetsTab({
         </div>
       )}
 
+      <div className="rounded-lg border border-border/70 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className={`${primaryBtnClass} cursor-pointer px-3 py-1.5`}>
+            {uploading
+              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              : <Upload className="w-3.5 h-3.5" />}
+            <span>Upload a fee schedule</span>
+            <input type="file" accept=".csv,text/csv" className="hidden"
+                   onChange={e => {
+                     const fl = e.target.files?.[0];
+                     if (fl) sendCsv(fl, false);
+                     e.target.value = '';
+                   }} />
+          </label>
+          <span className="text-[12px] text-slate-500">
+            CSV with <code className="text-slate-600">client, engagement_type, monthly_fee</code>
+            {' '}— we'll show you what it changes before anything is written.
+          </span>
+        </div>
+
+        {upload && (
+          <div className="mt-3 border-t border-border/60 pt-3 text-[12.5px]">
+            <div className="font-medium text-slate-800">
+              {upload.summary.rows} job{upload.summary.rows === 1 ? '' : 's'} would change
+              {upload.summary.periods
+                ? ` across ${upload.summary.periods} periods`
+                : ''}
+              {upload.summary.problems > 0 && (
+                <span className="text-rose-600 font-normal">
+                  {' '}· {upload.summary.problems} row{upload.summary.problems === 1 ? '' : 's'} we couldn't use
+                </span>
+              )}
+            </div>
+            {upload.problems.length > 0 && (
+              <ul className="mt-1.5 text-rose-700 space-y-0.5 max-h-32 overflow-y-auto">
+                {upload.problems.slice(0, 12).map((p: any) => (
+                  <li key={p.line}>Line {p.line}: {p.reason}</li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-2 mt-2.5">
+              <button className={`${primaryBtnClass} px-3 py-1.5`}
+                      disabled={uploading || upload.summary.rows === 0}
+                      onClick={() => sendCsv(upload.file, true)}>
+                <Check className="w-3.5 h-3.5" />
+                <span>Apply {upload.summary.rows} change{upload.summary.rows === 1 ? '' : 's'}</span>
+              </button>
+              <button className="text-[12px] text-slate-500 hover:text-slate-700"
+                      onClick={() => setUpload(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -169,6 +259,7 @@ export default function EngagementBudgetsTab({
               <th className="px-3 py-2 font-medium">Client</th>
               <th className="px-3 py-2 font-medium">Job</th>
               <th className="px-3 py-2 font-medium text-right">Periods</th>
+              <th className="px-3 py-2 font-medium text-right">We see</th>
               <th className="px-3 py-2 font-medium text-right">Budget</th>
               <th className="px-3 py-2 font-medium">Where it came from</th>
               <th className="px-3 py-2 font-medium">Fee per period</th>
@@ -186,6 +277,16 @@ export default function EngagementBudgetsTab({
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-500">
                     {r.open_periods}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {r.typical_hours > 0 ? (
+                      <span title="Typical hours we captured per period. A floor — work off this computer isn't in it.">
+                        {r.typical_hours}h
+                        {r.typical_value ? (
+                          <span className="text-slate-400"> · ${r.typical_value.toLocaleString()}</span>
+                        ) : null}
+                      </span>
+                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.budget_mixed
@@ -218,7 +319,8 @@ export default function EngagementBudgetsTab({
                       <button
                         onClick={() => save(r, draft)}
                         disabled={!draft.trim() || savingKey === k}
-                        className={`${primaryBtnClass} px-2 py-1 disabled:opacity-40`}
+                        className={`${primaryBtnClass} px-2 py-1 ${
+                          draft.trim() ? '' : 'invisible'}`}
                         title={bill_rate > 0
                           ? `Divided by your $${bill_rate}/h rate to get hours`
                           : 'Set a firm bill rate first'}
@@ -233,7 +335,7 @@ export default function EngagementBudgetsTab({
               );
             })}
             {visible.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400 text-sm">
+              <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400 text-sm">
                 Nothing matches that filter.
               </td></tr>
             )}

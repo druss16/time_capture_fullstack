@@ -75,7 +75,7 @@ export default function Sidebar({ body, onChange }: Props) {
 
   return (
     <aside
-      className="w-64 shrink-0 border-r border-border/70 px-4 py-6 space-y-6 overflow-y-auto"
+      className="w-64 shrink-0 border-r border-border/70 px-4 py-6 space-y-6 overflow-y-auto print:hidden"
       style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
     >
       {/* Scope section */}

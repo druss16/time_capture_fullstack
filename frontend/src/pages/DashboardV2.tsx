@@ -64,11 +64,11 @@ export default function DashboardV2() {
 
   // ─── Render ─────────────────────────────────────────────────────────────
   return (
-    <div className="flex min-h-[calc(100vh-64px)] -mx-4 -my-6">
+    <div className="flex min-h-[calc(100vh-64px)] -mx-4 -my-6 print:block print:m-0 print:min-h-0">
       <Sidebar body={body} onChange={handleSidebarChange} />
 
       <main
-        className="flex-1 min-w-0"
+        className="flex-1 min-w-0 print:bg-white"
         style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
       >
         <ViewSentence
@@ -79,7 +79,7 @@ export default function DashboardV2() {
           onRefresh={() => refetch()}
         />
 
-        <div className="px-6 py-6 space-y-6">
+        <div className="px-6 py-6 space-y-6 print:px-0 print:py-3 print:space-y-4">
           {/* Loading state — only when there's no cached data at all */}
           {isLoading && (
             <div className="flex items-center justify-center py-24 text-slate-400">

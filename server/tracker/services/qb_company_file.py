@@ -403,6 +403,7 @@ def pick_recent_company_file(reports, companies, primary_company=None):
         for name in target:
             target_class |= _entity_class(name)
         if company_words:
+            agreeing = []
             for path in picked:
                 stem = clean_stem(path)
                 if not (_identifying_words(stem) & company_words):
@@ -414,7 +415,22 @@ def pick_recent_company_file(reports, companies, primary_company=None):
                 file_class = _entity_class(stem)
                 if target_class and file_class and not (target_class & file_class):
                     continue
-                return path, 'picked'
+                if path not in agreeing:
+                    agreeing.append(path)
+            # Exactly one DISTINCT file may answer. Deduplication is not
+            # cosmetic: every raw event in the block carries the same MRU, so a
+            # 44-event block offers the same 4 files 44 times, and counting
+            # them raw made every block look ambiguous.
+            #
+            # Two open companies can share one
+            # generic name — "St. Mary's Church" is both Minoa's company name
+            # and Clinton's — and then the MRU holds a file for each, both
+            # agreeing with the title equally well. Taking the newer one is a
+            # coin flip between two parishes reported at full confidence, which
+            # is the failure this module exists to remove. Abstain and let the
+            # Stage-11 picker ask.
+            if len(agreeing) == 1:
+                return agreeing[0], 'picked'
 
     # Freshest observation wins per file: the same file appears in every event's
     # report, ageing as the block runs.

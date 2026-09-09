@@ -295,7 +295,7 @@ class Command(BaseCommand):
                         'chosen_client_id': block.client_id,
                         'candidate_client_ids': ranked,
                         'candidate_labels': {
-                            str(c): lookalikes.short_name(c, words) for c in ranked
+                            str(c): lookalikes.short_name(c, words, ranked) for c in ranked
                         },
                     },
                 })

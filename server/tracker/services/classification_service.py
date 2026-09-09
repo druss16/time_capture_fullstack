@@ -625,8 +625,19 @@ class ClassificationService:
             # stage still never decides anything.
             if client_id and client_id not in candidates:
                 return decision
-            # The text DOES single one out — that's evidence, not a guess.
-            if lookalikes.resolve(words) is not None:
+            # With a client already attached, a text that singles one out is
+            # evidence and there is nothing to ask.
+            #
+            # With NO client it means much less. Nothing applies resolve()'s
+            # answer to an unattributed block, so "it resolved" only means the
+            # user gets a search box instead of the shortlist. And resolve() is
+            # least trustworthy exactly here: "St Francis Altar Rosary Checking
+            # Aug2026.pdf" resolves to Church of Our Lady of The Rosary, because
+            # that client's whole identity is one word and "Rosary" appears —
+            # in "Altar Rosary", a St. Francis society. Offering the three
+            # candidates is both more useful and more honest than acting on
+            # that.
+            if client_id and lookalikes.resolve(words) is not None:
                 return decision
 
             ranked = lookalikes.rank(candidates, words)
@@ -647,7 +658,7 @@ class ClassificationService:
                     'chosen_client_id': client_id,
                     'candidate_client_ids': ranked,
                     'candidate_labels': {
-                        str(c): lookalikes.short_name(c, words) for c in ranked
+                        str(c): lookalikes.short_name(c, words, ranked) for c in ranked
                     },
                 },
             ))

@@ -240,7 +240,7 @@ export default function SupportWidget() {
                 <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
               )}
             </div>
-            {(m.sources?.length ?? 0) > 0 && (
+            {m.sources && m.sources.length > 0 && (
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
                 Sources: {m.sources.map((s: Source) => s.title).join(", ")}
               </div>

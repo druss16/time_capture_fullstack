@@ -28,6 +28,7 @@ export type OrgInfo = {
   billing_rate_default: string;
   cost_rate_default?: string;
   payroll_burden_multiplier?: string;
+  wip_auto_relief?: boolean;
   target_utilization?: string;
   capacity_hours_per_week?: string;
   created_at: string;

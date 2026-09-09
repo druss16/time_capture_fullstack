@@ -179,14 +179,26 @@ def _count_open_disagreements(org, scope, time) -> int:
 # --- card builders ---
 
 def _wip_aging_card(org, scope, aged_total, bands) -> InsightCardPayload:
+    # "Risk of write-off, prioritize billing" is a claim about the firm's
+    # receivables. We're a time record, not a billing system: without invoice
+    # data we cannot tell aged-and-unbilled from aged-and-billed-months-ago, and
+    # saying otherwise sends someone chasing an invoice they already sent. The
+    # billing read is offered only once invoices are actually here.
+    from ..permissions import firm_invoices_here
+    if firm_invoices_here(org):
+        tail = "Risk of write-off — prioritize billing these clients."
+    else:
+        tail = ("No invoice data has been imported, so this is time we haven't "
+                "been told was billed — some of it may already be invoiced. "
+                "Import invoices to tell the two apart.")
     return InsightCardPayload(
         id="threshold_wip_aged",
-        severity="bad",
-        headline=f"WIP aged 60+ days: ${aged_total:,.0f}",
+        severity="bad" if firm_invoices_here(org) else "watch",
+        headline=f"Unbilled-as-far-as-we-know, 60+ days: ${aged_total:,.0f}",
         body=(
             f"${bands['61_90']:,.0f} in 61-90 day band, "
             f"${bands['90_plus']:,.0f} in 90+ band. "
-            f"Risk of write-off — prioritize billing these clients."
+            f"{tail}"
         ),
         evidence=[
             {"label": "61-90 days", "value": f"${bands['61_90']:,.0f}"},

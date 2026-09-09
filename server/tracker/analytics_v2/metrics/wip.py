@@ -127,7 +127,7 @@ def unassigned_qs(org: Organization, scope: Scope | None = None) -> QuerySet:
 
 @register_metric("wip_unassigned")
 class WipUnassignedMetric(Metric):
-    """Value of billable time that has no client and therefore cannot be billed."""
+    """Value of billable time with no client, so it can never be reconciled."""
     label = "Needs a Client"
     format = "currency_0dp"
     tooltip = "Needs a Client = Σ(billable value where client is empty)\n\nCan't be invoiced, so it is NOT counted in WIP.\nA cleanup backlog, not money owed."
@@ -223,7 +223,7 @@ def _realizable_secondary(org, scope, time, gross_total, metric_self) -> dict | 
 class WipTotalMetric(Metric):
     label = "WIP Total"
     format = "currency_0dp"
-    tooltip = "WIP = Σ(uninvoiced billable value)\n     confirmed + approved, client attached\n\nA running BALANCE — it ignores the date filter above."
+    tooltip = "WIP = Σ(billable value not recorded as billed)\n     confirmed + approved, client attached\n\nTimeTracker records time; it does not bill. This is time we\nhave NOT been told was invoiced — not a claim that it wasn't.\nImport invoices and this drains as they land.\n\nA running BALANCE — it ignores the date filter above."
     valid_scopes = ("firm", "client", "staff", "composite")
     delta_good_when = "down"  # Lower WIP = faster billing = better cash flow
 
@@ -268,7 +268,7 @@ class WipUnreviewedMetric(Metric):
 class WipAged60PlusMetric(Metric):
     label = "WIP Aged 60+"
     format = "currency_0dp"
-    tooltip = "WIP 60+ = Σ(WIP where work date > 60 days ago)\n\nAged from the WORK date, not the approval date."
+    tooltip = "WIP 60+ = Σ(WIP where work date > 60 days ago)\n\nAged from the WORK date, not the approval date. With no\ninvoice data imported this measures how long time has sat\nunreconciled here — not how long a client has gone unbilled."
     valid_scopes = ("firm", "client", "staff", "composite")
     delta_good_when = "down"
 

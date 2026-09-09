@@ -970,6 +970,24 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
     return () => { alive = false; };
   }, [showSubmitModal, timesheetData?.timesheet_id, forcedConflicts]);
 
+  // What this submission actually represents. A pushed entry looks the same
+  // whether it carries all of someone's week or a third of it, and downstream it
+  // reads as a complete claim — so the one moment worth saying otherwise is here,
+  // before it becomes a bill.
+  const [sendContext, setSendContext] = useState<{
+    billable_hours: number; total_hours: number; unreviewed_hours: number;
+    capacity_hours: number | null; coverage_pct: number | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!showSubmitModal || !timesheetData?.timesheet_id) { setSendContext(null); return; }
+    let alive = true;
+    safeFetchJson(`${API_BASE}/billing/timesheets/${timesheetData.timesheet_id}/send-context/`)
+      .then((d: any) => { if (alive) setSendContext(d); })
+      .catch(() => { /* the caveat is worth having, not worth blocking a submit */ });
+    return () => { alive = false; };
+  }, [showSubmitModal, timesheetData?.timesheet_id]);
+
   const handleSubmit = async () => {
     if (!timesheetData?.timesheet_id) return;
     setSubmitting(true);
@@ -1639,6 +1657,40 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                   </div>
                 ))}
               </div>
+
+              {sendContext && (
+                <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-muted-foreground">
+                  <p>
+                    You're sending{' '}
+                    <span className="font-semibold text-foreground tabular-nums">
+                      {sendContext.billable_hours}h
+                    </span>{' '}
+                    of billable time that you've confirmed. This is the time we
+                    captured — it's the record, not the bill.
+                  </p>
+                  {sendContext.coverage_pct !== null && sendContext.coverage_pct < 80 && (
+                    <p className="mt-1.5">
+                      We saw about{' '}
+                      <span className="font-semibold text-amber-700 tabular-nums">
+                        {sendContext.coverage_pct}%
+                      </span>{' '}
+                      of your scheduled week
+                      {sendContext.capacity_hours ? ` (${sendContext.total_hours}h of ${sendContext.capacity_hours}h)` : ''}.
+                      Anything worked away from this computer won't be here —
+                      check for it before this becomes a bill.
+                    </p>
+                  )}
+                  {sendContext.unreviewed_hours > 0.1 && (
+                    <p className="mt-1.5">
+                      <span className="font-semibold text-amber-700 tabular-nums">
+                        {sendContext.unreviewed_hours}h
+                      </span>{' '}
+                      is still waiting in Daily Review and is <em>not</em> included.
+                      Confirm it there first if it should go out.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Notes and the Clio summary sit side by side. Stacked, this
                   dialog ran taller than most laptop screens and the submit

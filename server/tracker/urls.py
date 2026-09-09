@@ -221,6 +221,7 @@ urlpatterns = [
     path("engagements/<int:engagement_id>/budget/", views_engagements.set_engagement_budget, name="engagement-set-budget"),
     path("engagements/budget-setup/", views_engagements.engagement_budget_setup, name="engagement-budget-setup"),
     path("engagements/budget-group/", views_engagements.set_engagement_budget_group, name="engagement-set-budget-group"),
+    path("engagements/budget-csv/", views_engagements.engagement_budget_csv, name="engagement-budget-csv"),
     
     # Block Billing Management
     path("billing/blocks/<int:block_id>/", views_billing.update_block_billing, name="update-block-billing"),

@@ -4835,7 +4835,10 @@ def today_time(request):
         _amb = [
             _b for _b in Block.objects.filter(
                 org=org, user=user, start__gte=start_utc, start__lt=end_utc,
-                classification_state='proposed',
+                # 'captured' as well as 'proposed': a block with no client at
+                # all is exactly the one worth offering a short list for, and
+                # those sit in captured.
+                classification_state__in=('proposed', 'captured'),
             ).only(
                 'id', 'user_id', 'window_title', 'title', 'minutes', 'start',
                 'end', 'category_hours', 'proposed_signals',

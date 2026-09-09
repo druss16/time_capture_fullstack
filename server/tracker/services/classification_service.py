@@ -580,16 +580,22 @@ class ClassificationService:
             identifies the parish the title can't.
           * It only downgrades. It never picks a different client, never
             commits, and never touches a block another stage already resolved.
+            A block with no client keeps having no client — it just gains the
+            candidate list, so Daily Review can offer two parishes instead of
+            a search box over three hundred.
         """
-        if decision.recommended_state != 'committed':
+        # State matters only for the with-a-client case, where this stage's job
+        # is to stop a commit. A block with NO client is not being committed to
+        # anything — attaching the candidate list is pure gain whatever state it
+        # is in, and "captured" is where the no-match blocks actually sit.
+        if decision.recommended_state not in ('committed', 'proposed', 'captured'):
             return decision
         client_id = decision.client_id or next(
             (s.proposed_client_id for s in decision.matched_signals
              if s.proposed_client_id is not None), None)
-        if not client_id:
-            return decision
-        if any(self._is_identifying(s) and s.proposed_client_id == client_id
-               for s in decision.matched_signals):
+        if client_id and any(
+                self._is_identifying(s) and s.proposed_client_id == client_id
+                for s in decision.matched_signals):
             return decision
 
         try:
@@ -606,16 +612,26 @@ class ClassificationService:
                 getattr(block, 'url', '') or '',
             )
             candidates = lookalikes.candidates_for(words)
-            # Nothing to be confused with, or the block was filed somewhere the
-            # text never pointed (inherited context) — leave it alone.
-            if len(candidates) < 2 or client_id not in candidates:
+            if len(candidates) < 2:
+                return decision
+            # With a client, gate only when the text actually pointed at it —
+            # a block filed from inherited context is not this stage's business.
+            #
+            # With NO client, the question is if anything MORE worth asking:
+            # "St Francis 6-21 & 6-28.pdf" names a group and nothing else, so
+            # the alternative is a bare "Pick a client…" over three hundred
+            # names when the answer is one of two parishes. The candidates cost
+            # nothing to attach and the client is left exactly as it was — this
+            # stage still never decides anything.
+            if client_id and client_id not in candidates:
                 return decision
             # The text DOES single one out — that's evidence, not a guess.
             if lookalikes.resolve(words) is not None:
                 return decision
 
             ranked = lookalikes.rank(candidates, words)
-            decision.recommended_state = 'proposed'
+            if decision.recommended_state == 'committed':
+                decision.recommended_state = 'proposed'
             decision.needs_review = True
             decision.review_reason = (
                 'The title names a group of look-alike clients but not which one'

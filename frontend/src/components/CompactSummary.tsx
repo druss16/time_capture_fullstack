@@ -812,13 +812,13 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
                 onClick={() => onAccept(c.client_id)}
                 disabled={busy}
                 title={`Book to ${c.client_name}`}
-                className={PILL_PICK_QUIET}
+                className={PILL_PICK}
               >
                 <span className="max-w-[190px] truncate">{c.short_name || c.client_name}</span>
               </button>
             ))}
             {hiddenCandidates > 0 && (
-              <button onClick={() => setShowAllCandidates(true)} disabled={busy} className={PILL_PICK_QUIET}>
+              <button onClick={() => setShowAllCandidates(true)} disabled={busy} className={PILL_PICK}>
                 {hiddenCandidates} more
               </button>
             )}

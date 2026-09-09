@@ -7518,6 +7518,7 @@ def settings_org(request):
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
             "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
+            "wip_auto_relief": bool(getattr(org, "wip_auto_relief", False)),
             "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
             "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
@@ -7543,6 +7544,12 @@ def settings_org(request):
         # Non-owners are served "0.00" in the GET above; without this guard an
         # admin's round-trip save would silently zero the firm's default cost.
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
+    if "wip_auto_relief" in request.data:
+        # Not cost data, so no can_see_cost gate — but it decides whether the
+        # nightly relief task touches this org at all. It was a database-only
+        # flag with no way to switch on, so a firm could import six months of
+        # invoices and watch WIP never move.
+        org.wip_auto_relief = bool(request.data["wip_auto_relief"])
     if "payroll_burden_multiplier" in request.data and can_see_cost:
         # Cost data, so owner-only on the same gate. Clamped to a sane band:
         # below 1.0 would mean an hour costs less than the wage, and no real
@@ -7591,6 +7598,7 @@ def settings_org(request):
         "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
         "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
         "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
+        "wip_auto_relief": bool(getattr(org, "wip_auto_relief", False)),
         "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
         "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
         "message": "Settings updated"

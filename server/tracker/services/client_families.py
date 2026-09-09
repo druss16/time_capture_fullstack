@@ -332,7 +332,7 @@ class ClientLookalikes:
 
         return sorted(candidates, key=key)
 
-    def short_name(self, client_id, words):
+    def short_name(self, client_id, words, candidates=None):
         """What to put on a picker button — just the deciding part of the name.
 
         The shared part is already on screen in the title above the buttons, so
@@ -344,19 +344,33 @@ class ClientLookalikes:
         client = self.by_id.get(client_id)
         if not client:
             return ''
+        # Label each button with what makes THAT client unique in this set —
+        # its distinguishing words. For a real family those are exactly the
+        # deciding words ("Clinton", "Baldwinsville", "Taberg"). For a set
+        # thrown together by one coincidental word it still holds: beside two
+        # St. Francis parishes, "Church of Our Lady of The Rosary" keeps
+        # "Lady Rosary" rather than being stripped down to "Church Lady".
+        #
+        # Falling back to every word the title mentions (the no-candidates
+        # path) is what the audit and the backfill use, where there is no set.
         words = set(words)
+        if candidates and len(candidates) > 1:
+            keep_tokens = self.distinguishing_words(client_id, candidates)
+        else:
+            keep_tokens = None
         kept = []
-        # Split on hyphens and underscores as well as spaces: this roster names
-        # siblings "St Patrick's Church-Jordan" and "St Patricks_St
-        # Anthony_Chadwicks", where the deciding word is glued to a word the
-        # title already said.
         for raw_word in re.split(r'[\s_]+|(?<=[a-z])-(?=[A-Za-z])', client.name):
             raw_word = raw_word.strip(' -,&')
             if not raw_word:
                 continue
             tokens = ClassificationService._normalize_name(raw_word).split()
             tokens = [t for t in tokens if len(t) >= 3 and t not in _NAME_FILLER]
-            if tokens and not (set(tokens) & words):
+            if not tokens:
+                continue
+            if keep_tokens is not None:
+                if set(tokens) & keep_tokens:
+                    kept.append(raw_word)
+            elif not (set(tokens) & words):
                 kept.append(raw_word)
         tail = ' '.join(kept).strip(' -,&')
         return tail or client.name

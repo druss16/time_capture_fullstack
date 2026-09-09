@@ -739,11 +739,30 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
   };
 
   // ── Row rendering ──────────────────────────────────────────────────────────
-  const KIND_META: Record<RowKind, { label: string; color: string }> = {
-    pending: { label: "pick a client", color: T.teal },
-    ambiguous: { label: "which one?", color: T.purple },
-    mismatch: { label: "mismatch", color: T.red },
-    split: { label: "split", color: T.yellow },
+  // Each label names WHY the row is here, not what you do about it — the
+  // buttons on the right already say that. The old set mixed the two ("pick a
+  // client" and "split" were actions, "which one?" and "mismatch" were problems),
+  // so the four kinds did not read as four answers to one question, and the
+  // colour ended up carrying the distinction on its own.
+  //
+  // `hint` is the one-line difference, printed in the key under the filters.
+  const KIND_META: Record<RowKind, { label: string; color: string; hint: string }> = {
+    pending: {
+      label: "no client found", color: T.teal,
+      hint: "nothing in the title or its neighbours points anywhere",
+    },
+    ambiguous: {
+      label: "which one?", color: T.purple,
+      hint: "the title names a client, but several share that name",
+    },
+    mismatch: {
+      label: "looks misfiled", color: T.red,
+      hint: "the title clearly names a different client than it is booked to",
+    },
+    split: {
+      label: "mixed clients", color: T.yellow,
+      hint: "one block touched more than one client's files",
+    },
   };
 
   const renderActions = (row: Row) => {
@@ -1094,6 +1113,22 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
               />
               group by user
             </label>
+
+            {/* The key. Four kinds sat interleaved in one list, told apart by a
+                stripe colour and a two-word pill, and "what is the difference
+                between these rows" is not a question a queue should provoke.
+                Only kinds actually present are listed, so a clean firm is not
+                handed a glossary of problems it does not have. */}
+            <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: "4px 16px", paddingTop: 10, borderTop: `1px solid ${T.border}`, marginTop: 4 }}>
+              {(["pending", "ambiguous", "mismatch", "split"] as const)
+                .filter((k) => counts[k] > 0)
+                .map((k) => (
+                  <span key={k} style={{ fontSize: 11, ...mono, color: T.textMuted }}>
+                    <span style={{ color: KIND_META[k].color }}>▌{KIND_META[k].label}</span>
+                    {" — "}{KIND_META[k].hint}
+                  </span>
+                ))}
+            </div>
           </div>
 
           {/* ── Queue ── */}

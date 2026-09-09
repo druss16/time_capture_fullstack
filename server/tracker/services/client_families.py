@@ -38,7 +38,9 @@ from tracker.services.classification_service import (
     ALIAS_STOP_WORDS,
     DOMAIN_COMMON_WORDS,
     EXCLUSIVE_ENTITY_CLASSES,
+    GENERIC_HAYSTACK_WORDS,
     META_CLIENT_NAMES,
+    SHORT_ALIAS_STOPLIST,
     ClassificationService,
     _canonical_entity_tokens,
 )
@@ -47,18 +49,41 @@ _CACHE_TTL = 600  # roster changes are rare; a stale map for 10 min is fine
 
 
 def _name_words(name):
-    """Matchable words of a name — long enough and not structural filler."""
+    """Every matchable word of a name, INCLUDING the legal-entity suffix.
+
+    "Trust", "Holdings", "Company" are kept here and excluded from
+    _identifying below, which is the same two-tier split that lets "Church" and
+    "Cemetery" separate two parishes without either of them naming anybody.
+    A CPA firm's roster runs on exactly this distinction — "Smith Family Trust"
+    and "Smith Family Foundation" are two clients whose ONLY difference is the
+    entity kind — and dropping the suffix outright made them indistinguishable
+    even when the filename said which.
+    """
     return {
         t for t in ClassificationService._normalize_name(name or '').split()
-        if len(t) >= 4
-        and t not in ALIAS_STOP_WORDS
-        and t not in ALIAS_GENERIC_SUFFIXES
+        if len(t) >= 4 and t not in ALIAS_STOP_WORDS
     }
 
 
 def _identifying(words):
-    """Words that name somebody. "church" and "saint" name the whole roster."""
-    return {w for w in words if w not in DOMAIN_COMMON_WORDS}
+    """Words that name somebody.
+
+    "Church" and "Saint" name the whole roster; so does "Trust" on a book of
+    business full of trusts. An entity kind can TELL TWO SIBLINGS APART (see
+    _name_words) but must never make a client a candidate on its own.
+    """
+    return {
+        w for w in words
+        if w not in DOMAIN_COMMON_WORDS
+        and w not in ALIAS_GENERIC_SUFFIXES
+        # Desktop and app vocabulary. A File Explorer window on the "Home"
+        # folder offered five unrelated businesses — Krueger Funeral Home,
+        # Situational Homes, Harrington Homes of Jamesville — every one of them
+        # matched on the single word "home". The main matcher has carried these
+        # stoplists for exactly this reason; this module was not consulting them.
+        and w not in GENERIC_HAYSTACK_WORDS
+        and w not in SHORT_ALIAS_STOPLIST
+    }
 
 
 # Application chrome that trails a real title. Left in, it is not merely noise:
@@ -148,6 +173,7 @@ class ClientLookalikes:
             if self._class_conflict(cid, text_classes):
                 continue
             out.append(cid)
+
         return out
 
     def _class_conflict(self, client_id, text_classes):

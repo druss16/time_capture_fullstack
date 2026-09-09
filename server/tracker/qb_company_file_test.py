@@ -223,6 +223,30 @@ check("a 4-char alias cannot claim a file",
 check("normalizer strips punctuation and case",
       norm("St. Mary's Church– Clinton") == "stmaryschurchclinton")
 
+print("\n=== the file must not CONTRADICT the client ===")
+# Real files on org 21's share with no client of their own. Client 125's
+# generic alias "St. Mary's Cemetery" covers most of each name, and
+# MIN_COVERAGE alone happily let it claim both — a Rome cemetery's books
+# landing on a Baldwinsville one.
+_CEM = [(125, "St. Mary's Cemetery Bville", "St. Mary's Cemetery Bville"),
+        (125, "St. Mary's Cemetery Bville", "St Marys Cemetery"),
+        (125, "St. Mary's Cemetery Bville", "St. Mary's Cemetery")]
+check("a cemetery in ANOTHER town is refused",
+      match(path("St. Mary's Cemetery Rome_QB2024.qbw"), _CEM) is None)
+check("and so is one in Central Square",
+      match(path("St. Mary's Cemetery Central SQ_QB2024.qbw"), _CEM) is None)
+check("its OWN file still matches",
+      match(path("St. Mary's Cemetery Bville_QB2024.qbw"), _CEM)[0] == 125)
+
+# One-directional extra detail is normal and must NOT abstain: the file often
+# appends the town to a client whose name never carried one.
+_DM = [(500, 'Divine Mercy Parish', 'Divine Mercy Parish')]
+check("a town appended to the client's own name is kept",
+      match(path('Divine Mercy Parish_Central SQ_QB2024.QBW'), _DM)[0] == 500)
+_FX = [(501, 'St. Francis Xavier Church', 'St. Francis Xavier Church')]
+check("...even when the client name has no town at all",
+      match(path('St. Francis Xavier Church Marcellus_QB2024.QBW'), _FX)[0] == 501)
+
 print("\n=== the shell file-dialog MRU ('picked') ===")
 # The agent reads the current user's ComDlg32 MRU — what was PICKED in an
 # "Open a Company" dialog. It is the one mechanism elevation cannot block, but

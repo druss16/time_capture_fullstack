@@ -147,6 +147,27 @@ def match_stem(path: str, candidates):
 
     if not best or len({b[0] for b in best}) > 1:
         return None
+
+    # The FILE must not out-specify the client. "St. Mary's Cemetery Rome" and
+    # "St. Mary's Cemetery Central SQ" are real files on this share with no
+    # client of their own; client 125's generic alias "St. Mary's Cemetery"
+    # covers most of each name and MIN_COVERAGE happily lets it claim both, so
+    # a Rome cemetery's books land on a Baldwinsville one. A place or name word
+    # in the FILE that appears in none of the client's names means the file is
+    # naming a different entity, and no-answer beats a coin flip.
+    #
+    # Every word is weighed against ALL of that client's matchables, not just
+    # the one that matched: client 105 is named "Sacred Heart & St. Mary's
+    # Church" but carries "Sacred Heart NY Mills", and its file needs both
+    # halves to be accounted for.
+    winner_id = best[0][0]
+    client_words = set()
+    for cid, _cname, matchable in candidates:
+        if cid == winner_id:
+            client_words |= _identifying_words(matchable)
+    file_words = _identifying_words(clean_stem(path))
+    if (file_words - client_words) and (client_words - file_words):
+        return None
     return best[0]
 
 

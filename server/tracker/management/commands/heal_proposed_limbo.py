@@ -82,6 +82,9 @@ from django.utils import timezone
 
 from tracker.models import Block, Organization
 
+# The signal Daily Review's picker keys off (tracker/services/ambiguous_groups.py).
+AMBIGUOUS_SIGNAL = 'family_ambiguous'
+
 
 SKIP_CATEGORIZED_BY = ('manual', 'correction')
 SKIP_STATE_CHANGED_BY = ('user', 'user_edit', 'correction')
@@ -131,7 +134,8 @@ class Command(BaseCommand):
         return qs
 
     def _evidence_split(self, qs):
-        """(evidenced_ids, unevidenced_ids, minutes) for blocks that have a client.
+        """(evidenced_ids, unevidenced_ids, minutes, needs_signal) for blocks
+        that already have a client.
 
         Evidenced means the block's own text carries a word that distinguishes
         the client it is booked to from the look-alikes it could be confused
@@ -150,6 +154,7 @@ class Command(BaseCommand):
         rosters = {}
         evidenced, unevidenced = [], []
         minutes = {'evidenced': 0, 'unevidenced': 0}
+        needs_signal = []
         for block in keyset_iter(qs, 400):
             roster = rosters.get(block.org_id)
             if roster is None:
@@ -158,10 +163,56 @@ class Command(BaseCommand):
             if bucket in (AMBIGUOUS, NO_EVIDENCE):
                 unevidenced.append(block.id)
                 minutes['unevidenced'] += block.minutes or 0
+                sig = self._picker_signal(block, roster)
+                if sig is not None:
+                    block.proposed_signals = list(block.proposed_signals or []) + [sig]
+                    needs_signal.append(block)
             else:
                 evidenced.append(block.id)
                 minutes['evidenced'] += block.minutes or 0
-        return evidenced, unevidenced, minutes
+        return evidenced, unevidenced, minutes, needs_signal
+
+    @staticmethod
+    def _picker_signal(block, roster):
+        """The family_ambiguous signal Daily Review's picker keys off, or None.
+
+        Surfacing a look-alike block without this is the difference between one
+        question and hundreds. The picker folds gated blocks into work sessions —
+        a morning in one parish's QuickBooks file is ONE row with one answer —
+        but only for blocks carrying the signal. Without it they arrive as a
+        pending row each: on org 21's pile that is 2,200 rows, 463 of them on a
+        single person, which is not a review queue, it is a wall.
+
+        Blocks reopened by fix_lookalike_attribution already carry it; the ones
+        the June classifier sweep stranded do not. Returns None when the block
+        already has one (never duplicate) or when the text names no real family.
+        """
+        from tracker.services import client_families
+        if any(isinstance(s, dict) and s.get('type') == AMBIGUOUS_SIGNAL
+               for s in (block.proposed_signals or [])):
+            return None
+        words = client_families.text_words(
+            block.window_title or block.title or '',
+            block.file_path or '', block.url or '')
+        family = roster.family_for(words)
+        if not family or block.client_id not in family:
+            return None
+        return {
+            'type': AMBIGUOUS_SIGNAL,
+            'strength': 0.5,
+            'evidence': (f'{len(family)} clients fit this text; nothing in it '
+                         f'says which'),
+            'detail': {
+                'chosen_client_id': block.client_id,
+                'candidate_client_ids': family,
+                # Pass the family so each button is labelled with what makes
+                # THAT client unique within it ("Church" vs "Cemetery"), not
+                # with whatever the title happened not to say.
+                'candidate_labels': {
+                    str(c): roster.short_name(c, words, family) for c in family
+                },
+            },
+        }
 
     @staticmethod
     def _update_in_chunks(model_qs, ids, **fields):
@@ -226,7 +277,8 @@ class Command(BaseCommand):
         # at the blocks before it can report — the other two modes are pure SQL.
         ev_ids = un_ids = None
         if opts['mode'] == 'evidenced':
-            ev_ids, un_ids, split_m = self._evidence_split(has_client_no_conflict)
+            ev_ids, un_ids, split_m, needs_signal = self._evidence_split(
+                has_client_no_conflict)
             ev_m, un_m = split_m['evidenced'], split_m['unevidenced']
             self.stdout.write(self.style.WARNING(
                 "\nevidenced mode — commits only what the text backs:"))
@@ -236,6 +288,9 @@ class Command(BaseCommand):
                 f"COMMIT under current client (billable now)\n"
                 f"  B-look-alike ({len(un_ids)}, {un_m} min / {un_m/60:.1f} h) -> "
                 f"SURFACE for a pick — the title names a group, not a member\n"
+                f"     of those, {len(needs_signal)} gain a family_ambiguous signal "
+                f"so they FOLD into the Daily Review picker\n"
+                f"     (without it each is its own pending row)\n"
                 f"  C ({nc_n}) -> is_categorized=False, state='captured' "
                 f"(assign-a-client review)\n")
         elif opts['mode'] == 'surface':
@@ -287,6 +342,12 @@ class Command(BaseCommand):
                     is_categorized=False,
                     proposed_client_id=F('client_id'),
                     state_changed_by='admin_bulk', state_changed_at=now)
+                # Written separately from the bulk update above because each
+                # block's candidate list is its own — this is what folds them
+                # into one question per work session instead of one row each.
+                for i in range(0, len(needs_signal), 500):
+                    Block.objects.bulk_update(
+                        needs_signal[i:i + 500], ['proposed_signals'])
                 c = no_client.update(
                     is_categorized=False,
                     classification_state='captured',
@@ -294,7 +355,8 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(
                     f"\n✅ Healed {a + b_ok + b_ask + c} blocks: committed {b_ok} "
                     f"whose text backs the client (now billable), surfaced "
-                    f"{b_ask} look-alike guesses + {a} genuine-change + {c} "
+                    f"{b_ask} look-alike guesses ({len(needs_signal)} newly "
+                    f"foldable into the picker) + {a} genuine-change + {c} "
                     f"no-client for a human pick."))
             elif opts['mode'] == 'surface':
                 a = genuine_change.update(

@@ -142,6 +142,14 @@ if _ok:
 
     NAMES = {c.id: c.name for c in ROSTER}
 
+    print("Picker labels — two buttons must never read the same:")
+    _t = W("St Patrick's Church Cemetery Fund  - QuickBooks")
+    _cands = [390, 391]   # Church-Jordan  vs  Jordan Cemetery
+    check("without the candidate set the two labels collide",
+          L.short_name(390, _t) == L.short_name(391, _t))
+    check("given the set, each button says what makes IT unique",
+          L.short_name(390, _t, _cands) != L.short_name(391, _t, _cands))
+
     print("Ambiguous groups — one question per sitting, not per block:")
     run = [FakeBlock(1, 20, 0, [388, 790]), FakeBlock(2, 5, 25, [388, 790]),
            FakeBlock(3, 15, 35, [388, 790])]

@@ -2207,6 +2207,8 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
   // Users nested inside the open client, collapsed by default for the same
   // reason. Keyed `${clientKey}:${userId}` so it survives switching clients.
   const [openUsers, setOpenUsers] = useState<Set<string>>(new Set());
+  // "By User" starts closed — see the block's own note.
+  const [showUsers, setShowUsers] = useState(false);
 
   const load = useCallback(async () => {
     if (!filterOrg) { flash("Select a firm above first.", "err"); return; }
@@ -2281,19 +2283,28 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
 
       {data && (
         <>
-          {/* ── Header + firm totals ── */}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "20px 0 12px" }}>
+          {/* ── Header + firm totals ──
+              The totals used to be four full-width StatCards. Three of them
+              (billable / non-billable / total) are ambient context you read
+              once, and they were pushing the two things this tab exists for —
+              By User and Clients — below the fold. They live on the header line
+              now: same numbers, one row, no click. A collapse toggle would have
+              been worse than shrinking them, since it costs a click to see a
+              number you always want. */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "20px 0 14px", flexWrap: "wrap" as const }}>
             <span style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{data.org_name}</span>
             <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>
               {data.window.mode === "range" ? `${data.window.start} → ${data.window.end}` : data.window.start} · {data.timezone}
             </span>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-            <StatCard label="Billable" value={fmtH(data.totals.billable_hours)} color={T.green} />
-            <StatCard label="Non-billable" value={fmtH(data.totals.non_billable_hours)} color={T.textSub} />
-            <StatCard label="Total" value={fmtH(data.totals.total_hours)} color={T.text} />
-            <StatCard label="Needs Review" value={fmtH(data.totals.needs_review_hours)} color={data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted} />
+            <div style={{ flex: 1 }} />
+            <div style={{ display: "flex", alignItems: "baseline", gap: 14, ...mono, fontSize: 12.5 }}>
+              <span style={{ color: T.green }}>{fmtH(data.totals.billable_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>billable</span></span>
+              <span style={{ color: T.textSub }}>{fmtH(data.totals.non_billable_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>non-bill</span></span>
+              <span style={{ color: T.text }}>{fmtH(data.totals.total_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>total</span></span>
+              <span style={{ color: data.totals.needs_review_hours > 0 ? T.yellow : T.textMuted }}>
+                {data.totals.needs_review_hours > 0 ? "⚠ " : ""}{fmtH(data.totals.needs_review_hours)} <span style={{ color: T.textMuted, fontSize: 11 }}>needs review</span>
+              </span>
+            </div>
           </div>
 
           {/* Anomalies used to print a flat red table of every title-vs-booked
@@ -2303,10 +2314,29 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
               the part only an audit can give you — the ⚠ badges below, which
               show WHERE in the client rollup the suspect time is sitting. */}
 
-          {/* ── Per-user summary ── */}
-          {data.user_summary.length > 0 && (
-            <div style={{ ...card, marginBottom: 20 }}>
-              <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>By User</div>
+          {/* ── Per-user summary ──
+              Thirteen rows tall on a real firm, and most of them are usually
+              zeros. Collapsed by default, with the three facts worth knowing
+              printed on the closed header — how many people, how many booked
+              nothing at all, and how much time is waiting on a human. Expand for
+              the per-user breakdown. This is the block that earns a collapse:
+              it is big, and its headline compresses honestly. */}
+          {data.user_summary.length > 0 && (() => {
+            const idle = data.user_summary.filter(u => u.total_hours === 0).length;
+            const review = data.user_summary.reduce((n, u) => n + (u.needs_review_hours || 0), 0);
+            return (
+            <div style={{ ...card, marginBottom: 20, padding: showUsers ? 20 : "14px 20px" }}>
+              <div onClick={() => setShowUsers(v => !v)} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: showUsers ? 12 : 0 }}>
+                <span style={{ color: T.textMuted, fontSize: 11, width: 10 }}>{showUsers ? "▾" : "▸"}</span>
+                <span style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, fontWeight: 600 }}>By User</span>
+                <div style={{ flex: 1 }} />
+                <span style={{ ...mono, fontSize: 11.5, color: T.textMuted }}>
+                  {data.user_summary.length} users
+                  {idle > 0 && <span> · {idle} with no time</span>}
+                  {review > 0 && <span style={{ color: T.yellow }}> · {fmtH(review)} needs review</span>}
+                </span>
+              </div>
+              {showUsers && (
               <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 12, ...mono }}>
                 <thead>
                   <tr style={{ color: T.textMuted, textAlign: "left" as const }}>
@@ -2331,8 +2361,10 @@ function DailyReviewTab({ apiFetch, flash, filterOrg, setFilterOrg, orgs }: Dail
                   ))}
                 </tbody>
               </table>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {/* ── Clients (client-major) ── */}
           <div style={{ color: T.textMuted, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 10, fontWeight: 600 }}>

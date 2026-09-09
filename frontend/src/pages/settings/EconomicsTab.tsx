@@ -2,7 +2,7 @@
 // One place for everything Analytics uses for revenue, cost, and margin:
 // tiers (main setup), per-client rate overrides, and firm-wide defaults.
 import { useEffect, useState } from 'react';
-import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag, CalendarDays } from 'lucide-react';
+import { DollarSign, Check, RefreshCw, Layers, Briefcase, Upload, Receipt, Tag, CalendarDays, Gauge } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import type { OrgInfo, BillingRate, EmployeeCostRate, TeamMember, Client } from './types';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
@@ -11,6 +11,7 @@ import WorkCalendarSettings from './WorkCalendarSettings';
 import BillingRatesTab from './BillingRatesTab';
 import ClientFlatFeeTab from './ClientFlatFeeTab';
 import TaskTypeRatesTab from './TaskTypeRatesTab';
+import EngagementBudgetsTab from './EngagementBudgetsTab';
 import EconomicsImportModal from './EconomicsImportModal';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -176,6 +177,15 @@ export default function EconomicsTab({
           sub="Mark which task types count as billable and set an optional default rate."
         >
           <TaskTypeRatesTab onSuccess={onSuccess} onError={onError} />
+        </SettingsSection>
+
+        <SettingsSection
+          {...acc('engagement_budgets')}
+          icon={<Gauge className="w-4 h-4 text-primary" />}
+          title="Engagement budgets"
+          sub="What each recurring job is worth, so burn-vs-pace means something."
+        >
+          <EngagementBudgetsTab onSuccess={onSuccess} onError={onError} />
         </SettingsSection>
 
         {/* Firm defaults — the fallback */}

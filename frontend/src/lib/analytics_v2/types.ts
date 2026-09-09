@@ -155,6 +155,8 @@ export interface Section {
   id: string;
   title: string;
   collapsible: boolean;
+  /** Start folded. Caller can still expand it. */
+  collapsed?: boolean;
   children: SectionChild[];
 }
 

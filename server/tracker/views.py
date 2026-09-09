@@ -7517,6 +7517,7 @@ def settings_org(request):
             "billing_contact": profile.billing_contact or "",
             "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
             "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
+            "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
             "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
             "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
             "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
@@ -7542,6 +7543,15 @@ def settings_org(request):
         # Non-owners are served "0.00" in the GET above; without this guard an
         # admin's round-trip save would silently zero the firm's default cost.
         org.cost_rate_default = Decimal(str(request.data["cost_rate_default"]))
+    if "payroll_burden_multiplier" in request.data and can_see_cost:
+        # Cost data, so owner-only on the same gate. Clamped to a sane band:
+        # below 1.0 would mean an hour costs less than the wage, and no real
+        # burden reaches 3x.
+        try:
+            v = Decimal(str(request.data["payroll_burden_multiplier"]))
+            org.payroll_burden_multiplier = max(Decimal("1.00"), min(Decimal("3.00"), v))
+        except (TypeError, ValueError, InvalidOperation):
+            pass
     if "target_utilization" in request.data:
         try:
             v = Decimal(str(request.data["target_utilization"]))
@@ -7580,6 +7590,7 @@ def settings_org(request):
         "billing_contact": profile.billing_contact or "",
         "billing_rate_default": str(getattr(org, "billing_rate_default", None) or "150.00"),
         "cost_rate_default": str(getattr(org, "cost_rate_default", None) or "75.00") if can_see_cost else "0.00",
+        "payroll_burden_multiplier": str(getattr(org, "payroll_burden_multiplier", None) or "1.00") if can_see_cost else "1.00",
         "target_utilization": str(getattr(org, "target_utilization", None) or "75.00"),
         "capacity_hours_per_week": str(getattr(org, "capacity_hours_per_week", None) or "40.00"),
         "message": "Settings updated"

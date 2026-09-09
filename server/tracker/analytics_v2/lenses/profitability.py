@@ -78,6 +78,10 @@ class ProfitabilityLens(Lens):
 
         if scope.is_firm():
             sections.append(self._by_client_section(org, scope, time))
+            # Appended after, so the tail sits below the ranking it was split out
+            # of. _by_client_section stashes it while partitioning.
+            if getattr(self, "_immaterial_section", None):
+                sections.append(self._immaterial_section)
         elif scope.type == "client":
             sections.append(self._client_detail_section(org, scope, time))
         elif scope.type == "staff":
@@ -131,16 +135,32 @@ class ProfitabilityLens(Lens):
             state=MetricState.READY if material else MetricState.EMPTY,
         )]
 
+        self._immaterial_section = None
         if immaterial:
-            children.append(DataTablePayload(
-                id="clients_profit_immaterial",
-                title="Low-materiality clients",
-                subtitle="Under 1h and under $250 — excluded from the ranking and median",
-                columns=cols,
-                rows=immaterial,
-                default_sort={"key": "revenue", "direction": "desc"},
-                state=MetricState.READY,
-            ))
+            tail_rev = sum(r["revenue"] or 0 for r in immaterial)
+            tail_hrs = sum(r["hours"] or 0 for r in immaterial)
+            # Its own FOLDED section rather than a second table stapled under the
+            # ranking. At org 21 this tail is 48 of 99 clients — half the rows on
+            # screen for 6% of revenue — so expanded it buries the table that
+            # matters. The header keeps the totals visible while it's shut.
+            self._immaterial_section = Section(
+                id="by_client_immaterial",
+                type="section",
+                title=f"Low-Materiality Clients ({len(immaterial)})",
+                collapsible=True,
+                collapsed=True,
+                children=[DataTablePayload(
+                    id="clients_profit_immaterial",
+                    title="Low-materiality clients",
+                    subtitle=(f"{len(immaterial)} clients · {tail_hrs:,.1f} h · "
+                              f"${tail_rev:,.0f} — under the materiality floor, so "
+                              f"excluded from the ranking and the median above"),
+                    columns=cols,
+                    rows=immaterial,
+                    default_sort={"key": "revenue", "direction": "desc"},
+                    state=MetricState.READY,
+                )],
+            )
 
         return Section(
             id="by_client",

@@ -270,6 +270,9 @@ class Section:
     type: SectionType
     title: str = ""
     collapsible: bool = False
+    # Start folded. For a long tail nobody reads by default — the low-materiality
+    # client list, say — showing it expanded buries the section under it.
+    collapsed: bool = False
     children: list[Any] = field(default_factory=list)  # KPITile | ChartCardPayload | DataTablePayload
     
     def to_dict(self) -> dict:
@@ -285,6 +288,7 @@ class Section:
             "id": self.id,
             "title": self.title,
             "collapsible": self.collapsible,
+            "collapsed": self.collapsed,
             "children": [c.to_dict() for c in self.children],
         }
 

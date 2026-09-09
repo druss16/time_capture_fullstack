@@ -4831,6 +4831,7 @@ def today_time(request):
     ambiguous_groups = []
     try:
         from tracker.services.ambiguous_groups import build_groups, SIGNAL_TYPE
+        from tracker.services.classification_service import ClassificationService
         _amb = [
             _b for _b in Block.objects.filter(
                 org=org, user=user, start__gte=start_utc, start__lt=end_utc,
@@ -4841,6 +4842,15 @@ def today_time(request):
             )[:300]
             if any(
                 isinstance(_s, dict) and _s.get('type') == SIGNAL_TYPE
+                for _s in (_b.proposed_signals or [])
+            )
+            # A block gated earlier and RESOLVED since (the QuickBooks company
+            # file capture reached this machine, say) still carries its old
+            # family_ambiguous signal. Asking "which parish?" about a block
+            # that now has an answer is the worst of both: the same block
+            # appears twice, and picking on one row leaves the other behind.
+            and not any(
+                isinstance(_s, dict) and ClassificationService._is_identifying(_s)
                 for _s in (_b.proposed_signals or [])
             )
         ]

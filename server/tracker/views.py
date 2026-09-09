@@ -4852,7 +4852,9 @@ def today_time(request):
     # here must never take down Daily Review.
     ambiguous_groups = []
     try:
-        from tracker.services.ambiguous_groups import build_groups, is_open_question
+        from tracker.services.ambiguous_groups import (
+            build_groups, is_open_question, narrow_to_live_family,
+        )
         _amb = [
             _b for _b in Block.objects.filter(
                 org=org, user=user, start__gte=start_utc, start__lt=end_utc,
@@ -4882,7 +4884,10 @@ def today_time(request):
             _client_names = {
                 c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')
             }
-            ambiguous_groups = build_groups(_amb, _client_names, _recent)
+            # Stored candidate lists can predate the current narrowing —
+            # older signals carry fourteen buttons where two will do.
+            ambiguous_groups = build_groups(
+                narrow_to_live_family(_amb, org.id), _client_names, _recent)
     except Exception:
         ambiguous_groups = []
 

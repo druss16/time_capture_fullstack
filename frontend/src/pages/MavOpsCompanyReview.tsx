@@ -796,13 +796,21 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
       const category = g.category || "General Client Work";
       return (
         <>
+          {/* Every candidate is the row's own purple. They used to split green
+              (worked recently) / purple (not), which was wrong twice over: it
+              implied the green one was RECOMMENDED — on the one row type that
+              exists precisely because the matcher refused to recommend — and it
+              collided with the green ✓ accept button on pending rows, so green
+              meant two different things on one screen. Recency is real and
+              useful, so it stays: as a ● that the row's own context line names
+              in words, rather than a colour nobody can look up. */}
           {g.candidates.slice(0, 4).map((c) => (
             <ActionBtn
               key={c.client_id}
-              label={c.recent ? `${c.short_name} ·` : c.short_name}
-              color={c.recent ? T.green : T.purple}
+              label={c.recent ? `● ${c.short_name}` : c.short_name}
+              color={T.purple}
               disabled={disabled}
-              title={`${c.client_name}${c.recent ? " — worked recently" : ""}`}
+              title={`${c.client_name}${c.recent ? " — you have worked this client recently" : ""}`}
               onClick={() => applyRow(row, c.client_id, category, c.client_name)}
             />
           ))}
@@ -887,10 +895,14 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
     }
     if (row.kind === "ambiguous") {
       const g = row.item;
+      const anyRecent = g.candidates.slice(0, 4).some((c) => c.recent);
       return (
         <span style={{ fontSize: 11.5, color: T.textMuted, ...mono }}>
           {g.block_count} block{g.block_count > 1 ? "s" : ""} · {g.candidates.length} look-alike client
           {g.candidates.length > 1 ? "s" : ""} share this name
+          {anyRecent && (
+            <span> · <span style={{ color: T.purple }}>●</span> = {row.who} worked it recently</span>
+          )}
         </span>
       );
     }

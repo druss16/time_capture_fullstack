@@ -462,6 +462,12 @@ class ClassificationService:
         # every) case where the file path cannot be read.
         self._stage_4_6_qb_vendor(block, decision)
 
+        # Stage 4.7 — the firm's own Customer/Company list. Runs last of the
+        # QuickBooks stages and outranks all of them but a direct handle read:
+        # 4.5 and 4.6 infer which parish a generic company name means, and this
+        # one was told.
+        self._stage_4_7_qb_company_roster(block, decision)
+
         # Stage 5 — URL domain match
         # SKIPPED in foundation: Stage 3 already handles URL domain matching.
         # Stage 5 was originally planned for Client.email_domain matching but
@@ -523,6 +529,7 @@ class ClassificationService:
     # What is left for the gate is exactly the void-fillers: agent stickiness,
     # AI inference, temporal brackets, learned patterns, safe defaults.
     IDENTIFYING_EVIDENCE_TYPES = frozenset({
+        'qb_company_roster',
         'qb_company_file', 'qb_vendor_fingerprint', 'org_rule', 'tax_software',
         'calendar', 'mail',
         'title_match_domain', 'title_match_title_alias', 'title_match_file_path',
@@ -3430,6 +3437,193 @@ class ClassificationService:
             },
         ))
 
+    def _qb_company_map(self):
+        """{normalized company name: (client_id, client_name)} for this org.
+
+        Memoized per service instance — one instance classifies a whole day of
+        blocks and this table changes only when the firm re-imports its list.
+        Rows naming a client that is no longer active are dropped here rather
+        than at import time, so deactivating a client takes effect immediately
+        without anyone remembering to re-run the importer.
+        """
+        cached = getattr(self, '_qb_company_map_cache', None)
+        if cached is not None:
+            return cached
+        out = {}
+        try:
+            from tracker.models import QBCompanyClient
+            live = {c.id: c.name for c in self._clients}
+            for key, cid in QBCompanyClient.objects.filter(
+                    org=self.org).values_list('company_key', 'client_id'):
+                if cid in live:
+                    out[key] = (cid, live[cid])
+        except Exception:
+            out = {}
+        self._qb_company_map_cache = out
+        return out
+
+    def _client_name_keys(self):
+        """Every name and alias on this org's roster, normalized.
+
+        A company name sitting in here is already somebody's, exactly as
+        spelled, and the typo tier has no business guessing at it.
+        """
+        cached = getattr(self, '_client_name_keys_cache', None)
+        if cached is None:
+            cached = set()
+            for c in self._clients:
+                for n in [c.name] + list(c.aliases or []):
+                    if n:
+                        cached.add(self._normalize_name(n))
+            self._client_name_keys_cache = cached
+        return cached
+
+    def _qb_block_companies(self, block):
+        """(primary, seen) — the QuickBooks company on this block's own title,
+        and every company any sample in the block saw.
+
+        Both are needed because most QuickBooks samples are modals whose title
+        carries no company at all; a block's own representative title is often
+        one of them, while some other sample in the same block shows the main
+        window. The block's own title is still the better evidence when it has
+        one, so the two are kept apart rather than merged into a set.
+        """
+        cached = getattr(block, '_qb_companies_cache', None)
+        if cached is not None:
+            return cached
+        from tracker.services.qb_company_file import extract_qb_company
+
+        def _company(t):
+            return extract_qb_company(self._strip_qb_screen_bracket(t or ''))
+
+        primary = (_company(getattr(block, 'window_title', ''))
+                   or _company(getattr(block, 'title', '')))
+        seen = []
+        try:
+            from tracker.models import RawEvent
+            titles = [getattr(block, 'window_title', ''), getattr(block, 'title', '')]
+            titles += list(RawEvent.objects.filter(block=block)
+                           .values_list('window_title', flat=True))
+            for t in titles:
+                c = _company(t)
+                if c and c not in seen:
+                    seen.append(c)
+        except Exception:
+            seen = [primary] if primary else []
+        result = (primary, seen)
+        block._qb_companies_cache = result
+        return result
+
+    def _stage_4_7_qb_company_roster(self, block, decision: 'ClassificationDecision'):
+        """
+        Stage 4.7 — the firm's own Customer/Company list.
+
+        Every other QuickBooks stage INFERS which client a company name means:
+        from the filename, from the vendors on screen, from the file the user
+        picked out of a dialog, from the block before it. This one does not
+        infer anything. The firm exported the mapping from QuickBooks itself —
+        customer "St Mary's Church- Clinton" keeps its books in the company file
+        named "St. Mary's Church" — and a stated fact outranks every inference
+        drawn from a title bar.
+
+        Emitted at 0.95: above the picked-file read (0.93) and the vendor
+        fingerprint (0.91), below only the direct read of the open handle, which
+        this stage steps aside for outright. That order is deliberate. The list
+        is a snapshot and a snapshot goes stale; a file the agent actually
+        watched being opened is the present tense and wins.
+
+        Two ways this abstains, both of which matter more than the hits:
+
+          * The block's own title names no company, and the samples inside it
+            saw more than one. With two company files open, nothing here knows
+            which one was in front.
+          * The company name maps to more than one client. The importer refuses
+            to store those, so this is belt-and-braces.
+
+        A block this stage resolves does NOT reach the Stage 11 family picker —
+        `qb_company_roster` is identifying evidence. That is the whole point:
+        317 of the firm's company names become questions nobody has to answer.
+        """
+        app = (block.app_name or '').lower()
+        if not app.startswith('qbw'):
+            return
+
+        mapping = self._qb_company_map()
+        if not mapping:
+            return
+
+        # A direct read of the open company file has already answered this
+        # better than a list can. Stand down rather than pile on a second
+        # opinion — if the two ever disagree, the file is the live fact.
+        if any(s.type == 'qb_company_file'
+               and (s.detail or {}).get('via') in ('direct', 'exact')
+               for s in decision.matched_signals):
+            return
+
+        primary, seen = self._qb_block_companies(block)
+        # The block's own title is the better evidence when it has one. Falling
+        # back to what the samples saw is safe only because a set naming two
+        # clients is rejected below — with two company files open, nothing here
+        # knows which was in front.
+        companies, via = ([primary], 'title') if primary else (seen, 'block')
+
+        from tracker.services.qb_company_file import typo_match
+
+        hits, spelling = [], None
+        for company in companies:
+            key = self._normalize_name(company)
+            hit = mapping.get(key)
+            if not hit and key not in self._client_name_keys():
+                # Both sides of this comparison were typed by people. The list
+                # says "Transportoration"; QuickBooks shows "Transportation".
+                # Matching only the exact spelling threw away 46 of every 253
+                # hours over spelling alone.
+                #
+                # But only where the exact spelling is not already SOMEBODY's
+                # name. "Cameza, LLC" is a hand-added alias on CAMEZA_Champions
+                # Fitness, 218 blocks and counting; the firm's list separately
+                # has a client called "Cameze LLC" with no captured time ever.
+                # One character apart, two different companies — and without
+                # this guard the typo tier moves sixteen hours off the client a
+                # person deliberately mapped onto one nobody has ever worked.
+                # When an exact answer exists, there is nothing to guess at.
+                near = typo_match(key, mapping.keys())
+                if near:
+                    hit, spelling = mapping[near], near
+            if hit:
+                hits.append((hit[0], hit[1], company))
+        # Distinct CLIENTS, not distinct company names: two spellings of one
+        # parish's company file are not a contradiction.
+        if len({cid for cid, _, _ in hits}) != 1:
+            return
+
+        client_id, client_name, company = hits[0]
+        # A spelling the list does not literally contain is still the firm's
+        # answer, but it took a judgement to get there — rank it below a
+        # verbatim hit and below a direct read of the open file (0.93).
+        strength = 0.90 if spelling else 0.95
+        evidence = (
+            f"QuickBooks company '{company}' is {client_name}'s, per the "
+            f"firm's own customer/company list."
+        )
+        if spelling:
+            evidence = (
+                f"QuickBooks company '{company}' is the firm's list entry for "
+                f"{client_name}, spelled differently ('{spelling}')."
+            )
+        decision.matched_signals.append(Signal(
+            type='qb_company_roster',
+            strength=strength,
+            evidence=evidence,
+            detail={
+                'client_id': client_id,
+                'client_name': client_name,
+                'company_name': company,
+                'matched_spelling': spelling,
+                'via': ('typo:' + via) if spelling else via,
+            },
+        ))
+
     def _stage_4_6_qb_vendor(self, block, decision: 'ClassificationDecision'):
         """Stage 4.6 — identify a QuickBooks parish by the vendors in its titles.
 
@@ -5629,7 +5823,7 @@ class ClassificationService:
             'title_match_domain', 'file_path_structure',
             'calendar', 'mail', 'learned_pattern',
             'org_rule', 'tax_software', 'qb_company_file',
-            'qb_vendor_fingerprint',
+            'qb_vendor_fingerprint', 'qb_company_roster',
         }
         verified_signals = []
         for sig in signals:

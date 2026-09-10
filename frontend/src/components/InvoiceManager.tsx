@@ -351,11 +351,12 @@ const CsvImportModal: React.FC<{
                 <p className="font-semibold text-slate-700 text-sm mb-1">
                   {uploading ? 'Parsing CSV…' : 'Drop your CSV here or click to browse'}
                 </p>
-                <p className="text-xs text-slate-400">Required: client_code, invoice_number, invoice_date, amount</p>
+                <p className="text-xs text-slate-400">Send the export your billing software already produces — we read QuickBooks and Xero column names as they come.</p>
+                <p className="text-[11px] text-slate-400 mt-1">It needs a client, an invoice number, a date and an amount. Hours too, if you have them.</p>
               </div>
               <div className="text-center">
                 <button onClick={downloadTemplate} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
-                  <Download className="w-3.5 h-3.5" /> Download template with your client codes pre-filled
+                  <Download className="w-3.5 h-3.5" /> Or download a blank one to send to whoever does your billing
                 </button>
               </div>
             </div>
@@ -402,7 +403,7 @@ const CsvImportModal: React.FC<{
                         <td className="px-4 py-2.5 font-mono font-semibold text-slate-700 text-xs">{row.invoice_number}</td>
                         <td className="px-4 py-2.5 text-slate-500 text-xs tabular-nums">{fmtDate(row.invoice_date)}</td>
                         <td className="px-4 py-2.5 font-semibold text-slate-800 tabular-nums text-xs">{fmtCurrency(row.amount)}</td>
-                        <td className="px-4 py-2.5 font-mono text-[10px] text-slate-400">{row.client_code}</td>
+                        <td className="px-4 py-2.5 text-xs text-slate-500">{row.client_code}</td>
                         <td className="px-4 py-2.5">
                           {row.is_duplicate ? (
                             <span className="text-slate-300 text-xs italic">—</span>

@@ -976,6 +976,60 @@ class QBVendorClient(models.Model):
         return f"{self.vendor} -> {self.client_id}"
 
 
+class QBCompanyClient(models.Model):
+    """Which client a QuickBooks COMPANY NAME belongs to, stated by the firm.
+
+    QuickBooks Desktop shows only its Company Name, and a dozen of this firm's
+    files answer to "St. Mary's Church". Everything else in this codebase infers
+    the parish — from the filename, the vendor on screen, the file the user
+    picked, the neighbouring block. This table is the firm simply telling us,
+    from their own Customer/Company list.
+
+    That makes it the strongest evidence available and the only one that needs
+    no reasoning, so Stage 4.4 consults it above every inference. Measured on
+    org 21 before it existed: 483 blocks already agreed with it and 178 blocks
+    (27.9 h) did not — every one of those a bare "St. Mary's Church" filed to a
+    parish the firm's own list does not name.
+
+    Deliberately NOT stored in Client.aliases. An alias is matched against any
+    window title, so "St. Mary's Church" as an alias would claim every window
+    mentioning it — the mistake that once swallowed 204 billable minutes. A
+    company name is only ever compared against the company field of a
+    QuickBooks title, which is a much narrower claim.
+    """
+    org = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                            related_name='qb_company_clients')
+    company_name = models.CharField(
+        max_length=255,
+        help_text="Company Name exactly as QuickBooks Desktop shows it in the "
+                  "title bar, before the ' - QuickBooks ...' chrome.")
+    company_key = models.CharField(
+        max_length=255,
+        help_text="Normalized company_name, for matching. Written by save().")
+    client = models.ForeignKey(Client, on_delete=models.CASCADE,
+                               related_name='qb_companies')
+    source = models.CharField(
+        max_length=20, default='import',
+        help_text="import = the firm's Customer/Company list; "
+                  "confirmed = a person picked this client for this company.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # (org, company_key) is both the uniqueness rule and the only lookup
+        # this table has, so the unique constraint's index is the whole story —
+        # a second index on the same pair would just be another thing to write.
+        unique_together = ('org', 'company_key')
+
+    def save(self, *args, **kwargs):
+        from tracker.services.classification_service import ClassificationService
+        self.company_key = ClassificationService._normalize_name(self.company_name or '')
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.company_name} -> {self.client_id}"
+
+
 class ClientBillingProfile(models.Model):
     """
     Per-client billing arrangement — the coordination layer the timesheet→billing

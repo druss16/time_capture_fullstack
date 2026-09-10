@@ -484,3 +484,73 @@ def pick_recent_company_file(reports, companies, primary_company=None):
     if len(fresh) == 1 or (fresh[1][0] - fresh[0][0]) >= RECENT_LEAD_SECONDS:
         return fresh[0][1], 'lead'
     return None, 'ambiguous'
+
+
+# How alike two spellings of the same word have to be. 0.82 admits
+# "cameza"/"cameze" and "servive"/"service"; it refuses "mary"/"marx".
+TYPO_MIN_RATIO = 0.82
+
+
+def _spellings_of_one_name(a_words, b_words):
+    """Are these two identifying-word sets the same name, spelled differently?
+
+    Only ever true when the two sets pair up ONE FOR ONE. A word on one side
+    with no partner on the other is not a typo, it is information — and it is
+    exactly the information that separates a client from its look-alikes:
+
+        "St. Patrick's Cemetery"  vs  "St Patrick's Jordan Cemetery"
+
+    Those share every word one of them has, and a similarity score would call
+    them a match. They are two different cemeteries, and there is a third in
+    Taberg. Requiring equal counts is what makes this refuse them.
+    """
+    if not a_words or len(a_words) != len(b_words):
+        return False
+    if a_words == b_words:
+        return True
+    import difflib
+    remaining = list(b_words)
+    for w in sorted(a_words):
+        best, best_i = 0.0, -1
+        for i, x in enumerate(remaining):
+            if x is None:
+                continue
+            r = 1.0 if w == x else difflib.SequenceMatcher(None, w, x).ratio()
+            if r > best:
+                best, best_i = r, i
+        if best_i < 0 or best < TYPO_MIN_RATIO:
+            return False
+        remaining[best_i] = None
+    return True
+
+
+def typo_match(company, choices):
+    """The one name in `choices` that is `company` misspelled, or None.
+
+    `choices` is an iterable of normalized names. Both sides here are written
+    by people: QuickBooks shows whatever the firm typed into the company file,
+    and the firm's exported list has its own typos for the same client —
+    "Cameze LLC" on the list is "Cameza, LLC" on screen, and one of them turned
+    "Transportation" into "Transportoration". Exact matching threw away 46 of
+    every 253 hours over the names alone.
+
+    This is safe here in a way that fuzzy client matching never is, because
+    both sides are CURATED: 317 company names the firm wrote down, not three
+    hundred client names plus every word that lands in a window title. The
+    guards still do the work:
+
+      * identifying words must pair one for one (see _spellings_of_one_name),
+        so an extra town name is never a typo
+      * the entity class must agree — a parish's church, cemetery and school
+        are separate clients with separate books, and "St. Mary's Church" and
+        "St. Mary's School" reduce to the same identifying word
+      * exactly one choice may pass; two means the question is still open
+    """
+    words = _identifying_words(company)
+    if not words:
+        return None
+    klass = _entity_class(company)
+    hits = [c for c in choices
+            if _entity_class(c) == klass
+            and _spellings_of_one_name(words, _identifying_words(c))]
+    return hits[0] if len(hits) == 1 else None

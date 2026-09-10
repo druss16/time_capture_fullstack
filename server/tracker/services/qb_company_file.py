@@ -417,20 +417,35 @@ def pick_recent_company_file(reports, companies, primary_company=None):
                     continue
                 if path not in agreeing:
                     agreeing.append(path)
-            # Exactly one DISTINCT file may answer. Deduplication is not
-            # cosmetic: every raw event in the block carries the same MRU, so a
-            # 44-event block offers the same 4 files 44 times, and counting
-            # them raw made every block look ambiguous.
-            #
-            # Two open companies can share one
-            # generic name — "St. Mary's Church" is both Minoa's company name
-            # and Clinton's — and then the MRU holds a file for each, both
-            # agreeing with the title equally well. Taking the newer one is a
-            # coin flip between two parishes reported at full confidence, which
-            # is the failure this module exists to remove. Abstain and let the
-            # Stage-11 picker ask.
+            # Deduplication is not cosmetic: every raw event in the block
+            # carries the same MRU, so a 44-event block offers the same 4 files
+            # 44 times, and counting them raw made every block look ambiguous.
             if len(agreeing) == 1:
                 return agreeing[0], 'picked'
+
+            # More than one open file mentions the title's company, which is
+            # ordinary — someone with four parishes open has several files with
+            # a saint's name in them. They are rarely EQUAL, though: against
+            # "St. Mary's Church" the file "St. Mary's Church_Clinton" is
+            # nearly the whole title, while "St. Anne Mother of Mary Mexico"
+            # shares one word of its four. Requiring a lone survivor there
+            # abstained on a block whose answer was sitting in the MRU, and it
+            # went to a temporal guess instead.
+            #
+            # So prefer whichever file the title accounts for most COMPLETELY,
+            # and abstain only on a genuine tie — "…_Minoa" beside "…_Clinton",
+            # each covered exactly as much, which is the real
+            # two-parishes-one-name case that belongs in the picker.
+            if len(agreeing) > 1:
+                def _covered(path):
+                    file_words = _identifying_words(clean_stem(path))
+                    if not file_words:
+                        return 0.0
+                    return len(file_words & company_words) / len(file_words)
+
+                ranked = sorted(agreeing, key=_covered, reverse=True)
+                if _covered(ranked[0]) > _covered(ranked[1]):
+                    return ranked[0], 'picked'
 
     # Freshest observation wins per file: the same file appears in every event's
     # report, ageing as the block runs.

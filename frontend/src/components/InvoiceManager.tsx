@@ -301,6 +301,20 @@ const CsvImportModal: React.FC<{
 
   const importCount = editedRows.filter(r => !r.is_duplicate && !r.needs_review).length;
 
+  // A firm sending two years of history uploads thousands of rows, and every
+  // row here carries a <select>. Rendering them all locks the tab, and nobody
+  // reads 8,000 rows anyway. The rows that need a person are the ones we
+  // couldn't match; the rest are shown as a sample to confirm it looks right.
+  const AUTO_SAMPLE = 25;
+  const visibleRows = (() => {
+    const keyed = editedRows.map((row, i) => ({ row, i }));
+    const decisions = keyed.filter(({ row }) => row.needs_review);
+    const settled = keyed.filter(({ row }) => !row.needs_review);
+    if (keyed.length <= 200) return keyed;
+    return [...decisions, ...settled.slice(0, AUTO_SAMPLE)];
+  })();
+  const hiddenCount = editedRows.length - visibleRows.length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
@@ -398,7 +412,7 @@ const CsvImportModal: React.FC<{
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30">
-                    {editedRows.map((row, i) => (
+                    {visibleRows.map(({ row, i }) => (
                       <tr key={i} className={cn('transition-colors', row.is_duplicate ? 'opacity-40 bg-slate-50' : 'hover:bg-slate-50/50')}>
                         <td className="px-4 py-2.5 font-mono font-semibold text-slate-700 text-xs">{row.invoice_number}</td>
                         <td className="px-4 py-2.5 text-slate-500 text-xs tabular-nums">{fmtDate(row.invoice_date)}</td>
@@ -442,6 +456,12 @@ const CsvImportModal: React.FC<{
                     ))}
                   </tbody>
                 </table>
+                {hiddenCount > 0 && (
+                  <div className="px-4 py-2.5 bg-slate-50 border-t border-border/50 text-xs text-slate-500">
+                    {hiddenCount.toLocaleString()} more matched cleanly and aren't shown.
+                    Everything we couldn't match is listed above — those are the only rows that need you.
+                  </div>
+                )}
               </div>
             </div>
           )}

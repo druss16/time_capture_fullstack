@@ -3734,50 +3734,54 @@ def csv_invoice_commit(request):
 
     imported, skipped, errors = [], [], []
 
+    # This used to be one INSERT per row inside a single transaction. A firm
+    # sending two years of history sends thousands of rows, and that shape times
+    # out long before it finishes. Validate in Python, then write in batches.
     from django.db import transaction
-    with transaction.atomic():
-        for row in rows:
-            inv_num = (row.get('invoice_number') or '').strip()
-            if not inv_num:
-                errors.append({'invoice_number': inv_num, 'error': 'Missing invoice_number'})
-                continue
 
-            if inv_num in existing_numbers:
-                skipped.append({'invoice_number': inv_num, 'reason': 'Duplicate'})
-                continue
+    pending = []
+    for row in rows:
+        inv_num = (row.get('invoice_number') or '').strip()
+        if not inv_num:
+            errors.append({'invoice_number': inv_num, 'error': 'Missing invoice_number'})
+            continue
 
-            try:
-                inv_date = row['invoice_date']  # Already ISO string from preview
-                amount   = Decimal(str(row['amount']))
-                hours    = Decimal(str(row['hours_billed'])) if row.get('hours_billed') else None
-                status   = row.get('status', 'sent')
-                client_id = row.get('client_id')
-                client    = clients_by_id.get(client_id) if client_id else None
+        if inv_num in existing_numbers:
+            skipped.append({'invoice_number': inv_num, 'reason': 'Duplicate'})
+            continue
 
-                invoice = Invoice.objects.create(
-                    org=org,
-                    client=client,
-                    invoice_number=inv_num,
-                    invoice_date=inv_date,
-                    amount=amount,
-                    hours_billed=hours,
-                    status=status,
-                    client_code=row.get('client_code', ''),
-                    source='csv',
-                    created_by=request.user,
-                )
+        try:
+            client_id = row.get('client_id')
+            client    = clients_by_id.get(client_id) if client_id else None
+            amount    = Decimal(str(row['amount']))
+            pending.append(Invoice(
+                org=org,
+                client=client,
+                invoice_number=inv_num,
+                invoice_date=row['invoice_date'],   # already ISO from preview
+                amount=amount,
+                hours_billed=(Decimal(str(row['hours_billed']))
+                              if row.get('hours_billed') else None),
+                status=row.get('status', 'sent'),
+                client_code=row.get('client_code', ''),
+                source='csv',
+                created_by=request.user,
+            ))
+            existing_numbers.add(inv_num)   # guard against dupes within the batch
+        except Exception as e:
+            errors.append({'invoice_number': inv_num, 'error': str(e)})
 
-                existing_numbers.add(inv_num)  # Prevent dupes within this batch
-
-                imported.append({
-                    'id':             invoice.id,
-                    'invoice_number': inv_num,
-                    'client_name':    client.name if client else None,
-                    'amount':         float(amount),
-                })
-
-            except Exception as e:
-                errors.append({'invoice_number': inv_num, 'error': str(e)})
+    if pending:
+        with transaction.atomic():
+            Invoice.objects.bulk_create(pending, batch_size=500)
+        # Postgres returns the ids, so callers still get them. Invoice has no
+        # save() override and no signals, so nothing is skipped by going bulk.
+        imported.extend({
+            'id':             obj.pk,
+            'invoice_number': obj.invoice_number,
+            'client_name':    obj.client.name if obj.client else None,
+            'amount':         float(obj.amount),
+        } for obj in pending)
 
     return Response({
         'success': True,
@@ -3818,7 +3822,14 @@ def csv_invoice_template(request):
         return Response({'error': 'No organization'}, status=404)
 
     lines = [
-        '# What to send back: one row per invoice you have sent.',
+        '# What to send back: one row per invoice, going back as far as your',
+        f'# records go — {_history_ask(org)}',
+        '#',
+        '# History is the point. One month tells us almost nothing; a year or two',
+        '# tells us what each job is really worth, which of them are billed for',
+        '# less than the work they take, and which time has already been billed.',
+        '# In most systems this is one date field in the export dialog, so please',
+        '# reach back as far as it will let you.',
         '#',
         '# Most billing systems will export this for you — in QuickBooks it is',
         '# Reports > Sales > Invoice List, then Export to CSV. If you bill from a',
@@ -3869,6 +3880,28 @@ def csv_invoice_template(request):
         f'attachment; filename="invoices_for_{org.slug}.csv"'
     )
     return response
+
+
+def _history_ask(org):
+    """The date to ask back to, in the firm's terms.
+
+    Invoices earlier than the time we hold still earn their keep — they are what
+    each job is normally worth, which is the only non-circular way to budget an
+    engagement while capture is incomplete. But invoices that stop short of our
+    earliest recorded time leave that time permanently in WIP, because nothing
+    ever arrives to say it was billed. So the floor is our own first block, and
+    the ask is a good deal wider.
+    """
+    from tracker.models import Block
+
+    first = (Block.objects.filter(org=org, deleted_at__isnull=True)
+             .order_by('day').values_list('day', flat=True).first())
+    if not first:
+        return 'ideally two years'
+    floor = first.replace(day=1)
+    wide = floor.replace(year=floor.year - 1)
+    return (f'{wide:%B %Y} would be ideal, and we need '
+            f'{floor:%B %Y} onwards at minimum')
 
 
 def _ambiguous_client_names(org):

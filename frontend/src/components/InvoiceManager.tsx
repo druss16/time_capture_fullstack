@@ -38,6 +38,11 @@ interface PreviewSummary {
   total_rows: number; will_import: number; matched: number;
   unmatched: number; duplicates: number; parse_errors: number;
 }
+interface RateCheck {
+  default_rate: number; rows_with_hours: number; median_implied: number;
+  min_implied: number; max_implied: number; rows_off_default: number;
+  clients_off_default: { client: string; implied_rate: number }[];
+}
 interface Props { filter?: string; onFilterClear?: () => void }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -229,7 +234,7 @@ const CsvImportModal: React.FC<{
   const [step,        setStep]        = useState<Step>('upload');
   const [uploading,   setUploading]   = useState(false);
   const [committing,  setCommitting]  = useState(false);
-  const [preview,     setPreview]     = useState<{ rows: PreviewRow[]; summary: PreviewSummary } | null>(null);
+  const [preview,     setPreview]     = useState<{ rows: PreviewRow[]; summary: PreviewSummary; rate_check?: RateCheck | null } | null>(null);
   const [editedRows,  setEditedRows]  = useState<PreviewRow[]>([]);
   const [commitResult,setCommitResult]= useState<any>(null);
   const [error,       setError]       = useState('');
@@ -366,7 +371,7 @@ const CsvImportModal: React.FC<{
                   {uploading ? 'Parsing CSV…' : 'Drop your CSV here or click to browse'}
                 </p>
                 <p className="text-xs text-slate-400">Send the export your billing software already produces — we read QuickBooks and Xero column names as they come.</p>
-                <p className="text-[11px] text-slate-400 mt-1">It needs a client, an invoice number, a date and an amount. Hours too, if you have them.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Three columns: who it was billed to, the date, the amount. Hours too if the file has them — that's what lets us check the rate.</p>
               </div>
               <div className="text-center">
                 <button onClick={downloadTemplate} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
@@ -400,6 +405,35 @@ const CsvImportModal: React.FC<{
                   </span>
                 )}
               </div>
+
+              {preview.rate_check && preview.rate_check.rows_off_default > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                  <p className="text-sm font-semibold text-amber-900">
+                    These invoices don't all bill at ${preview.rate_check.default_rate}/hr
+                  </p>
+                  <p className="text-[12.5px] text-amber-800 mt-1">
+                    {preview.rate_check.rows_off_default.toLocaleString()} of{' '}
+                    {preview.rate_check.rows_with_hours.toLocaleString()} rows with hours imply a
+                    different rate — the file spans ${preview.rate_check.min_implied} to $
+                    {preview.rate_check.max_implied}/hr, median ${preview.rate_check.median_implied}.
+                    Every figure on this site currently prices time at $
+                    {preview.rate_check.default_rate}, so those clients are being valued wrong.
+                  </p>
+                  {preview.rate_check.clients_off_default.length > 0 && (
+                    <ul className="mt-2 space-y-0.5">
+                      {preview.rate_check.clients_off_default.map(c => (
+                        <li key={c.client} className="text-[12px] text-amber-900 tabular-nums">
+                          <span className="font-medium">{c.client}</span> — bills about ${c.implied_rate}/hr
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-[11.5px] text-amber-700/90 mt-2">
+                    Importing is still the right move — this is what tells us the rate is wrong.
+                    Worth fixing in Settings → Economics afterwards.
+                  </p>
+                </div>
+              )}
 
               {/* Preview table */}
               <div className="border border-border/60 rounded-xl overflow-hidden">

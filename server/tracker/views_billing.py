@@ -30,6 +30,7 @@ import stripe
 from django.utils.timezone import localtime
 
 import csv
+import hashlib
 import io
 import re
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -3320,6 +3321,47 @@ def get_seat_usage(request):
 # CSV INVOICE IMPORT — Preview + Commit (two-step)
 # ============================================================================
 
+def _implied_rate_check(org, rows):
+    """What these invoices say the firm's hourly rate really is.
+
+    amount / hours, per row, against the rate everything on the site is priced
+    at. Returns None when the file carries no hours — that is the common case
+    and not a problem, just nothing to check with.
+    """
+    from statistics import median
+
+    default = float(getattr(org, 'billing_rate_default', 0) or 0)
+    implied = [(r['amount'] / r['hours_billed'], r)
+               for r in rows
+               if r.get('hours_billed') and r['hours_billed'] > 0 and r['amount']]
+    if not implied or not default:
+        return None
+
+    rates = sorted(v for v, _r in implied)
+    off = [r for v, r in implied if abs(v - default) > 0.01]
+    by_client = {}
+    for v, r in implied:
+        name = r.get('client_name') or r.get('client_code') or '?'
+        by_client.setdefault(name, []).append(v)
+    outliers = sorted(
+        ((n, median(vs)) for n, vs in by_client.items()
+         if abs(median(vs) - default) > 0.01),
+        key=lambda t: -abs(t[1] - default),
+    )[:10]
+
+    return {
+        'default_rate':   round(default, 2),
+        'rows_with_hours': len(implied),
+        'median_implied': round(median(rates), 2),
+        'min_implied':    round(rates[0], 2),
+        'max_implied':    round(rates[-1], 2),
+        'rows_off_default': len(off),
+        'clients_off_default': [
+            {'client': n, 'implied_rate': round(v, 2)} for n, v in outliers
+        ],
+    }
+
+
 def _parse_csv_file(csv_file):
     """
     Parse uploaded CSV file. Returns (reader, column_map, error_response).
@@ -3383,7 +3425,11 @@ def _parse_csv_file(csv_file):
                 column_map[standard_name] = alias
                 break
 
-    required = ['client_code', 'invoice_number', 'invoice_date', 'amount']
+    # Deliberately three. An invoice number is bookkeeping we can synthesise,
+    # and whether it was PAID is accounts receivable — collections is not our
+    # business and asking for it invites the firm to think it is. Every column
+    # we require is one more reason the file never arrives.
+    required = ['client_code', 'invoice_date', 'amount']
     missing = [col for col in required if col not in column_map]
 
     if missing:
@@ -3391,7 +3437,8 @@ def _parse_csv_file(csv_file):
             'error': f'Missing required columns: {", ".join(missing)}',
             'found_columns': list(reader.fieldnames or []),
             'required_columns': required,
-            'hint': 'CSV must have: client_code (or customer), invoice_number (or invoice_no), invoice_date (or date), amount (or total)',
+            'hint': ('Needs a client (or customer), a date, and an amount. '
+                     'An invoice number and hours are welcome but optional.'),
         }
 
     return reader, column_map, None
@@ -3406,7 +3453,7 @@ def _parse_row(row, column_map, row_num):
     # NOT uppercased: this column usually holds a client NAME, and rapidfuzz
     # is case-sensitive — upper-casing it scored an exact name match 15/100.
     client_code    = (row.get(column_map['client_code']) or '').strip()
-    invoice_number = (row.get(column_map['invoice_number']) or '').strip()
+    invoice_number = (row.get(column_map.get('invoice_number', '__missing__')) or '').strip()
     date_str       = (row.get(column_map['invoice_date']) or '').strip()
     amount_str     = (row.get(column_map['amount']) or '').strip()
     hours_str      = (row.get(column_map.get('hours_billed', '__missing__')) or '').strip()
@@ -3419,7 +3466,7 @@ def _parse_row(row, column_map, row_num):
             or client_code.startswith('#'):
         return None, None
 
-    if not all([client_code, invoice_number, date_str, amount_str]):
+    if not all([client_code, date_str, amount_str]):
         return None, 'Missing required field'
 
     DATE_FORMATS = [
@@ -3457,6 +3504,16 @@ def _parse_row(row, column_map, row_num):
         'overdue': 'overdue',
     }
     status = status_map.get(status_str, 'sent')
+
+    # No invoice number is the normal case now that we don't ask for one. Derive
+    # a stable key from what the row actually says, so uploading the same file
+    # twice de-duplicates instead of doubling the firm's revenue. Two genuinely
+    # separate invoices to one client on one day for one amount will collapse
+    # into one — rare, and the preview reports it as a duplicate rather than
+    # swallowing it silently.
+    if not invoice_number:
+        seed = f'{client_code.lower()}|{invoice_date.isoformat()}|{amount}'
+        invoice_number = 'AUTO-' + hashlib.sha1(seed.encode()).hexdigest()[:12]
 
     return {
         'client_code':    client_code,
@@ -3662,6 +3719,14 @@ def import_invoices_csv(request):
                 'will_import':     not is_duplicate and not needs_review,
             })
 
+        # Every figure on this site prices captured time at the org's default
+        # rate — for org 21 that is $75 on 12,309 of 12,312 billable blocks,
+        # which is one assumption applied 12,309 times, not 12,309 observations.
+        # A row carrying both an amount and hours is the first independent
+        # evidence of what the firm actually charges, so say so before import
+        # rather than letting a wrong rate quietly become the baseline.
+        rate_check = _implied_rate_check(org, rows)
+
         matched      = sum(1 for r in rows if r['client_id'] and not r['needs_review'])
         unmatched    = sum(1 for r in rows if r['needs_review'])
         duplicates   = sum(1 for r in rows if r['is_duplicate'])
@@ -3679,6 +3744,7 @@ def import_invoices_csv(request):
                 'duplicates':   duplicates,
                 'parse_errors': len(parse_errors),
             },
+            'rate_check': rate_check,
         })
 
     except Exception as e:
@@ -3836,15 +3902,26 @@ def csv_invoice_template(request):
         '# spreadsheet, just send that; the column names below are the only part',
         '# that matters, and we already recognise the usual variants.',
         '#',
+        '# Three things are needed:',
+        '#',
         '#   client          who it was billed to, spelled as you have them',
-        '#   invoice_number  whatever number is on the invoice',
-        '#   invoice_date    the invoice date',
-        '#   amount          the invoice total',
-        '#   hours_billed    optional, but tells us far more if you have it',
+        '#   invoice_date    the date, or just the month it covers',
+        '#   amount          what you billed',
+        '#',
+        '# And two more if they are already in the file — no need to add them:',
+        '#',
+        '#   hours_billed    the hours behind the amount. Worth including if you',
+        '#                   have it: it is the only way we can check the rate we',
+        '#                   are using against what you actually charge, per',
+        '#                   client, instead of assuming one rate for everybody.',
+        '#   invoice_number  we make one up if you leave it out',
+        '#',
+        '# We do not need to know whether anything was paid. That is your',
+        '# business, not ours — we are a record of time, not your receivables.',
         '#',
         '# Delete the two example rows before sending.',
         '#',
-        'client,invoice_number,invoice_date,amount,hours_billed,status',
+        'client,invoice_date,amount,hours_billed',
     ]
 
     # The one thing only we can tell them. When several clients share a name no
@@ -3871,8 +3948,8 @@ def csv_invoice_template(request):
     while len(sample) < 2:
         sample.append('Example Client')
     lines += [
-        f'"{sample[0]}",1001,2026-08-31,450.00,6,sent',
-        f'"{sample[1]}",1002,2026-08-31,1200.00,16,paid',
+        f'"{sample[0]}",2026-08-31,450.00,6',
+        f'"{sample[1]}",2026-08-31,1200.00,',
     ]
 
     response = HttpResponse('\n'.join(lines) + '\n', content_type='text/csv')

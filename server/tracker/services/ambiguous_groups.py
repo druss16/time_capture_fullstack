@@ -89,11 +89,22 @@ def narrow_to_live_family(blocks, org_id):
             getattr(block, 'file_path', '') or '',
             getattr(block, 'url', '') or '')
         live = [c for c in roster.family_for(words) if c in stored]
-        if len(live) < 2 or block.client_id not in live:
+        if len(live) < 2:
             continue
-        labels = roster.short_names(live, words)
+        if block.client_id not in live:
+            # The block is booked to a client the title does not actually point
+            # at — a mismatch, and exactly the case worth asking about. Keeping
+            # it as an option (rather than refusing to narrow at all, which left
+            # a real "*St Marys Baldwinsville" row showing fourteen buttons)
+            # gives the honest choice: the two the title names, plus where it
+            # sits today.
+            live = live + [block.client_id]
         detail['candidate_client_ids'] = live
-        detail['candidate_labels'] = {str(c): labels[c] for c in live}
+        # Relabel against the NARROWED set: a button should say what makes that
+        # client unique among the ones still on screen, not among fourteen.
+        detail['candidate_labels'] = {
+            str(c): roster.short_name(c, words, live) for c in live
+        }
         sig['detail'] = detail
     return blocks
 

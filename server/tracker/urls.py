@@ -10,6 +10,7 @@ from . import views_day_review
 from . import views_capture_status
 from . import views_review_misfiled
 from . import views_outstanding_weeks
+from . import views_readiness
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -151,6 +152,7 @@ urlpatterns = [
     # Settings endpoints
     # -------------------------------
     path("settings/org/", views.settings_org, name="settings_org"),
+    path("settings/readiness/", views_readiness.setup_readiness, name="setup_readiness"),
     # path("settings/ai/", views.org_ai_settings, name="org_ai_settings"),
     path("settings/team/", views.settings_team_list, name="settings_team_list"),
     path("settings/cost-rates/", views.settings_cost_rates, name="settings_cost_rates"),
@@ -217,6 +219,9 @@ urlpatterns = [
     path("engagements/phase-agreement/", views_engagements.phase_agreement, name="engagement-phase-agreement"),
     path("engagements/<int:engagement_id>/phase/", views_engagements.set_engagement_phase, name="engagement-set-phase"),
     path("engagements/<int:engagement_id>/budget/", views_engagements.set_engagement_budget, name="engagement-set-budget"),
+    path("engagements/budget-setup/", views_engagements.engagement_budget_setup, name="engagement-budget-setup"),
+    path("engagements/budget-group/", views_engagements.set_engagement_budget_group, name="engagement-set-budget-group"),
+    path("engagements/budget-csv/", views_engagements.engagement_budget_csv, name="engagement-budget-csv"),
     
     # Block Billing Management
     path("billing/blocks/<int:block_id>/", views_billing.update_block_billing, name="update-block-billing"),
@@ -235,6 +240,7 @@ urlpatterns = [
 
     path('billing/timesheets/<int:pk>/submit/', views_billing.TimesheetSubmitView.as_view(), name='timesheet-submit'),
     path('billing/timesheets/<int:pk>/clio-preview/', views_billing.TimesheetClioPreviewView.as_view(), name='timesheet-clio-preview'),
+    path('billing/timesheets/<int:pk>/send-context/', views_billing.TimesheetSendContextView.as_view(), name='timesheet-send-context'),
     path('billing/timesheets/<int:pk>/approve/', views_billing.TimesheetApproveView.as_view(), name='timesheet-approve'),
     path('billing/timesheets/<int:pk>/reject/', views_billing.TimesheetRejectView.as_view(), name='timesheet-reject'),
     path('billing/timesheets/<int:pk>/reopen/', views_billing.TimesheetReopenView.as_view(), name='timesheet-reopen'),

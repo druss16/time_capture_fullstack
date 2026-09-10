@@ -739,11 +739,30 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
   };
 
   // ── Row rendering ──────────────────────────────────────────────────────────
-  const KIND_META: Record<RowKind, { label: string; color: string }> = {
-    pending: { label: "pick a client", color: T.teal },
-    ambiguous: { label: "which one?", color: T.purple },
-    mismatch: { label: "mismatch", color: T.red },
-    split: { label: "split", color: T.yellow },
+  // Each label names WHY the row is here, not what you do about it — the
+  // buttons on the right already say that. The old set mixed the two ("pick a
+  // client" and "split" were actions, "which one?" and "mismatch" were problems),
+  // so the four kinds did not read as four answers to one question, and the
+  // colour ended up carrying the distinction on its own.
+  //
+  // `hint` is the one-line difference, printed in the key under the filters.
+  const KIND_META: Record<RowKind, { label: string; color: string; hint: string }> = {
+    pending: {
+      label: "no client found", color: T.teal,
+      hint: "nothing in the title or its neighbours points anywhere",
+    },
+    ambiguous: {
+      label: "which one?", color: T.purple,
+      hint: "the title names a client, but several share that name",
+    },
+    mismatch: {
+      label: "looks misfiled", color: T.red,
+      hint: "the title clearly names a different client than it is booked to",
+    },
+    split: {
+      label: "mixed clients", color: T.yellow,
+      hint: "one block touched more than one client's files",
+    },
   };
 
   const renderActions = (row: Row) => {
@@ -796,13 +815,21 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
       const category = g.category || "General Client Work";
       return (
         <>
+          {/* Every candidate is the row's own purple. They used to split green
+              (worked recently) / purple (not), which was wrong twice over: it
+              implied the green one was RECOMMENDED — on the one row type that
+              exists precisely because the matcher refused to recommend — and it
+              collided with the green ✓ accept button on pending rows, so green
+              meant two different things on one screen. Recency is real and
+              useful, so it stays: as a ● that the row's own context line names
+              in words, rather than a colour nobody can look up. */}
           {g.candidates.slice(0, 4).map((c) => (
             <ActionBtn
               key={c.client_id}
-              label={c.recent ? `${c.short_name} ·` : c.short_name}
-              color={c.recent ? T.green : T.purple}
+              label={c.recent ? `● ${c.short_name}` : c.short_name}
+              color={T.purple}
               disabled={disabled}
-              title={`${c.client_name}${c.recent ? " — worked recently" : ""}`}
+              title={`${c.client_name}${c.recent ? " — you have worked this client recently" : ""}`}
               onClick={() => applyRow(row, c.client_id, category, c.client_name)}
             />
           ))}
@@ -887,10 +914,14 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
     }
     if (row.kind === "ambiguous") {
       const g = row.item;
+      const anyRecent = g.candidates.slice(0, 4).some((c) => c.recent);
       return (
         <span style={{ fontSize: 11.5, color: T.textMuted, ...mono }}>
           {g.block_count} block{g.block_count > 1 ? "s" : ""} · {g.candidates.length} look-alike client
           {g.candidates.length > 1 ? "s" : ""} share this name
+          {anyRecent && (
+            <span> · <span style={{ color: T.purple }}>●</span> = {row.who} worked it recently</span>
+          )}
         </span>
       );
     }
@@ -1082,6 +1113,22 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
               />
               group by user
             </label>
+
+            {/* The key. Four kinds sat interleaved in one list, told apart by a
+                stripe colour and a two-word pill, and "what is the difference
+                between these rows" is not a question a queue should provoke.
+                Only kinds actually present are listed, so a clean firm is not
+                handed a glossary of problems it does not have. */}
+            <div style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: "4px 16px", paddingTop: 10, borderTop: `1px solid ${T.border}`, marginTop: 4 }}>
+              {(["pending", "ambiguous", "mismatch", "split"] as const)
+                .filter((k) => counts[k] > 0)
+                .map((k) => (
+                  <span key={k} style={{ fontSize: 11, ...mono, color: T.textMuted }}>
+                    <span style={{ color: KIND_META[k].color }}>▌{KIND_META[k].label}</span>
+                    {" — "}{KIND_META[k].hint}
+                  </span>
+                ))}
+            </div>
           </div>
 
           {/* ── Queue ── */}

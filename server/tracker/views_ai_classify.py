@@ -88,6 +88,45 @@ def _check_rate_limit(org_id: int) -> bool:
     return True
 
 
+# ── Upstream circuit breaker ──────────────────────────────────────────────
+# Nothing was cached when the OpenAI call RAISED — success cached, "no match"
+# cached, failure cached nothing. So a persistently broken upstream (an account
+# out of credits answers 429 to everything) meant every agent poll re-asked for
+# the same titles forever: "1 titles, 0 cached, 1 sent to AI", on a loop, with a
+# 429 logged each time. The retries cannot succeed and the noise hides
+# everything else in the log.
+_BREAKER_KEY = "ai_classify:breaker"
+# Quota and auth failures do not fix themselves in a minute; transient ones do.
+_BREAKER_COOLDOWN_HARD = 900
+_BREAKER_COOLDOWN_SOFT = 60
+
+
+def _breaker_open() -> bool:
+    return cache.get(_BREAKER_KEY) is not None
+
+
+def _trip_breaker(exc: Exception) -> None:
+    """Stop calling OpenAI for a while, and say so once rather than per request."""
+    import urllib.error
+
+    code = getattr(exc, "code", None)
+    if code is None and isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+    hard = code in (401, 402, 403, 429)
+    cooldown = _BREAKER_COOLDOWN_HARD if hard else _BREAKER_COOLDOWN_SOFT
+    if not _breaker_open():
+        logger.error(
+            "[AI-CLASSIFY] upstream failing (%s) - pausing AI calls for %ss. "
+            "A 429 here is the OpenAI account, not our own rate limit.",
+            exc, cooldown,
+        )
+    cache.set(_BREAKER_KEY, True, timeout=cooldown)
+
+
+def _no_match(cached: bool = False) -> dict:
+    return {"client_id": None, "client_name": None, "confidence": 0,
+            "cached": cached}
+
 # =====================================================================
 # OpenAI call (server-side)
 # =====================================================================
@@ -520,6 +559,9 @@ def ai_classify_window(request):
                              "confidence": 0, "cached": False})
 
     # Call OpenAI
+    if _breaker_open():
+        return JsonResponse(_no_match())
+
     try:
         titles_batch = [{
             "title": title,
@@ -563,8 +605,10 @@ def ai_classify_window(request):
         return JsonResponse(response_data)
 
     except Exception as e:
-        logger.error(f"[AI-CLASSIFY] Error for org={org.id}: {e}")
-        return JsonResponse({"error": "classification_failed"}, status=500)
+        _trip_breaker(e)
+        # A "no match" rather than a 500: the agent already handles that shape,
+        # and a 500 makes the caller retry the thing that just failed.
+        return JsonResponse(_no_match())
 
 
 @csrf_exempt
@@ -624,6 +668,11 @@ def ai_classify_batch(request):
 
     # Call OpenAI for uncached titles
     if uncached_titles:
+        if _breaker_open():
+            for idx in uncached_indices:
+                results[idx] = _no_match()
+            return JsonResponse({"results": results})
+
         if not _check_rate_limit(org.id):
             return JsonResponse({"error": "rate_limit_exceeded"}, status=429)
 
@@ -661,9 +710,12 @@ def ai_classify_batch(request):
                 results[orig_idx] = response_data
 
         except Exception as e:
-            logger.error(f"[AI-CLASSIFY] Batch error for org={org.id}: {e}")
-            # Return partial results (cached ones) + nulls for failed
-            pass
+            _trip_breaker(e)
+            # Cached results stand; the rest come back as no-match so the caller
+            # gets a complete, well-formed response instead of holes.
+            for idx in uncached_indices:
+                if results[idx] is None:
+                    results[idx] = _no_match()
 
     cache_hits = sum(1 for r in results if r and r.get("cached"))
     logger.info(f"[AI-CLASSIFY] Batch org={org.id}: {len(titles_input)} titles, "

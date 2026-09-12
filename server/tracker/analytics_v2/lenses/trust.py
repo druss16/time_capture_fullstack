@@ -518,32 +518,82 @@ class TrustLens(Lens):
         ledger can never say a parish was touched by six people across
         forty-two separate days, because it never sees the work, only the bill.
         """
-        from ..blocks import billable_q, confirmed_qs
+        from ..blocks import confirmed_qs
+        from tracker.services.billing_totals import billable_block_q
 
+        # `billable_q` rather than `billable_block_q` would be the obvious
+        # choice and is wrong here: it widens the rule to clients flagged
+        # counts_billable_utilization, which at this firm means Internal-Tax.
+        # That is right for a utilization numerator -- the flag exists so
+        # UltraTax work parked under an internal client still counts as
+        # productive -- and wrong for a question about clients, where it put an
+        # internal bucket top of the list at 16.7% and made "of hours go to the
+        # ten biggest clients" false. The canonical billing rule already
+        # excludes internal work, so this uses that.
         qs = confirmed_qs(Block.objects.filter(
             org=org, day__gte=time.start, day__lte=time.end,
-        )).filter(billable_q(org), client_id__isnull=False)
+        )).filter(billable_block_q(org), client_id__isnull=False)
         qs = self._apply_scope_qs(qs, scope)
 
-        agg = list(
+        # Every client, once: the chart needs ten, the table shows eight, and
+        # the long-tail count needs all of them. One query, sliced three ways —
+        # a client list is small even at a firm with hundreds.
+        agg_all = list(
             qs.values("client__name")
               .annotate(minutes=Sum("minutes"),
                         people=Count("user_id", distinct=True),
                         days=Count("day", distinct=True))
-              .order_by("-minutes")[:8]
+              .order_by("-minutes")
         )
-        if not agg:
+        if not agg_all:
             return None
+        agg = agg_all[:8]
 
-        total_min = to_float(qs.aggregate(s=Sum("minutes"))["s"])
-        client_count = qs.values("client_id").distinct().count()
+        total_min = sum(to_float(r["minutes"]) for r in agg_all)
+        client_count = len(agg_all)
 
         rows = [{
             "client": r["client__name"],
             "hours": round(to_float(r["minutes"]) / 60.0, 1),
             "people": r["people"],
             "days": r["days"],
+            # Carried for the concentration chart, not shown in the table --
+            # it restated Hours there.
+            "share": (to_float(r["minutes"]) / total_min) if total_min else None,
         } for r in agg]
+
+        # Concentration, as a shape. The table underneath answers "who and how
+        # much"; this answers "how much of the firm rides on how few clients",
+        # which is the question a general ledger cannot reach — it knows what
+        # was billed, never how the week was spent earning it.
+        #
+        # Percent rather than hours so the bars mean the same thing whatever
+        # range is selected, and no "all other clients" bar: at this firm it
+        # would be five times the longest real one and flatten everything.
+        top10 = [{
+            "client": r["client__name"],
+            "share": (to_float(r["minutes"]) / total_min) if total_min else 0.0,
+        } for r in agg_all[:10]]
+        top_share = sum(r["share"] for r in top10)
+        tail = sum(1 for r in agg_all if to_float(r["minutes"]) < 60)
+
+        concentration = ChartCardPayload(
+            id="client_concentration",
+            hero=f"{top_share * 100:.0f}%",
+            hero_label=f"of hours go to the ten biggest of {client_count} clients",
+            title="Share of hours, ten biggest clients",
+            subtitle=(f"{time.label} · client work only, internal excluded"
+                      + (f" · {tail} took under an hour each" if tail else "")),
+            chart_type="horizontal_bar",
+            data=[{
+                # The axis track is 120px; a long parish name has to lose its
+                # tail somewhere, and doing it here beats silent clipping.
+                "client": (r["client"][:26] + "…") if len(r["client"]) > 27 else r["client"],
+                "share": round((r["share"] or 0) * 100, 1),
+            } for r in top10],
+            series=[{"key": "share", "label": "% of hours", "color": C_KNOWN}],
+            state=MetricState.READY,
+        )
 
         table = DataTablePayload(
             id="client_effort",
@@ -563,7 +613,7 @@ class TrustLens(Lens):
             state=MetricState.READY,
         )
 
-        children: list = [table]
+        children: list = [concentration, table]
 
         # The one missing input that turns all of this into money.
         missing_fees = self._clients_without_fees(org, qs)

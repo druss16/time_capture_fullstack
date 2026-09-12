@@ -9,7 +9,7 @@ export type ScopeType =
   | "firm" | "client" | "staff" | "service" | "engagement" | "composite";
 
 export type LensKey =
-  | "pulse" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
+  | "pulse" | "trust" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
   | "engagements";
 
 export interface Scope {
@@ -91,7 +91,7 @@ export interface KPITilePayload {
 
 export type ChartType =
   | "line" | "area" | "bar" | "horizontal_bar" | "stacked_bar"
-  | "pie" | "wip_aging" | "sparkline";
+  | "pie" | "wip_aging" | "sparkline" | "proportion_bar" | "dot_matrix";
 
 export interface ChartCardPayload {
   type: "chart_card";

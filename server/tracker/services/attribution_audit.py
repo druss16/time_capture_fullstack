@@ -93,10 +93,32 @@ def audit_org(org_id, days=30):
     committed_without_evidence = 0
     unresolved = []
 
+    # AMBIGUOUS is measured off `candidates_for`, which is deliberately
+    # generous — one shared word puts a client on the list. But the product only
+    # ever puts a question to a person via `family_for`, which additionally
+    # demands a shared root and a real look-alike. So some AMBIGUOUS blocks
+    # describe a collision nothing would ever ask about: "St. Peters Church"
+    # incidentally matching the individual client "Peter Dugan". Counting those
+    # as an open trust hole overstates the problem and makes the fixable part
+    # look bigger than it is, so they are tallied apart.
+    answerable = {'blocks': 0, 'minutes': 0}
+    incidental = {'blocks': 0, 'minutes': 0}
+
     for block in blocks:
         bucket = classify_block(block, lookalikes)
         counts[bucket] += 1
         minutes[bucket] += (block.minutes or 0)
+        if bucket == AMBIGUOUS:
+            words = client_families.text_words(
+                block.window_title or block.title or '',
+                block.file_path or '',
+                block.url or '',
+            )
+            slot = (answerable
+                    if len(lookalikes.family_for(words)) >= 2
+                    else incidental)
+            slot['blocks'] += 1
+            slot['minutes'] += (block.minutes or 0)
         if bucket in (AMBIGUOUS, NO_EVIDENCE):
             per_client[block.client_id][bucket] += (block.minutes or 0)
             unresolved.append(block)
@@ -138,5 +160,7 @@ def audit_org(org_id, days=30):
         'unresolved_blocks': len(unresolved),
         'unresolved_minutes': minutes[AMBIGUOUS] + minutes[NO_EVIDENCE],
         'session_decisions': session_decisions,
+        'ambiguous_answerable': answerable,
+        'ambiguous_incidental': incidental,
         'ambiguous_name_forms': lookalikes.ambiguous_name_forms(),
     }

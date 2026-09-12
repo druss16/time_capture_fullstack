@@ -38,7 +38,7 @@ class MetricState(str, Enum):
 # ---------------------------------------------------------------------------
 
 ScopeType = Literal["firm", "client", "staff", "service", "engagement", "composite"]
-LensKey = Literal["pulse", "review", "profitability", "utilization", "wip", "realization", "trends", "engagements"]
+LensKey = Literal["pulse", "trust", "review", "profitability", "utilization", "wip", "realization", "trends", "engagements"]
 
 
 @dataclass(frozen=True)
@@ -190,7 +190,7 @@ class ChartCardPayload:
     subtitle: str = ""
     chart_type: Literal[
         "line", "area", "bar", "horizontal_bar", "stacked_bar",
-        "pie", "wip_aging", "sparkline"
+        "pie", "wip_aging", "sparkline", "proportion_bar", "dot_matrix"
     ] = "line"
     data: list[dict] = field(default_factory=list)
     series: list[dict] = field(default_factory=list)  # [{key, label, color}]

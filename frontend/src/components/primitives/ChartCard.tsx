@@ -223,49 +223,97 @@ function ProportionBarView({ card }: { card: ChartCardPayload }) {
   const total = rows.reduce((sum, r) => sum + (Number(r.value) || 0), 0);
   if (!total) return <EmptyChart />;
   const unit = card.series?.[0]?.label ?? "";
+  const pct = (v: unknown) => (Number(v) || 0) / total * 100;
+  const colorAt = (r: Record<string, unknown>, i: number) =>
+    (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+
+  // Rows may declare a `group`. Five segments read as five peers and the
+  // question the chart answers — which is a two-way split — disappears into the
+  // subtitle. Grouped, the eye gets two totals and the five reasons become
+  // detail underneath them.
+  const groups: Array<{ name: string; rows: typeof rows; total: number }> = [];
+  rows.forEach(r => {
+    const name = (r.group as string) ?? "";
+    let g = groups.find(x => x.name === name);
+    if (!g) { g = { name, rows: [], total: 0 }; groups.push(g); }
+    g.rows.push(r);
+    g.total += Number(r.value) || 0;
+  });
+  const grouped = groups.length > 1 && groups.every(g => g.name);
 
   return (
-    <div className="h-full flex flex-col justify-center gap-5 py-2">
-      <div className="flex gap-[2px] h-11" role="img"
+    <div className="h-full flex flex-col justify-center gap-6 py-2">
+      <div className={cn("flex h-11", grouped ? "gap-2" : "gap-[2px]")} role="img"
            aria-label={rows.map(r => `${r.label}: ${r.value} ${unit}`).join(", ")}>
-        {rows.map((r, i) => {
-          const pct = (Number(r.value) || 0) / total * 100;
-          if (pct <= 0) return null;
-          return (
-            <div
-              key={String(r.label)}
-              className="rounded-sm min-w-[3px]"
-              style={{
-                width: `${pct}%`,
-                backgroundColor: (r.color as string) ??
-                  SERIES_COLORS[i % SERIES_COLORS.length],
-              }}
-              title={`${r.label} — ${formatValue(Number(r.value), "decimal_1dp")} ${unit} (${pct.toFixed(1)}%)`}
-            />
-          );
-        })}
+        {(grouped ? groups : [{ name: "", rows, total }]).map(g => (
+          <div key={g.name} className="flex gap-[2px]"
+               style={{ width: `${g.total / total * 100}%` }}>
+            {g.rows.map(r => {
+              const i = rows.indexOf(r);
+              if (pct(r.value) <= 0) return null;
+              return (
+                <div
+                  key={String(r.label)}
+                  className="rounded-sm min-w-[3px]"
+                  style={{ width: `${(Number(r.value) || 0) / g.total * 100}%`,
+                           backgroundColor: colorAt(r, i) }}
+                  title={`${r.label} — ${formatValue(Number(r.value), "decimal_1dp")} ${unit} (${pct(r.value).toFixed(1)}%)`}
+                />
+              );
+            })}
+          </div>
+        ))}
       </div>
-      <div className="grid gap-x-6 gap-y-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3
-                      overflow-y-auto">
-        {rows.map((r, i) => {
-          const pct = (Number(r.value) || 0) / total * 100;
-          return (
+
+      {grouped ? (
+        <div className="grid gap-x-10 gap-y-5 grid-cols-1 sm:grid-cols-2">
+          {groups.map(g => (
+            <div key={g.name} className="min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-semibold tabular-nums text-slate-900">
+                  {Math.round(g.total / total * 100)}%
+                </span>
+                <span className="text-sm text-slate-500 tabular-nums">
+                  {formatValue(g.total, "decimal_1dp")} {unit}
+                </span>
+              </div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-0.5">
+                {g.name}
+              </div>
+              {/* A lone row would just restate the group total in smaller type. */}
+              <ul className={cn("mt-2.5 space-y-1.5", g.rows.length < 2 && "hidden")}>
+                {g.rows.map(r => (
+                  <li key={String(r.label)} className="flex gap-2 items-baseline text-xs">
+                    <span className="h-2 w-2 rounded-sm shrink-0 translate-y-[1px]"
+                          style={{ backgroundColor: colorAt(r, rows.indexOf(r)) }} />
+                    <span className="tabular-nums text-slate-700 font-medium">
+                      {formatValue(Number(r.value), "decimal_1dp")}
+                    </span>
+                    <span className="text-slate-500 leading-snug">{r.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-x-6 gap-y-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+          {rows.map((r, i) => (
             <div key={String(r.label)} className="flex gap-2.5 items-start min-w-0">
               <span className="mt-[5px] h-2.5 w-2.5 rounded-sm shrink-0"
-                    style={{ backgroundColor: (r.color as string) ??
-                      SERIES_COLORS[i % SERIES_COLORS.length] }} />
+                    style={{ backgroundColor: colorAt(r, i) }} />
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-slate-900 tabular-nums">
                   {formatValue(Number(r.value), "decimal_1dp")}
                   {unit && <span className="font-normal text-slate-500"> {unit}</span>}
-                  <span className="font-normal text-slate-400"> · {pct.toFixed(1)}%</span>
+                  <span className="font-normal text-slate-400"> · {pct(r.value).toFixed(1)}%</span>
                 </div>
                 <div className="text-xs text-slate-500 leading-snug">{r.label}</div>
               </div>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

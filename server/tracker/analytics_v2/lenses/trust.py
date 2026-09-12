@@ -126,16 +126,19 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="decided_by",
-            title="Every recorded hour, by who decided it",
+            title="Who decided each hour?",
             subtitle=f"{time.label} · {total:,.1f} h",
             chart_type="proportion_bar",
             data=[
-                {"label": "Filed to a client with nobody asked",
-                 "value": round(filed, 1), "color": C_KNOWN},
-                {"label": "Held back — evidence too thin to guess",
-                 "value": round(asked, 1), "color": C_OPEN},
-                {"label": "Set by a person at the keyboard",
-                 "value": round(human, 1), "color": C_PERSON},
+                {"group": "The software decided", "color": C_KNOWN,
+                 "label": "filed to a client, nobody asked",
+                 "value": round(filed, 1)},
+                {"group": "A person was needed", "color": C_OPEN,
+                 "label": "held back — evidence too thin to guess",
+                 "value": round(asked, 1)},
+                {"group": "A person was needed", "color": C_PERSON,
+                 "label": "set by hand at the keyboard",
+                 "value": round(human, 1)},
             ],
             series=[{"key": "value", "label": "h"}],
             state=MetricState.READY if total else MetricState.EMPTY,
@@ -211,7 +214,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="audit_composition",
-            title="What the random audit found",
+            title="Was it right?",
             subtitle=(
                 f"{drawn} drawn at random, judged by hand"
                 + (f" · {period[0]:%-d %b}–{period[1]:%-d %b %Y}"
@@ -356,7 +359,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='autonomy_trend',
-            title='Share filed without asking, by month',
+            title='Is it getting better?',
             subtitle=(f"{first_pt['month']} {first_pt['autonomy']:.0f}% → "
                       f"{last_pt['month']} {last_pt['autonomy']:.0f}% · "
                       f"since the firm went fully live · current month partial"),
@@ -443,20 +446,27 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='provable_split',
-            title='Booked time, by whether the evidence names the client',
-            subtitle=f"{provable / total * 100:.0f}% provable from the block's own text",
+            title='Can we prove which client?',
+            subtitle=f'{time.label} · {total:,.0f} h booked to a client',
             chart_type='proportion_bar',
+            # Grouped, so the chart answers its own title with two numbers. The
+            # five reasons are why, not what, and sit underneath at detail size.
             data=[
-                {'label': 'Only one client it could be',
-                 'value': round(singular, 1), 'color': C_KNOWN},
-                {'label': 'Look-alikes exist, the text separates them',
-                 'value': round(resolved, 1), 'color': C_KNOWN_2},
-                {'label': 'Collision nothing would ever ask about',
-                 'value': round(incidental, 1), 'color': C_KNOWN_3},
-                {'label': 'Names the family, not the member',
-                 'value': round(answerable, 1), 'color': C_OPEN},
-                {'label': 'The text names nothing at all',
-                 'value': round(no_ev, 1), 'color': C_OPEN_2},
+                {'group': 'Proved by the work itself', 'color': C_KNOWN,
+                 'label': 'only one client it could be',
+                 'value': round(singular, 1)},
+                {'group': 'Proved by the work itself', 'color': C_KNOWN_2,
+                 'label': 'the text rules out the look-alikes',
+                 'value': round(resolved, 1)},
+                {'group': 'Proved by the work itself', 'color': C_KNOWN_3,
+                 'label': 'no real rival for it',
+                 'value': round(incidental, 1)},
+                {'group': 'Needs a person to say', 'color': C_OPEN,
+                 'label': 'names the family, not which one',
+                 'value': round(answerable, 1)},
+                {'group': 'Needs a person to say', 'color': C_OPEN_2,
+                 'label': 'names no client at all',
+                 'value': round(no_ev, 1)},
             ],
             series=[{'key': 'value', 'label': 'h'}],
             state=MetricState.READY,
@@ -660,7 +670,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="queue_aging",
-            title="Time waiting on a decision",
+            title="What is waiting on you?",
             subtitle=f"{live_h:,.1f} h live · older is cleanup, not a habit",
             chart_type="horizontal_bar",
             data=data,

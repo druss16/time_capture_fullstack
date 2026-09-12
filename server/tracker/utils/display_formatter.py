@@ -527,6 +527,91 @@ def extract_context_from_title(window_title: str, app_name: str = '', url: str =
     return title[:50] if title else ''
 
 
+_MEETING_SPLASH = ('loading', 'starting', 'connecting', 'joining')
+_MEETING_PLATFORMS = (
+    ('teams', 'Teams'), ('zoom', 'Zoom'), ('webex', 'Webex'),
+    ('gotomeeting', 'GoToMeeting'), ('ringcentral', 'RingCentral'),
+    ('google meet', 'Google Meet'), ('meet.google', 'Google Meet'),
+)
+# Vocabulary a meeting window uses to describe ITSELF. A title made only of
+# these says nothing about what the meeting was for.
+_MEETING_CHROME_WORDS = frozenset({
+    'meet', 'meeting', 'teams', 'microsoft', 'zoom', 'webex', 'lobby', 'chat',
+    'call', 'work', 'personal', 'page', 'pages', 'more', 'and', 'in', 'the',
+    'loading', 'starting', 'connecting', 'joining', 'edge', 'chrome', 'you',
+})
+# A generated room id — "oak-tjkn-ryx". Not a subject, however wordy it looks.
+_ROOM_CODE = re.compile(r'^[a-z]{3,4}(-[a-z]{3,4}){2,}$')
+# Browser chrome a web-hosted meeting drags along.
+_BROWSER_TAIL = re.compile(
+    r'\s+and \d+ more pages?\b.*$|\s+[-\u2013]\s+(Work|Personal)\s+[-\u2013]\s+.*$'
+    r'|\s+[-\u2013]\s+(Microsoft\s*)?(Edge|Chrome|Firefox|Safari|Brave|Arc)\s*$',
+    re.IGNORECASE)
+
+
+def _meeting_subject(title: str) -> str:
+    """The part of a meeting window title that says what the meeting was FOR.
+
+    The title is split on its separators and every segment that is nothing but
+    window vocabulary is dropped — "Chat", "In lobby", "Microsoft Teams". What
+    survives is the subject, or the person, or nothing:
+
+        "Chat | Stephen Dubois (You) | Microsoft Teams" -> "Stephen Dubois (You)"
+        "In lobby - Meeting - Webex and 3 more pages"   -> ""
+        "Meet - oak-tjkn-ryx and 1 more page"           -> ""
+
+    An empty result is the useful answer, not a failure: a plain "Teams meeting"
+    beats a row that announces "Loading Microsoft Teams" as if it were the work.
+    """
+    t = (title or '').strip()
+    prev = None
+    while t and t != prev:                       # chrome nests: tail, then tail
+        prev = t
+        t = _BROWSER_TAIL.sub('', t).strip(' -\u2013|\u00b7')
+
+    keep = []
+    for seg in re.split(r'\s*[|\u00b7]\s*|\s+[-\u2013]\s+', t):
+        seg = seg.strip()
+        words = re.findall(r"[a-z0-9'\-]+", seg.lower())
+        if not words:
+            continue
+        if any(_ROOM_CODE.match(w) for w in words):
+            continue
+        # A segment describing the app's STATE is never the subject. Checked
+        # separately from the vocabulary list so "Connecting to Zoom" is
+        # rejected on "connecting" alone, without every filler word ("to")
+        # having to be enumerated first.
+        if any(w in _MEETING_SPLASH for w in words):
+            continue
+        if all(w in _MEETING_CHROME_WORDS or w.isdigit() for w in words):
+            continue
+        keep.append(seg)
+    return ' \u00b7 '.join(keep)
+
+
+def _meeting_display_title(app_name: str, window_title: str) -> str:
+    """"Teams meeting" for a bracketed meeting block, else ''.
+
+    Only fires when the app name itself says meeting — that is the agent's
+    meeting detector talking, not a guess from a window title. A Teams CHAT
+    window whose app is plain "Teams" is ordinary work and keeps its own title.
+
+    Where the title survived the splash and names a subject ("Q3 review |
+    Microsoft Teams"), that is better than any label we could invent, so it is
+    kept. Where it only describes the window, it is dropped — see
+    _meeting_subject.
+    """
+    app = (app_name or '').lower()
+    if 'meeting' not in app:
+        return ''
+    title = (window_title or '').strip()
+    platform = next((label for key, label in _MEETING_PLATFORMS
+                     if key in app or key in title.lower()), '')
+    base = f'{platform} meeting' if platform else 'Meeting'
+    subject = _meeting_subject(title)
+    return f'{base}: {subject}' if subject else base
+
+
 def format_block_for_display(block: Dict[str, Any], client_name: str = '') -> Dict[str, Any]:
     """
     Format a block for clean UI display.
@@ -551,7 +636,21 @@ def format_block_for_display(block: Dict[str, Any], client_name: str = '') -> Di
     url = block.get('url', '')
     minutes = block.get('minutes', 0) or 0
     category = block.get('category') or block.get('ai_category', '')
-    
+
+    # A meeting the agent bracketed is named by what it WAS, not by the window
+    # title. The detector fires the moment the conferencing app appears — while
+    # it is still painting — so the title it keeps is the splash screen, and the
+    # row ends up announcing "Loading Microsoft Teams" as if that were the work.
+    # Seven of org 21's thirteen meeting blocks in a month said exactly that.
+    meeting = _meeting_display_title(app_name, window_title)
+    if meeting:
+        return {
+            'title': meeting,
+            'app': meeting,
+            'duration': format_duration(minutes),
+            'category': category,
+        }
+
     # Clean app name
     clean_app = clean_app_name(app_name)
     

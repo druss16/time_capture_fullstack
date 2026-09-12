@@ -44,6 +44,9 @@ def elapsed_days(time) -> int:
 
 
 _NEEDS_YOU_TTL = 60.0
+# Above this many candidate rows the per-block predicate is too slow to run
+# inside a request; the tiles report nothing rather than hanging a worker.
+NEEDS_YOU_CEILING = 25_000
 _needs_you_cache: dict = {}
 
 
@@ -77,11 +80,20 @@ def needs_you(org_id: int, time) -> tuple[int, float, int]:
                 deleted_at__isnull=True)
         .filter(Q(is_categorized=False) | Q(classification_state="proposed"))
         .exclude(classification_state="suppressed")
-        .only("id", "user_id", "minutes", "classification_state",
-              "is_categorized", "categorized_by", "proposed_client_id",
-              "proposed_reasoning", "proposed_signals", "bundle_id",
-              "category_hours")
     )
+
+    # NO .only() here, deliberately. It was an obvious win and it took a
+    # production worker down: the predicate reaches through _is_material ->
+    # _block_minutes -> _is_anomalous_block to b.start and b.end, and a deferred
+    # field makes Django refresh_from_db PER BLOCK. Several hundred extra
+    # round-trips against a pooled database is a SIGKILL, not a slow page. Any
+    # field list here would have to track a predicate three call levels away in
+    # another module, so the whole row is the only safe thing to load.
+    if candidates.count() > NEEDS_YOU_CEILING:
+        result = (0, 0.0, 0)
+        _needs_you_cache[key] = (_time.monotonic(), result)
+        return result
+
     items = 0
     minutes = 0
     owners: set = set()

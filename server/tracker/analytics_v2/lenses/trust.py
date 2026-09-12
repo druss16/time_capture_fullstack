@@ -82,11 +82,12 @@ class TrustLens(Lens):
                 org, scope, time, compare, section_id="headline",
             ))
 
-        sections.append(self._decided_by_section(org, time))
-
-        audit = self._audit_section(org, time)
-        if audit is not None:
-            sections.append(audit)
+        # One visible section per question someone actually asks, in the order
+        # they ask them. Autonomy and precision share a section because neither
+        # means anything alone — a system that guessed wildly scores 100% on the
+        # first, and one that asked about everything scores 100% on the second.
+        # Everything that is reference rather than argument is collapsed.
+        sections.append(self._right_section(org, time))
 
         if firm:
             trend = self._trend_section(org, time)
@@ -97,19 +98,33 @@ class TrustLens(Lens):
             if provable is not None:
                 sections.append(provable)
 
-        unlocked = self._unlocked_section(org, scope, time)
-        if unlocked is not None:
-            sections.append(unlocked)
-
         queue = self._queue_section(org, scope, time)
         if queue is not None:
             sections.append(queue)
 
+        unlocked = self._unlocked_section(org, scope, time)
+        if unlocked is not None:
+            sections.append(unlocked)
+
+        if firm:
+            renames = self._renames_section(org, time)
+            if renames is not None:
+                sections.append(renames)
+
         sections.append(self._boundaries_section(org, time))
         return sections
 
+    # ── is it right? autonomy and precision, together ───────────────────────
+    def _right_section(self, org, time) -> Section:
+        children = list(self._decided_by_children(org, time))
+        children.extend(self._audit_children(org, time))
+        return Section(
+            id="is_it_right", type="section", title="Is it right?",
+            collapsible=False, children=children,
+        )
+
     # ── 1. who decided each hour ────────────────────────────────────────────
-    def _decided_by_section(self, org, time) -> Section:
+    def _decided_by_children(self, org, time) -> list:
         """The autonomy split, as a shape.
 
         The middle bar is the one that matters and it is the one that reads as
@@ -126,8 +141,9 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="decided_by",
-            title="Who decided each hour?",
-            subtitle=f"{time.label} · {total:,.1f} h",
+            title="Who decided each hour",
+            subtitle=(f"{time.label} · {total:,.1f} h · "
+                      f"{discarded:,.0f} h judged not real activity, excluded"),
             chart_type="proportion_bar",
             data=[
                 {"group": "The software decided", "color": C_KNOWN,
@@ -144,41 +160,10 @@ class TrustLens(Lens):
             state=MetricState.READY if total else MetricState.EMPTY,
         )
 
-        rows = [
-            {"who": "Filed automatically",
-             "hours": round(filed, 1),
-             "share": (filed / total) if total else None,
-             "means": "Assigned to a client with nobody asked"},
-            {"who": "Held for review",
-             "hours": round(asked, 1),
-             "share": (asked / total) if total else None,
-             "means": "Evidence too thin to guess — waiting on a person"},
-            {"who": "Set by a person",
-             "hours": round(human, 1),
-             "share": (human / total) if total else None,
-             "means": "Someone chose the client at the keyboard"},
-        ]
-
-        table = DataTablePayload(
-            id="decided_by_rows",
-            title="The same three numbers",
-            subtitle=f"{discarded:,.1f} h judged not real activity, excluded",
-            columns=[
-                column("who", "Decided by", "text"),
-                column("hours", "Hours", "hours_1dp"),
-                column("share", "Share", "percent_1dp"),
-            ],
-            rows=rows,
-            state=MetricState.READY if total else MetricState.EMPTY,
-        )
-        return Section(
-            id="decided_by_section", type="section",
-            title="Who Decided Each Hour", collapsible=False,
-            children=[chart, table],
-        )
+        return [chart]
 
     # ── 2. the audit ────────────────────────────────────────────────────────
-    def _audit_section(self, org, time) -> Section | None:
+    def _audit_children(self, org, time) -> list:
         """Sample composition, including the draws with no verdict yet.
 
         Showing `pending` and `unverifiable` beside the wins is the whole point.
@@ -191,18 +176,14 @@ class TrustLens(Lens):
         samp, period = sample_for_window(org.id, time)
         drawn = samp.get("drawn") or 0
         if not drawn:
-            return Section(
-                id="audit", type="section", title="How Often We Were Right",
-                collapsible=False,
-                children=[InsightCardPayload(
+            return [InsightCardPayload(
                     id="no_sample",
                     severity="watch",
                     headline="No audit sample has been drawn yet",
                     body=("Without one there is no accuracy claim, only autonomy — "
                           "which a system that guessed wildly would score 100% on."),
                     source="rule", dismissible=False,
-                )],
-            )
+                )]
 
         correct = samp.get("correct") or 0
         wrong = samp.get("wrong") or 0
@@ -214,7 +195,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="audit_composition",
-            title="Was it right?",
+            title="Random audit, judged by hand",
             subtitle=(
                 f"{drawn} drawn at random, judged by hand"
                 + (f" · {period[0]:%-d %b}–{period[1]:%-d %b %Y}"
@@ -275,10 +256,7 @@ class TrustLens(Lens):
                 source="rule", dismissible=False,
             ))
 
-        return Section(
-            id="audit", type="section", title="How Often We Were Right",
-            collapsible=False, children=children,
-        )
+        return children
 
 
     # ── 2b. is it getting better? ───────────────────────────────────────────
@@ -359,7 +337,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='autonomy_trend',
-            title='Is it getting better?',
+            title='Filed without asking, by month',
             subtitle=(f"{first_pt['month']} {first_pt['autonomy']:.0f}% → "
                       f"{last_pt['month']} {last_pt['autonomy']:.0f}% · "
                       f"since the firm went fully live · current month partial"),
@@ -381,7 +359,7 @@ class TrustLens(Lens):
             ))
 
         return Section(
-            id='trend', type='section', title='Is It Getting Better?',
+            id='trend', type='section', title='Is it getting better?',
             collapsible=False, children=children,
         )
 
@@ -446,7 +424,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='provable_split',
-            title='Can we prove which client?',
+            title='Booked time, by strength of evidence',
             subtitle=f'{time.label} · {total:,.0f} h booked to a client',
             chart_type='proportion_bar',
             # Grouped, so the chart answers its own title with two numbers. The
@@ -485,56 +463,78 @@ class TrustLens(Lens):
         )]
 
 
-        # {client_id: [(name_form, [(other_id, other_name, relation), ...]), ...]}
-        forms = rep.get('ambiguous_name_forms') or {}
-        by_id = rep.get('by_id') or {}
-        per_client = rep.get('per_client') or {}
-        if forms:
-            # Ranked by the hours actually at stake, so the rename that buys the
-            # most comes first. An alphabetical list of 54 names is a chore; a
-            # list with hours against it is a decision.
-            def at_stake(cid):
-                buckets = per_client.get(cid) or {}
-                return sum(buckets.values())
-
-            rows = []
-            for cid in sorted(forms, key=at_stake, reverse=True)[:15]:
-                client = by_id.get(cid)
-                for name_form, collisions in forms[cid][:1]:
-                    others = [f"{n} ({rel})" for _oid, n, rel in collisions[:2]]
-                    extra = len(collisions) - len(others)
-                    if extra > 0:
-                        others.append(f"+{extra} more")
-                    rows.append({
-                        'client': getattr(client, 'name', None) or f'Client {cid}',
-                        'form': name_form,
-                        'collides': ', '.join(others),
-                        'hours': round(at_stake(cid) / 60.0, 1),
-                    })
-
-            children.append(DataTablePayload(
-                id='rename_candidates',
-                title='Roster entries worth renaming',
-                subtitle=(f"{len(forms)} names cannot exclude another client. "
-                          f"One rename settles the whole family."),
-                columns=[
-                    column('client', 'Client', 'text'),
-                    column('form', 'Name or alias', 'text'),
-                    column('collides', 'Also matches', 'text'),
-                    column('hours', 'Hours at stake', 'hours_1dp'),
-                ],
-                rows=rows,
-                default_sort={'key': 'hours', 'direction': 'desc'},
-                state=MetricState.READY,
-            ))
 
         return Section(
             id='provable', type='section',
-            title='Which Hours Can Be Proved', collapsible=False,
+            title='Can we prove which client?', collapsible=False,
             children=children,
         )
 
     # ── 3. what trustworthy time unlocks ────────────────────────────────────
+
+    # ── the roster fixes, folded away: reference, not argument ─────────────
+    def _renames_section(self, org, time) -> Section | None:
+        """The one-rename-fixes-a-family list.
+
+        Collapsed by default. It is the most actionable thing on the page and
+        also fifteen rows of client names, which is the opposite of what the
+        rest of the lens is trying to be. Folded, it is one line until wanted.
+
+        Reads the audit already computed for the provable section rather than
+        walking every block a second time.
+        """
+        cached = getattr(self, "_audit_cache", None)
+        if cached is None:
+            return None
+        rep = cached[1]
+
+        # {client_id: [(name_form, [(other_id, other_name, relation), ...]), ...]}
+        forms = rep.get("ambiguous_name_forms") or {}
+        by_id = rep.get("by_id") or {}
+        per_client = rep.get("per_client") or {}
+        if not forms:
+            return None
+
+        def at_stake(cid) -> int:
+            return sum((per_client.get(cid) or {}).values())
+
+        # Ranked by hours actually at stake: an alphabetical list of 54 names is
+        # a chore, the same list with hours against it is a decision.
+        rows = []
+        for cid in sorted(forms, key=at_stake, reverse=True)[:15]:
+            client = by_id.get(cid)
+            for name_form, collisions in forms[cid][:1]:
+                others = [f"{n} ({rel})" for _oid, n, rel in collisions[:2]]
+                extra = len(collisions) - len(others)
+                if extra > 0:
+                    others.append(f"+{extra} more")
+                rows.append({
+                    "client": getattr(client, "name", None) or f"Client {cid}",
+                    "form": name_form,
+                    "collides": ", ".join(others),
+                    "hours": round(at_stake(cid) / 60.0, 1),
+                })
+
+        return Section(
+            id="renames", type="section",
+            title="Roster entries worth renaming",
+            collapsible=True, collapsed=True,
+            children=[DataTablePayload(
+                id="rename_candidates",
+                title="Ranked by hours currently at stake",
+                subtitle=f"{len(forms)} names cannot exclude another client",
+                columns=[
+                    column("client", "Client", "text"),
+                    column("form", "Name or alias", "text"),
+                    column("collides", "Also matches", "text"),
+                    column("hours", "Hours at stake", "hours_1dp"),
+                ],
+                rows=rows,
+                default_sort={"key": "hours", "direction": "desc"},
+                state=MetricState.READY,
+            )],
+        )
+
     def _unlocked_section(self, org, scope, time) -> Section | None:
         """The per-client view a general ledger structurally cannot produce.
 
@@ -555,7 +555,7 @@ class TrustLens(Lens):
               .annotate(minutes=Sum("minutes"),
                         people=Count("user_id", distinct=True),
                         days=Count("day", distinct=True))
-              .order_by("-minutes")[:15]
+              .order_by("-minutes")[:8]
         )
         if not agg:
             return None
@@ -568,7 +568,6 @@ class TrustLens(Lens):
             "hours": round(to_float(r["minutes"]) / 60.0, 1),
             "people": r["people"],
             "days": r["days"],
-            "share": (to_float(r["minutes"]) / total_min) if total_min else None,
         } for r in agg]
 
         table = DataTablePayload(
@@ -579,7 +578,6 @@ class TrustLens(Lens):
             columns=[
                 column("client", "Client", "text"),
                 column("hours", "Hours", "hours_1dp"),
-                column("share", "Share of hours", "percent_1dp"),
                 column("people", "People", "integer",
                        tooltip="Distinct staff who worked on this client."),
                 column("days", "Days touched", "integer",
@@ -606,7 +604,7 @@ class TrustLens(Lens):
 
         return Section(
             id="unlocked", type="section",
-            title="What Trustworthy Time Makes Visible", collapsible=False,
+            title="What this makes visible", collapsible=False,
             children=children,
         )
 
@@ -670,7 +668,7 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="queue_aging",
-            title="What is waiting on you?",
+            title="By age",
             subtitle=f"{live_h:,.1f} h live · older is cleanup, not a habit",
             chart_type="horizontal_bar",
             data=data,
@@ -699,7 +697,7 @@ class TrustLens(Lens):
             # detail survives the change of form.
             children.append(ChartCardPayload(
                 id="queue_owners",
-                title="Whose queue it is",
+                title="By person",
                 subtitle="Last 30 days · longest first",
                 chart_type="horizontal_bar",
                 data=[{"person": f"{r['person']} ({r['blocks']})",
@@ -709,7 +707,7 @@ class TrustLens(Lens):
             ))
 
         return Section(
-            id="queue", type="section", title="What's Waiting On You",
+            id="queue", type="section", title="What is waiting on you?",
             collapsible=False, children=children,
         )
 
@@ -755,7 +753,7 @@ class TrustLens(Lens):
 
         return Section(
             id="boundaries", type="section",
-            title="What These Numbers Are Not", collapsible=True, collapsed=True,
+            title="What these numbers are not", collapsible=True, collapsed=True,
             children=cards,
         )
 

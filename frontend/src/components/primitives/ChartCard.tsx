@@ -1,6 +1,7 @@
 /**
  * ChartCard — wraps recharts with our brand styling and handles all chart types
- * the backend produces (line, area, bar, horizontal_bar, pie, wip_aging, sparkline).
+ * the backend produces (line, area, bar, horizontal_bar, stacked_bar, pie,
+ * wip_aging, sparkline, proportion_bar, dot_matrix).
  */
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
@@ -72,6 +73,8 @@ function ChartByType({ card }: { card: ChartCardPayload }) {
     case "stacked_bar":   return <StackedBarView card={card} />;
     case "pie":           return <PieChartView card={card} />;
     case "wip_aging":     return <WipAgingChart card={card} />;
+    case "proportion_bar":return <ProportionBarView card={card} />;
+    case "dot_matrix":    return <DotMatrixView card={card} />;
     default:              return <BarChartView card={card} />;
   }
 }
@@ -207,6 +210,125 @@ function HorizontalBarView({ card }: { card: ChartCardPayload }) {
         ))}
       </BarChart>
     </ResponsiveContainer>
+  );
+}
+
+// ── proportion_bar ─────────────────────────────────────────────────────────
+// One horizontal bar whose segments are shares of a whole, with the legend
+// carrying the figures. A stacked column answers "how did this month compare";
+// this answers "what is this made of", which is a different question and the
+// one the Trust lens keeps asking. Rows: {label, value, color?}.
+function ProportionBarView({ card }: { card: ChartCardPayload }) {
+  const rows = card.data ?? [];
+  const total = rows.reduce((sum, r) => sum + (Number(r.value) || 0), 0);
+  if (!total) return <EmptyChart />;
+  const unit = card.series?.[0]?.label ?? "";
+
+  return (
+    <div className="h-full flex flex-col justify-center gap-5 py-2">
+      <div className="flex gap-[2px] h-11" role="img"
+           aria-label={rows.map(r => `${r.label}: ${r.value} ${unit}`).join(", ")}>
+        {rows.map((r, i) => {
+          const pct = (Number(r.value) || 0) / total * 100;
+          if (pct <= 0) return null;
+          return (
+            <div
+              key={String(r.label)}
+              className="rounded-sm min-w-[3px]"
+              style={{
+                width: `${pct}%`,
+                backgroundColor: (r.color as string) ??
+                  SERIES_COLORS[i % SERIES_COLORS.length],
+              }}
+              title={`${r.label} — ${formatValue(Number(r.value), "decimal_1dp")} ${unit} (${pct.toFixed(1)}%)`}
+            />
+          );
+        })}
+      </div>
+      <div className="grid gap-x-6 gap-y-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3
+                      overflow-y-auto">
+        {rows.map((r, i) => {
+          const pct = (Number(r.value) || 0) / total * 100;
+          return (
+            <div key={String(r.label)} className="flex gap-2.5 items-start min-w-0">
+              <span className="mt-[5px] h-2.5 w-2.5 rounded-sm shrink-0"
+                    style={{ backgroundColor: (r.color as string) ??
+                      SERIES_COLORS[i % SERIES_COLORS.length] }} />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-900 tabular-nums">
+                  {formatValue(Number(r.value), "decimal_1dp")}
+                  {unit && <span className="font-normal text-slate-500"> {unit}</span>}
+                  <span className="font-normal text-slate-400"> · {pct.toFixed(1)}%</span>
+                </div>
+                <div className="text-xs text-slate-500 leading-snug">{r.label}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── dot_matrix ─────────────────────────────────────────────────────────────
+// One square per audited item. A percentage invites the reader to take the
+// number on faith; a hundred and fifty squares show the sample size, and show
+// the ones with no verdict yet, which is the part a bar chart quietly hides.
+// Rows: {label, value, color?, outline?}.
+function DotMatrixView({ card }: { card: ChartCardPayload }) {
+  const rows = card.data ?? [];
+  const total = rows.reduce((sum, r) => sum + (Number(r.value) || 0), 0);
+  if (!total) return <EmptyChart />;
+
+  const cols = total > 120 ? 15 : total > 60 ? 12 : 10;
+  const pitch = 14, size = 9;
+  const gridRows = Math.ceil(total / cols);
+
+  const cells: Array<{ fill: string; outline: boolean; label: string }> = [];
+  rows.forEach((r, i) => {
+    const fill = (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+    for (let n = 0; n < (Number(r.value) || 0); n++) {
+      cells.push({ fill, outline: Boolean(r.outline), label: String(r.label) });
+    }
+  });
+
+  return (
+    <div className="h-full flex flex-col justify-center gap-4">
+      <svg
+        viewBox={`0 0 ${cols * pitch - (pitch - size)} ${gridRows * pitch - (pitch - size)}`}
+        className="w-full h-auto max-h-44"
+        preserveAspectRatio="xMinYMid meet"
+        role="img"
+        aria-label={rows.map(r => `${r.value} ${r.label}`).join(", ")}
+      >
+        {cells.map((c, i) => (
+          <rect
+            key={i}
+            x={(i % cols) * pitch}
+            y={Math.floor(i / cols) * pitch}
+            width={size} height={size} rx={2}
+            fill={c.outline ? "none" : c.fill}
+            stroke={c.outline ? c.fill : "none"}
+            strokeWidth={c.outline ? 1.5 : 0}
+          />
+        ))}
+      </svg>
+      <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
+        {rows.map((r, i) => {
+          const fill = (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+          return (
+            <span key={String(r.label)} className="inline-flex items-center gap-2">
+              <i className="h-2.5 w-2.5 rounded-sm inline-block"
+                 style={r.outline
+                   ? { border: `1.5px solid ${fill}` }
+                   : { backgroundColor: fill }} />
+              <span className="tabular-nums font-medium text-slate-900">{r.value}</span>
+              {r.label}
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -9,6 +9,7 @@ modules so the registry is populated. Always import via:
 from .base import Metric, ThresholdRange, all_metric_ids, get_metric, register_metric  # noqa: F401
 
 # Side-effect imports — register all concrete metrics
+from . import attribution  # noqa: F401
 from . import realization  # noqa: F401
 from . import utilization  # noqa: F401
 from . import profitability  # noqa: F401

@@ -277,6 +277,29 @@ def by_signal(org_id: int, start: date, end: date, min_decided: int = 3) -> list
     return out
 
 
+def latest_sample_period(org_id: int, on_or_before: date | None = None) -> tuple | None:
+    """The most recent period this org actually has adjudicated draws for.
+
+    Samples are drawn for a fixed window and `sampled_precision` matches that
+    window exactly, which is correct — a precision figure belongs to the period
+    it was measured on. But a reader picking "last 30 days" is not asking for a
+    different measurement, they are asking whether the thing works; answering
+    them with silence because the sample was drawn a fortnight earlier reads as
+    "we have never measured this", which is the opposite of true.
+
+    So callers can fall back to this and SAY which window they are quoting.
+    Returns (period_start, period_end), or None when nothing has been drawn.
+    """
+    from tracker.models import AccuracySample
+
+    qs = AccuracySample.objects.filter(org_id=org_id)
+    if on_or_before is not None:
+        qs = qs.filter(period_end__lte=on_or_before)
+    row = qs.order_by("-period_end", "-period_start").values(
+        "period_start", "period_end").first()
+    return (row["period_start"], row["period_end"]) if row else None
+
+
 def sampled_precision(org_id: int, start: date, end: date) -> dict:
     """The headline: what the random sample says, with its uncertainty."""
     from tracker.models import AccuracySample

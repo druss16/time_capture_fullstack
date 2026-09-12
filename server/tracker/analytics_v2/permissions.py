@@ -381,7 +381,8 @@ def get_available_scopes(user: AbstractUser, role: Optional[str], org: Organizat
 
 def _all_lens_keys_for_plan(org: Organization) -> set[str]:
     plan = (getattr(org, "plan", "none") or "none").lower()
-    base = {"pulse", "review", "profitability", "utilization", "wip", "realization"}
+    base = {"pulse", "trust", "review", "profitability", "utilization",
+            "wip", "realization"}
     if plan.startswith(("executive", "trial")):
         # engagements was registered, given a lens, a sidebar entry and an icon,
         # and then never added here — so it was greyed out for every org on

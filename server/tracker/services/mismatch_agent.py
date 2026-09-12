@@ -82,6 +82,13 @@ PRECEDENT_MIN = 1
 VERDICT_REASSIGN = 'reassign'
 VERDICT_CONFIRM = 'confirm_correct'
 VERDICT_HUMAN = 'needs_human'
+# The detector does not flag this block at all any more — the flag is left over
+# from before someone fixed it. Closing that is bookkeeping, not a judgement:
+# the detector itself agrees there is nothing here, which is the same basis the
+# nightly scan already closes in-window flags on, unattended, today. It is the
+# one closure that is NOT the invisible-suppression hazard AGENT_MAY_CLOSE_FLAGS
+# guards against, so it is the one closure the agent may do alone.
+VERDICT_STALE = 'stale'
 
 # Stamped on blocks the agent moves. NOT 'correction'/'manual': those mean a
 # person decided, and the accuracy sampler, the heal commands and this very
@@ -524,6 +531,9 @@ def _vetoes(block, ctx, target_id):
 
 def draft_for_block(block, ctx):
     """Read the block and everything around it; say what should happen."""
+    stale = _stale_flag_draft(block, ctx)
+    if stale:
+        return stale
     return draft_from_signals(
         block_id=block.id,
         org_id=block.org_id,
@@ -531,6 +541,46 @@ def draft_for_block(block, ctx):
         signals=gather_signals(block, ctx),
         name_of=ctx.name,
         veto_fn=lambda target_id: _vetoes(block, ctx, target_id),
+    )
+
+
+def _stale_flag_draft(block, ctx):
+    """A Draft saying "this was already fixed", or None if it really is flagged.
+
+    Worth asking FIRST, because a queue fills up with these. The nightly scan
+    only ever re-examined flags whose block was still inside its 7-day
+    detection window, so a flag raised on day 1 and fixed on day 9 stayed open
+    forever. Org 21 had 19 open flags and 18 of them were already correct.
+
+    The scan now closes those itself (see tasks.scan_org_mismatches), which is
+    where the fix belongs. This stays as the agent's own honest reading, so a
+    row that slips through is labelled "already fixed" instead of being dressed
+    up as a judgement call the agent made.
+    """
+    from tracker.utils.client_name_match import detect_booked_absent, detect_mismatch
+
+    if not block.window_title or not block.client_id:
+        return None
+    if block.client_id not in ctx.names:
+        return None
+
+    if detect_mismatch(block.window_title, block.client_id, ctx.index, ctx.names,
+                       firm_name=ctx.firm_name):
+        return None
+    if detect_booked_absent(block.window_title, block.client_id, ctx.index,
+                            ctx.names, firm_name=ctx.firm_name):
+        return None
+
+    return Draft(
+        block_id=block.id, org_id=block.org_id,
+        booked_client_id=block.client_id,
+        booked_client_name=ctx.name(block.client_id),
+        verdict=VERDICT_STALE,
+        confidence=1.0,
+        auto=True,
+        summary=(f"Already fixed — the detector no longer flags this block, "
+                 f"and {ctx.name(block.client_id)} is what its title names. "
+                 f"The flag is left over."),
     )
 
 
@@ -573,6 +623,13 @@ def draft_from_signals(block_id, org_id, booked_id, signals, name_of, veto_fn):
                              'agent only ever proposes it.')
             d.summary = (f"Leave it on {d.booked_client_name} — "
                          f"{booked_sigs[0].text.rstrip('.').lower()}.")
+        elif booked_sigs:
+            # There IS evidence — it just all reads the window title, which is
+            # the text that raised the flag. Saying "no evidence" here was a
+            # lie the row could be checked against in one glance.
+            d.summary = (f"Only the title speaks, and it names "
+                         f"{d.booked_client_name} — the client it is already "
+                         f"on. Nothing independent either way.")
         else:
             d.summary = 'No evidence points anywhere. Needs a person.'
         return d
@@ -674,6 +731,12 @@ def apply_draft(draft, block, ctx, approved_by=None):
     # resolved_by is 32 chars; a username here is an email address, so this
     # can and does run over.
     actor = (f'approved:{approved_by}'[:32] if approved_by else AGENT_ACTOR)
+
+    if draft.verdict == VERDICT_STALE:
+        # Bookkeeping, not judgement — 'reconciled' is the same reason and the
+        # same basis the nightly scan closes in-window flags on.
+        _resolve_flag(block, reason='reconciled', draft=draft, by=actor)
+        return 'reconciled'
 
     if draft.verdict == VERDICT_CONFIRM:
         if not approved_by and not AGENT_MAY_CLOSE_FLAGS:

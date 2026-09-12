@@ -14,7 +14,7 @@ respects the per-org opt-in (Organization.mismatch_agent_autoresolve); pass
 from django.core.management.base import BaseCommand
 
 from tracker.services.mismatch_agent import (
-    VERDICT_CONFIRM, VERDICT_HUMAN, VERDICT_REASSIGN, run,
+    VERDICT_CONFIRM, VERDICT_HUMAN, VERDICT_REASSIGN, VERDICT_STALE, run,
 )
 
 
@@ -49,6 +49,7 @@ class Command(BaseCommand):
             (VERDICT_REASSIGN, 'MOVE'),
             (VERDICT_CONFIRM, 'LEAVE IT'),
             (VERDICT_HUMAN, 'NEEDS A PERSON'),
+            (VERDICT_STALE, 'ALREADY FIXED — stale flag'),
         ):
             rows = by_verdict.get(verdict) or []
             if not rows:

@@ -2170,6 +2170,47 @@ def scan_org_mismatches(days=7, org_id=None):
         resolved_reason='reconciled',
     )
 
+    # ...and the same question for flags whose block has aged OUT of the
+    # window. Detection is rightly limited to a rolling 7 days — re-deriving
+    # every block ever is not a nightly job. Resolution was limited to the same
+    # 7 days, and that was a bug with a long tail: a flag raised on day 1 and
+    # fixed on day 9 was never looked at again, so it stayed open forever.
+    #
+    # It compounds, because those are exactly the flags someone DID fix. Org 21
+    # reached 19 open flags of which 18 were already correct — a queue that is
+    # 95% dead rows, which is how a review tab teaches people to ignore it.
+    #
+    # Bounded by the number of open flags, not by the block table: there are 19
+    # of them. Re-derived through the same scan_blocks the detection pass uses,
+    # so "still mismatching" means exactly what it means above.
+    aged_open = list(
+        MismatchFlag.objects
+        .filter(org_id__in=org_ids, resolved_at__isnull=True,
+                block__start__lt=cutoff)
+        .values_list('id', 'block_id')[:5000]
+    )
+    if aged_open:
+        aged_blocks = (
+            Block.objects
+            .filter(id__in=[b for _, b in aged_open], deleted_at__isnull=True,
+                    client_id__isnull=False)
+            .exclude(window_title__isnull=True)
+            .exclude(window_title='')
+            .select_related('client')
+        )
+        still_bad = {
+            row['block_id']
+            for row in scan_blocks(aged_blocks, names_by_org, index_by_org, firm_by_org)
+            if row['bucket'] == 'client'
+        }
+        cleared_ids = [fid for fid, bid in aged_open if bid not in still_bad]
+        if cleared_ids:
+            resolved += (
+                MismatchFlag.objects
+                .filter(id__in=cleared_ids)
+                .update(resolved_at=timezone.now(), resolved_reason='reconciled')
+            )
+
     logger = logging.getLogger(__name__)
     logger.info(
         f"[MISMATCH-SCAN] orgs={len(org_ids)} window={days}d "

@@ -78,7 +78,7 @@ class TrustLens(Lens):
         if firm:
             sections.append(headline_row(
                 ["attribution_autonomy", "attribution_precision",
-                 "review_burden", "hours_per_decision"],
+                 "review_burden", "hours_recorded"],
                 org, scope, time, compare, section_id="headline",
             ))
 
@@ -704,6 +704,30 @@ class TrustLens(Lens):
                        "hours": r["hours"]} for r in rows[:8]],
                 series=[{"key": "hours", "label": "Hours", "color": C_OPEN}],
                 state=MetricState.READY,
+            ))
+
+        # The leverage ratio, as a sentence. As a tile it was labelled "Hours per
+        # Decision" and read as "each decision takes two hours" — the precise
+        # opposite of what it measures. A sentence cannot be misread that way.
+        from tracker.models import ClassificationAudit
+        from tracker.services import accuracy as _acc
+
+        asked = ClassificationAudit.objects.filter(
+            block__org_id=org.id, block__day__gte=time.start,
+            block__day__lte=time.end, source="manual",
+        ).count()
+        recorded = (_acc.coverage(org.id, time.start, time.end)
+                    .get("total_minutes") or 0) / 60.0
+        if asked and recorded:
+            children.append(InsightCardPayload(
+                id="leverage",
+                severity="good",
+                headline=(f"Each question settled about "
+                          f"{recorded / asked:,.0f} hours of work"),
+                body=(f"{asked} decisions by a person across {recorded:,.0f} h "
+                      f"recorded. That ratio is the whole trade: it rises as the "
+                      f"matcher improves and falls when it starts leaning on people."),
+                source="rule", dismissible=False,
             ))
 
         return Section(

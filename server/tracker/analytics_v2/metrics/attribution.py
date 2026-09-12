@@ -141,22 +141,25 @@ class AttributionPrecisionMetric(Metric):
 
 @register_metric("review_burden")
 class ReviewBurdenMetric(Metric):
-    """Human decisions per day — what the accuracy above costs the firm."""
+    """How often a single person gets asked anything. Lower is better."""
 
-    label = "Decisions a Day"
+    label = "Asks a Day, per Person"
     format = "decimal_1dp"
     tooltip = (
-        "Decisions a Day = human classification decisions ÷ days in range\n\n"
-        "Every time a person told the software which client a block\n"
-        "belonged to, across the whole firm. This is the running cost of\n"
-        "the numbers above — the lower it is for a given accuracy, the\n"
-        "less the firm is paying in attention."
+        "Asks a Day, per Person = human classification decisions ÷ days ÷ people\n\n"
+        "How often the software has to interrupt one person to ask which\n"
+        "client a block belongs to. Reported per person because that is the\n"
+        "cost actually felt; the firm-wide total is underneath.\n"
+        "Lower is better — it falls as the matcher learns."
     )
     valid_scopes = ("firm",)
     delta_good_when = "down"
+    # Under two asks a day is background noise; past five it is an interruption
+    # someone will complain about.
+    threshold = ThresholdRange(low=2, high=5, direction="lower_is_better")
 
     def compute(self, org, scope, time):
-        from tracker.models import ClassificationAudit
+        from tracker.models import Block, ClassificationAudit
 
         days = elapsed_days(time)
         n = ClassificationAudit.objects.filter(
@@ -167,45 +170,54 @@ class ReviewBurdenMetric(Metric):
         ).count()
         if not n:
             return MetricValue(state=MetricState.EMPTY)
+        people = (
+            Block.objects.filter(
+                org_id=org.id, deleted_at__isnull=True,
+                day__gte=time.start, day__lte=time.end,
+            ).values("user_id").distinct().count()
+        ) or 1
         return MetricValue(
-            value=round(n / days, 1),
-            secondary_value=float(n),
-            secondary_label=f"over {days} days",
-            secondary_format="integer",
+            value=round(n / days / people, 1),
+            secondary_value=round(n / days, 1),
+            secondary_label=f"a day across {people} people",
+            secondary_format="decimal_1dp",
         )
 
 
-@register_metric("hours_per_decision")
-class HoursPerDecisionMetric(Metric):
-    """Recorded hours bought per human decision — the leverage ratio."""
+@register_metric("hours_recorded")
+class HoursRecordedMetric(Metric):
+    """Everything the agent wrote down — the base every share here is taken of."""
 
-    label = "Hours per Decision"
+    label = "Hours Recorded"
     format = "hours_1dp"
     tooltip = (
-        "Hours per Decision = all decided-or-asked hours ÷ human decisions\n\n"
-        "How much attributed time each human decision produced. This is the\n"
-        "single clearest answer to 'is it worth the hassle' — it rises when\n"
-        "the software gets better and falls when it starts leaning on people."
+        "Hours Recorded = all decided-or-asked time in the range\n\n"
+        "Work the agent observed and attributed, or is holding a question\n"
+        "about. Time judged not to be real activity is excluded. This is the\n"
+        "denominator for every share on this page — none of it came from\n"
+        "anyone filling in a timesheet."
     )
     valid_scopes = ("firm",)
     delta_good_when = "up"
 
     def compute(self, org, scope, time):
-        from tracker.models import ClassificationAudit
-
         cov = acc.coverage(org.id, time.start, time.end)
-        total_h = (cov.get("total_minutes") or 0) / 60.0
-        n = ClassificationAudit.objects.filter(
-            block__org_id=org.id,
-            block__day__gte=time.start,
-            block__day__lte=time.end,
-            source="manual",
-        ).count()
-        if not total_h or not n:
+        total = (cov.get("total_minutes") or 0) / 60.0
+        if not total:
             return MetricValue(state=MetricState.EMPTY)
+        people = _people_in(org.id, time) or 1
         return MetricValue(
-            value=round(total_h / n, 1),
-            secondary_value=round(total_h, 1),
-            secondary_label=f"from {n} decisions",
-            secondary_format="hours_1dp",
+            value=round(total, 1),
+            secondary_value=round(total / people / elapsed_days(time), 2),
+            secondary_label="h per person per day",
+            secondary_format="decimal_2dp",
         )
+
+
+def _people_in(org_id: int, time) -> int:
+    from tracker.models import Block
+
+    return (Block.objects.filter(
+        org_id=org_id, deleted_at__isnull=True,
+        day__gte=time.start, day__lte=time.end,
+    ).values("user_id").distinct().count())

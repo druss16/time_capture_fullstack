@@ -338,6 +338,36 @@ class ClassificationDecision:
 # THE SERVICE
 # =============================================================================
 
+def _phrase_in(needle: str, hay: str) -> bool:
+    """Whole-WORD phrase containment on normalized, space-joined text.
+
+    The three phrase tests in `_alias_matches_safely` each used a bare
+    `needle in hay`, which on space-joined tokens happily matches ACROSS a word
+    boundary. Not a theoretical hazard — it was live and billing:
+
+        client  "N. Syracuse Fire Department"  -> "n syracuse fire department"
+        title   "...Candidates in Syracuse, NY 13212..."
+
+    The client's two-token leading prefix "n syracuse" is a substring of
+    "candidates i[n syracuse] ny", so an Indeed job ad for the FIRM's own
+    vacancy billed 1.1h to a fire department. The test is that precise: change
+    the preposition to "at" and the match disappears.
+
+    It generalizes badly. Any client whose name opens with an initial is a
+    magnet for every sentence containing a word ending in that letter, and
+    nothing flags it — the mismatch detector only fires when two clients
+    disagree, never when one client is quietly wrong on its own.
+
+    `_normalize_name` emits single-space-separated tokens, so padding both
+    sides is an exact word-boundary test for two concatenations.
+
+    Module-level rather than a closure so there is ONE definition of "does this
+    phrase appear", and so a harness can swap it to measure what anchoring
+    changed. See tracker/alias_word_boundary_test.py.
+    """
+    return bool(needle) and bool(hay) and f" {needle} " in f" {hay} "
+
+
 class ClassificationService:
     """
     Orchestrates the 10-stage classification pipeline and owns all block
@@ -2583,7 +2613,14 @@ class ClassificationService:
         # and the client name "St. James Church" (which DOES stem, to "jame")
         # no longer matches its own file. Splitting first keeps the stemmer
         # symmetric across client names and block text.
-        s = re.sub(r'[.,()&/\\|:;!?"*–—_\-\[\]{}]+', ' ', s)
+        # Typographic quotes belong here with the straight `"`, not in the
+        # apostrophe strip above: they are quotation marks, never possessives.
+        # Leaving them out glued one to the next word, so a WordPress title
+        # reading `File “L&S Veneer 2024”` tokenised as `“l`, and the client
+        # "L&S Veneer, Inc" could not match its own file by whole words. That
+        # went unnoticed only because the phrase tests used to ignore word
+        # boundaries entirely and matched straight through the quote.
+        s = re.sub(r'[.,()&/\\|:;!?"“”‘‹›«»*–—_\-\[\]{}]+', ' ', s)
         s = re.sub(r'\b(\w{4,})s\b', r'\1', s)
         s = re.sub(r'\s+', ' ', s).strip()
         return s
@@ -2808,6 +2845,7 @@ class ClassificationService:
         alias_n = _normalize(a)
         haystack_n = _normalize(haystack)
 
+
         # v1.3.23: Generic-haystack early reject. If the title is entirely
         # generic app/file vocabulary (no client-specific tokens), refuse
         # to fire any strong match. Catches "client tracking file 2025 -
@@ -2857,9 +2895,9 @@ class ClassificationService:
             if head_class not in alias_classes:
                 return False
 
-        # Direct substring hit — easiest case, preserves prior behavior
+        # Direct phrase hit — easiest case, preserves prior behavior
         # for aliases that already matched exactly.
-        if alias_n and alias_n in haystack_n:
+        if _phrase_in(alias_n, haystack_n):
             return True
 
         # Same check, blind to articles and prepositions. Client 201 is called
@@ -2874,7 +2912,7 @@ class ClassificationService:
         # Still requires a real contiguous phrase AND a word that identifies
         # somebody: collapsing "Church of the" alone would match every parish.
         alias_c = _collapse_filler(alias_n)
-        if alias_c and alias_c in _collapse_filler(haystack_n):
+        if _phrase_in(alias_c, _collapse_filler(haystack_n)):
             if any(t not in DOMAIN_COMMON_WORDS and len(t) >= 4
                    for t in alias_c.split()):
                 return True
@@ -2895,7 +2933,7 @@ class ClassificationService:
         alias_prefix_tokens = alias_n.split()
         for _k in range(len(alias_prefix_tokens) - 1, 1, -1):
             _prefix = ' '.join(alias_prefix_tokens[:_k])
-            if _prefix not in haystack_n:
+            if not _phrase_in(_prefix, haystack_n):
                 continue
             if any(len(t) >= 4 and t not in DOMAIN_COMMON_WORDS
                    and t not in ALIAS_STOP_WORDS

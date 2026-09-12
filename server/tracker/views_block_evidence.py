@@ -1249,6 +1249,71 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
     return out
 
 
+_MEETING_APPS = ('teams', 'zoom', 'webex', 'meet', 'gotomeeting', 'ringcentral')
+
+
+def _meeting_facts(block, org, local_time=""):
+    """(sentence, client_id, client_name) for a block the agent bracketed as a
+    meeting — or None if this is not one.
+
+    A meeting block is the one kind whose window title is reliably useless. The
+    detector fires the instant the conferencing app appears, which is while it
+    is still painting its splash screen, so the title we keep says "Loading
+    Microsoft Teams" and the row reads as if that were the work. Seven of org
+    21's thirteen meeting blocks in a month say exactly that, and ten of the
+    thirteen have no client.
+
+    So say what we actually know instead of showing the splash: that it was a
+    meeting, when, and for how long. Then look for the one thing that can say
+    WHO it was with — a calendar entry covering it, which carries a subject and
+    attendees, and may already name a client.
+    """
+    app = (block.app_name or '').lower()
+    title = (block.window_title or '').lower()
+    is_meeting = 'meeting' in app or (
+        any(a in app for a in _MEETING_APPS) and 'meeting' in title)
+    if not is_meeting:
+        return None
+
+    kind = next((a for a in _MEETING_APPS if a in app or a in title), None)
+    label = {'teams': 'Teams', 'zoom': 'Zoom', 'webex': 'Webex',
+             'meet': 'Google Meet'}.get(kind, '')
+    span = f"a {label} meeting" if label else "a meeting"
+    when = f" around {local_time}" if local_time else ""
+
+    ev = None
+    try:
+        from tracker.models import CalendarEvent
+        ev = (CalendarEvent.objects
+              .filter(user=block.user, start__lt=block.end, end__gt=block.start)
+              .order_by('start').first())
+    except Exception:
+        ev = None
+
+    if ev:
+        # A calendar entry is the only real evidence of who was in the room.
+        others = [a for a in (ev.attendees or [])
+                  if isinstance(a, str) and a and a != getattr(block.user, 'email', '')]
+        who = ''
+        if others:
+            shown = ', '.join(others[:3])
+            more = f" and {len(others) - 3} more" if len(others) > 3 else ''
+            who = f" with {shown}{more}"
+        cid = getattr(ev, 'extracted_client_id', None)
+        name = ev.extracted_client.name if cid and ev.extracted_client else None
+        return (
+            f"You were in {span}{when} — “{(ev.title or 'untitled')[:60]}”{who}.",
+            cid, name,
+        )
+
+    return (
+        f"You were in {span}{when}. Nothing on your calendar covers it, so "
+        f"there is no record of who it was with — pick the client if it was "
+        f"client work.",
+        None, None,
+    )
+
+
 def _looks_like_timesheet(block):
     """True if the block's own title / dominant activity reads as the employee's
     personal timesheet or payroll admin — internal work that touches many clients,
@@ -1343,15 +1408,29 @@ def block_why(request, block_id: int):
     explanation, tier, suggested_id, suggested_name = _compose_why(
         local_time, co_open_client, surrounding, title_client=tc, title_family=fam
     )
+    # A meeting is a FACT from the agent's detector, not a guess from app shape,
+    # so it outranks every heuristic below — including the title, which for a
+    # meeting block is the conferencing app's splash screen.
+    _mtg = _meeting_facts(block, org, local_time)
+    if _mtg:
+        _sentence, _mid, _mname = _mtg
+        if tier in ("co_open", "title", "family") and suggested_id:
+            # Something concrete already named a client; keep it, but lead with
+            # what the block actually was so the row stops showing "Loading…".
+            explanation = f"{_sentence} {explanation}"
+        else:
+            explanation = _sentence
+            suggested_id, suggested_name = _mid, _mname
+        tier = "meeting"
     # A title that names a client outranks the personal/timesheet heuristics — those
     # guess from app shape, but the title is explicit about whose work this is.
-    if personal and not has_co_client and tier not in ("title", "family"):
+    if personal and not has_co_client and tier not in ("title", "family", "meeting"):
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
         suggested_id = suggested_name = None
     # A personal timesheet touches many clients — the temporal-neighbor guess would
     # misleadingly name whoever came next. Label it honestly and suggest no client.
-    elif not has_co_client and tier not in ("title", "family") and _looks_like_timesheet(block):
+    elif not has_co_client and tier not in ("title", "family", "meeting") and _looks_like_timesheet(block):
         explanation = "Looks like your own timesheet — internal, not tied to one client."
         tier = "timesheet"
         suggested_id = suggested_name = None

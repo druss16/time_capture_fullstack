@@ -127,11 +127,7 @@ class TrustLens(Lens):
         chart = ChartCardPayload(
             id="decided_by",
             title="Every recorded hour, by who decided it",
-            subtitle=(
-                f"{time.label} · {total:,.1f} h recorded. Held-back time is the "
-                f"matcher refusing to guess — it is what makes the first bar "
-                f"worth reading."
-            ),
+            subtitle=f"{time.label} · {total:,.1f} h",
             chart_type="proportion_bar",
             data=[
                 {"label": "Filed to a client with nobody asked",
@@ -162,16 +158,12 @@ class TrustLens(Lens):
 
         table = DataTablePayload(
             id="decided_by_rows",
-            title="The same three numbers, exactly",
-            subtitle=(
-                f"{discarded:,.1f} h was judged not to be real activity and is on "
-                f"neither side of this ratio."
-            ),
+            title="The same three numbers",
+            subtitle=f"{discarded:,.1f} h judged not real activity, excluded",
             columns=[
                 column("who", "Decided by", "text"),
                 column("hours", "Hours", "hours_1dp"),
                 column("share", "Share", "percent_1dp"),
-                column("means", "Which means", "text"),
             ],
             rows=rows,
             state=MetricState.READY if total else MetricState.EMPTY,
@@ -203,11 +195,8 @@ class TrustLens(Lens):
                     id="no_sample",
                     severity="watch",
                     headline="No audit sample has been drawn yet",
-                    body=("Precision is only measurable against blocks a person "
-                          "has judged one at a time. Draw a sample and this "
-                          "section fills in — without one there is no defensible "
-                          "accuracy claim, only autonomy, and autonomy on its own "
-                          "would be perfect for a system that guessed wildly."),
+                    body=("Without one there is no accuracy claim, only autonomy — "
+                          "which a system that guessed wildly would score 100% on."),
                     source="rule", dismissible=False,
                 )],
             )
@@ -224,10 +213,8 @@ class TrustLens(Lens):
             id="audit_composition",
             title="What the random audit found",
             subtitle=(
-                f"{drawn} blocks drawn at random from what we filed "
-                f"automatically, then judged by hand"
-                + (f" · measured over {period[0]:%-d %b}–{period[1]:%-d %b %Y}, "
-                   f"not the range selected above"
+                f"{drawn} drawn at random, judged by hand"
+                + (f" · {period[0]:%-d %b}–{period[1]:%-d %b %Y}"
                    if period and (period[0] != time.start or period[1] != time.end)
                    else "")
             ),
@@ -256,36 +243,12 @@ class TrustLens(Lens):
                 severity="good" if good else "watch",
                 headline=(f"{precision * 100:.1f}% of judged blocks were "
                           f"on the right client"),
-                body=(f"{correct} correct and {wrong} wrong of {decided} judged, "
-                      f"95% confidence interval {lo * 100:.1f}–{hi * 100:.1f}%. "
-                      f"If every one of the {drawn - decided} undecided draws were "
-                      f"counted as wrong, the figure would still be "
-                      f"{floor * 100:.1f}% — that is the floor, not the estimate."),
+                body=(f"95% CI {lo * 100:.1f}–{hi * 100:.1f}%. Counting every "
+                      f"undecided draw as wrong still leaves {floor * 100:.1f}%."),
                 source="rule", dismissible=False,
             ))
 
-        if pending:
-            children.append(InsightCardPayload(
-                id="pending_draws",
-                severity="watch",
-                headline=f"{pending} drawn blocks are still waiting on a verdict",
-                body=("Each one judged narrows the confidence interval above. "
-                      "This is the cheapest accuracy work available — the blocks "
-                      "are already selected and the evidence is already attached."),
-                source="rule", dismissible=False,
-            ))
 
-        if unver:
-            children.append(InsightCardPayload(
-                id="unverifiable_draws",
-                severity="info",
-                headline=f"{unver} blocks could not be settled either way",
-                body=("Usually a QuickBooks window that reported no company name "
-                      "at all, so nothing on screen could confirm or refute the "
-                      "client. They are excluded from the percentage rather than "
-                      "quietly counted as correct."),
-                source="rule", dismissible=False,
-            ))
 
         if period:
             age = (time.end - period[1]).days
@@ -294,9 +257,8 @@ class TrustLens(Lens):
                     id="stale_sample",
                     severity="watch",
                     headline=f"The accuracy measurement is {age} days old",
-                    body=(f"It covers {period[0]:%-d %b}–{period[1]:%-d %b %Y}. "
-                          f"Everything above has moved since then — draw a fresh "
-                          f"sample before quoting this figure to anyone."),
+                    body=(f"Covers {period[0]:%-d %b}–{period[1]:%-d %b %Y}. "
+                          f"Draw a fresh sample before quoting it."),
                     source="rule", dismissible=False,
                 ))
 
@@ -306,10 +268,7 @@ class TrustLens(Lens):
                 id="self_corrections",
                 severity="good",
                 headline=f"{fixed} client attributions were corrected automatically",
-                body=("Blocks the system re-filed on its own during this window — "
-                      "a QuickBooks company file read later, or a vendor "
-                      "fingerprint that resolved two same-named parishes. Nobody "
-                      "was asked, and nobody had to notice."),
+                body="Re-filed on their own. Nobody was asked.",
                 source="rule", dismissible=False,
             ))
 
@@ -331,8 +290,9 @@ class TrustLens(Lens):
         """
         from django.db.models.functions import TruncMonth
 
-        months = max(int((time.end - time.start).days / 30) + 1, 6)
-        first = (time.end.replace(day=1) - timedelta(days=31 * (months - 1))).replace(day=1)
+        # Reach back a year so a short range still shows a slope. Which of those
+        # months actually qualify is decided below, on headcount and volume.
+        first = (time.end.replace(day=1) - timedelta(days=31 * 11)).replace(day=1)
 
         rows = (
             Block.objects
@@ -358,11 +318,30 @@ class TrustLens(Lens):
             )
             slot['filed' if auto else 'other'] += m
 
+        # Only months where the whole firm was on the system belong on this line.
+        # TL Wall ran March–May with three people and went firm-wide at nine in
+        # June; the pilot months score in the high nineties off a fraction of the
+        # work, which turns a genuine climb into an apparent decline. Headcount
+        # is what separates them — not volume, which a busy pilot would pass.
+        heads = dict(
+            Block.objects
+            .filter(org=org, deleted_at__isnull=True,
+                    day__gte=first, day__lte=time.end)
+            .exclude(classification_state='suppressed')
+            .annotate(mo=TruncMonth('day'))
+            .values_list('mo')
+            .annotate(n=Count('user_id', distinct=True))
+        )
+        peak_heads = max(heads.values(), default=0)
+        peak_mins = max((v['filed'] + v['other'] for v in by_month.values()), default=0)
+
         data = []
         for mo in sorted(by_month):
             v = by_month[mo]
             total = v['filed'] + v['other']
-            if total < 60:  # under an hour in a month is noise, not a trend point
+            if total < max(peak_mins * 0.10, 10 * 60):
+                continue
+            if peak_heads and heads.get(mo, 0) < peak_heads * 0.6:
                 continue
             data.append({
                 'month': mo.strftime('%b %Y'),
@@ -379,8 +358,8 @@ class TrustLens(Lens):
             id='autonomy_trend',
             title='Share filed without asking, by month',
             subtitle=(f"{first_pt['month']} {first_pt['autonomy']:.0f}% → "
-                      f"{last_pt['month']} {last_pt['autonomy']:.0f}%. The current "
-                      f"month is partial and will move."),
+                      f"{last_pt['month']} {last_pt['autonomy']:.0f}% · "
+                      f"since the firm went fully live · current month partial"),
             chart_type='line',
             data=data,
             series=[{'key': 'autonomy', 'label': 'Filed without asking (%)',
@@ -394,10 +373,7 @@ class TrustLens(Lens):
                 id='autonomy_improving',
                 severity='good',
                 headline=f'Up {gain:.0f} points since {first_pt["month"]}',
-                body=('Each correction and each client name the firm confirms feeds '
-                      'the matcher, so the share it can file unaided compounds. '
-                      'This is the number to watch across a beta: a single month\'s '
-                      'accuracy is a snapshot, this is the trajectory.'),
+                body='Every correction the firm makes feeds the matcher.',
                 source='rule', dismissible=False,
             ))
 
@@ -468,8 +444,7 @@ class TrustLens(Lens):
         chart = ChartCardPayload(
             id='provable_split',
             title='Booked time, by whether the evidence names the client',
-            subtitle=(f"{provable / total * 100:.0f}% of booked hours can be shown "
-                      f"to be on the right client from the block's own text."),
+            subtitle=f"{provable / total * 100:.0f}% provable from the block's own text",
             chart_type='proportion_bar',
             data=[
                 {'label': 'Only one client it could be',
@@ -487,32 +462,18 @@ class TrustLens(Lens):
             state=MetricState.READY,
         )
 
+        picks = rep.get('session_decisions') or 0
+        picks_hint = (f"{picks} picks would settle it." if picks else "")
+
         children: list = [chart, InsightCardPayload(
             id='two_books',
             severity='good' if provable / total >= 0.7 else 'watch',
             headline=(f'{provable:,.0f} of {total:,.0f} booked hours are on solid ground'),
-            body=(f"Report economics on those without reservation — that figure "
-                  f"includes {incidental:,.0f} h whose only rival is an incidental "
-                  f"word match the software would never put to a person. The "
-                  f"remaining {unproven:,.0f} h sit on client families whose members "
-                  f"genuinely share a name: the pick may be right, but nothing in "
-                  f"the text proves it. Keeping the two apart is what stops one "
-                  f"ambiguous family from putting the whole book in doubt."),
+            body=(f"{unproven:,.0f} h sits on families whose members share a name. "
+                  f"{picks_hint}"),
             source='rule', dismissible=False,
         )]
 
-        picks = rep.get('session_decisions') or 0
-        if picks:
-            children.append(InsightCardPayload(
-                id='picks_to_settle',
-                severity='info',
-                headline=f'{picks} human picks would settle the unproven pile',
-                body=(f"Consecutive work by the same person counts as one decision, "
-                      f"which is how it actually gets reviewed. Over {days} days "
-                      f"that is about {picks / days:.1f} decisions a day to move "
-                      f"{unproven:,.0f} hours onto solid ground."),
-                source='rule', dismissible=False,
-            ))
 
         # {client_id: [(name_form, [(other_id, other_name, relation), ...]), ...]}
         forms = rep.get('ambiguous_name_forms') or {}
@@ -544,11 +505,8 @@ class TrustLens(Lens):
             children.append(DataTablePayload(
                 id='rename_candidates',
                 title='Roster entries worth renaming',
-                subtitle=(f"{len(forms)} clients carry a name or alias that cannot "
-                          f"exclude another client. Renaming one settles every "
-                          f"future block in that family — the cheapest accuracy "
-                          f"work there is, and the firm's to do, not ours. "
-                          f"Ranked by hours currently at stake."),
+                subtitle=(f"{len(forms)} names cannot exclude another client. "
+                          f"One rename settles the whole family."),
                 columns=[
                     column('client', 'Client', 'text'),
                     column('form', 'Name or alias', 'text'),
@@ -606,11 +564,8 @@ class TrustLens(Lens):
         table = DataTablePayload(
             id="client_effort",
             title="Where the work actually went",
-            subtitle=(
-                f"{time.label} · {total_min / 60.0:,.1f} billable hours across "
-                f"{client_count} clients. 'People' and 'Days' are the columns a "
-                f"general ledger can never fill — it sees the invoice, never the work."
-            ),
+            subtitle=(f"{total_min / 60.0:,.1f} billable h · {client_count} clients · "
+                      f"a ledger can never fill the last two columns"),
             columns=[
                 column("client", "Client", "text"),
                 column("hours", "Hours", "hours_1dp"),
@@ -628,18 +583,14 @@ class TrustLens(Lens):
         children: list = [table]
 
         # The one missing input that turns all of this into money.
-        missing_fees = self._clients_without_fees(org)
+        missing_fees = self._clients_without_fees(org, qs)
         if missing_fees:
             children.append(InsightCardPayload(
                 id="fees_missing",
                 severity="watch",
                 headline="One input away from per-client profitability",
-                body=(f"{missing_fees} of the clients worked in this period have no "
-                      f"fee or rate recorded, so this table can only be shown in "
-                      f"hours. Load the fee schedule and every row above gains a "
-                      f"realized rate and a margin — the first time the firm can "
-                      f"see which clients pay for themselves. Nothing else is "
-                      f"blocking it; the hours are already here."),
+                body=(f"{missing_fees} clients have no fee recorded. Load them and "
+                      f"every row above gains a rate and a margin."),
                 source="rule", dismissible=False,
             ))
 
@@ -649,7 +600,12 @@ class TrustLens(Lens):
             children=children,
         )
 
-    def _clients_without_fees(self, org) -> int:
+    def _clients_without_fees(self, org, worked_qs) -> int:
+        """Unpriced clients among those worked IN THIS PERIOD.
+
+        Counting every client the firm has ever touched reports a number far
+        larger than the table it sits under, which reads as an error.
+        """
         from tracker.models import ClientBillingProfile
 
         priced = set(
@@ -657,10 +613,7 @@ class TrustLens(Lens):
             .filter(org=org, flat_amount__isnull=False)
             .values_list("client_id", flat=True)
         )
-        worked = set(
-            Block.objects.filter(org=org, client_id__isnull=False)
-            .values_list("client_id", flat=True).distinct()
-        )
+        worked = set(worked_qs.values_list("client_id", flat=True).distinct())
         return len(worked - priced)
 
     # ── 4. what is waiting ──────────────────────────────────────────────────
@@ -708,9 +661,7 @@ class TrustLens(Lens):
         chart = ChartCardPayload(
             id="queue_aging",
             title="Time waiting on a decision",
-            subtitle=(f"{live_h:,.1f} h from the last month is live work, one click "
-                      f"each from being booked. Anything older is a cleanup project, "
-                      f"not a weekly habit."),
+            subtitle=f"{live_h:,.1f} h live · older is cleanup, not a habit",
             chart_type="horizontal_bar",
             data=data,
             series=[{"key": "hours", "label": "Hours", "color": C_OPEN}],
@@ -733,17 +684,17 @@ class TrustLens(Lens):
                     "hours": round(to_float(o["minutes"]) / 60.0, 1),
                     "blocks": o["blocks"],
                 })
-            children.append(DataTablePayload(
+            # A bar per person, not a table: nine rows of two numbers is a chart
+            # someone drew as a grid. The blocks count rides in the label so the
+            # detail survives the change of form.
+            children.append(ChartCardPayload(
                 id="queue_owners",
                 title="Whose queue it is",
-                subtitle="Last 30 days · the people who can clear it fastest",
-                columns=[
-                    column("person", "Person", "text"),
-                    column("hours", "Hours waiting", "hours_1dp"),
-                    column("blocks", "Blocks", "integer"),
-                ],
-                rows=rows,
-                default_sort={"key": "hours", "direction": "desc"},
+                subtitle="Last 30 days · longest first",
+                chart_type="horizontal_bar",
+                data=[{"person": f"{r['person']} ({r['blocks']})",
+                       "hours": r["hours"]} for r in rows[:8]],
+                series=[{"key": "hours", "label": "Hours", "color": C_OPEN}],
                 state=MetricState.READY,
             ))
 
@@ -768,10 +719,8 @@ class TrustLens(Lens):
                 id="bound_no_invoices",
                 severity="info",
                 headline="These are hours, not invoices",
-                body=("No invoices have been imported, so nothing here is billed or "
-                      "collected revenue — your ledger remains the authority on "
-                      "that. What this page claims is narrower and not available "
-                      "anywhere else: where the hours went, and how reliably."),
+                body=("No invoices imported. Your ledger stays the authority on "
+                      "revenue; this page only claims where the hours went."),
                 source="rule", dismissible=False,
             ))
 
@@ -781,10 +730,8 @@ class TrustLens(Lens):
                 id="bound_sample",
                 severity="info",
                 headline="Precision is a sample estimate, not a guarantee",
-                body=(f"It is measured on {samp['drawn']} blocks drawn at random, "
-                      f"not on every block filed. The confidence interval is the "
-                      f"honest width of that claim; a bigger sample narrows it and "
-                      f"nothing else does."),
+                body=(f"Measured on {samp['drawn']} random blocks. Only a bigger "
+                      f"sample narrows the interval."),
                 source="rule", dismissible=False,
             ))
 
@@ -792,15 +739,13 @@ class TrustLens(Lens):
             id="bound_coverage",
             severity="info",
             headline="This is desk work, not the whole week",
-            body=("Time at the machine is what can be observed. Meetings away from "
-                  "the desk, phone calls and site visits are not in these totals, "
-                  "so read every figure as 'of the work we can see'."),
+            body=("Meetings, calls and site visits are not in these totals."),
             source="rule", dismissible=False,
         ))
 
         return Section(
             id="boundaries", type="section",
-            title="What These Numbers Are Not", collapsible=False,
+            title="What These Numbers Are Not", collapsible=True, collapsed=True,
             children=cards,
         )
 

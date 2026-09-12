@@ -742,19 +742,89 @@ class TrustLens(Lens):
                 source="rule", dismissible=False,
             ))
 
+        # This card used to claim meetings and calls were not counted. They are:
+        # a synced calendar event becomes a block, and anyone can type time in
+        # by hand. Stating a limit the product does not actually have is worse
+        # than stating none — it invites the reader to correct the page, and
+        # then to wonder what else it has wrong.
+        cal, hand = self._offdesk_sources(org, time)
+        counted = ["work at the machine"]
+        if cal:
+            counted.append("meetings from a connected calendar")
+        if hand:
+            counted.append("time entered by hand")
         cards.append(InsightCardPayload(
             id="bound_coverage",
             severity="info",
-            headline="This is desk work, not the whole week",
-            body=("Meetings, calls and site visits are not in these totals."),
+            headline="What lands here, and what does not",
+            body=("Counted: " + ", ".join(counted) + ". Missing is only work "
+                  "that is none of those three — away from the desk, not on a "
+                  "calendar, and never typed in."),
             source="rule", dismissible=False,
         ))
+
+        # A calendar nobody is syncing is the quiet way the line above stops
+        # being true, so it says so rather than waiting to be found out.
+        if cal and (cal["stale_days"] > 7 or cal["people"] < cal["staff"]):
+            bits = []
+            if cal["stale_days"] > 7:
+                bits.append(f"last synced {cal['stale_days']} days ago")
+            if cal["people"] < cal["staff"]:
+                bits.append(f"only {cal['people']} of {cal['staff']} people "
+                            f"have any events")
+            cards.append(InsightCardPayload(
+                id="calendar_thin",
+                severity="watch",
+                headline="Calendar coverage is thinner than it looks",
+                body=("Meetings are counted when they reach us, and right now "
+                      + " and ".join(bits) + ". Re-authorising the connection "
+                      "widens what this page can see."),
+                source="rule", dismissible=False,
+            ))
 
         return Section(
             id="boundaries", type="section",
             title="What these numbers are not", collapsible=True, collapsed=True,
             children=cards,
         )
+
+
+    def _offdesk_sources(self, org, time):
+        """What reaches this org besides the agent watching a screen.
+
+        Returns (calendar_state | None, hand_entered_blocks). Both drive copy
+        rather than a number, so a thin result still counts as present — the
+        claim is about what the product does, not how much of it happened.
+        """
+        from django.utils import timezone
+        from tracker.models import Block, CalendarEvent
+
+        # __date__ rather than a bare date against the DateTimeField, which
+        # Django reads as a naive midnight and warns about under USE_TZ.
+        ev = CalendarEvent.objects.filter(
+            org=org, start__date__gte=time.start, start__date__lte=time.end,
+        )
+        cal = None
+        if ev.exists():
+            last = ev.order_by("-fetched_at").values_list("fetched_at", flat=True).first()
+            # Headcount from blocks, not memberships: the rest of this lens
+            # counts people who actually recorded time, and a membership table
+            # carries leavers and never-signed-in invitees.
+            cal = {
+                "people": ev.values("user_id").distinct().count(),
+                "staff": (Block.objects.filter(
+                    org=org, deleted_at__isnull=True,
+                    day__gte=time.start, day__lte=time.end,
+                ).values("user_id").distinct().count()),
+                "stale_days": (timezone.now() - last).days if last else 999,
+            }
+
+        hand = Block.objects.filter(
+            org=org, deleted_at__isnull=True,
+            day__gte=time.start, day__lte=time.end,
+            categorized_by="manual",
+        ).count()
+        return cal, hand
 
     # ── shared ──────────────────────────────────────────────────────────────
     def _apply_scope_qs(self, qs, scope):

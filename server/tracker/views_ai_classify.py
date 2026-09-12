@@ -99,10 +99,32 @@ _BREAKER_KEY = "ai_classify:breaker"
 # Quota and auth failures do not fix themselves in a minute; transient ones do.
 _BREAKER_COOLDOWN_HARD = 900
 _BREAKER_COOLDOWN_SOFT = 60
+# A zero balance is fixed by a human with a credit card, not by waiting.
+_BREAKER_COOLDOWN_QUOTA = 3600
 
 
 def _breaker_open() -> bool:
     return cache.get(_BREAKER_KEY) is not None
+
+
+def _upstream_reason(exc: Exception) -> str:
+    """OpenAI's own words for why it refused.
+
+    urllib renders an HTTPError as a bare "HTTP Error 429: Too Many Requests",
+    which reads as "we are going too fast" and is often the opposite: a 429 with
+    `insufficient_quota` means the account balance is zero and no amount of
+    backing off will help. The body says which, so the log should too.
+    """
+    import urllib.error
+
+    if not isinstance(exc, urllib.error.HTTPError):
+        return ""
+    try:
+        payload = json.loads(exc.read().decode() or "{}").get("error", {})
+    except Exception:
+        return ""
+    bits = [payload.get("code") or payload.get("type"), payload.get("message")]
+    return " ".join(b for b in bits if b)
 
 
 def _trip_breaker(exc: Exception) -> None:
@@ -112,16 +134,25 @@ def _trip_breaker(exc: Exception) -> None:
     code = getattr(exc, "code", None)
     if code is None and isinstance(exc, urllib.error.HTTPError):
         code = exc.code
+    reason = _upstream_reason(exc)
+
+    # An exhausted balance does not recover on its own, so backing off for a
+    # quarter of an hour just re-asks a question with a known answer 96 times a
+    # day. A real rate limit does recover, and keeps the shorter cooldown.
+    out_of_credit = "insufficient_quota" in reason or "credit_balance" in reason
     hard = code in (401, 402, 403, 429)
-    cooldown = _BREAKER_COOLDOWN_HARD if hard else _BREAKER_COOLDOWN_SOFT
+    cooldown = (_BREAKER_COOLDOWN_QUOTA if out_of_credit
+                else _BREAKER_COOLDOWN_HARD if hard
+                else _BREAKER_COOLDOWN_SOFT)
+
     if not _breaker_open():
         # Only a quota/auth code is the account; saying so on a timeout would
         # send whoever reads this log to the billing page for nothing.
-        why = (" A 429 or 401 here is the OpenAI account, not our own rate limit."
+        why = (" This is the OpenAI account, not our own rate limit."
                if hard else "")
         logger.error(
-            "[AI-CLASSIFY] upstream failing (%s) - pausing AI calls for %ss.%s",
-            exc, cooldown, why,
+            "[AI-CLASSIFY] upstream failing (%s%s) - pausing AI calls for %ss.%s",
+            exc, f" | {reason}" if reason else "", cooldown, why,
         )
     cache.set(_BREAKER_KEY, True, timeout=cooldown)
 

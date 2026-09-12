@@ -30,7 +30,9 @@ import stripe
 from django.utils.timezone import localtime
 
 import csv
+import hashlib
 import io
+import re
 from rest_framework.parsers import MultiPartParser, FormParser
 
 stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None) or ""
@@ -3319,6 +3321,47 @@ def get_seat_usage(request):
 # CSV INVOICE IMPORT — Preview + Commit (two-step)
 # ============================================================================
 
+def _implied_rate_check(org, rows):
+    """What these invoices say the firm's hourly rate really is.
+
+    amount / hours, per row, against the rate everything on the site is priced
+    at. Returns None when the file carries no hours — that is the common case
+    and not a problem, just nothing to check with.
+    """
+    from statistics import median
+
+    default = float(getattr(org, 'billing_rate_default', 0) or 0)
+    implied = [(r['amount'] / r['hours_billed'], r)
+               for r in rows
+               if r.get('hours_billed') and r['hours_billed'] > 0 and r['amount']]
+    if not implied or not default:
+        return None
+
+    rates = sorted(v for v, _r in implied)
+    off = [r for v, r in implied if abs(v - default) > 0.01]
+    by_client = {}
+    for v, r in implied:
+        name = r.get('client_name') or r.get('client_code') or '?'
+        by_client.setdefault(name, []).append(v)
+    outliers = sorted(
+        ((n, median(vs)) for n, vs in by_client.items()
+         if abs(median(vs) - default) > 0.01),
+        key=lambda t: -abs(t[1] - default),
+    )[:10]
+
+    return {
+        'default_rate':   round(default, 2),
+        'rows_with_hours': len(implied),
+        'median_implied': round(median(rates), 2),
+        'min_implied':    round(rates[0], 2),
+        'max_implied':    round(rates[-1], 2),
+        'rows_off_default': len(off),
+        'clients_off_default': [
+            {'client': n, 'implied_rate': round(v, 2)} for n, v in outliers
+        ],
+    }
+
+
 def _parse_csv_file(csv_file):
     """
     Parse uploaded CSV file. Returns (reader, column_map, error_response).
@@ -3330,7 +3373,16 @@ def _parse_csv_file(csv_file):
     except UnicodeDecodeError:
         decoded_file = raw_content.decode('latin-1')
 
-    reader = csv.DictReader(io.StringIO(decoded_file))
+    # Drop leading comment and blank lines BEFORE DictReader, or the first '#'
+    # line becomes the header and every required column reads as missing. Our
+    # own downloadable template starts with three such lines, so without this
+    # the one file we hand the firm is the one file we reject.
+    lines = decoded_file.splitlines(keepends=True)
+    offset = 0
+    while offset < len(lines) and (not lines[offset].strip()
+                                   or lines[offset].lstrip().startswith('#')):
+        offset += 1
+    reader = csv.DictReader(io.StringIO(''.join(lines[offset:])))
 
     if reader.fieldnames:
         reader.fieldnames = [
@@ -3340,18 +3392,30 @@ def _parse_csv_file(csv_file):
 
     fieldnames_set = set(reader.fieldnames or [])
 
+    # Named for the exports we actually ask firms for. QuickBooks' Invoice List
+    # calls the number "Num" and the client "Customer:Job"; Xero says "Contact"
+    # and "Invoice Number". A firm should be able to send the file its own
+    # software produced, unedited — every column name it has to rename by hand
+    # is a chance to rename it wrong.
     COLUMN_ALIASES = {
         'client_code':    ['client_code', 'clientcode', 'client', 'code',
-                           'customer_code', 'customercode', 'customer'],
+                           'customer_code', 'customercode', 'customer',
+                           'customer:job', 'customer_job', 'customer_name',
+                           'client_name', 'contact', 'contact_name', 'name',
+                           'payee', 'bill_to'],
         'invoice_number': ['invoice_number', 'invoicenumber', 'invoice_no',
-                           'invoiceno', 'invoice', 'inv_number', 'inv_no', 'number', 'doc_number'],
+                           'invoiceno', 'invoice', 'inv_number', 'inv_no',
+                           'number', 'doc_number', 'num', 'invoice_num',
+                           'invoice_#', 'doc_num', 'reference', 'ref', 'no.'],
         'invoice_date':   ['invoice_date', 'invoicedate', 'date', 'inv_date',
-                           'invdate', 'txndate'],
+                           'invdate', 'txndate', 'transaction_date',
+                           'date_issued', 'issue_date'],
         'amount':         ['amount', 'total', 'invoice_amount', 'invoiceamount',
-                           'total_amount', 'totalamount', 'value', 'totalamt'],
+                           'total_amount', 'totalamount', 'value', 'totalamt',
+                           'amount_due', 'grand_total', 'invoice_total', 'subtotal'],
         'hours_billed':   ['hours_billed', 'hoursbilled', 'hours', 'billed_hours',
-                           'billedhours', 'qty', 'quantity'],
-        'status':         ['status', 'invoice_status', 'payment_status'],
+                           'billedhours', 'qty', 'quantity', 'units', 'hrs'],
+        'status':         ['status', 'invoice_status', 'payment_status', 'paid'],
     }
 
     column_map = {}
@@ -3361,7 +3425,11 @@ def _parse_csv_file(csv_file):
                 column_map[standard_name] = alias
                 break
 
-    required = ['client_code', 'invoice_number', 'invoice_date', 'amount']
+    # Deliberately three. An invoice number is bookkeeping we can synthesise,
+    # and whether it was PAID is accounts receivable — collections is not our
+    # business and asking for it invites the firm to think it is. Every column
+    # we require is one more reason the file never arrives.
+    required = ['client_code', 'invoice_date', 'amount']
     missing = [col for col in required if col not in column_map]
 
     if missing:
@@ -3369,7 +3437,8 @@ def _parse_csv_file(csv_file):
             'error': f'Missing required columns: {", ".join(missing)}',
             'found_columns': list(reader.fieldnames or []),
             'required_columns': required,
-            'hint': 'CSV must have: client_code (or customer), invoice_number (or invoice_no), invoice_date (or date), amount (or total)',
+            'hint': ('Needs a client (or customer), a date, and an amount. '
+                     'An invoice number and hours are welcome but optional.'),
         }
 
     return reader, column_map, None
@@ -3381,14 +3450,23 @@ def _parse_row(row, column_map, row_num):
     """
     from datetime import datetime as dt
 
-    client_code    = (row.get(column_map['client_code']) or '').strip().upper()
-    invoice_number = (row.get(column_map['invoice_number']) or '').strip()
+    # NOT uppercased: this column usually holds a client NAME, and rapidfuzz
+    # is case-sensitive — upper-casing it scored an exact name match 15/100.
+    client_code    = (row.get(column_map['client_code']) or '').strip()
+    invoice_number = (row.get(column_map.get('invoice_number', '__missing__')) or '').strip()
     date_str       = (row.get(column_map['invoice_date']) or '').strip()
     amount_str     = (row.get(column_map['amount']) or '').strip()
     hours_str      = (row.get(column_map.get('hours_billed', '__missing__')) or '').strip()
     status_str     = (row.get(column_map.get('status', '__missing__')) or '').strip().lower()
 
-    if not all([client_code, invoice_number, date_str, amount_str]):
+    # A comment or spacer line is not a broken row. Firms annotate these files,
+    # and reporting "row 47: missing required field" for a note somebody wrote
+    # buries the rows that are genuinely wrong.
+    if not any([client_code, invoice_number, date_str, amount_str]) \
+            or client_code.startswith('#'):
+        return None, None
+
+    if not all([client_code, date_str, amount_str]):
         return None, 'Missing required field'
 
     DATE_FORMATS = [
@@ -3427,6 +3505,16 @@ def _parse_row(row, column_map, row_num):
     }
     status = status_map.get(status_str, 'sent')
 
+    # No invoice number is the normal case now that we don't ask for one. Derive
+    # a stable key from what the row actually says, so uploading the same file
+    # twice de-duplicates instead of doubling the firm's revenue. Two genuinely
+    # separate invoices to one client on one day for one amount will collapse
+    # into one — rare, and the preview reports it as a duplicate rather than
+    # swallowing it silently.
+    if not invoice_number:
+        seed = f'{client_code.lower()}|{invoice_date.isoformat()}|{amount}'
+        invoice_number = 'AUTO-' + hashlib.sha1(seed.encode()).hexdigest()[:12]
+
     return {
         'client_code':    client_code,
         'invoice_number': invoice_number,
@@ -3437,54 +3525,132 @@ def _parse_row(row, column_map, row_num):
     }, None
 
 
-MATCH_THRESHOLD = 82  # rapidfuzz score 0–100
+# ── who is this invoice for? ─────────────────────────────────────────────────
+# An invoice filed against the wrong client is worse than one left unmatched.
+# It relieves the wrong client's WIP, so two clients' numbers go wrong at once
+# and neither of them looks broken afterwards. The ladder below therefore
+# prefers abstaining to guessing, and character-similarity — which cannot tell
+# "St. Mary's Church" from "St. Marks Church" (it scores that pair 90, above
+# the auto-accept bar, while the real St. Mary's sits at 79) — is the last
+# resort and never overrules the roster's own view of who a name could mean.
+
+MATCH_THRESHOLD = 82   # rapidfuzz score 0–100
+FUZZY_MARGIN    = 8    # ...and, with no roster support, this far clear of #2
+
+_PUNCT = re.compile(r'[^a-z0-9 ]+')
+_WS    = re.compile(r'\s+')
 
 
-def _match_client(client_code, clients_by_code, clients_by_name):
-    """
-    Two-tier client matching:
-    1. Exact code match (fast path)
-    2. Fuzzy name/code match via rapidfuzz (fallback)
+def _norm_name(s):
+    """Casefold and drop punctuation, so "St. Mary's Church" == "st marys church"."""
+    return _WS.sub(' ', _PUNCT.sub(' ', (s or '').lower())).strip()
 
-    Returns (client_or_None, match_score, suggestions_list, needs_review_bool)
+
+class ClientIndex:
+    """Everything row matching needs about a roster, built once per upload."""
+
+    def __init__(self, org):
+        self.org = org
+        self.clients = list(Client.objects.filter(org=org))
+        self.by_id = {c.id: c for c in self.clients}
+        self.by_code, self.by_name = {}, {}
+        # Two clients can normalise to one name — a roster picks up "TK Realty
+        # Services LLC" and "TK Realty Services LLC." over the years. Silently
+        # taking whichever was inserted first is a coin flip on someone's money.
+        self.name_owners = {}
+        for c in self.clients:
+            if c.code:
+                self.by_code.setdefault(c.code.strip().upper(), c)
+            self.by_name.setdefault(_norm_name(c.name), c)
+            self.name_owners.setdefault(_norm_name(c.name), []).append(c.id)
+            for alias in (c.aliases or []):
+                key = _norm_name(str(alias))
+                if key:
+                    self.by_name.setdefault(key, c)
+        self._names = {c.id: _norm_name(c.name) for c in self.clients}
+        self._families = None
+
+    @property
+    def families(self):
+        """Lazy: only an unrecognised name needs the roster's ambiguity map."""
+        if self._families is None:
+            from tracker.services import client_families
+            self._families = client_families.for_org(self.org.id)
+        return self._families
+
+    def score(self, text, client_id):
+        from rapidfuzz import fuzz
+        return fuzz.token_sort_ratio(text, self._names.get(client_id, ''))
+
+    def suggest(self, text, client_ids, limit=6):
+        ranked = sorted(client_ids, key=lambda i: -self.score(text, i))[:limit]
+        return [{
+            'client_id':   i,
+            'client_name': self.by_id[i].name,
+            'client_code': self.by_id[i].code or '',
+            'score':       round(self.score(text, i)),
+        } for i in ranked]
+
+
+def _match_client(raw, index):
+    """Resolve one invoice's client reference.
+
+    Returns (client_or_None, score, suggestions, needs_review).
     """
     from rapidfuzz import fuzz, process
 
-    # Tier 1: exact code match
-    exact = clients_by_code.get(client_code)
-    if exact:
-        return exact, 100, [], False
-
-    # Tier 2: fuzzy match against all client names and codes
-    all_labels = list(clients_by_name.keys())  # "NAME (CODE)" strings
-    if not all_labels:
+    raw = (raw or '').strip()
+    if not raw or not index.clients:
         return None, 0, [], True
+    text = _norm_name(raw)
 
-    results = process.extract(
-        client_code,
-        all_labels,
-        scorer=fuzz.token_sort_ratio,
-        limit=3,
-    )
+    # 1. a code we issued — a hit only when the file was exported from us
+    hit = index.by_code.get(raw.upper())
+    if hit:
+        return hit, 100, [], False
 
-    suggestions = [
-        {
-            'client_id':   clients_by_name[label].id,
-            'client_name': clients_by_name[label].name,
-            'client_code': clients_by_name[label].code or '',
-            'score':       round(score),
-        }
-        for label, score, _ in results
-        if score >= 50  # Show anything semi-plausible as a suggestion
-    ]
+    # 2. the name itself, case and punctuation forgiven, aliases included
+    owners = index.name_owners.get(text) or []
+    if len(owners) > 1:
+        return None, 100, index.suggest(text, owners), True
+    hit = index.by_name.get(text)
+    if hit:
+        return hit, 100, [], False
 
-    best_label, best_score, _ = results[0] if results else (None, 0, None)
+    # 3. ask the roster who this name could mean. It knows there are four
+    #    Sacred Hearts and that St. Marks is not one of the St. Mary's —
+    #    something no string metric can work out. One candidate is an answer;
+    #    several is a question, and the siblings are the only honest choices
+    #    to offer, so we hand those back instead of fuzzy near-misses.
+    from tracker.services.client_families import text_words
+    candidates = index.families.candidates_for(text_words(raw))
+    if len(candidates) > 1:
+        return None, 0, index.suggest(text, candidates), True
+    if len(candidates) == 1:
+        only = candidates[0]
+        s = index.score(text, only)
+        # The roster vouching for a single client is necessary, not sufficient:
+        # with one fencing client on file, "Smith Fence Co" has exactly one
+        # candidate and is still a different company.
+        if s >= MATCH_THRESHOLD:
+            return index.by_id[only], round(s), [], False
+        return None, round(s), index.suggest(text, candidates), True
 
-    if best_score >= MATCH_THRESHOLD and best_label:
-        best_client = clients_by_name[best_label]
-        return best_client, round(best_score), suggestions, False
-
-    return None, round(best_score) if results else 0, suggestions, True
+    # 4. nobody on the roster claims a word of it. Fall back to similarity,
+    #    and only when it is both good and clearly alone.
+    results = process.extract(text, list(index._names.values()),
+                              scorer=fuzz.token_sort_ratio, limit=4)
+    if not results:
+        return None, 0, [], True
+    by_norm = {}
+    for cid, n in index._names.items():
+        by_norm.setdefault(n, cid)
+    ids = [by_norm[label] for label, _s, _i in results if label in by_norm]
+    best_score = results[0][1]
+    runner_up = results[1][1] if len(results) > 1 else 0
+    if best_score >= MATCH_THRESHOLD and (best_score - runner_up) >= FUZZY_MARGIN:
+        return index.by_id[ids[0]], round(best_score), [], False
+    return None, round(best_score), index.suggest(text, ids), True
 
 
 @api_view(['POST'])
@@ -3511,15 +3677,7 @@ def import_invoices_csv(request):
         if err:
             return Response(err, status=400)
 
-        # Build lookup tables
-        all_clients = list(Client.objects.filter(org=org))
-        clients_by_code = {
-            c.code.upper(): c for c in all_clients if c.code
-        }
-        # "NAME (CODE)" label for fuzzy matching
-        clients_by_name = {
-            f"{c.name} ({c.code or ''})".strip(): c for c in all_clients
-        }
+        index = ClientIndex(org)
 
         existing_invoice_numbers = set(
             Invoice.objects.filter(org=org)
@@ -3531,12 +3689,13 @@ def import_invoices_csv(request):
 
         for row_num, row in enumerate(reader, start=2):
             parsed, err = _parse_row(row, column_map, row_num)
-            if err:
-                parse_errors.append({'row': row_num, 'error': err})
+            if parsed is None:
+                if err:
+                    parse_errors.append({'row': row_num, 'error': err})
                 continue
 
             client, score, suggestions, needs_review = _match_client(
-                parsed['client_code'], clients_by_code, clients_by_name
+                parsed['client_code'], index
             )
 
             is_duplicate = parsed['invoice_number'] in existing_invoice_numbers
@@ -3560,6 +3719,14 @@ def import_invoices_csv(request):
                 'will_import':     not is_duplicate and not needs_review,
             })
 
+        # Every figure on this site prices captured time at the org's default
+        # rate — for org 21 that is $75 on 12,309 of 12,312 billable blocks,
+        # which is one assumption applied 12,309 times, not 12,309 observations.
+        # A row carrying both an amount and hours is the first independent
+        # evidence of what the firm actually charges, so say so before import
+        # rather than letting a wrong rate quietly become the baseline.
+        rate_check = _implied_rate_check(org, rows)
+
         matched      = sum(1 for r in rows if r['client_id'] and not r['needs_review'])
         unmatched    = sum(1 for r in rows if r['needs_review'])
         duplicates   = sum(1 for r in rows if r['is_duplicate'])
@@ -3577,6 +3744,7 @@ def import_invoices_csv(request):
                 'duplicates':   duplicates,
                 'parse_errors': len(parse_errors),
             },
+            'rate_check': rate_check,
         })
 
     except Exception as e:
@@ -3632,50 +3800,54 @@ def csv_invoice_commit(request):
 
     imported, skipped, errors = [], [], []
 
+    # This used to be one INSERT per row inside a single transaction. A firm
+    # sending two years of history sends thousands of rows, and that shape times
+    # out long before it finishes. Validate in Python, then write in batches.
     from django.db import transaction
-    with transaction.atomic():
-        for row in rows:
-            inv_num = (row.get('invoice_number') or '').strip()
-            if not inv_num:
-                errors.append({'invoice_number': inv_num, 'error': 'Missing invoice_number'})
-                continue
 
-            if inv_num in existing_numbers:
-                skipped.append({'invoice_number': inv_num, 'reason': 'Duplicate'})
-                continue
+    pending = []
+    for row in rows:
+        inv_num = (row.get('invoice_number') or '').strip()
+        if not inv_num:
+            errors.append({'invoice_number': inv_num, 'error': 'Missing invoice_number'})
+            continue
 
-            try:
-                inv_date = row['invoice_date']  # Already ISO string from preview
-                amount   = Decimal(str(row['amount']))
-                hours    = Decimal(str(row['hours_billed'])) if row.get('hours_billed') else None
-                status   = row.get('status', 'sent')
-                client_id = row.get('client_id')
-                client    = clients_by_id.get(client_id) if client_id else None
+        if inv_num in existing_numbers:
+            skipped.append({'invoice_number': inv_num, 'reason': 'Duplicate'})
+            continue
 
-                invoice = Invoice.objects.create(
-                    org=org,
-                    client=client,
-                    invoice_number=inv_num,
-                    invoice_date=inv_date,
-                    amount=amount,
-                    hours_billed=hours,
-                    status=status,
-                    client_code=row.get('client_code', ''),
-                    source='csv',
-                    created_by=request.user,
-                )
+        try:
+            client_id = row.get('client_id')
+            client    = clients_by_id.get(client_id) if client_id else None
+            amount    = Decimal(str(row['amount']))
+            pending.append(Invoice(
+                org=org,
+                client=client,
+                invoice_number=inv_num,
+                invoice_date=row['invoice_date'],   # already ISO from preview
+                amount=amount,
+                hours_billed=(Decimal(str(row['hours_billed']))
+                              if row.get('hours_billed') else None),
+                status=row.get('status', 'sent'),
+                client_code=row.get('client_code', ''),
+                source='csv',
+                created_by=request.user,
+            ))
+            existing_numbers.add(inv_num)   # guard against dupes within the batch
+        except Exception as e:
+            errors.append({'invoice_number': inv_num, 'error': str(e)})
 
-                existing_numbers.add(inv_num)  # Prevent dupes within this batch
-
-                imported.append({
-                    'id':             invoice.id,
-                    'invoice_number': inv_num,
-                    'client_name':    client.name if client else None,
-                    'amount':         float(amount),
-                })
-
-            except Exception as e:
-                errors.append({'invoice_number': inv_num, 'error': str(e)})
+    if pending:
+        with transaction.atomic():
+            Invoice.objects.bulk_create(pending, batch_size=500)
+        # Postgres returns the ids, so callers still get them. Invoice has no
+        # save() override and no signals, so nothing is skipped by going bulk.
+        imported.extend({
+            'id':             obj.pk,
+            'invoice_number': obj.invoice_number,
+            'client_name':    obj.client.name if obj.client else None,
+            'amount':         float(obj.amount),
+        } for obj in pending)
 
     return Response({
         'success': True,
@@ -3683,8 +3855,7 @@ def csv_invoice_commit(request):
             'imported':  len(imported),
             'skipped':   len(skipped),
             'errors':    len(errors),
-            'unmatched': sum(1 for r in imported if not Invoice.objects.filter(
-                id=r['id']).values_list('client_id', flat=True).first()),
+            'unmatched': sum(1 for r in imported if not r['client_name']),
         },
         'imported': imported,
         'skipped':  skipped,
@@ -3696,9 +3867,19 @@ def csv_invoice_commit(request):
 @permission_classes([IsAuthenticated])
 @require_professional_plan
 def csv_invoice_template(request):
-    """
-    Download a pre-filled CSV template with the org's active client codes.
-    Makes it easy for firms to fill in their invoice data correctly.
+    """The file to send the person who does the billing.
+
+    The old template emitted one placeholder row per client keyed on the client
+    CODE — codes this system invented (initials, so "100 Maconi Ave, LLC" is
+    "MAL"), which appear nowhere in the firm's own records. Nobody billing
+    invoices has ever seen them, so the template asked its reader to translate
+    330 rows out of a vocabulary only we speak, then delete the ones that
+    weren't billed. It also opened with three '#' lines the importer could not
+    read, so the one file we hand a firm was the one file we rejected.
+
+    What a firm actually has is an invoice list out of whatever it bills from.
+    So: ask for that, in its own words, with the columns named the way the
+    common exports already name them.
     """
     from django.http import HttpResponse
 
@@ -3706,27 +3887,132 @@ def csv_invoice_template(request):
     if not org:
         return Response({'error': 'No organization'}, status=404)
 
-    clients = Client.objects.filter(org=org, is_active=True).order_by('name')
-
     lines = [
-        '# TimeTracker Invoice Import Template',
-        '# Required columns: client_code, invoice_number, invoice_date, amount',
-        '# Optional columns: hours_billed, status (paid/sent/draft/voided)',
+        '# What to send back: one row per invoice, going back as far as your',
+        f'# records go — {_history_ask(org)}',
         '#',
-        'client_code,invoice_number,invoice_date,amount,hours_billed,status',
+        '# History is the point. One month tells us almost nothing; a year or two',
+        '# tells us what each job is really worth, which of them are billed for',
+        '# less than the work they take, and which time has already been billed.',
+        '# In most systems this is one date field in the export dialog, so please',
+        '# reach back as far as it will let you.',
+        '#',
+        '# Most billing systems will export this for you — in QuickBooks it is',
+        '# Reports > Sales > Invoice List, then Export to CSV. If you bill from a',
+        '# spreadsheet, just send that; the column names below are the only part',
+        '# that matters, and we already recognise the usual variants.',
+        '#',
+        '# Three things are needed:',
+        '#',
+        '#   client          who it was billed to, spelled as you have them',
+        '#   invoice_date    the date, or just the month it covers',
+        '#   amount          what you billed',
+        '#',
+        '# And two more if they are already in the file — no need to add them:',
+        '#',
+        '#   hours_billed    the hours behind the amount. Worth including if you',
+        '#                   have it: it is the only way we can check the rate we',
+        '#                   are using against what you actually charge, per',
+        '#                   client, instead of assuming one rate for everybody.',
+        '#   invoice_number  we make one up if you leave it out',
+        '#',
+        '# We do not need to know whether anything was paid. That is your',
+        '# business, not ours — we are a record of time, not your receivables.',
+        '#',
+        '# Delete the two example rows before sending.',
+        '#',
+        'client,invoice_date,amount,hours_billed',
     ]
 
-    # Pre-populate one example row per client
-    from django.utils import timezone as tz
-    today = tz.now().date()
-    for client in clients:
-        code = client.code or client.name.upper()[:8].replace(' ', '')
-        lines.append(f'{code},INV-XXXX,{today.isoformat()},0.00,,sent')
+    # The one thing only we can tell them. When several clients share a name no
+    # importer can sort the invoices out afterwards — it has to be distinguished
+    # where it is written, and they are the only ones who know which is which.
+    # Placed before the column header so it is read before anything is typed.
+    ambiguous = _ambiguous_client_names(org)
+    if ambiguous:
+        warning = [
+            '# Before you start — these names belong to more than one client on',
+            '# your list. Please add whatever tells them apart (usually the town),',
+            '# or we will have to come back and ask which one each invoice was for.',
+            '#',
+        ]
+        for name, others in ambiguous[:25]:
+            warning.append(f'#   {name}  ->  also: {", ".join(others[:3])}')
+        if len(ambiguous) > 25:
+            warning.append(f'#   ...and {len(ambiguous) - 25} more')
+        warning.append('#')
+        lines[-1:-1] = warning
 
-    content = '\n'.join(lines)
-    response = HttpResponse(content, content_type='text/csv')
-    response['Content-Disposition'] = f'attachment; filename="invoice_import_template_{org.slug}.csv"'
+    sample = list(Client.objects.filter(org=org, is_active=True)
+                  .order_by('name').values_list('name', flat=True)[:2])
+    while len(sample) < 2:
+        sample.append('Example Client')
+    lines += [
+        f'"{sample[0]}",2026-08-31,450.00,6',
+        f'"{sample[1]}",2026-08-31,1200.00,',
+    ]
+
+    response = HttpResponse('\n'.join(lines) + '\n', content_type='text/csv')
+    response['Content-Disposition'] = (
+        f'attachment; filename="invoices_for_{org.slug}.csv"'
+    )
     return response
+
+
+def _history_ask(org):
+    """The date to ask back to, in the firm's terms.
+
+    Invoices earlier than the time we hold still earn their keep — they are what
+    each job is normally worth, which is the only non-circular way to budget an
+    engagement while capture is incomplete. But invoices that stop short of our
+    earliest recorded time leave that time permanently in WIP, because nothing
+    ever arrives to say it was billed. So the floor is our own first block, and
+    the ask is a good deal wider.
+    """
+    from tracker.models import Block
+
+    first = (Block.objects.filter(org=org, deleted_at__isnull=True)
+             .order_by('day').values_list('day', flat=True).first())
+    if not first:
+        return 'ideally two years'
+    floor = first.replace(day=1)
+    wide = floor.replace(year=floor.year - 1)
+    return (f'{wide:%B %Y} would be ideal, and we need '
+            f'{floor:%B %Y} onwards at minimum')
+
+
+def _ambiguous_client_names(org):
+    """Names on this roster that fit more than one client.
+
+    Reuses the look-alike resolver rather than a fresh notion of "similar", so
+    the warning in the template names exactly the clients the importer will
+    later refuse to choose between. Returns [(name, [other names]), ...].
+    """
+    from tracker.services import client_families
+
+    try:
+        fam = client_families.for_org(org.id)
+    except Exception:
+        return []   # a template that can't compute a warning still has a job
+
+    out = []
+    for client in Client.objects.filter(org=org, is_active=True).order_by('name'):
+        try:
+            # candidates_for is built for noisy window text, so on a bare client
+            # name it is generous — it pairs "200 Elwood Davis Property LLC" with
+            # "Prostream Property Services" on the strength of "property" alone.
+            # Use it as the cheap shortlist and let are_lookalikes, which wants a
+            # shared identifying word AND two shared words, make the call.
+            shortlist = fam.candidates_for(client_families.text_words(client.name))
+            others = [cid for cid in shortlist
+                      if cid != client.id and fam.are_lookalikes(client.id, cid)]
+        except Exception:
+            continue
+        if others:
+            out.append((client.name,
+                        [fam.by_id[c].name for c in others if c in fam.by_id]))
+    return [(nm, o) for nm, o in out if o]
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

@@ -115,10 +115,13 @@ def _trip_breaker(exc: Exception) -> None:
     hard = code in (401, 402, 403, 429)
     cooldown = _BREAKER_COOLDOWN_HARD if hard else _BREAKER_COOLDOWN_SOFT
     if not _breaker_open():
+        # Only a quota/auth code is the account; saying so on a timeout would
+        # send whoever reads this log to the billing page for nothing.
+        why = (" A 429 or 401 here is the OpenAI account, not our own rate limit."
+               if hard else "")
         logger.error(
-            "[AI-CLASSIFY] upstream failing (%s) - pausing AI calls for %ss. "
-            "A 429 here is the OpenAI account, not our own rate limit.",
-            exc, cooldown,
+            "[AI-CLASSIFY] upstream failing (%s) - pausing AI calls for %ss.%s",
+            exc, cooldown, why,
         )
     cache.set(_BREAKER_KEY, True, timeout=cooldown)
 

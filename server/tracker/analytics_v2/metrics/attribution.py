@@ -141,76 +141,76 @@ class AttributionPrecisionMetric(Metric):
 
 @register_metric("review_burden")
 class ReviewBurdenMetric(Metric):
-    """How often a single person gets asked anything. Lower is better."""
+    """How often one person has to sit down with the queue. Lower is better."""
 
-    label = "Asks a Day, per Person"
+    label = "Reviews a Week, per Person"
     format = "decimal_1dp"
     tooltip = (
-        "Asks a Day, per Person = human classification decisions ÷ days ÷ people\n\n"
-        "How often the software has to interrupt one person to ask which\n"
-        "client a block belongs to. Reported per person because that is the\n"
-        "cost actually felt; the firm-wide total is underneath.\n"
-        "Lower is better — it falls as the matcher learns."
+        "Reviews a Week, per Person = distinct days someone reviewed ÷ people ÷ weeks\n\n"
+        "A sitting, not a click. Counting audit rows counts BLOCKS: one\n"
+        "'Confirm all' writes a row per block — 78 in a single minute at this\n"
+        "firm — so row counts measure the size of the queue, not the cost of\n"
+        "clearing it. This counts the days a person opened it at all.\n"
+        "Lower is better."
     )
     valid_scopes = ("firm",)
     delta_good_when = "down"
-    # Under two asks a day is background noise; past five it is an interruption
-    # someone will complain about.
+    # Once a week is a habit nobody notices; daily is a chore.
     threshold = ThresholdRange(low=2, high=5, direction="lower_is_better")
 
     def compute(self, org, scope, time):
-        from tracker.models import Block, ClassificationAudit
+        from django.db.models.functions import TruncDate
+        from tracker.models import ClassificationAudit
 
-        days = elapsed_days(time)
-        n = ClassificationAudit.objects.filter(
-            block__org_id=org.id,
-            block__day__gte=time.start,
-            block__day__lte=time.end,
-            source="manual",
-        ).count()
-        if not n:
+        sittings = (
+            ClassificationAudit.objects
+            .filter(block__org_id=org.id, source="manual",
+                    created_at__date__gte=time.start,
+                    created_at__date__lte=time.end)
+            .annotate(d=TruncDate("created_at"))
+            .values("block__user_id", "d")
+            .distinct()
+            .count()
+        )
+        if not sittings:
             return MetricValue(state=MetricState.EMPTY)
-        people = (
-            Block.objects.filter(
-                org_id=org.id, deleted_at__isnull=True,
-                day__gte=time.start, day__lte=time.end,
-            ).values("user_id").distinct().count()
-        ) or 1
+        people = _people_in(org.id, time) or 1
+        weeks = max(elapsed_days(time) / 7.0, 1 / 7.0)
         return MetricValue(
-            value=round(n / days / people, 1),
-            secondary_value=round(n / days, 1),
-            secondary_label=f"a day across {people} people",
-            secondary_format="decimal_1dp",
+            value=round(sittings / people / weeks, 1),
+            secondary_value=float(sittings),
+            secondary_label=f"sittings across {people} people",
+            secondary_format="integer",
         )
 
 
-@register_metric("hours_recorded")
-class HoursRecordedMetric(Metric):
-    """Everything the agent wrote down — the base every share here is taken of."""
+@register_metric("hours_waiting")
+class HoursWaitingMetric(Metric):
+    """Time the software declined to guess on, still unanswered. Lower is better."""
 
-    label = "Hours Recorded"
+    label = "Hours Waiting on You"
     format = "hours_1dp"
     tooltip = (
-        "Hours Recorded = all decided-or-asked time in the range\n\n"
-        "Work the agent observed and attributed, or is holding a question\n"
-        "about. Time judged not to be real activity is excluded. This is the\n"
-        "denominator for every share on this page — none of it came from\n"
-        "anyone filling in a timesheet."
+        "Hours Waiting on You = recorded time still holding a question\n\n"
+        "Work the matcher would not guess a client for, waiting on a person.\n"
+        "It is not lost and it is not wrong — it is the one pile on this page\n"
+        "that converts directly into booked hours when someone looks at it.\n"
+        "Lower is better."
     )
     valid_scopes = ("firm",)
-    delta_good_when = "up"
+    delta_good_when = "down"
 
     def compute(self, org, scope, time):
         cov = acc.coverage(org.id, time.start, time.end)
+        asked = (cov.get("asked_minutes") or 0) / 60.0
         total = (cov.get("total_minutes") or 0) / 60.0
         if not total:
             return MetricValue(state=MetricState.EMPTY)
-        people = _people_in(org.id, time) or 1
         return MetricValue(
-            value=round(total, 1),
-            secondary_value=round(total / people / elapsed_days(time), 2),
-            secondary_label="h per person per day",
-            secondary_format="decimal_2dp",
+            value=round(asked, 1),
+            secondary_value=round(asked / total * 100, 1),
+            secondary_label="of recorded time",
+            secondary_format="percent_1dp",
         )
 
 

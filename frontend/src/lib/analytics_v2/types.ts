@@ -100,7 +100,10 @@ export interface ChartCardPayload {
   subtitle: string;
   chart_type: ChartType;
   data: Array<Record<string, any>>;
-  series: Array<{ key: string; label: string; color?: string }>;
+  series: Array<{ key: string; label: string; color?: string
+  hero?: string | null;
+  hero_label?: string | null;
+}>;
   state: MetricState;
   error_message?: string | null;
 }

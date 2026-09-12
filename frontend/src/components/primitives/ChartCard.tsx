@@ -31,6 +31,16 @@ export default function ChartCard({ card }: Props) {
         {card.subtitle && (
           <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
         )}
+        {card.hero && (
+          <div className="mt-4 flex items-baseline gap-3 flex-wrap">
+            <span className="text-5xl font-semibold tracking-tight tabular-nums text-slate-900">
+              {card.hero}
+            </span>
+            {card.hero_label && (
+              <span className="text-sm text-slate-500">{card.hero_label}</span>
+            )}
+          </div>
+        )}
       </header>
 
       {card.state === "empty" ? (

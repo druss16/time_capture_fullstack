@@ -808,6 +808,31 @@ def save_draft(flag, draft):
 # The run
 # ─────────────────────────────────────────────────────────────────────────────
 
+# The columns migration 0162 adds to MismatchFlag. Nothing in a dry run reads
+# them, so nothing in a dry run should select them.
+_DRAFT_FIELDS = ('resolved_by', 'agent_verdict', 'agent_target_client',
+                 'agent_confidence', 'agent_evidence', 'agent_summary',
+                 'agent_drafted_at')
+
+
+def _draft_fields_on_model():
+    """Which of those the running MODEL actually declares.
+
+    Two different kinds of "not there yet" have to be survived and they fail at
+    different layers. Between merge and the hand-applied migrate, the model has
+    the fields and the database has no columns — deferring fixes that. Running
+    this service against an older models.py (copying it into a checkout to try
+    it before merging anything) has neither, and `.defer()` on a name the model
+    does not declare raises FieldDoesNotExist before a single query is built.
+
+    Asking the model what it has covers both, and costs one cached lookup.
+    """
+    from tracker.models import MismatchFlag
+
+    have = {f.name for f in MismatchFlag._meta.get_fields()}
+    return tuple(f for f in _DRAFT_FIELDS if f in have)
+
+
 def run(org_ids=None, days=90, apply=False, limit=500, respect_optin=True):
     """Draft a resolution for every OPEN flag; apply the ones above the bar.
 
@@ -839,19 +864,15 @@ def run(org_ids=None, days=90, apply=False, limit=500, respect_optin=True):
                      block__start__gte=cutoff)
              .select_related('block', 'block__client', 'booked_client')
              # Nothing here READS a previous draft — every run re-derives from
-             # the block as it is now — so don't select those columns. That is
-             # not a micro-optimisation: Render auto-deploys on merge and
-             # migrations are applied by hand, so there is a window where this
-             # code is live and 0162 is not. Deferring the new columns keeps a
-             # DRY run working through that window and makes the failure, when
-             # it comes, land on the write instead of the read.
+             # the block as it is now — so don't select those columns. Not a
+             # micro-optimisation: it is what lets a dry run survive a database
+             # that migration 0162 has not reached yet, which is every database
+             # between the merge and the hand-applied migrate.
              #
              # Deferred on the FLAG only. Deferring anything on `block` would
              # reintroduce the refresh_from_db-per-row trap that SIGKILLed a
              # worker in #439.
-             .defer('resolved_by', 'agent_verdict', 'agent_target_client',
-                    'agent_confidence', 'agent_evidence', 'agent_summary',
-                    'agent_drafted_at')
+             .defer(*_draft_fields_on_model())
              .order_by('-detected_at')[:limit])
 
     summary = {'drafted': 0, 'auto_reassigned': 0, 'auto_confirmed': 0,

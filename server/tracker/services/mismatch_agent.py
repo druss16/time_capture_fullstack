@@ -838,6 +838,20 @@ def run(org_ids=None, days=90, apply=False, limit=500, respect_optin=True):
                      block__deleted_at__isnull=True,
                      block__start__gte=cutoff)
              .select_related('block', 'block__client', 'booked_client')
+             # Nothing here READS a previous draft — every run re-derives from
+             # the block as it is now — so don't select those columns. That is
+             # not a micro-optimisation: Render auto-deploys on merge and
+             # migrations are applied by hand, so there is a window where this
+             # code is live and 0162 is not. Deferring the new columns keeps a
+             # DRY run working through that window and makes the failure, when
+             # it comes, land on the write instead of the read.
+             #
+             # Deferred on the FLAG only. Deferring anything on `block` would
+             # reintroduce the refresh_from_db-per-row trap that SIGKILLed a
+             # worker in #439.
+             .defer('resolved_by', 'agent_verdict', 'agent_target_client',
+                    'agent_confidence', 'agent_evidence', 'agent_summary',
+                    'agent_drafted_at')
              .order_by('-detected_at')[:limit])
 
     summary = {'drafted': 0, 'auto_reassigned': 0, 'auto_confirmed': 0,

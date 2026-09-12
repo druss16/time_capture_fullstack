@@ -2195,14 +2195,31 @@ def mavops_mismatch_drafts(request):
         return Response({'drafts': {}})
 
     drafts = drafts_for_blocks(int(org_id), block_ids)
+
     # Whether the agent is allowed to act here at all. Without it the tab
     # cannot tell "nothing cleared the bar" from "plenty did, and I am not
     # permitted to" — two very different things to show a person.
-    org = Organization.objects.filter(id=org_id).only(
-        'id', 'mismatch_agent_autoresolve').first()
+    #
+    # Wrapped in its own savepoint because this is the one column on this
+    # endpoint that migration 0162 adds, and Render auto-deploys on merge while
+    # migrations are applied by hand. During that window the query raises, and
+    # in Postgres a failed statement poisons the surrounding transaction unless
+    # something rolls back to a savepoint first — so catching it without the
+    # atomic() block would take down the response it was meant to save.
+    # Drafts themselves read nothing new, so they survive regardless.
+    from django.db import transaction as _txn
+    autoresolve = False
+    try:
+        with _txn.atomic():
+            row = (Organization.objects.filter(id=org_id)
+                   .values('mismatch_agent_autoresolve').first())
+            autoresolve = bool(row and row['mismatch_agent_autoresolve'])
+    except Exception:
+        autoresolve = False
+
     return Response({
         'org_id': int(org_id),
-        'autoresolve': bool(org and org.mismatch_agent_autoresolve),
+        'autoresolve': autoresolve,
         'drafts': drafts,
     })
 

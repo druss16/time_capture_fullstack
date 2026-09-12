@@ -577,6 +577,14 @@ urlpatterns = [
     path("mavops/mismatches/cleared/", views_mavops.mavops_cleared_mismatches, name="mavops_cleared_mismatches"),
     path("mavops/mismatches/undismiss/", views_mavops.mavops_undismiss_mismatches, name="mavops_undismiss_mismatches"),
 
+    # The resolution agent. /drafts/ is what the tab reads to show "here is
+    # what I'd do and why"; /agent/approve/ carries out a draft a person read
+    # and agreed with; /agent/run/ is the batch sweep (dry unless apply=true).
+    path("mavops/mismatches/drafts/", views_mavops.mavops_mismatch_drafts, name="mavops_mismatch_drafts"),
+    path("mavops/mismatches/agent/approve/", views_mavops.mavops_approve_mismatch_drafts, name="mavops_approve_mismatch_drafts"),
+    path("mavops/mismatches/agent/run/", views_mavops.mavops_run_mismatch_agent, name="mavops_run_mismatch_agent"),
+    path("mavops/orgs/<int:org_id>/mismatch-agent/", views_mavops.mavops_set_org_mismatch_agent, name="mavops_set_org_mismatch_agent"),
+
     # Accuracy — the sampled audit behind the number, plus its two lower-bound
     # estimators. Read the module docstring before changing what gets sampled.
     path("mavops/accuracy/", views_accuracy.accuracy_summary, name="mavops_accuracy_summary"),

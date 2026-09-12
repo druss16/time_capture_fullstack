@@ -242,6 +242,21 @@ class Organization(models.Model):
         ),
     )
 
+    mismatch_agent_autoresolve = models.BooleanField(
+        default=False,
+        help_text=(
+            "When True, the mismatch resolution agent may ACT on its own drafts "
+            "for this org — re-filing a flagged block, or closing a flag as a "
+            "false alarm — but only above its confidence bar, only with evidence "
+            "independent of the window title, and never on a same-family pair, "
+            "an invoiced block, or a block a person set. When False (default) the "
+            "agent still drafts every flag with its evidence; the drafts just "
+            "wait for a human to approve them. Ship it off, watch the drafts "
+            "against what your reviewers actually decide, and turn it on for a "
+            "firm once its drafts have stopped surprising you."
+        ),
+    )
+
     show_client_widget = models.BooleanField(
         default=False,
         help_text=(
@@ -1704,6 +1719,11 @@ class Block(models.Model):
             ('auto_commit_eod', 'End-of-day auto-commit'),
             ('rule',            'Org routing rule'),
             ('correction',      'User corrected after commit'),
+            # The mismatch agent re-filing a block it found strong evidence
+            # for. Deliberately NOT 'correction': that value means a person
+            # decided, and the accuracy sampler excludes those. The agent's
+            # work is our filing, so it stays in the population we measure.
+            ('mismatch_agent',  'Mismatch resolution agent re-filed it'),
         ],
         null=True, blank=True,
     )
@@ -1947,6 +1967,7 @@ class Block(models.Model):
             ('correction', 'User Corrected AI'),
             ('import', 'Imported Data'),
             ('pattern', 'Learned Pattern'),
+            ('mismatch_agent', 'Mismatch Agent'),
         ],
         null=True,
         blank=True,
@@ -4764,7 +4785,27 @@ class MismatchFlag(models.Model):
     window_title = models.CharField(max_length=512, blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
-    resolved_reason = models.CharField(max_length=64, blank=True)  # 'reconciled' | 'confirmed_correct' | 'invoiced_anyway'
+    resolved_reason = models.CharField(max_length=64, blank=True)  # 'reconciled' | 'confirmed_correct' | 'invoiced_anyway' | 'agent_reassigned' | 'agent_confirmed_correct'
+    # Who closed it. Without this an agent-resolved flag is indistinguishable
+    # from one a person worked, and the only way to find out whether letting
+    # the agent act was a good idea is to be able to separate the two.
+    resolved_by = models.CharField(max_length=32, blank=True)      # '' (human/scan) | 'mismatch_agent'
+
+    # ── The agent's draft ────────────────────────────────────────────────────
+    # Written by services/mismatch_agent onto OPEN flags. A drafted flag is
+    # still open and still needs a person; the draft is what turns the review
+    # tab from a queue you work into a queue you approve.
+    agent_verdict = models.CharField(max_length=24, blank=True)    # 'reassign' | 'confirm_correct' | 'needs_human'
+    agent_target_client = models.ForeignKey('Client', null=True, blank=True,
+                                            on_delete=models.SET_NULL, related_name='+')
+    agent_confidence = models.FloatField(default=0.0)
+    # The evidence lines, verbatim, so the row can always say WHY. Stored
+    # rather than recomputed: the drafting inputs (neighbours, prior rulings)
+    # move under you, and a justification that changes after the fact is not a
+    # justification.
+    agent_evidence = models.JSONField(default=dict, blank=True)
+    agent_summary = models.CharField(max_length=512, blank=True)
+    agent_drafted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         indexes = [

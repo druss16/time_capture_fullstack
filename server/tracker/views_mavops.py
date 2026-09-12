@@ -219,6 +219,7 @@ def mavops_orgs(request):
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
             'show_client_widget': getattr(org, 'show_client_widget', False),
+            'mismatch_agent_autoresolve': getattr(org, 'mismatch_agent_autoresolve', False),
             'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
@@ -591,6 +592,38 @@ def mavops_set_org_show_client_widget(request, org_id):
     org.save(update_fields=['show_client_widget', 'updated_at'])
 
     return Response({'ok': True, 'id': org.id, 'show_client_widget': org.show_client_widget})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_mismatch_agent(request, org_id):
+    """
+    Let the mismatch resolution agent act unattended for this org.
+    POST /api/mavops/orgs/<org_id>/mismatch-agent/  body: {"autoresolve": true|false}
+
+    Off by default and deliberately hard to turn on by accident: the agent
+    drafts for every org from the day it ships, and acting is the separate
+    decision you make AFTER watching its drafts against what your reviewers
+    actually chose. The switch lives on the Mismatches tab rather than in a
+    settings page because that is where the evidence for flipping it is.
+
+    Even on, the agent only ever MOVES blocks. Closing a flag stays a person's
+    call at any confidence — a wrong move is visible, a wrong close is not.
+    """
+    try:
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    on = request.data.get('autoresolve', False)
+    if isinstance(on, str):
+        on = on.lower() in ('1', 'true', 'yes')
+
+    org.mismatch_agent_autoresolve = bool(on)
+    org.save(update_fields=['mismatch_agent_autoresolve', 'updated_at'])
+    return Response({'ok': True, 'id': org.id,
+                     'autoresolve': org.mismatch_agent_autoresolve})
 
 
 @api_view(['POST'])
@@ -2118,3 +2151,177 @@ def mavops_reconcile_mismatches(request):
         'skipped': len(skipped),
         'category_set': RECONCILE_TAX_CATEGORY,
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Mismatch resolution agent — the drafts, and approving them
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The three endpoints below are what turn the Mismatches tab from a queue you
+# WORK into a queue you APPROVE. `/drafts/` says what the agent thinks about
+# the rows on screen and why; `/agent/approve/` carries out a draft a person
+# has read and agreed with; `/agent/run/` is the batch sweep, dry by default.
+#
+# Drafts are computed in a SECOND request rather than folded into
+# /mavops/mismatches/. The list has to stay fast — it is the page's first
+# paint — and drafting reads neighbours, file paths and prior rulings per row.
+# Splitting them means the rows appear immediately and the agent's reading
+# fills in behind, instead of everything waiting on the slowest part.
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_mismatch_drafts(request):
+    """
+    POST /api/mavops/mismatches/drafts/
+      body: {"org_id": 21, "block_ids": [...]}
+
+    What the agent would do with each of these rows, and the evidence for it.
+    Read-only — drafting never touches a block or a flag.
+
+    POST rather than GET because the caller sends the block ids it is actually
+    displaying, which is a list too long for a query string on a full tab.
+    """
+    from tracker.services.mismatch_agent import drafts_for_blocks
+
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    if not isinstance(block_ids, list):
+        return Response({'error': 'block_ids must be a list.'}, status=400)
+    if not block_ids:
+        return Response({'drafts': {}})
+
+    drafts = drafts_for_blocks(int(org_id), block_ids)
+    # Whether the agent is allowed to act here at all. Without it the tab
+    # cannot tell "nothing cleared the bar" from "plenty did, and I am not
+    # permitted to" — two very different things to show a person.
+    org = Organization.objects.filter(id=org_id).only(
+        'id', 'mismatch_agent_autoresolve').first()
+    return Response({
+        'org_id': int(org_id),
+        'autoresolve': bool(org and org.mismatch_agent_autoresolve),
+        'drafts': drafts,
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_approve_mismatch_drafts(request):
+    """
+    POST /api/mavops/mismatches/agent/approve/
+      body: {"org_id": 21, "block_ids": [...], "confirm": false}
+
+    Carry out the agent's own draft for these blocks — move the ones it wants
+    moved, close the ones it says were never wrong.
+
+    The draft is RE-DERIVED here rather than read back from the flag. A draft
+    written at 3am describes the block as it was at 3am; if someone edited it
+    at nine, approving the stale draft applies a conclusion to evidence that no
+    longer exists. Re-deriving costs a few queries and means the button always
+    does what the row on screen says it does.
+
+    The agent's own vetoes still apply, and they are not advisory: a row a
+    person approves is still refused if the block has since been invoiced, or
+    if the pair turns out to be same-family. Approval means "I agree with your
+    reasoning", not "skip your safeguards".
+    """
+    from django.db import transaction
+    from tracker.models import Block
+    from tracker.services.mismatch_agent import (
+        VERDICT_HUMAN, VERDICT_REASSIGN, apply_draft, context_for,
+        draft_for_block,
+    )
+
+    org_id = request.data.get('org_id')
+    block_ids = request.data.get('block_ids') or []
+    confirm = bool(request.data.get('confirm', False))
+
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    if not isinstance(block_ids, list) or not block_ids:
+        return Response({'error': 'block_ids (non-empty list) is required.'}, status=400)
+    if len(block_ids) > 500:
+        return Response({'error': 'Too many block_ids (max 500 per call).'}, status=400)
+
+    ctx = context_for(int(org_id))
+    blocks = (Block.objects
+              .filter(id__in=block_ids, org_id=org_id, deleted_at__isnull=True,
+                      client_id__isnull=False)
+              .select_related('client'))
+
+    plan, skips, applied = [], [], []
+    for b in blocks:
+        d = draft_for_block(b, ctx)
+        if d.verdict == VERDICT_HUMAN or (d.verdict == VERDICT_REASSIGN
+                                          and not d.target_client_id):
+            skips.append({'block_id': b.id,
+                          'reason': 'the agent has no draft for this row'})
+            continue
+        if d.vetoes:
+            skips.append({'block_id': b.id, 'reason': d.vetoes[0]})
+            continue
+        plan.append((b, d))
+
+    if not confirm:
+        return Response({
+            'dry_run': True, 'org_id': int(org_id),
+            'would_apply': len(plan), 'skipped': len(skips),
+            'plan': [d.as_dict() for _, d in plan],
+            'skips': skips[:100],
+        })
+
+    for b, d in plan:
+        try:
+            with transaction.atomic():
+                reason = apply_draft(d, b, ctx,
+                                     approved_by=request.user.username)
+        except Exception:
+            logger.exception("[MISMATCH-AGENT] approve failed on block %s", b.id)
+            skips.append({'block_id': b.id, 'reason': 'apply failed — see server log'})
+            continue
+        if reason:
+            applied.append({'block_id': b.id, 'action': reason,
+                            'to_client_name': d.target_client_name})
+        else:
+            skips.append({'block_id': b.id, 'reason': 'nothing left to do'})
+
+    return Response({'dry_run': False, 'org_id': int(org_id),
+                     'applied': len(applied), 'skipped': len(skips),
+                     'results': applied})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_run_mismatch_agent(request):
+    """
+    POST /api/mavops/mismatches/agent/run/
+      body: {"org_id": 21, "days": 90, "apply": false, "force": false}
+
+    Sweep every open flag for the org: draft each one, and (with apply=true)
+    act on the ones above the bar for orgs that have opted in. `force` ignores
+    the opt-in for one deliberate operator sweep — staff only, and it is the
+    only way to make the agent act on an org that has not switched it on.
+    """
+    from tracker.services.mismatch_agent import run
+
+    org_id = request.data.get('org_id')
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    try:
+        days = min(max(int(request.data.get('days', 90)), 1), 365)
+    except (TypeError, ValueError):
+        days = 90
+
+    summary = run(org_ids=[int(org_id)], days=days,
+                  apply=bool(request.data.get('apply', False)),
+                  limit=500,
+                  respect_optin=not bool(request.data.get('force', False)))
+    drafts = summary.pop('drafts', [])
+    summary['drafts'] = [d.as_dict() for d in drafts]
+    summary['org_id'] = int(org_id)
+    return Response(summary)

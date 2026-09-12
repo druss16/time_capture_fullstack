@@ -2179,6 +2179,51 @@ def scan_org_mismatches(days=7, org_id=None):
             'opened': opened, 'resolved': resolved}
 
 
+@shared_task(name='tracker.tasks.resolve_org_mismatches')
+def resolve_org_mismatches(days=90, org_id=None, apply=True, limit=500):
+    """
+    Mismatch resolution agent — runs right after the nightly scan opens flags.
+
+    For every OPEN flag it reads the block AND the evidence around it (the file
+    on disk, the QuickBooks company file, what the person was booked to either
+    side, how a human ruled on this same title before) and writes a draft
+    resolution onto the flag. Above the confidence bar it applies the draft;
+    below it, the draft rides along so the review tab shows what the agent
+    thinks and a person approves with one click.
+
+    `apply=True` does NOT mean "act everywhere": the agent only acts for orgs
+    that have turned on `Organization.mismatch_agent_autoresolve`, which ships
+    off. Everywhere else this writes drafts onto open flags and changes
+    nothing, which is the mode a new org should sit in until its drafts have
+    stopped surprising whoever works the tab.
+
+    Deliberately a SEPARATE task from the scan rather than a step inside it:
+    detection is a backstop that must keep working even if the agent is turned
+    off, wedged, or found to be wrong about an org. One of them failing must
+    not take the other down.
+    """
+    from tracker.models import Organization
+    from tracker.services.mismatch_agent import run
+
+    org_ids = [org_id] if org_id else list(
+        Organization.objects.values_list('id', flat=True)
+    )
+    if not org_ids:
+        return {'orgs': 0, 'drafted': 0}
+
+    summary = run(org_ids=org_ids, days=days, apply=bool(apply), limit=limit)
+    # Drafts are Draft objects; a Celery result has to be JSON.
+    summary.pop('drafts', None)
+    summary['orgs'] = len(org_ids)
+
+    logging.getLogger(__name__).info(
+        f"[MISMATCH-AGENT] orgs={len(org_ids)} drafted={summary['drafted']} "
+        f"reassigned={summary['auto_reassigned']} "
+        f"confirmed={summary['auto_confirmed']} queued={summary['queued']}"
+    )
+    return summary
+
+
 # ============================================================================
 # CLIENT ALIAS DERIVATION
 # ============================================================================

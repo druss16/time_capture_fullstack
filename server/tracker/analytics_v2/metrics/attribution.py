@@ -30,6 +30,19 @@ from ..types import MetricState, MetricValue
 from .base import Metric, ThresholdRange, register_metric
 
 
+def elapsed_days(time) -> int:
+    """Days of the window that have actually happened.
+
+    A "this quarter" range runs to the quarter's end, so dividing by its full
+    length on day twelve reports a rate against sixty days that have not
+    happened. Rates use this; totals still use the whole range.
+    """
+    from django.utils import timezone
+
+    last = min(time.end, timezone.localdate())
+    return max((last - time.start).days + 1, 1)
+
+
 def sample_for_window(org_id: int, time) -> tuple[dict, tuple | None]:
     """The audit sample to quote for this window, and the period it came from.
 
@@ -61,17 +74,18 @@ class AttributionAutonomyMetric(Metric):
     )
     valid_scopes = ("firm",)
     delta_good_when = "up"
-    threshold = ThresholdRange(low=0.70, high=0.90, direction="higher_is_better")
+    threshold = ThresholdRange(low=65, high=80, direction="higher_is_better")
 
     def compute(self, org, scope, time):
         cov = acc.coverage(org.id, time.start, time.end)
         if not cov.get("total_minutes"):
             return MetricValue(state=MetricState.EMPTY)
         filed_h = cov["filed_minutes"] / 60.0
+        # percent_1dp does NOT multiply by 100 — a fraction renders as "0.8%".
         return MetricValue(
-            value=cov["autonomy"],
+            value=round(cov["autonomy"] * 100, 1),
             secondary_value=round(filed_h, 1),
-            secondary_label="hours filed automatically",
+            secondary_label="filed automatically",
             secondary_format="hours_1dp",
         )
 
@@ -92,7 +106,7 @@ class AttributionPrecisionMetric(Metric):
     )
     valid_scopes = ("firm",)
     delta_good_when = "up"
-    threshold = ThresholdRange(low=0.85, high=0.95, direction="higher_is_better")
+    threshold = ThresholdRange(low=80, high=90, direction="higher_is_better")
 
     def compute(self, org, scope, time):
         samp, period = sample_for_window(org.id, time)
@@ -113,15 +127,15 @@ class AttributionPrecisionMetric(Metric):
         # without saying so is not. The window goes in the label.
         window = ""
         if period and (period[0] != time.start or period[1] != time.end):
-            window = f" · measured {period[0]:%-d %b}–{period[1]:%-d %b}"
+            window = f" · {period[0]:%-d %b}–{period[1]:%-d %b}"
+        precision = samp.get("precision") or (samp["correct"] / decided)
         return MetricValue(
-            value=samp.get("precision") or (samp["correct"] / decided),
+            value=round(precision * 100, 1),
             secondary_value=float(decided),
-            secondary_label=(f"blocks judged · 95% CI "
-                             f"{lo * 100:.1f}–{hi * 100:.1f}%{window}"),
+            secondary_label=f"of {decided} judged{window}",
             secondary_format="integer",
-            threshold_low=lo,
-            threshold_high=hi,
+            threshold_low=round(lo * 100, 1),
+            threshold_high=round(hi * 100, 1),
         )
 
 
@@ -144,7 +158,7 @@ class ReviewBurdenMetric(Metric):
     def compute(self, org, scope, time):
         from tracker.models import ClassificationAudit
 
-        days = max((time.end - time.start).days + 1, 1)
+        days = elapsed_days(time)
         n = ClassificationAudit.objects.filter(
             block__org_id=org.id,
             block__day__gte=time.start,
@@ -156,7 +170,7 @@ class ReviewBurdenMetric(Metric):
         return MetricValue(
             value=round(n / days, 1),
             secondary_value=float(n),
-            secondary_label=f"decisions over {days} days",
+            secondary_label=f"over {days} days",
             secondary_format="integer",
         )
 
@@ -192,6 +206,6 @@ class HoursPerDecisionMetric(Metric):
         return MetricValue(
             value=round(total_h / n, 1),
             secondary_value=round(total_h, 1),
-            secondary_label=f"hours from {n} decisions",
+            secondary_label=f"from {n} decisions",
             secondary_format="hours_1dp",
         )

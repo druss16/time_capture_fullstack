@@ -78,7 +78,7 @@ class TrustLens(Lens):
         if firm:
             sections.append(headline_row(
                 ["attribution_autonomy", "attribution_precision",
-                 "review_burden", "hours_recorded"],
+                 "review_burden", "hours_waiting"],
                 org, scope, time, compare, section_id="headline",
             ))
 
@@ -141,6 +141,8 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id="decided_by",
+            hero=(f"{filed / total * 100:.0f}%" if total else None),
+            hero_label="filed to a client without asking anyone",
             title="Who decided each hour",
             subtitle=(f"{time.label} · {total:,.1f} h · "
                       f"{discarded:,.0f} h judged not real activity, excluded"),
@@ -193,14 +195,32 @@ class TrustLens(Lens):
         pending = samp.get("pending") or 0
         decided = correct + wrong
 
+        # The figure this chart exists to make credible goes above it, big. The
+        # interval and the worst case ride in the subtitle: the rigour is what
+        # makes the number safe to print, but it is not what anyone reads first.
+        hero = hero_label = None
+        sub_stats = ""
+        if decided:
+            lo_ = samp.get("ci_low") or 0.0
+            hi_ = samp.get("ci_high") or 0.0
+            prec = samp.get("precision") or (correct / decided)
+            worst = samp.get("worst_case") or (correct / drawn)
+            hero = f"{prec * 100:.0f}%"
+            hero_label = "of judged blocks were on the right client"
+            sub_stats = (f" · 95% CI {lo_ * 100:.1f}–{hi_ * 100:.1f}%"
+                         f" · {worst * 100:.0f}% even if every undecided draw were wrong")
+
         chart = ChartCardPayload(
             id="audit_composition",
+            hero=hero,
+            hero_label=hero_label,
             title="Random audit, judged by hand",
             subtitle=(
                 f"{drawn} drawn at random, judged by hand"
                 + (f" · {period[0]:%-d %b}–{period[1]:%-d %b %Y}"
                    if period and (period[0] != time.start or period[1] != time.end)
                    else "")
+                + sub_stats
             ),
             chart_type="dot_matrix",
             data=[
@@ -216,21 +236,6 @@ class TrustLens(Lens):
 
         children: list = [chart]
 
-        if decided:
-            lo = samp.get("ci_low") or 0.0
-            hi = samp.get("ci_high") or 0.0
-            precision = samp.get("precision") or (correct / decided)
-            floor = samp.get("worst_case") or (correct / drawn)
-            good = precision >= PRECISION_FLOOR
-            children.append(InsightCardPayload(
-                id="precision_reading",
-                severity="good" if good else "watch",
-                headline=(f"{precision * 100:.1f}% of judged blocks were "
-                          f"on the right client"),
-                body=(f"95% CI {lo * 100:.1f}–{hi * 100:.1f}%. Counting every "
-                      f"undecided draw as wrong still leaves {floor * 100:.1f}%."),
-                source="rule", dismissible=False,
-            ))
 
 
 
@@ -245,16 +250,6 @@ class TrustLens(Lens):
                           f"Draw a fresh sample before quoting it."),
                     source="rule", dismissible=False,
                 ))
-
-        fixed = acc.self_correction_count(org.id, time.start, time.end)
-        if fixed:
-            children.append(InsightCardPayload(
-                id="self_corrections",
-                severity="good",
-                headline=f"{fixed} client attributions were corrected automatically",
-                body="Re-filed on their own. Nobody was asked.",
-                source="rule", dismissible=False,
-            ))
 
         return children
 
@@ -337,6 +332,8 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='autonomy_trend',
+            hero=(f'+{gain:.0f} pts' if gain >= 0 else f'{gain:.0f} pts'),
+            hero_label=f"since {first_pt['month']}",
             title='Filed without asking, by month',
             subtitle=(f"{first_pt['month']} {first_pt['autonomy']:.0f}% → "
                       f"{last_pt['month']} {last_pt['autonomy']:.0f}% · "
@@ -348,19 +345,9 @@ class TrustLens(Lens):
             state=MetricState.READY,
         )
 
-        children: list = [chart]
-        if gain >= 5:
-            children.append(InsightCardPayload(
-                id='autonomy_improving',
-                severity='good',
-                headline=f'Up {gain:.0f} points since {first_pt["month"]}',
-                body='Every correction the firm makes feeds the matcher.',
-                source='rule', dismissible=False,
-            ))
-
         return Section(
             id='trend', type='section', title='Is it getting better?',
-            collapsible=False, children=children,
+            collapsible=False, children=[chart],
         )
 
     # ── 3b. the two books ───────────────────────────────────────────────────
@@ -424,6 +411,8 @@ class TrustLens(Lens):
 
         chart = ChartCardPayload(
             id='provable_split',
+            hero=f'{provable / total * 100:.0f}%',
+            hero_label='of booked hours can be proved from the work itself',
             title='Booked time, by strength of evidence',
             subtitle=f'{time.label} · {total:,.0f} h booked to a client',
             chart_type='proportion_bar',
@@ -450,19 +439,7 @@ class TrustLens(Lens):
             state=MetricState.READY,
         )
 
-        picks = rep.get('session_decisions') or 0
-        picks_hint = (f"{picks} picks would settle it." if picks else "")
-
-        children: list = [chart, InsightCardPayload(
-            id='two_books',
-            severity='good' if provable / total >= 0.7 else 'watch',
-            headline=(f'{provable:,.0f} of {total:,.0f} booked hours are on solid ground'),
-            body=(f"{unproven:,.0f} h sits on families whose members share a name. "
-                  f"{picks_hint}"),
-            source='rule', dismissible=False,
-        )]
-
-
+        children: list = [chart]
 
         return Section(
             id='provable', type='section',

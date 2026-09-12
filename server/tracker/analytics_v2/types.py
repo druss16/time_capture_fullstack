@@ -196,6 +196,11 @@ class ChartCardPayload:
     series: list[dict] = field(default_factory=list)  # [{key, label, color}]
     state: MetricState = MetricState.READY
     error_message: Optional[str] = None
+    # A single figure the chart exists to make credible, printed large above it.
+    # The alternative is an insight card underneath restating the chart in a
+    # paragraph, which reads as homework and gets skipped.
+    hero: Optional[str] = None
+    hero_label: Optional[str] = None
     
     def to_dict(self) -> dict:
         return {
@@ -204,6 +209,8 @@ class ChartCardPayload:
             "title": self.title,
             "subtitle": self.subtitle,
             "chart_type": self.chart_type,
+            "hero": self.hero,
+            "hero_label": self.hero_label,
             "data": self.data,
             "series": self.series,
             "state": self.state.value if isinstance(self.state, Enum) else self.state,

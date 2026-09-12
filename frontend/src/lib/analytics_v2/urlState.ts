@@ -6,7 +6,7 @@
  *
  * Shape:
  *   /analytics?lens=profitability&scope=client:42&time=this_quarter&compare=last_quarter
- *   /analytics?lens=pulse                       (defaults: firm scope, this_quarter)
+ *   /analytics?lens=trust                       (defaults: firm scope, this_quarter)
  */
 import type { AnalyticsQueryBody, LensKey, Scope, ScopeType } from "./types";
 
@@ -28,9 +28,13 @@ export function parseUrlState(search: string): AnalyticsQueryBody {
   // pulse — so the tab looked enabled, did nothing, and reported no error.
   // Deriving from the menu means anything offered can also be selected.
   const rawLens = params.get("lens");
+  // Trust is the landing lens: the economics lenses are only worth reading once
+  // the time data behind them has been shown to be sound, so that is what a
+  // cold visit opens on. A bookmarked ?lens=pulse still resolves — the backend
+  // keeps the lens registered — it just is not offered in the menu any more.
   const lens: LensKey = (rawLens && LENS_OPTIONS.some(o => o.value === rawLens))
     ? (rawLens as LensKey)
-    : "pulse";
+    : "trust";
 
   // Scope — "firm" or "client:42" or "staff:56,57"
   const rawScope = params.get("scope") || "firm";
@@ -74,8 +78,8 @@ function parseScopeParam(raw: string): Scope {
 export function serializeUrlState(body: AnalyticsQueryBody): string {
   const params = new URLSearchParams();
 
-  // Lens (always include unless pulse)
-  if (body.lens !== "pulse") {
+  // Lens (always include unless it is the default)
+  if (body.lens !== "trust") {
     params.set("lens", body.lens);
   }
 
@@ -151,7 +155,6 @@ export const COMPARE_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 export const LENS_OPTIONS: Array<{ value: LensKey; label: string; description: string }> = [
-  { value: "pulse",         label: "Pulse",          description: "Curated daily overview" },
   { value: "trust",         label: "Trust",          description: "Can you believe the time data?" },
   { value: "review",        label: "Review",         description: "The numbers, and where they came from" },
   { value: "profitability", label: "Profitability",  description: "Revenue, margin, labor cost" },

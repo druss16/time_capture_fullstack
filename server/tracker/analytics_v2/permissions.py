@@ -381,7 +381,11 @@ def get_available_scopes(user: AbstractUser, role: Optional[str], org: Organizat
 
 def _all_lens_keys_for_plan(org: Organization) -> set[str]:
     plan = (getattr(org, "plan", "none") or "none").lower()
-    base = {"pulse", "trust", "review", "profitability", "utilization",
+    # Pulse is deliberately absent: it led with invoiced revenue and
+    # realization, which a firm's own ledger answers better, and it is
+    # superseded by Trust as the landing lens. The lens stays registered so
+    # bookmarked ?lens=pulse links still render rather than 404.
+    base = {"trust", "review", "profitability", "utilization",
             "wip", "realization"}
     if plan.startswith(("executive", "trial")):
         # engagements was registered, given a lens, a sidebar entry and an icon,

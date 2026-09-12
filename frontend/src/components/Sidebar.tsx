@@ -50,7 +50,7 @@ const LENS_ICONS: Record<LensKey, any> = {
 
 export default function Sidebar({ body, onChange }: Props) {
   const { data: perms } = useAnalyticsPermissions();
-  const availableLenses = new Set(perms?.capabilities?.available_lenses ?? ["pulse", "trust", "review", "profitability", "realization", "utilization", "wip", "engagements"]);
+  const availableLenses = new Set(perms?.capabilities?.available_lenses ?? ["trust", "review", "profitability", "realization", "utilization", "wip", "engagements"]);
   const canFirm = perms?.capabilities?.can_firm ?? false;
   const canPickClient = perms?.capabilities?.can_pick_any_client ?? false;
   const canPickStaff = perms?.capabilities?.can_pick_any_staff ?? false;

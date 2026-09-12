@@ -136,7 +136,6 @@ class TrustLens(Lens):
         filed = (cov.get("filed_minutes") or 0) / 60.0
         asked = (cov.get("asked_minutes") or 0) / 60.0
         human = (cov.get("human_filed_minutes") or 0) / 60.0
-        discarded = (cov.get("discarded_minutes") or 0) / 60.0
         total = filed + asked + human
 
         chart = ChartCardPayload(
@@ -144,8 +143,7 @@ class TrustLens(Lens):
             hero=(f"{filed / total * 100:.0f}%" if total else None),
             hero_label="filed to a client without asking anyone",
             title="Who decided each hour",
-            subtitle=(f"{time.label} · {total:,.1f} h · "
-                      f"{discarded:,.0f} h judged not real activity, excluded"),
+            subtitle=f"{time.label} · {total:,.1f} h recorded",
             chart_type="proportion_bar",
             data=[
                 {"group": "The software decided", "color": C_KNOWN,
@@ -207,8 +205,8 @@ class TrustLens(Lens):
             worst = samp.get("worst_case") or (correct / drawn)
             hero = f"{prec * 100:.0f}%"
             hero_label = "of judged blocks were on the right client"
-            sub_stats = (f" · 95% CI {lo_ * 100:.1f}–{hi_ * 100:.1f}%"
-                         f" · {worst * 100:.0f}% even if every undecided draw were wrong")
+            sub_stats = (f" · 95% confidence {lo_ * 100:.0f}–{hi_ * 100:.0f}%"
+                         f" · {worst * 100:.0f}% worst case")
 
         chart = ChartCardPayload(
             id="audit_composition",
@@ -216,7 +214,7 @@ class TrustLens(Lens):
             hero_label=hero_label,
             title="Random audit, judged by hand",
             subtitle=(
-                f"{drawn} drawn at random, judged by hand"
+                f"{drawn} blocks drawn at random"
                 + (f" · {period[0]:%-d %b}–{period[1]:%-d %b %Y}"
                    if period and (period[0] != time.start or period[1] != time.end)
                    else "")

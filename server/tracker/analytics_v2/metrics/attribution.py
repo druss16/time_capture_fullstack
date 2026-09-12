@@ -43,6 +43,59 @@ def elapsed_days(time) -> int:
     return max((last - time.start).days + 1, 1)
 
 
+_NEEDS_YOU_TTL = 60.0
+_needs_you_cache: dict = {}
+
+
+def needs_you(org_id: int, time) -> tuple[int, float, int]:
+    """Open Needs You items, their hours, and how many people own them.
+
+    One definition shared by both burden metrics. They were computed apart and
+    disagreed on screen — 737 items against 115.9 h — because one walked the
+    Daily Review predicate and the other took coverage's `asked_minutes`, which
+    also counts immaterial and idle blocks nobody is ever shown.
+
+    Memoised briefly: the predicate is per-block Python, and two tiles plus a
+    lens section ask for it inside one request.
+    """
+    import time as _time
+    from django.db.models import Q
+    from tracker.models import Block
+    from tracker.views_reports import is_pending_review_block
+
+    key = (org_id, time.start, time.end)
+    hit = _needs_you_cache.get(key)
+    if hit and (_time.monotonic() - hit[0]) < _NEEDS_YOU_TTL:
+        return hit[1]
+
+    # Prefilter in SQL so the predicate only judges plausible rows; it stays the
+    # authority. Both arms of the OR are needed — a Stage-11 re-opened block is
+    # `proposed` while still carrying is_categorized=True.
+    candidates = (
+        Block.objects
+        .filter(org_id=org_id, day__gte=time.start, day__lte=time.end,
+                deleted_at__isnull=True)
+        .filter(Q(is_categorized=False) | Q(classification_state="proposed"))
+        .exclude(classification_state="suppressed")
+        .only("id", "user_id", "minutes", "classification_state",
+              "is_categorized", "categorized_by", "proposed_client_id",
+              "proposed_reasoning", "proposed_signals", "bundle_id",
+              "category_hours")
+    )
+    items = 0
+    minutes = 0
+    owners: set = set()
+    for b in candidates:
+        if is_pending_review_block(b):
+            items += 1
+            minutes += (b.minutes or 0)
+            owners.add(b.user_id)
+
+    result = (items, minutes / 60.0, len(owners))
+    _needs_you_cache[key] = (_time.monotonic(), result)
+    return result
+
+
 def sample_for_window(org_id: int, time) -> tuple[dict, tuple | None]:
     """The audit sample to quote for this window, and the period it came from.
 
@@ -85,7 +138,7 @@ class AttributionAutonomyMetric(Metric):
         return MetricValue(
             value=round(cov["autonomy"] * 100, 1),
             secondary_value=round(filed_h, 1),
-            secondary_label="filed automatically",
+            secondary_label="Hours filed",
             secondary_format="hours_1dp",
         )
 
@@ -102,7 +155,8 @@ class AttributionPrecisionMetric(Metric):
         "judged one at a time against the underlying evidence. Draws that\n"
         "could not be settled either way are excluded from the ratio and\n"
         "reported separately. Shown with a 95% confidence interval — it is\n"
-        "a sample estimate, not a guarantee."
+        "a sample estimate, not a guarantee. Counting every undecided draw\n"
+        "as wrong gives the worst case, which the chart subtitle carries."
     )
     valid_scopes = ("firm",)
     delta_good_when = "up"
@@ -127,12 +181,12 @@ class AttributionPrecisionMetric(Metric):
         # without saying so is not. The window goes in the label.
         window = ""
         if period and (period[0] != time.start or period[1] != time.end):
-            window = f" · {period[0]:%-d %b}–{period[1]:%-d %b}"
+            window = f", {period[0]:%-d %b}–{period[1]:%-d %b}"
         precision = samp.get("precision") or (samp["correct"] / decided)
         return MetricValue(
             value=round(precision * 100, 1),
             secondary_value=float(decided),
-            secondary_label=f"of {decided} judged{window}",
+            secondary_label=f"Blocks judged{window}",
             secondary_format="integer",
             threshold_low=round(lo * 100, 1),
             threshold_high=round(hi * 100, 1),
@@ -141,45 +195,37 @@ class AttributionPrecisionMetric(Metric):
 
 @register_metric("review_burden")
 class ReviewBurdenMetric(Metric):
-    """How often one person has to sit down with the queue. Lower is better."""
+    """How many items are sitting in one person's Needs You. Lower is better."""
 
-    label = "Reviews a Week, per Person"
-    format = "decimal_1dp"
+    label = "Waiting on Each Person"
+    format = "integer"
     tooltip = (
-        "Reviews a Week, per Person = distinct days someone reviewed ÷ people ÷ weeks\n\n"
-        "A sitting, not a click. Counting audit rows counts BLOCKS: one\n"
-        "'Confirm all' writes a row per block — 78 in a single minute at this\n"
-        "firm — so row counts measure the size of the queue, not the cost of\n"
-        "clearing it. This counts the days a person opened it at all.\n"
+        "Waiting on Each Person = open Needs You items ÷ people\n\n"
+        "Exactly the rows Daily Review puts in front of someone: a client\n"
+        "guess to confirm, a mismatch, a split, or a look-alike to pick\n"
+        "between. Gated on the same predicate Daily Review and the reports\n"
+        "use, so this number and that screen can never disagree.\n\n"
+        "It is NOT every unreviewed block — work already filed, and the\n"
+        "legacy pile that is categorised but never surfaced, are not in\n"
+        "anyone's queue and are not counted here.\n"
         "Lower is better."
     )
     valid_scopes = ("firm",)
     delta_good_when = "down"
-    # Once a week is a habit nobody notices; daily is a chore.
-    threshold = ThresholdRange(low=2, high=5, direction="lower_is_better")
+    # A screen someone can clear in a sitting vs. a backlog they will avoid.
+    threshold = ThresholdRange(low=15, high=40, direction="lower_is_better")
 
     def compute(self, org, scope, time):
-        from django.db.models.functions import TruncDate
-        from tracker.models import ClassificationAudit
-
-        sittings = (
-            ClassificationAudit.objects
-            .filter(block__org_id=org.id, source="manual",
-                    created_at__date__gte=time.start,
-                    created_at__date__lte=time.end)
-            .annotate(d=TruncDate("created_at"))
-            .values("block__user_id", "d")
-            .distinct()
-            .count()
-        )
-        if not sittings:
-            return MetricValue(state=MetricState.EMPTY)
-        people = _people_in(org.id, time) or 1
-        weeks = max(elapsed_days(time) / 7.0, 1 / 7.0)
+        items, _hours, owners = needs_you(org.id, time)
+        if not items:
+            return MetricValue(value=0.0, secondary_value=0.0,
+                               secondary_label="Nothing waiting",
+                               secondary_format="integer")
+        people = _people_in(org.id, time) or owners or 1
         return MetricValue(
-            value=round(sittings / people / weeks, 1),
-            secondary_value=float(sittings),
-            secondary_label=f"sittings across {people} people",
+            value=round(items / people),
+            secondary_value=float(items),
+            secondary_label=f"Across {people} people",
             secondary_format="integer",
         )
 
@@ -191,8 +237,9 @@ class HoursWaitingMetric(Metric):
     label = "Hours Waiting on You"
     format = "hours_1dp"
     tooltip = (
-        "Hours Waiting on You = recorded time still holding a question\n\n"
-        "Work the matcher would not guess a client for, waiting on a person.\n"
+        "Hours Waiting on You = hours of the open Needs You items\n\n"
+        "The same pile as the tile beside it, measured in time instead of\n"
+        "rows. Work the matcher would not guess a client for.\n"
         "It is not lost and it is not wrong — it is the one pile on this page\n"
         "that converts directly into booked hours when someone looks at it.\n"
         "Lower is better."
@@ -201,15 +248,16 @@ class HoursWaitingMetric(Metric):
     delta_good_when = "down"
 
     def compute(self, org, scope, time):
-        cov = acc.coverage(org.id, time.start, time.end)
-        asked = (cov.get("asked_minutes") or 0) / 60.0
-        total = (cov.get("total_minutes") or 0) / 60.0
+        # Same pile as the tile beside it, by construction.
+        _items, hours, _owners = needs_you(org.id, time)
+        total = (acc.coverage(org.id, time.start, time.end)
+                 .get("total_minutes") or 0) / 60.0
         if not total:
             return MetricValue(state=MetricState.EMPTY)
         return MetricValue(
-            value=round(asked, 1),
-            secondary_value=round(asked / total * 100, 1),
-            secondary_label="of recorded time",
+            value=round(hours, 1),
+            secondary_value=round(hours / total * 100, 1),
+            secondary_label="Share of recorded time",
             secondary_format="percent_1dp",
         )
 

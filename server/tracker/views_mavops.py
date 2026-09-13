@@ -2357,3 +2357,49 @@ def mavops_run_mismatch_agent(request):
     summary['drafts'] = [d.as_dict() for d in drafts]
     summary['org_id'] = int(org_id)
     return Response(summary)
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_attribution_evidence(request):
+    """
+    GET /api/mavops/attribution/evidence/?org_id=&days=&client_id=&billable=
+
+    For each client over the period: how much of the time about to be billed can
+    say WHY it belongs to them. Four buckets — a person chose it, independent
+    evidence, the window title only, nothing at all.
+
+    Read-only, whole-population (not a sample), ~7s for a quarter of org 21.
+
+    NOT an accuracy score, and the response says so in `caveat` because this is
+    the number most likely to be quoted out of context. Org 21 reads 36% backed
+    against a sampled accuracy of ~94%: most unbacked blocks are short
+    QuickBooks modals inheriting the session the user was already in, which is
+    legitimate and which this engine cannot see. It measures how much of the
+    book can explain itself, which is a different and more actionable thing.
+    """
+    from tracker.services.attribution_evidence import evidence_report
+
+    org_id = request.GET.get('org_id')
+    if not org_id:
+        return Response({'error': 'org_id is required.'}, status=400)
+    try:
+        days = min(max(int(request.GET.get('days', 90)), 1), 365)
+    except (TypeError, ValueError):
+        days = 90
+    client_id = request.GET.get('client_id') or None
+    billable = str(request.GET.get('billable', '1')).lower() not in ('0', 'false', 'no')
+
+    report = evidence_report(int(org_id), days=days,
+                             client_id=int(client_id) if client_id else None,
+                             billable_only=billable)
+    report['params'] = {'org_id': int(org_id), 'days': days,
+                        'billable_only': billable}
+    report['caveat'] = (
+        "Evidence coverage, not accuracy. Time with nothing behind it is "
+        "usually still correct — short QuickBooks dialogs inherit the client "
+        "from the session, and that inheritance is invisible here. Use it to "
+        "decide where review time is worth spending, not as an error rate."
+    )
+    return Response(report)

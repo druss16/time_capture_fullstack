@@ -585,6 +585,10 @@ urlpatterns = [
     path("mavops/mismatches/agent/run/", views_mavops.mavops_run_mismatch_agent, name="mavops_run_mismatch_agent"),
     path("mavops/orgs/<int:org_id>/mismatch-agent/", views_mavops.mavops_set_org_mismatch_agent, name="mavops_set_org_mismatch_agent"),
 
+    # What is holding up the time about to be billed — evidence coverage per
+    # client. Deliberately NOT an accuracy score; see the view's docstring.
+    path("mavops/attribution/evidence/", views_mavops.mavops_attribution_evidence, name="mavops_attribution_evidence"),
+
     # Accuracy — the sampled audit behind the number, plus its two lower-bound
     # estimators. Read the module docstring before changing what gets sampled.
     path("mavops/accuracy/", views_accuracy.accuracy_summary, name="mavops_accuracy_summary"),

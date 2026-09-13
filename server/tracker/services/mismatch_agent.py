@@ -198,6 +198,12 @@ class OrgContext:
         # every night is the queue this feature exists to empty.
         self._dismissed_titles = None
         self._human_rulings = None
+        # Optional prebuilt neighbour index (see attribution_evidence). When
+        # present, _neighbour_signal reads it instead of issuing two queries
+        # per block. One flagged row at a time does not care; a report over
+        # every billable block in a quarter cares a great deal — 7,724 blocks
+        # is 15,448 queries the other way.
+        self.neighbour_index = None
 
     # -- lazy, because most runs never need it -------------------------------
 
@@ -378,18 +384,17 @@ def _file_signal(block, ctx):
     )
 
 
-def _neighbour_signal(block, ctx):
-    """What this person was booked to immediately before and after.
+def neighbours_of(block, ctx):
+    """(before, after) nearest attributed blocks — from the index, or queried.
 
-    Weakest of the independent signals and the one most likely to be circular:
-    if the neighbours were filed by the same classifier that filed this block,
-    agreement between them is one opinion repeated. So neighbours only speak
-    when a HUMAN set them, or when they carry a client name in their own title.
+    Split out so a batch caller can supply the whole period's answer up front.
+    The semantics must not drift between the two paths, which is why there is
+    exactly one place that decides what "nearest attributed neighbour" means.
     """
     from tracker.models import Block
 
-    if not (block.start and block.end):
-        return None
+    if ctx.neighbour_index is not None:
+        return ctx.neighbour_index.get(block.id, (None, None))
 
     before = (Block.objects
               .filter(user_id=block.user_id, org_id=block.org_id,
@@ -409,6 +414,20 @@ def _neighbour_signal(block, ctx):
              .only('id', 'client_id', 'app_name', 'state_changed_by',
                    'categorized_by', 'window_title')
              .first())
+    return before, after
+
+
+def _neighbour_signal(block, ctx):
+    """What this person was booked to immediately before and after.
+
+    Weakest of the independent signals and the one most likely to be circular:
+    if the neighbours were filed by the same classifier that filed this block,
+    agreement between them is one opinion repeated. So neighbours only speak
+    when a HUMAN set them, or when they carry a client name in their own title.
+    """
+    if not (block.start and block.end):
+        return None
+    before, after = neighbours_of(block, ctx)
 
     sides = [s for s in (before, after) if s is not None]
     if not sides:

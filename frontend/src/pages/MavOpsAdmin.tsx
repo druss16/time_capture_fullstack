@@ -878,6 +878,10 @@ interface MismatchRow {
   org_name: string | null;
   user: string | null;
   date: string;
+  // Sent by the backend's _base_row and never declared here. Minutes are why
+  // a manager cares: a 4-minute misfile and a 3-hour one are the same row
+  // without them.
+  minutes: number;
   window_title: string;
   app_name: string;
   booked_client_id: number;
@@ -917,7 +921,9 @@ interface AgentSignal {
 }
 interface AgentDraft {
   block_id: number;
-  verdict: "reassign" | "confirm_correct" | "needs_human";
+  // "stale" = the detector no longer flags this block at all, so the row is
+  // left over rather than a judgement the agent is making.
+  verdict: "reassign" | "confirm_correct" | "needs_human" | "stale";
   target_client_id: number | null;
   target_client_name: string;
   booked_client_name: string;
@@ -925,6 +931,10 @@ interface AgentDraft {
   auto: boolean;
   summary: string;
   evidence: AgentSignal[];
+  // Every signal the agent ATTEMPTED, sent by the server so the card can say
+  // what it checked and found nothing — the half that makes a verdict
+  // arguable rather than something to swallow whole.
+  checked: string[];
   vetoes: string[];
   caveats: string[];
 }
@@ -1322,6 +1332,246 @@ function BucketDetail({
   );
 }
 
+// ─── One finding, stated as a decision ────────────────────────────────────────
+//
+// This replaces a row that carried a checkbox, an org pill, a block id, a date,
+// a user, a set-by badge, a fix button, two client chips, a raw window title, a
+// clear button, a collapsed agent panel and three confidence metrics — for a
+// finding whose entire content is "these two minutes might be on the wrong
+// client". Everything factual is still reachable under `details`; none of it
+// leads, because none of it is the question.
+//
+// The wording is deliberately about PEOPLE and FILES rather than blocks and
+// coverage. Whoever works this queue is deciding whether to move somebody's
+// billable time, and "coverage 64% · vs booked 32% · strength 8.4" is not a
+// sentence anyone can act on.
+
+// What each signal is called when it is speaking.
+const SIGNAL_NOUN: Record<string, string> = {
+  title: "the window title",
+  file_path: "the folder it sits in",
+  qb_company_file: "the QuickBooks company file",
+  neighbours: "the work either side of it",
+  human_precedent: "an earlier decision on this same title",
+  prior_dismissal: "a previous review of this row",
+};
+
+// …and what its ABSENCE means, said plainly. This half is what makes the
+// verdict arguable instead of something to swallow or dismiss: it says how
+// hard the agent looked, not just what it happened to find.
+const SIGNAL_ABSENT: Record<string, string> = {
+  file_path: "the folder doesn't say so",
+  qb_company_file: "no QuickBooks company file was open",
+  neighbours: "the work either side of it doesn't say so",
+  human_precedent: "nobody has filed this title before",
+  prior_dismissal: "nobody has reviewed this row before",
+};
+
+const joinEnglish = (xs: string[]) =>
+  xs.length <= 1 ? (xs[0] || "")
+    : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
+function DecisionCard({
+  row, draft, clients, busy, onMove, onCorrect, onSkip,
+}: {
+  row: MismatchRow;
+  draft?: AgentDraft | undefined;
+  clients: { id: number; name: string }[];
+  busy: boolean;
+  onMove: (blockIds: number[], clientId: number, clientName: string) => void;
+  onCorrect: (blockIds: number[]) => void;
+  onSkip: (blockIds: number[]) => void;
+}) {
+  const [details, setDetails] = useState(false);
+  const [pick, setPick] = useState<number | "">("");
+
+  // Who the primary button would move it to. The agent's target when it has
+  // one; otherwise the detector's, which is what the row itself already says.
+  const targetId = draft?.target_client_id ?? row.looks_like_client_id ?? null;
+  const targetName = draft?.target_client_name || row.looks_like_client_name || "";
+
+  const found = draft?.evidence || [];
+  const independent = found.filter(e => e.independent);
+  const checked = draft?.checked || [];
+  const missing = checked
+    .filter(k => k !== "title" && !found.some(e => e.kind === k))
+    .map(k => SIGNAL_ABSENT[k])
+    .filter(Boolean) as string[];
+  const blocked = (draft?.vetoes || []).length > 0;
+
+  const when = (() => {
+    const d = new Date(row.date + "T12:00:00");
+    return isNaN(d.getTime()) ? row.date
+      : d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  })();
+  const mins = row.minutes === 1 ? "1 minute" : `${row.minutes ?? 0} minutes`;
+
+  return (
+    <div style={{
+      background: T.surface, border: `1px solid ${blocked ? T.border : T.border}`,
+      borderRadius: 10, padding: "22px 24px", marginBottom: 14,
+    }}>
+      <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16 }}>
+        {row.user || "Someone"} · {when} · {mins}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: "4px 14px", marginBottom: 16 }}>
+        <div style={{ color: T.textMuted, fontSize: 12, paddingTop: 2 }}>They had open</div>
+        <div style={{ ...mono, fontSize: 13, wordBreak: "break-word" as const }}>
+          {row.window_title}
+        </div>
+        <div style={{ color: T.textMuted, fontSize: 12, paddingTop: 2 }}>Booked to</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: T.yellow }}>
+          {row.booked_client_name}
+        </div>
+      </div>
+
+      {/* The verdict, in sentences. */}
+      <div style={{
+        borderLeft: `3px solid ${blocked ? T.red + "77" : T.border}`,
+        padding: "2px 0 2px 14px", marginBottom: 20,
+        color: T.textSub, fontSize: 13.5, lineHeight: 1.6,
+      }}>
+        {!draft && <>Still reading the evidence around this one…</>}
+
+        {draft && draft.verdict === "confirm_correct" && (
+          <>Everything points back at <b style={{ color: T.text }}>{row.booked_client_name}</b>
+            {independent[0] ? <> — {independent[0].text.replace(/\.$/, "").toLowerCase()}</> : null}.
+            {" "}The flag looks like the thing that was wrong.</>
+        )}
+
+        {draft && draft.verdict === "stale" && (
+          <>Already settled — nothing flags this block any more. The row is left over.</>
+        )}
+
+        {draft && draft.verdict === "needs_human" && (
+          <>Nothing outside the window title points anywhere, and the title doesn't
+            name one client clearly. There is no recommendation to make here.</>
+        )}
+
+        {draft && draft.verdict === "reassign" && (
+          <>
+            {SIGNAL_NOUN[found[0]?.kind || "title"] || "The window title"} names{" "}
+            <b style={{ color: T.text }}>{targetName}</b>, which is a different client.
+            {independent.length === 0 ? (
+              <>
+                {" "}But that is the only thing pointing there
+                {missing.length > 0 ? <> — {joinEnglish(missing)}</> : null}.
+                {" "}<b style={{ color: T.text }}>One clue is not enough to move billable
+                time, so this is your call.</b>
+              </>
+            ) : (
+              <>
+                {" "}
+                {independent.length === 1 ? "Something else agrees" : `${independent.length} other things agree`}
+                : {joinEnglish(independent.map(e => e.text.replace(/\.$/, "").toLowerCase()))}.
+                {missing.length > 0 && (
+                  <span style={{ color: T.textMuted }}> ({joinEnglish(missing)}.)</span>
+                )}
+              </>
+            )}
+            {blocked && (
+              <div style={{ color: T.red, marginTop: 8 }}>
+                Held back: {draft.vetoes[0]}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" as const, alignItems: "center" }}>
+        {targetId && !blocked && (
+          <button disabled={busy}
+            onClick={() => onMove([row.block_id], targetId, targetName)}
+            style={{
+              background: T.green, border: `1px solid ${T.green}`, color: "#06281c",
+              padding: "9px 16px", fontSize: 13, borderRadius: 7, fontWeight: 600,
+              cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
+            }}>
+            Move to {targetName}
+          </button>
+        )}
+        <button disabled={busy} onClick={() => onCorrect([row.block_id])}
+          style={{
+            background: "transparent", border: `1px solid ${T.border}`, color: T.textSub,
+            padding: "9px 16px", fontSize: 13, borderRadius: 7,
+            cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
+          }}>
+          Booking is correct
+        </button>
+        <button disabled={busy} onClick={() => onSkip([row.block_id])}
+          style={{
+            background: "transparent", border: "none", color: T.textMuted,
+            padding: "9px 10px", fontSize: 13, borderRadius: 7,
+            cursor: busy ? "default" : "pointer",
+          }}>
+          Leave for now
+        </button>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setDetails(d => !d)}
+          style={{
+            background: "transparent", border: "none", color: T.textMuted,
+            fontSize: 12, cursor: "pointer", ...mono,
+          }}>
+          {details ? "▾ details" : "▸ details"}
+        </button>
+      </div>
+
+      {details && (
+        <div style={{
+          marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}`,
+          fontSize: 11.5, color: T.textMuted, ...mono,
+          display: "flex", flexDirection: "column" as const, gap: 6,
+        }}>
+          <div>
+            block {row.block_id} · {row.app_name || "unknown app"} ·{" "}
+            {row.set_by === "user" ? "a person set this client" : "the classifier set this client"}
+            {" · "}coverage {((row.confidence.looks_like_coverage ?? row.confidence.top_candidate_coverage ?? 0) * 100).toFixed(0)}%
+            {" · "}vs booked {(row.confidence.booked_coverage * 100).toFixed(0)}%
+            {" · "}strength {row.confidence.abs_hit.toFixed(1)}
+            {draft ? ` · agent ${(draft.confidence * 100).toFixed(0)}%` : ""}
+          </div>
+          {found.map((e, i) => (
+            <div key={i}>
+              <span style={{ color: e.independent ? T.teal : T.textMuted }}>
+                {e.independent ? "independent" : "from title"}
+              </span>
+              {" · "}{e.text} <span style={{ color: T.textMuted }}>({e.weight.toFixed(2)})</span>
+            </div>
+          ))}
+          {(draft?.caveats || []).map((c, i) => (
+            <div key={`c${i}`} style={{ color: T.yellow }}>{c}</div>
+          ))}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" as const }}>
+            <span>move somewhere else:</span>
+            <select value={pick} disabled={busy}
+              onChange={e => setPick(e.target.value ? Number(e.target.value) : "")}
+              style={{
+                background: T.bg, border: `1px solid ${T.border}`, color: T.text,
+                padding: "5px 8px", fontSize: 11.5, borderRadius: 4, ...mono, maxWidth: 260,
+              }}>
+              <option value="">pick a client…</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button disabled={!pick || busy}
+              onClick={() => {
+                const c = clients.find(x => x.id === pick);
+                if (c) { onMove([row.block_id], c.id, c.name); setPick(""); }
+              }}
+              style={{
+                background: "transparent", border: `1px solid ${T.border}`, color: T.textSub,
+                padding: "5px 12px", fontSize: 11.5, borderRadius: 4, ...mono,
+                cursor: pick && !busy ? "pointer" : "default", opacity: pick && !busy ? 1 : 0.45,
+              }}>
+              move
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [raw, setRaw] = useState<MismatchResponse | null>(null);
   // Rows acted on since the last fetch, hidden locally instead of refetched.
@@ -1337,9 +1587,6 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(120);
   const [showInternal, setShowInternal] = useState(false);
-  // Open by default: these rows are the ones a person can actually settle, so
-  // hiding them behind a disclosure buried the only actionable pile on the tab.
-  const [showUnsure, setShowUnsure] = useState(true);
   const [orgClients, setOrgClients] = useState<{ id: number; name: string }[]>([]);
   const [resolveBusy, setResolveBusy] = useState(false);
   const [cleared, setCleared] = useState<{ flag_id: number; block_id: number; cleared_at: string | null; booked_client_name: string | null; window_title: string }[]>([]);
@@ -1515,52 +1762,12 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     finally { setResolveBusy(false); }
   }, [apiFetch, flash, filterOrg, hide, load, loadCleared]);
 
-  // Reconcile: dry-run first (server re-derives the target client from each
-  // block's title), show the plan, confirm, then commit. Requires an org
-  // (reconcile is per-org). The server ignores any client id we might send —
-  // it re-detects from the title — so this is safe.
-  const reconcile = useCallback(async (blockIds: number[], label: string) => {
-    const org = filterOrg;
-    if (!org) {
-      flash("Pick a single org (filter) before reconciling.", "err");
-      return;
-    }
-    setReconcileBusy(true);
-    try {
-      // 1) dry-run
-      const dry = await apiFetch(`/mavops/mismatches/reconcile/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ org_id: org, block_ids: blockIds, confirm: false }),
-      });
-      const n = dry.would_reassign || 0;
-      if (n === 0) {
-        flash(`Nothing to reconcile for ${label} (${dry.skipped} skipped).`);
-        return;
-      }
-      const catNote = dry.category_will_be_set
-        ? `Category will be set to "${dry.category_will_be_set}".`
-        : `Category unchanged (only the client is reassigned).`;
-      const ok = window.confirm(
-        `Reconcile ${n} block${n > 1 ? "s" : ""} for ${label}?\n\n` +
-        `Each will be reassigned to the client its title names. ${catNote}\n` +
-        `${dry.skipped} block(s) skipped (title no longer names one clear client).`
-      );
-      if (!ok) return;
-      // 2) commit
-      const res = await apiFetch(`/mavops/mismatches/reconcile/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ org_id: org, block_ids: blockIds, confirm: true }),
-      });
-      flash(`Reconciled ${res.reassigned} block${res.reassigned !== 1 ? "s" : ""}.`, "ok");
-      hide(blockIds);
-    } catch {
-      flash("Reconcile failed.", "err");
-    } finally {
-      setReconcileBusy(false);
-    }
-  }, [apiFetch, flash, filterOrg, hide]);
+  // The `reconcile` callback lived here — dry-run, confirm, then bulk-reassign
+  // every flagged block to whatever its title named. Removed with the button
+  // that called it: it is the title-only move the agent examines each row for
+  // and declines to make unattended, and the page should not offer in one
+  // click what it spends a paragraph explaining it will not do. The endpoint
+  // is untouched for callers outside this tab.
 
   // Approve the agent's own draft for these rows — move the ones it wants
   // moved, close the ones it says were never wrong.
@@ -1640,291 +1847,183 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     };
   }, [drafts]);
 
-  // Verdict runs on the CLIENT bucket only — the money bucket. Internal noise
-  // must never trigger the "ongoing" alarm.
-  const verdict = (() => {
-    if (!data || data.client.histogram.length === 0) return null;
-    const newest = data.client.histogram[data.client.histogram.length - 1].date;
-    const ageDays = Math.floor((Date.now() - new Date(newest).getTime()) / 86400000);
-    return { newest, ageDays, ongoing: ageDays <= 3 };
-  })();
+  // The ongoing-vs-historical verdict banner was computed here. Gone with the
+  // banner: it read the newest flag's DATE and announced "likely historical,
+  // consider a one-time cleanup", which is a conclusion that date cannot
+  // support — when the work happened says nothing about whether anyone has
+  // since fixed it — and it said so above a queue of one.
+
+  // Everything that needs a person, in one pile. The client bucket and the
+  // target-unclear bucket were separate sections with separate headers and
+  // separate controls, but they are the same job — somebody has to decide
+  // where this time belongs — and splitting them made the page look like two
+  // problems when there was one.
+  const decisions = useMemo(() => {
+    if (!data) return [];
+    return [...data.client.mismatches, ...(data.unsure?.mismatches || [])];
+  }, [data]);
+
+  const asideCount = (data?.internal.total ?? 0);
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
-        <span style={{ color: T.textSub, fontSize: 13, ...mono, fontWeight: 600 }}>Client-name mismatches</span>
-        {filterOrg && <OrgPill name={`org ${filterOrg}`} />}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, marginBottom: 28, flexWrap: "wrap" as const }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-.01em", color: T.text }}>
+            Misfiled time
+          </div>
+          <div style={{ fontSize: 13, color: T.textMuted, marginTop: 2 }}>
+            {filterOrg
+              ? `${data ? data.scanned_blocks.toLocaleString() + " blocks" : "…"} checked from the last ${days} days`
+              : "Pick an org in the selector above"}
+          </div>
+        </div>
         <div style={{ flex: 1 }} />
-        <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>lookback</span>
         {[30, 60, 90, 120, 180].map(d => (
           <button key={d} onClick={() => setDays(d)}
             style={{
-              background: days === d ? T.teal + "25" : "transparent",
+              background: days === d ? T.teal + "20" : "transparent",
               border: `1px solid ${days === d ? T.teal : T.border}`,
-              color: days === d ? T.teal : T.textSub,
-              padding: "5px 12px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono,
-              fontWeight: days === d ? 600 : 400,
+              color: days === d ? T.teal : T.textMuted,
+              padding: "4px 10px", fontSize: 11.5, cursor: "pointer", borderRadius: 5, ...mono,
             }}>
             {d}d
           </button>
         ))}
-        <Btn label="↻ rescan" onClick={load} outline color={T.textSub} small />
+        <Btn label="↻ recheck" onClick={load} outline color={T.textSub} small />
       </div>
 
-      {/* No org selected → point at the navbar selector (reconcile is per-org). */}
-      {!filterOrg && (
-        <div style={{
-          ...card, marginBottom: 18, padding: "12px 16px",
-          borderColor: T.yellow + "55", background: T.yellow + "0e",
-          display: "flex", alignItems: "center", gap: 10,
-        }}>
-          <span style={{ fontSize: 16 }}>↗</span>
-          <span style={{ color: T.yellow, fontSize: 13, ...mono, fontWeight: 600 }}>
-            Pick an org in the selector at the top of the page to enable reconcile.
-          </span>
-          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>
-            Viewing all orgs — reconcile acts on one org at a time.
-          </span>
-        </div>
+      {loading && (
+        <div style={{ color: T.textMuted, fontSize: 13, paddingTop: 6 }}>checking…</div>
       )}
-
-      {loading && <div style={{ color: T.textMuted, ...mono, fontSize: 13, paddingTop: 12 }}>scanning…</div>}
 
       {data && !loading && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 20 }}>
-            <StatCard label="Blocks Scanned" value={data.scanned_blocks.toLocaleString()} color={T.text} />
-            <StatCard label="Client Mismatches" value={data.client.total} color={data.client.total > 0 ? T.red : T.green} />
-            <StatCard label="Internal (noise)" value={data.internal.total} color={T.textMuted} />
-            <StatCard label="Wrong, Target Unclear" value={data.unsure?.total ?? 0} color={(data.unsure?.total ?? 0) > 0 ? T.yellow : T.textMuted} />
-            <StatCard label="Lookback" value={`${data.params.days}d`} color={T.teal} />
-          </div>
+          {decisions.length > 0 ? (
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>
+              <span style={{ color: T.yellow }}>{decisions.length}</span>
+              {" "}booking{decisions.length === 1 ? "" : "s"} need
+              {decisions.length === 1 ? "s" : ""} your decision
+            </div>
+          ) : (
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14, color: T.green }}>
+              Nothing needs you.
+            </div>
+          )}
 
-          {/* What the agent made of this queue, and the one button that empties
-              the part of it that does not need a person.
-
-              Deliberately reports how many rows it could NOT settle alongside
-              how many it could. A panel that only counts its wins is how a tool
-              that quietly stopped working goes unnoticed for a month, and this
-              one has every incentive to look busy: the rows it holds back are
-              the rows that matter most. */}
-          {filterOrg && (draftsLoading || agentStats.total > 0) && (
+          {/* The agent line only appears when it has something to say about
+              these rows, and says it in one clause. It used to be a standing
+              banner that announced itself even while reporting that it had
+              nothing to add. */}
+          {filterOrg && decisions.length > 0 && (draftsLoading || agentStats.ready > 0) && (
             <div style={{
-              ...card, marginBottom: 20, padding: "12px 16px",
               display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" as const,
-              borderColor: agentStats.ready ? T.green + "55" : T.border,
-              background: agentStats.ready ? T.green + "0c" : T.surface,
+              marginBottom: 14, padding: "10px 14px", borderRadius: 8,
+              border: `1px solid ${agentStats.ready ? T.green + "55" : T.border}`,
+              background: agentStats.ready ? T.green + "0c" : "transparent",
             }}>
-              <span style={{
-                fontSize: 10, ...mono, fontWeight: 700, letterSpacing: 2,
-                textTransform: "uppercase" as const, color: T.teal,
-              }}>
-                resolution agent
+              <span style={{ fontSize: 13, color: T.textSub }}>
+                {draftsLoading
+                  ? "Reading the evidence around these…"
+                  : `${agentStats.ready} of them have independent evidence behind the move.`}
               </span>
-              {draftsLoading ? (
-                <span style={{ fontSize: 12, color: T.textMuted, ...mono }}>
-                  reading the evidence around {Object.keys(drafts).length || "these"} rows…
-                </span>
-              ) : (
-                // Lead with what it DID. The old wording opened with "no row
-                // clears the bar on its own", so a run that had read every row
-                // and written a recommendation on each one announced itself as
-                // a failure, and the drafts further down the page looked like
-                // they had come from somewhere else.
-                <span style={{ fontSize: 12, color: T.textSub, ...mono }}>
-                  {`read ${agentStats.total} row${agentStats.total === 1 ? "" : "s"}`}
-                  {agentStats.ready > 0
-                    ? ` · ${agentStats.ready} ready to approve`
-                    : ``}
-                  {agentStats.drafted > agentStats.ready &&
-                    ` · ${agentStats.drafted - agentStats.ready} recommended, your call`}
-                  {agentStats.held > 0 && ` · ${agentStats.held} held back`}
-                  {agentStats.total > agentStats.drafted + agentStats.held &&
-                    ` · ${agentStats.total - agentStats.drafted - agentStats.held} it cannot call`}
-                </span>
-              )}
               <div style={{ flex: 1 }} />
-              <button onClick={toggleAutoresolve} title={autoresolve
-                ? "The agent re-files ready rows overnight for this org. It still never closes a flag on its own."
-                : "The agent only drafts for this org — nothing changes until a person approves it."}
-                style={{
-                  background: "transparent",
-                  border: `1px solid ${autoresolve ? T.teal : T.border}`,
-                  color: autoresolve ? T.teal : T.textMuted,
-                  padding: "5px 11px", fontSize: 11, borderRadius: 4, ...mono,
-                  cursor: "pointer", whiteSpace: "nowrap" as const,
-                }}>
-                {autoresolve ? "● acts overnight" : "○ drafts only"}
-              </button>
               {agentStats.ready > 0 && (
                 <button disabled={agentBusy}
                   onClick={() => approveDrafts(agentStats.readyIds)}
                   style={{
-                    background: T.green + "18", border: `1px solid ${T.green}`,
-                    color: T.green, padding: "6px 14px", fontSize: 12,
-                    borderRadius: 4, ...mono, fontWeight: 700,
-                    cursor: agentBusy ? "default" : "pointer",
-                    opacity: agentBusy ? 0.5 : 1,
+                    background: T.green, border: `1px solid ${T.green}`, color: "#06281c",
+                    padding: "7px 14px", fontSize: 12.5, borderRadius: 7, fontWeight: 600,
+                    cursor: agentBusy ? "default" : "pointer", opacity: agentBusy ? 0.5 : 1,
                   }}>
-                  {agentBusy ? "applying…" : `✓ approve all ${agentStats.ready} ready`}
+                  {agentBusy ? "moving…" : `Move all ${agentStats.ready}`}
                 </button>
               )}
             </div>
           )}
 
-          {verdict && (
-            <div style={{
-              ...card, marginBottom: 20,
-              borderColor: verdict.ongoing ? T.red + "66" : T.green + "66",
-              background: verdict.ongoing ? T.red + "12" : T.green + "12",
-            }}>
-              <div style={{ fontSize: 13, color: verdict.ongoing ? T.red : T.green, ...mono, fontWeight: 600 }}>
-                {verdict.ongoing
-                  ? `⚠ ONGOING — most recent CLIENT mismatch was ${verdict.ageDays}d ago (${verdict.newest}). Needs a live classifier fix.`
-                  : `✓ Likely HISTORICAL — newest CLIENT mismatch was ${verdict.ageDays}d ago (${verdict.newest}). No recent recurrences; consider a one-time recategorization cleanup.`}
-              </div>
-            </div>
-          )}
+          {decisions.map(m => (
+            <DecisionCard
+              key={m.block_id}
+              row={m}
+              draft={drafts[m.block_id]}
+              clients={orgClients}
+              busy={resolveBusy || agentBusy}
+              onMove={assignTo}
+              onCorrect={dismissRows}
+              onSkip={hide}
+            />
+          ))}
 
-          {/* TARGET-UNCLEAR bucket — FIRST, above the auto-fixable ones.
-              Ordered by how much of a person's attention each pile needs, not
-              by severity: these cannot be auto-applied, so they are the only
-              rows that will sit here untouched unless someone works them. The
-              red bucket below is one click each. */}
-          {(data.unsure?.total ?? 0) > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <div style={{
-                ...card, marginBottom: showUnsure ? 16 : 10,
-                borderColor: T.yellow + "88", background: T.yellow + "12",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                gap: 16, flexWrap: "wrap" as const,
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, color: T.yellow, ...mono, fontWeight: 700 }}>
-                    ⚠ {data.unsure?.total ?? 0} on the wrong client — you pick which
-                  </div>
-                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
-                    The title doesn't name the booked client, but two same-family clients tie,
-                    so nothing can be auto-applied. Choose the right one, or clear it if it was right.
-                  </div>
-                </div>
-                <button onClick={() => setShowUnsure(v => !v)}
-                  style={{ background: showUnsure ? "transparent" : T.yellow, border: `1px solid ${T.yellow}`, color: showUnsure ? T.yellow : "#0b1220", padding: "8px 18px", fontSize: 12, cursor: "pointer", borderRadius: 5, ...mono, fontWeight: 700, whiteSpace: "nowrap" as const }}>
-                  {showUnsure ? "hide" : `review ${data.unsure?.total ?? 0}`}
+          {/* Everything that is real but is not a decision: firm/admin rows,
+              and the ones already settled. One line, folded away. */}
+          <div style={{
+            marginTop: 30, paddingTop: 16, borderTop: `1px solid ${T.border}`,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            gap: 14, flexWrap: "wrap" as const,
+          }}>
+            <span style={{ color: T.textMuted, fontSize: 12.5 }}>
+              {asideCount} internal/admin row{asideCount === 1 ? "" : "s"}
+              {cleared.length > 0 && ` · ${cleared.length} you've already cleared`}
+              {autoresolve && ` · agent acts overnight`}
+            </span>
+            <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+              {filterOrg && (
+                <button onClick={toggleAutoresolve}
+                  title={autoresolve
+                    ? "The agent re-files rows with independent evidence overnight. It never closes a flag on its own."
+                    : "The agent only recommends. Nothing changes unless you click."}
+                  style={{
+                    background: "transparent", border: "none", fontSize: 12.5,
+                    color: autoresolve ? T.teal : T.textMuted, cursor: "pointer",
+                    borderBottom: `1px dotted ${T.textMuted}`, padding: 0,
+                  }}>
+                  {autoresolve ? "agent acts overnight" : "agent recommends only"}
                 </button>
-              </div>
-              {showUnsure && data.unsure && (
-                <BucketDetail
-                  bucket={data.unsure}
-                  tone={T.yellow}
-                  label="Wrong, target unclear"
-                  resolve={filterOrg ? {
-                    clients: orgClients,
-                    busy: resolveBusy,
-                    assign: assignTo,
-                    dismiss: dismissRows,
-                  } : undefined}
-                  drafts={drafts}
-                  onApprove={filterOrg ? approveDrafts : undefined}
-                  agentBusy={agentBusy}
-                />
+              )}
+              <button onClick={() => { setShowInternal(v => !v); setShowCleared(v => !v); }}
+                style={{
+                  background: "transparent", border: "none", color: T.textSub,
+                  fontSize: 12.5, cursor: "pointer",
+                  borderBottom: `1px dotted ${T.textMuted}`, padding: 0,
+                }}>
+                {showInternal ? "hide these" : "show these"}
+              </button>
+            </div>
+          </div>
+
+          {showInternal && (
+            <div style={{ marginTop: 20 }}>
+              <BucketDetail bucket={data.internal} tone={T.textMuted} label="Internal / admin" />
+              {cleared.length > 0 && (
+                <div style={{ ...card, marginTop: 12 }}>
+                  <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, color: T.green, marginBottom: 10, ...mono }}>
+                    cleared as correct ({cleared.length})
+                  </div>
+                  {cleared.map(c => (
+                    <div key={c.flag_id} style={{
+                      display: "flex", alignItems: "center", gap: 10, padding: "6px 0",
+                      borderBottom: `1px solid ${T.border}`, fontSize: 12, ...mono,
+                    }}>
+                      <span style={{ color: T.textMuted }}>block {c.block_id}</span>
+                      <span style={{ color: T.textSub }}>{c.booked_client_name}</span>
+                      <span style={{ color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+                        {c.window_title}
+                      </span>
+                      <button onClick={() => undoClear([c.block_id])}
+                        style={{
+                          background: "transparent", border: `1px solid ${T.border}`,
+                          color: T.textSub, padding: "3px 10px", fontSize: 11,
+                          borderRadius: 4, cursor: "pointer", ...mono,
+                        }}>
+                        undo
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
-
-          {/* CLIENT bucket — the money bucket. Scope is driven by the top org
-              selector (filterOrg); no per-client dropdown needed. */}
-          {data.client.total > 0 ? (
-            <>
-              {/* The "Reconcile all N" bar stood here. Removed, not moved.
-                  It reassigned every flagged block to whatever its title named,
-                  in one click, with nothing required to corroborate the title —
-                  which is the precise thing the agent examines each row for and
-                  refuses to do on its own. Offering both put a button on screen
-                  that did what the sentence above it had just advised against,
-                  and put it in the largest, reddest element on the page.
-
-                  Its own warning admitted the cost ("N of these were put there
-                  by a person — reconciling overwrites their choice"). A control
-                  that has to talk you out of itself is not a control.
-
-                  Nothing is lost: the agent's banner approves everything that
-                  clears the bar in one click, each row keeps a "fix" for the
-                  title-only move when no draft covers it, and the bulk picker
-                  below still moves a selection anywhere a person chooses. */}
-
-              <BucketDetail
-                bucket={data.client}
-                tone={T.red}
-                label="Client mismatches"
-                onReconcile={filterOrg ? reconcile : undefined}
-                reconcileBusy={reconcileBusy}
-                hideBulkButton
-                resolve={filterOrg ? {
-                  clients: orgClients,
-                  busy: resolveBusy,
-                  assign: assignTo,
-                  dismiss: dismissRows,
-                } : undefined}
-                drafts={drafts}
-                onApprove={filterOrg ? approveDrafts : undefined}
-                agentBusy={agentBusy}
-              />
-            </>
-          ) : (
-            <div style={{ ...card, textAlign: "center" as const, padding: 40 }}>
-              <div style={{ color: T.green, fontSize: 14, ...mono }}>no client-name mismatches in this window ✓</div>
-            </div>
-          )}
-
-          {/* Cleared list — the way back from a mis-click. "It's right" is one
-              click on a dense list and will be hit by accident; without this
-              the only route back is editing the database by hand. */}
-          {cleared.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <button onClick={() => setShowCleared(v => !v)}
-                style={{ width: "100%", ...card, marginBottom: showCleared ? 12 : 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.border}` }}>
-                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
-                  {showCleared ? "▾" : "▸"} Cleared as correct ({cleared.length})
-                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
-                    — hidden from the lists above; undo any of them here
-                  </span>
-                </span>
-                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showCleared ? "hide" : "show"}</span>
-              </button>
-              {showCleared && cleared.map(c => (
-                <div key={c.flag_id} style={{ ...card, padding: "10px 16px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" as const }}>
-                  <Badge label={c.booked_client_name || "No client"} color={T.textMuted} />
-                  <code style={{ fontSize: 11, color: T.textMuted, ...mono, flex: 1, minWidth: 200, wordBreak: "break-all" as const }}>
-                    {c.window_title || "(no title)"}
-                  </code>
-                  <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>block {c.block_id}</span>
-                  <button onClick={() => undoClear([c.block_id])}
-                    style={{ background: "transparent", border: `1px solid ${T.yellow}`, color: T.yellow, padding: "4px 12px", fontSize: 11, cursor: "pointer", borderRadius: 4, ...mono, fontWeight: 600 }}>
-                    ↶ undo
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* INTERNAL bucket — collapsed, secondary */}
-          {data.internal.total > 0 && (
-            <div style={{ marginTop: 24 }}>
-              <button onClick={() => setShowInternal(v => !v)}
-                style={{ width: "100%", ...card, marginBottom: showInternal ? 20 : 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, textAlign: "left" as const, border: `1px solid ${T.border}` }}>
-                <span style={{ fontSize: 13, color: T.textSub, ...mono, fontWeight: 600 }}>
-                  {showInternal ? "▾" : "▸"} Internal / admin mismatches ({data.internal.total})
-                  <span style={{ color: T.textMuted, marginLeft: 10, fontWeight: 400 }}>
-                    — firm buckets & CS Connect; real but not billing errors
-                  </span>
-                </span>
-                <span style={{ ...mono, fontSize: 12, color: T.textMuted }}>{showInternal ? "hide" : "show"}</span>
-              </button>
-              {showInternal && <BucketDetail bucket={data.internal} tone={T.textMuted} label="Internal / admin" />}
-            </div>
-          )}
-
         </>
       )}
     </div>

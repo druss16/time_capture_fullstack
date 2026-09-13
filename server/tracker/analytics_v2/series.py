@@ -1,0 +1,312 @@
+"""
+Time series for the Performance Trend chart.
+
+WHY THIS MODULE EXISTS
+----------------------
+The overview needs one chart the viewer can retune between hours, billable
+hours, billable value, labor cost, margin and utilization — six readings of the
+same window, switched client-side with no round trip. Computing that by calling
+each Metric once per bucket would be correct but costs roughly
+(buckets x metrics x queries-per-metric) round trips; at 26 weekly buckets that
+is several hundred.
+
+So the series is built from grouped SQL instead — a handful of queries total.
+The risk that buys is drift: a chart whose Q3 bars quietly add up to something
+other than the Q3 tile above them. Two things hold that shut.
+
+  1. Every rule here is IMPORTED from the same helpers the metrics use —
+     `confirmed_qs` for the basis, `billable_q` for the billing rule,
+     `working_qs` for the utilization basis, `bill_rate_map` / `cost_rate_map`
+     for the rate ladders, `apply_scope` for scope and filters. None of it is
+     restated locally.
+  2. `tests/test_series_reconciliation.py` asserts the summed series equals the
+     metric for the same window. If someone changes one side, that test fails
+     rather than the dashboard silently disagreeing with itself.
+
+Flat-fee / retainer revenue is deliberately NOT spread across buckets: it is
+recognized pro-rata over a period, so slicing it daily invents a shape the
+underlying contract does not have. The trend therefore charts HOURLY billable
+value, and says so in its subtitle. The Billable Value KPI tile above it,
+which does include retainers, is the complete number.
+"""
+from __future__ import annotations
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+from django.db.models import DecimalField, F, Q, Sum
+from django.db.models.functions import Coalesce
+
+from tracker.models import Block
+
+from .types import Scope, TimeRange, to_float
+
+# Bucket the window so a chart never has to render more points than a person
+# can read, and never so few that a quarter looks like three dots.
+_DAILY_MAX_DAYS = 31        # a month or less reads naturally day by day
+_WEEKLY_MAX_DAYS = 240      # up to ~8 months stays weekly; beyond that, monthly
+
+
+# ---------------------------------------------------------------------------
+# Bucketing
+# ---------------------------------------------------------------------------
+
+def choose_grain(time: TimeRange) -> str:
+    """'day' | 'week' | 'month', from the length of the window."""
+    span = time.days()
+    if span <= _DAILY_MAX_DAYS:
+        return "day"
+    if span <= _WEEKLY_MAX_DAYS:
+        return "week"
+    return "month"
+
+
+def _bucket_start(d: date, grain: str) -> date:
+    if grain == "day":
+        return d
+    if grain == "week":
+        return d - timedelta(days=d.weekday())   # Monday
+    return d.replace(day=1)
+
+
+def _next_bucket(d: date, grain: str) -> date:
+    if grain == "day":
+        return d + timedelta(days=1)
+    if grain == "week":
+        return d + timedelta(days=7)
+    return (d.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def _bucket_label(d: date, grain: str) -> str:
+    if grain == "day":
+        return d.strftime("%-d %b")
+    if grain == "week":
+        return f"w/c {d.strftime('%-d %b')}"
+    return d.strftime("%b %Y")
+
+
+def bucket_starts(time: TimeRange, grain: str) -> list[date]:
+    """Every bucket start covering the window, including empty ones.
+
+    Gaps are filled so a quiet week reads as a dip rather than vanishing and
+    letting the line jump straight over it.
+    """
+    out: list[date] = []
+    cur = _bucket_start(time.start, grain)
+    while cur <= time.end:
+        out.append(cur)
+        cur = _next_bucket(cur, grain)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+# ---------------------------------------------------------------------------
+
+def _money() -> DecimalField:
+    return DecimalField(max_digits=14, decimal_places=2)
+
+
+def _grouped(qs, grain: str, extra: dict) -> list[dict]:
+    """Group a Block queryset by (bucket, user) and aggregate `extra`.
+
+    Grouping by user as well as bucket is what lets the per-person rate ladders
+    be applied in Python without a query per person: each row already carries
+    the user whose bill/cost rate applies to it.
+    """
+    from django.db.models.functions import TruncMonth, TruncWeek
+
+    if grain == "day":
+        qs = qs.annotate(bucket=F("day"))
+    elif grain == "week":
+        qs = qs.annotate(bucket=TruncWeek("day"))
+    else:
+        qs = qs.annotate(bucket=TruncMonth("day"))
+
+    return list(
+        qs.values("bucket", "user_id").annotate(**extra).order_by()
+    )
+
+
+def _as_date(v) -> date | None:
+    if v is None:
+        return None
+    return v.date() if hasattr(v, "date") else v
+
+
+def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
+    """Return (points, grain).
+
+    Each point carries every measure for one bucket:
+
+        {bucket, label, hours, billable_hours, revenue, cost,
+         margin, margin_pct, utilization}
+
+    `revenue` is hourly billable value (see the module docstring on retainers),
+    `cost` is labor cost on the same billable hours the cost metric charges,
+    and `utilization` is the billable share of tracked working time — the
+    definition the "Utilization" KPI uses, not capacity utilization.
+    """
+    from .blocks import billable_q, confirmed_qs, working_qs
+    from .cost_rates import bill_rate_map, cost_rate_map, default_cost_rate
+    from .metrics.base import apply_scope
+    from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
+
+    grain = choose_grain(time)
+    buckets = bucket_starts(time, grain)
+
+    base = apply_scope(
+        Block.objects.filter(org=org, day__gte=time.start, day__lte=time.end),
+        scope,
+    )
+    confirmed = confirmed_qs(base)
+    billable = billable_q(org)
+
+    # Hourly revenue excludes flat-fee and non-billable clients, exactly as
+    # RevenueMetric does, so the two never double-count a retainer.
+    rev_exclude = flat_fee_client_ids(org) | non_billable_client_ids(org)
+    rev_qs = confirmed.filter(billable)
+    if rev_exclude:
+        rev_qs = rev_qs.exclude(client_id__in=rev_exclude)
+
+    bill_rates = bill_rate_map(org)
+    cost_rates = cost_rate_map(org)
+    default_bill = to_float(getattr(org, "billing_rate_default", 0))
+    default_cost = default_cost_rate(org)
+
+    # 1) Total and billable minutes per bucket.
+    hours_rows = _grouped(confirmed, grain, {
+        "total_min": Coalesce(Sum("minutes"), 0),
+        "billable_min": Coalesce(Sum("minutes", filter=billable), 0),
+    })
+
+    # 2) Rated value + un-rated minutes per bucket, for the revenue ladder.
+    rev_rows = _grouped(rev_qs, grain, {
+        "rated": Coalesce(Sum("billing_amount"), Decimal("0"), output_field=_money()),
+        "unrated_min": Coalesce(
+            Sum("minutes", filter=Q(billing_amount__isnull=True)), 0),
+    })
+
+    # 3) Labor cost rides the same billable blocks the cost metric charges.
+    cost_rows = _grouped(confirmed.filter(billable), grain, {
+        "billable_min": Coalesce(Sum("minutes"), 0),
+    })
+
+    # 4) Utilization has its own basis: idle and retainer/internal clients out.
+    util_rows = _grouped(working_qs(base, org), grain, {
+        "tracked_min": Coalesce(Sum("minutes"), 0),
+        "billable_min": Coalesce(Sum("minutes", filter=billable), 0),
+    })
+
+    acc: dict[date, dict] = {
+        b: {"hours": 0.0, "billable_hours": 0.0, "revenue": 0.0, "cost": 0.0,
+            "_util_tracked": 0.0, "_util_billable": 0.0}
+        for b in buckets
+    }
+
+    def slot(raw) -> dict | None:
+        return acc.get(_as_date(raw))
+
+    for r in hours_rows:
+        s = slot(r["bucket"])
+        if s is None:
+            continue
+        s["hours"] += to_float(r["total_min"]) / 60.0
+        s["billable_hours"] += to_float(r["billable_min"]) / 60.0
+
+    for r in rev_rows:
+        s = slot(r["bucket"])
+        if s is None:
+            continue
+        rate = bill_rates.get(r["user_id"], default_bill)
+        s["revenue"] += to_float(r["rated"])
+        s["revenue"] += (to_float(r["unrated_min"]) / 60.0) * rate
+
+    for r in cost_rows:
+        s = slot(r["bucket"])
+        if s is None:
+            continue
+        rate = cost_rates.get(r["user_id"], default_cost)
+        s["cost"] += (to_float(r["billable_min"]) / 60.0) * rate
+
+    for r in util_rows:
+        s = slot(r["bucket"])
+        if s is None:
+            continue
+        s["_util_tracked"] += to_float(r["tracked_min"]) / 60.0
+        s["_util_billable"] += to_float(r["billable_min"]) / 60.0
+
+    points: list[dict] = []
+    for b in buckets:
+        s = acc[b]
+        revenue, cost = s["revenue"], s["cost"]
+        margin = revenue - cost
+        tracked = s["_util_tracked"]
+        points.append({
+            "bucket": b.isoformat(),
+            "label": _bucket_label(b, grain),
+            "hours": round(s["hours"], 2),
+            "billable_hours": round(s["billable_hours"], 2),
+            "revenue": round(revenue, 2),
+            "cost": round(cost, 2),
+            "margin": round(margin, 2),
+            # Margin % is None, not 0, in a bucket that earned nothing. Zero
+            # would draw the line down to the floor as though the firm worked
+            # at no margin, when in fact it billed nothing that week.
+            "margin_pct": round(margin / revenue * 100, 1) if revenue > 0 else None,
+            "utilization": (
+                round(s["_util_billable"] / tracked * 100, 1) if tracked > 0 else None
+            ),
+        })
+    return points, grain
+
+
+# ---------------------------------------------------------------------------
+# Chart card
+# ---------------------------------------------------------------------------
+
+# Series key -> the toggle view that charts it. Order is the order of the
+# toggle. `series` names the data keys the view draws, which is also what the
+# cost redactor strips by name: drop "cost" and "margin" and the Labor cost and
+# Gross margin views disappear with them, leaving the other four intact.
+_TREND_VIEWS = [
+    {"key": "hours", "label": "Total hours", "series": ["hours"],
+     "format": "hours_1dp", "chart_type": "area"},
+    {"key": "billable_hours", "label": "Billable hours", "series": ["billable_hours"],
+     "format": "hours_1dp", "chart_type": "area"},
+    {"key": "revenue", "label": "Billable value", "series": ["revenue"],
+     "format": "currency_0dp", "chart_type": "area"},
+    {"key": "cost", "label": "Labor cost", "series": ["cost"],
+     "format": "currency_0dp", "chart_type": "area"},
+    {"key": "margin", "label": "Gross margin", "series": ["margin"],
+     "format": "currency_0dp", "chart_type": "area"},
+    {"key": "utilization", "label": "Utilization", "series": ["utilization"],
+     "format": "percent_1dp", "chart_type": "line"},
+]
+
+_GRAIN_NOUN = {"day": "day", "week": "week", "month": "month"}
+
+
+def trend_chart(org, scope: Scope, time: TimeRange, card_id: str = "performance_trend"):
+    """The Performance Trend card: one window, six readings, switched client-side."""
+    from .types import ChartCardPayload, MetricState
+
+    points, grain = build_series(org, scope, time)
+    has_data = any(p["hours"] > 0 for p in points)
+
+    return ChartCardPayload(
+        id=card_id,
+        title="Performance trend",
+        subtitle=(
+            f"By {_GRAIN_NOUN[grain]} · {time.label} · "
+            "billable value is hourly work only — retainers are recognized "
+            "over their period, not per day"
+        ),
+        chart_type="area",
+        x_key="label",
+        data=points,
+        series=[{"key": "hours", "label": "Total hours"}],
+        toggle_views=_TREND_VIEWS,
+        toggle_label="Measure",
+        state=MetricState.READY if has_data else MetricState.EMPTY,
+    )

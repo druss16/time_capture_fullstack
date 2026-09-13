@@ -147,6 +147,8 @@ def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
     and `utilization` is the billable share of tracked working time — the
     definition the "Utilization" KPI uses, not capacity utilization.
     """
+    from tracker.services.billing_totals import billable_block_q
+
     from .blocks import billable_q, confirmed_qs, working_qs
     from .cost_rates import bill_rate_map, cost_rate_map, default_cost_rate
     from .metrics.base import apply_scope
@@ -160,12 +162,20 @@ def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
         scope,
     )
     confirmed = confirmed_qs(base)
+
+    # Two rules, matching the two the tiles use — see the same note in
+    # breakdowns.py. `billable` is the utilization numerator (canonical rule
+    # PLUS billable-effort clients such as Internal-Tax); `billing` is the
+    # canonical rule alone, which is what Revenue and Labor Cost charge.
+    # The Billable hours line ties to the Billable Hours tile; the Billable
+    # value, Labor cost and Gross margin lines tie to the money tiles.
     billable = billable_q(org)
+    billing = billable_block_q(org)
 
     # Hourly revenue excludes flat-fee and non-billable clients, exactly as
     # RevenueMetric does, so the two never double-count a retainer.
     rev_exclude = flat_fee_client_ids(org) | non_billable_client_ids(org)
-    rev_qs = confirmed.filter(billable)
+    rev_qs = confirmed.filter(billing)
     if rev_exclude:
         rev_qs = rev_qs.exclude(client_id__in=rev_exclude)
 
@@ -187,8 +197,10 @@ def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
             Sum("minutes", filter=Q(billing_amount__isnull=True)), 0),
     })
 
-    # 3) Labor cost rides the same billable blocks the cost metric charges.
-    cost_rows = _grouped(confirmed.filter(billable), grain, {
+    # 3) Labor cost rides the same blocks the cost metric charges — the
+    #    canonical billing rule, so an internal-work bucket shows no cost
+    #    against income it never earned.
+    cost_rows = _grouped(confirmed.filter(billing), grain, {
         "billable_min": Coalesce(Sum("minutes"), 0),
     })
 

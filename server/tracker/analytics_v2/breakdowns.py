@@ -61,13 +61,31 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
     if dimension not in _DIMENSIONS:
         raise ValueError(f"Unknown breakdown dimension '{dimension}'")
 
+    from tracker.services.billing_totals import billable_block_q, internal_client_ids
+
     from .blocks import billable_q, confirmed_qs
     from .cost_rates import bill_rate_map, cost_rate_map, default_cost_rate
     from .metrics.base import apply_scope
     from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
 
     group_field, name_field = _DIMENSIONS[dimension]
+
+    # TWO billable rules, because the tiles above these tables use two.
+    #
+    #   billable  (blocks.billable_q)      canonical rule PLUS clients flagged
+    #       "counts as billable effort" — work that is productive but not
+    #       invoiced through the tool, e.g. UltraTax parked under Internal-Tax.
+    #       This is the numerator of the Billable Hours tile and of utilization.
+    #
+    #   billing   (billable_block_q)       the canonical rule alone: marked
+    #       billable AND a real client AND not internal firm work. This is what
+    #       the Revenue and Labor Cost tiles charge.
+    #
+    # Using the first for MONEY is what put $10,489 of "billable value" on an
+    # Internal - Tax row that the Billable Value tile above it did not count.
+    # Hours columns tie to the hours tile; money columns tie to the money tiles.
     billable = billable_q(org)
+    billing = billable_block_q(org)
 
     qs = confirmed_qs(apply_scope(
         Block.objects.filter(org=org, day__gte=time.start, day__lte=time.end),
@@ -84,7 +102,7 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
     # conditionally: `~Q(client_id__in=[])` is not the no-op it looks like once
     # NULL client ids are in play, and an empty exclusion list should widen
     # nothing.
-    rev_q = billable
+    rev_q = billing
     rev_exclude = flat_fee_client_ids(org) | non_billable_client_ids(org)
     if rev_exclude:
         rev_q = rev_q & ~Q(client_id__in=list(rev_exclude))
@@ -93,6 +111,7 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
         qs.values(*values).annotate(
             total_min=Coalesce(Sum("minutes"), 0),
             billable_min=Coalesce(Sum("minutes", filter=billable), 0),
+            billing_min=Coalesce(Sum("minutes", filter=billing), 0),
             rated=Coalesce(
                 Sum("billing_amount", filter=rev_q),
                 Decimal("0"), output_field=_money()),
@@ -119,16 +138,22 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
                 "revenue": 0.0, "cost": 0.0, "_users": set(),
             }
         billable_h = to_float(r["billable_min"]) / 60.0
+        billing_h = to_float(r["billing_min"]) / 60.0
         slot["hours"] += to_float(r["total_min"]) / 60.0
         slot["billable_hours"] += billable_h
         slot["revenue"] += to_float(r["rated"]) + (
             to_float(r["unrated_min"]) / 60.0
             * bill_rates.get(r["user_id"], default_bill))
-        slot["cost"] += billable_h * cost_rates.get(r["user_id"], default_cost)
+        # Cost is charged on the hours that earn revenue, as LaborCostMetric
+        # does — otherwise an internal row shows cost against no income and
+        # reads as a loss.
+        slot["cost"] += billing_h * cost_rates.get(r["user_id"], default_cost)
         slot["_users"].add(r["user_id"])
 
     if dimension == "user":
         _label_users(org, acc)
+
+    internal_ids = internal_client_ids(org) if dimension == "client" else set()
 
     total_hours = sum(s["hours"] for s in acc.values()) or 0.0
     out: list[dict] = []
@@ -149,43 +174,58 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
             "margin_pct": round(margin / revenue * 100, 1) if revenue > 0 else None,
             "people": len(s["_users"]),
             "share": round(hours / total_hours * 100, 1) if total_hours > 0 else 0.0,
+            # The firm's own work ("Internal", "Internal - Tax", ...). Not a
+            # client, and held out of client rankings by `split_client_rows`.
+            "is_internal": s["id"] in internal_ids,
         })
 
     out.sort(key=lambda r: -r["hours"])
     return out
 
 
-def split_unassigned(rows: list[dict]) -> tuple[list[dict], dict | None]:
-    """Pull the id-less row out of a breakdown, rescaling `share` over the rest.
+def split_client_rows(
+    rows: list[dict],
+) -> tuple[list[dict], dict | None, list[dict]]:
+    """Split a client breakdown into (clients, unassigned, internal).
 
-    A client table ranks clients, and "no client assigned" is not one: it has no
-    billable hours, no value, no cost, no margin, and no drilldown. It also
-    outranks every real client on hours at most firms, which pushes the actual
-    answer to "who consumes the most time" down the page.
+    A client table ranks clients, and two kinds of row are not clients:
 
-    The hours are not swept away silently — the callers put the excluded total
-    in the table's subtitle, because a client table whose hours no longer tie
-    to the firm's hours is its own kind of wrong. Unattributed time is a
-    real problem, but it is an ATTRIBUTION problem: Trust and the Needs-a-Client
-    queue are where it is actionable. Ranking it against paying clients only
-    makes the ranking harder to read.
+      unassigned  "No client assigned" — no billable hours, no value, no cost,
+          no margin, no drilldown, and at most firms it outranks every real
+          client on hours, pushing the actual answer down the page.
+      internal    the firm's own work ("Internal", "Internal - Tax", ...).
+          Never billable by definition (`is_internal_client_name` is the single
+          source of truth), so it earns nothing and cannot be ranked on margin
+          against work that does.
+
+    Neither is swept away silently — callers name what was held out in the
+    table's subtitle, because a client table whose hours no longer tie to the
+    firm's hours is its own kind of wrong.
 
     Shares are recomputed over the remaining rows so they still sum to 100%.
     """
-    kept = [r for r in rows if r.get("id") is not None]
     unassigned = next((r for r in rows if r.get("id") is None), None)
+    internal = [r for r in rows if r.get("is_internal")]
+    kept = [r for r in rows
+            if r.get("id") is not None and not r.get("is_internal")]
 
     total = sum(r["hours"] for r in kept)
     for r in kept:
         r["share"] = round(r["hours"] / total * 100, 1) if total > 0 else 0.0
-    return kept, unassigned
+    return kept, unassigned, internal
 
 
-def unassigned_note(unassigned: dict | None) -> str:
+def held_out_note(unassigned: dict | None, internal: list[dict]) -> str:
     """A subtitle clause naming what was held out, or "" when nothing was."""
-    if not unassigned or unassigned["hours"] <= 0:
+    parts = []
+    if unassigned and unassigned["hours"] > 0:
+        parts.append(f"{unassigned['hours']:,.1f} h with no client")
+    internal_hours = sum(r["hours"] for r in internal)
+    if internal_hours > 0:
+        parts.append(f"{internal_hours:,.1f} h internal")
+    if not parts:
         return ""
-    return f"{unassigned['hours']:,.1f} h with no client is not shown"
+    return f"{' and '.join(parts)} not shown"
 
 
 def _label_users(org, acc: dict) -> None:

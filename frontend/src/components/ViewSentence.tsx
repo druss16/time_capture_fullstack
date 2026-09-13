@@ -8,8 +8,8 @@ import { cn } from "@/lib/design-system";
 
 interface Props {
   sentence: string;
-  generatedAt?: string | null;
-  dataFreshness?: string | null;
+  generatedAt?: string | null | undefined;
+  dataFreshness?: string | null | undefined;
   isFetching: boolean;
   onRefresh: () => void;
 }
@@ -18,8 +18,11 @@ export default function ViewSentence({
   sentence, generatedAt, dataFreshness, isFetching, onRefresh,
 }: Props) {
   return (
+    // Deliberately not sticky: the control bar above it is what stays pinned.
+    // Two sticky headers at top-0 just overlap each other, and the page title
+    // is not what a viewer needs in front of them while scrolling a table.
     <header
-      className="border-b border-border/70 bg-white/95 backdrop-blur-sm sticky top-0 z-20 print:static print:border-black/20"
+      className="border-b border-border/70 bg-white/95 print:static print:border-black/20"
       style={{ fontFamily: '"Inter", sans-serif' }}
     >
       <div className="px-6 py-3.5 flex items-center justify-between gap-4">

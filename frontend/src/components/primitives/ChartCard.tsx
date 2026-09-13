@@ -3,6 +3,7 @@
  * the backend produces (line, area, bar, horizontal_bar, stacked_bar, pie,
  * wip_aging, sparkline, proportion_bar, dot_matrix).
  */
+import { useState } from "react";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   PieChart, Pie, Cell,
@@ -11,7 +12,9 @@ import {
 import { Inbox } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
-import type { ChartCardPayload } from "@/lib/analytics_v2/types";
+import type {
+  ChartCardPayload, ChartToggleView, NumberFormat,
+} from "@/lib/analytics_v2/types";
 
 // Brand palette — teal-led to match the Lightning primary (Daily Review / Reports)
 const SERIES_COLORS = ["#0d9488", "#0d1b2a", "#c9a84c", "#fb7185", "#f97316", "#94a3b8"];
@@ -24,13 +27,65 @@ interface Props {
 }
 
 export default function ChartCard({ card }: Props) {
+  const views = card.toggle_views ?? [];
+  const [activeKey, setActiveKey] = useState(views[0]?.key ?? "");
+  // Falls back to the first view if a previously-selected one has gone — which
+  // happens for real: the backend drops the cost views for a viewer who may
+  // not see cost.
+  const active: ChartToggleView | undefined =
+    views.find(v => v.key === activeKey) ?? views[0];
+
+  // With a toggle, the card renders the active view: its series, its chart
+  // type, and crucially its FORMAT. Without one it renders what it was sent.
+  const shown: ChartCardPayload = active
+    ? {
+        ...card,
+        chart_type: active.chart_type ?? card.chart_type,
+        series: active.series.map(key => ({
+          key,
+          label: active.label,
+        })),
+      }
+    : card;
+  const format: NumberFormat | undefined =
+    active?.format ?? (card.value_format || undefined);
+
   return (
     <div className="rounded-[15px] border border-border/70 bg-white p-5 shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
       <header className="mb-4">
-        <h3 className="text-sm font-semibold text-slate-900">{card.title}</h3>
-        {card.subtitle && (
-          <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
-        )}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900">{card.title}</h3>
+            {card.subtitle && (
+              <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
+            )}
+          </div>
+          {views.length > 1 && (
+            <div
+              role="tablist"
+              aria-label={card.toggle_label || "Measure"}
+              className="flex flex-wrap gap-1 rounded-xl bg-slate-100/80 p-1 print:hidden"
+            >
+              {views.map(v => (
+                <button
+                  key={v.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={active?.key === v.key}
+                  onClick={() => setActiveKey(v.key)}
+                  className={cn(
+                    "rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                    active?.key === v.key
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-500 hover:text-slate-800",
+                  )}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {card.hero && (
           <div className="mt-4 flex items-baseline gap-3 flex-wrap">
             <span className="text-5xl font-semibold tracking-tight tabular-nums text-slate-900">
@@ -48,12 +103,22 @@ export default function ChartCard({ card }: Props) {
       ) : card.state === "error" ? (
         <ErrorChart message={card.error_message} />
       ) : (
-        <div className="h-64">
-          <ChartByType card={card} />
+        <div style={{ height: chartHeight(shown) }}>
+          <ChartByType card={shown} format={format} />
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Ranked bars grow with their rows; everything else is a fixed 16rem.
+ * A twelve-client ranking squeezed into 16rem gives each bar 13px, which is
+ * too thin to compare and too thin to label.
+ */
+function chartHeight(card: ChartCardPayload): number {
+  if (card.chart_type !== "horizontal_bar") return 256;
+  return Math.min(Math.max(card.data.length * 28 + 40, 180), 620);
 }
 
 function EmptyChart() {
@@ -65,7 +130,7 @@ function EmptyChart() {
   );
 }
 
-function ErrorChart({ message }: { message?: string | null }) {
+function ErrorChart({ message }: { message?: string | null | undefined }) {
   return (
     <div className="h-64 flex flex-col items-center justify-center text-rose-600">
       <p className="text-sm font-medium">Couldn't load chart</p>
@@ -74,18 +139,28 @@ function ErrorChart({ message }: { message?: string | null }) {
   );
 }
 
-function ChartByType({ card }: { card: ChartCardPayload }) {
+interface ViewProps {
+  card: ChartCardPayload;
+  /**
+   * How to render values in axes and tooltips. Supplied by the active toggle
+   * view. Without it the tooltip has to guess from magnitude, which is how
+   * "10.0 hours" and "$10" end up formatted the same way.
+   */
+  format?: NumberFormat | undefined;
+}
+
+function ChartByType({ card, format }: ViewProps) {
   switch (card.chart_type) {
-    case "area":          return <AreaChartView card={card} />;
-    case "line":          return <LineChartView card={card} />;
-    case "bar":           return <BarChartView card={card} />;
-    case "horizontal_bar":return <HorizontalBarView card={card} />;
-    case "stacked_bar":   return <StackedBarView card={card} />;
+    case "area":          return <AreaChartView card={card} format={format} />;
+    case "line":          return <LineChartView card={card} format={format} />;
+    case "bar":           return <BarChartView card={card} format={format} />;
+    case "horizontal_bar":return <HorizontalBarView card={card} format={format} />;
+    case "stacked_bar":   return <StackedBarView card={card} format={format} />;
     case "pie":           return <PieChartView card={card} />;
     case "wip_aging":     return <WipAgingChart card={card} />;
     case "proportion_bar":return <ProportionBarView card={card} />;
     case "dot_matrix":    return <DotMatrixView card={card} />;
-    default:              return <BarChartView card={card} />;
+    default:              return <BarChartView card={card} format={format} />;
   }
 }
 
@@ -93,6 +168,9 @@ function ChartByType({ card }: { card: ChartCardPayload }) {
 // Backend data rows have varying x-axis keys (month_label, client_name, band, etc.)
 // Pick the first non-series key as the x-axis.
 function xKey(card: ChartCardPayload): string {
+  // The backend states it outright when it knows; the inference below is the
+  // fallback for older payloads that don't.
+  if (card.x_key) return card.x_key;
   const seriesKeys = new Set(card.series.map(s => s.key));
   const first = card.data[0];
   if (!first) return "name";
@@ -103,7 +181,7 @@ function xKey(card: ChartCardPayload): string {
 }
 
 // ─── Custom tooltip ──────────────────────────────────────────────────────────
-function ChartTooltip({ active, payload, label }: any) {
+function ChartTooltip({ active, payload, label, format }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg bg-slate-900 text-white text-xs px-3 py-2 shadow-lg">
@@ -112,28 +190,55 @@ function ChartTooltip({ active, payload, label }: any) {
         <div key={i} className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full" style={{ background: p.color }} />
           <span className="text-slate-300">{p.name}:</span>
-          <span className="font-medium">
-            {typeof p.value === "number"
-              ? (p.value > 1000 ? `$${Math.round(p.value).toLocaleString()}` : p.value.toFixed(1))
-              : p.value}
-          </span>
+          <span className="font-medium">{tooltipValue(p.value, format)}</span>
         </div>
       ))}
     </div>
   );
 }
 
+/**
+ * Format a tooltip value.
+ *
+ * When the card told us its format, use it. The legacy fallback — "over 1000
+ * means dollars" — is kept only for cards that still send no format, because
+ * it is a guess: it renders 1,200 billable hours as $1,200.
+ */
+function tooltipValue(value: unknown, format?: NumberFormat): string {
+  if (typeof value !== "number") return String(value ?? "—");
+  if (format) return formatValue(value, format);
+  return value > 1000
+    ? `$${Math.round(value).toLocaleString()}`
+    : value.toFixed(1);
+}
+
+/** Compact Y-axis ticks, format-aware. */
+function axisTick(format?: NumberFormat) {
+  return (value: number) => {
+    if (typeof value !== "number") return String(value);
+    const compact = Math.abs(value) >= 1000
+      ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`
+      : String(Math.round(value * 10) / 10);
+    if (!format) return compact;
+    if (format.startsWith("currency")) return `$${compact}`;
+    if (format.startsWith("percent")) return `${Math.round(value)}%`;
+    if (format.startsWith("hours")) return `${compact}h`;
+    return compact;
+  };
+}
+
 // ─── Chart implementations ───────────────────────────────────────────────────
 
-function AreaChartView({ card }: { card: ChartCardPayload }) {
+function AreaChartView({ card, format }: ViewProps) {
   const x = xKey(card);
   return (
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
         <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-        <Tooltip content={<ChartTooltip />} />
+        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+               tickFormatter={axisTick(format)} width={56} />
+        <Tooltip content={<ChartTooltip format={format} />} />
         {card.series.map((s, i) => (
           <Area
             key={s.key}
@@ -151,15 +256,16 @@ function AreaChartView({ card }: { card: ChartCardPayload }) {
   );
 }
 
-function LineChartView({ card }: { card: ChartCardPayload }) {
+function LineChartView({ card, format }: ViewProps) {
   const x = xKey(card);
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
         <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-        <Tooltip content={<ChartTooltip />} />
+        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+               tickFormatter={axisTick(format)} width={56} />
+        <Tooltip content={<ChartTooltip format={format} />} />
         {card.series.map((s, i) => (
           <Line
             key={s.key}
@@ -176,15 +282,16 @@ function LineChartView({ card }: { card: ChartCardPayload }) {
   );
 }
 
-function BarChartView({ card }: { card: ChartCardPayload }) {
+function BarChartView({ card, format }: ViewProps) {
   const x = xKey(card);
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
         <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-        <Tooltip content={<ChartTooltip />} cursor={{ fill: "#f1f5f9" }} />
+        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+               tickFormatter={axisTick(format)} width={56} />
+        <Tooltip content={<ChartTooltip format={format} />} cursor={{ fill: "#f1f5f9" }} />
         {card.series.map((s, i) => (
           <Bar
             key={s.key}
@@ -199,16 +306,19 @@ function BarChartView({ card }: { card: ChartCardPayload }) {
   );
 }
 
-function HorizontalBarView({ card }: { card: ChartCardPayload }) {
+function HorizontalBarView({ card, format }: ViewProps) {
   const x = xKey(card);
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} layout="vertical" margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-        <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+        <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false}
+               axisLine={false} tickFormatter={axisTick(format)} />
+        {/* 180px: CPA client names are long ("St. Mary of the Assumption"),
+            and a truncated label makes the ranking unreadable. */}
         <YAxis type="category" dataKey={x} stroke="#94a3b8" fontSize={11}
-               tickLine={false} width={120} />
-        <Tooltip content={<ChartTooltip />} cursor={{ fill: "#f1f5f9" }} />
+               tickLine={false} width={180} interval={0} />
+        <Tooltip content={<ChartTooltip format={format} />} cursor={{ fill: "#f1f5f9" }} />
         {card.series.map((s, i) => (
           <Bar
             key={s.key}
@@ -390,15 +500,16 @@ function DotMatrixView({ card }: { card: ChartCardPayload }) {
   );
 }
 
-function StackedBarView({ card }: { card: ChartCardPayload }) {
+function StackedBarView({ card, format }: ViewProps) {
   const x = xKey(card);
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
         <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-        <Tooltip content={<ChartTooltip />} cursor={{ fill: "#f1f5f9" }} />
+        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+               tickFormatter={axisTick(format)} width={56} />
+        <Tooltip content={<ChartTooltip format={format} />} cursor={{ fill: "#f1f5f9" }} />
         {card.series.map((s, i) => (
           <Bar
             key={s.key}

@@ -46,6 +46,10 @@ function buildKey(body: AnalyticsQueryBody) {
     body.lens,
     body.scope.type,
     body.scope.ids.slice().sort().join(","),
+    // Filters MUST be in the key. They change the answer to every question on
+    // the page, so leaving them out would serve the unfiltered response from
+    // cache while the control bar showed a filter as applied.
+    stableFilters(body.scope.filters),
     typeof body.time.value === "string" ? body.time.value : JSON.stringify(body.time.value),
     body.compare
       ? (typeof body.compare.value === "string"
@@ -53,6 +57,20 @@ function buildKey(body: AnalyticsQueryBody) {
           : JSON.stringify(body.compare.value))
       : "no_compare",
   ];
+}
+
+/** Key-sorted, id-sorted rendering of the filters so equal sets hash equal. */
+function stableFilters(filters: AnalyticsQueryBody["scope"]["filters"]): string {
+  if (!filters) return "";
+  return Object.keys(filters)
+    .sort()
+    .map(k => {
+      const v = (filters as Record<string, unknown>)[k];
+      return Array.isArray(v)
+        ? `${k}:${[...(v as number[])].sort((a, b) => a - b).join(",")}`
+        : `${k}:${String(v)}`;
+    })
+    .join("|");
 }
 
 export function useAnalyticsQuery(body: AnalyticsQueryBody) {
@@ -111,6 +129,28 @@ export function useAnalyticsStaff(enabled: boolean) {
   return useQuery<TeamMember[], Error>({
     queryKey: ["analytics_v2_staff"],
     queryFn: () => safeFetchJson<TeamMember[]>(`${API_BASE}/settings/team/`),
+    enabled,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+}
+
+/** Project list for the Project filter. */
+export function useAnalyticsProjects(enabled: boolean) {
+  return useQuery<Array<{ id: number; name: string; client: number | null }>, Error>({
+    queryKey: ["analytics_v2_projects"],
+    queryFn: () => safeFetchJson(`${API_BASE}/options/projects/`),
+    enabled,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+  });
+}
+
+/** Task types — "Category" in the UI — for the Category filter. */
+export function useAnalyticsCategories(enabled: boolean) {
+  return useQuery<Array<{ id: number; name: string; code?: string }>, Error>({
+    queryKey: ["analytics_v2_categories"],
+    queryFn: () => safeFetchJson(`${API_BASE}/options/task-types/`),
     enabled,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,

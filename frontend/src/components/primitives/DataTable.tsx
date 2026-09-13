@@ -76,7 +76,7 @@ function PhaseCell({ row }: { row: Record<string, any> }) {
 
 interface Props {
   table: DataTablePayload;
-  onRowClick?: (row: Record<string, any>) => void;
+  onRowClick?: ((row: Record<string, any>) => void) | undefined;
 }
 
 export default function DataTable({ table, onRowClick }: Props) {
@@ -101,6 +101,18 @@ export default function DataTable({ table, onRowClick }: Props) {
     return copy;
   }, [table.rows, sortKey, sortDir]);
 
+  // Max per bar column, for scaling the in-cell proportion bars. Computed over
+  // ALL rows, not the sorted page, so the bars keep their meaning when the
+  // viewer re-sorts by a different column.
+  const barMax = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const key of table.bar_columns ?? []) {
+      out[key] = Math.max(
+        0, ...table.rows.map(r => (typeof r[key] === "number" ? r[key] : 0)));
+    }
+    return out;
+  }, [table.rows, table.bar_columns]);
+
   const handleSort = (key: string) => {
     if (sortKey === key) {
       setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -116,6 +128,11 @@ export default function DataTable({ table, onRowClick }: Props) {
         <h3 className="text-sm font-semibold text-slate-900">{table.title}</h3>
         {table.subtitle && (
           <p className="text-xs text-slate-500 mt-0.5">{table.subtitle}</p>
+        )}
+        {table.footnote && (
+          <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            {table.footnote}
+          </p>
         )}
       </header>
 
@@ -154,18 +171,30 @@ export default function DataTable({ table, onRowClick }: Props) {
                     <td
                       key={col.key}
                       className={cn(
-                        "px-4 py-3 text-slate-700",
+                        "relative px-4 py-3 text-slate-700",
                         col.format !== "text" && col.format !== "phase_picker" &&
                           "text-right tabular-nums font-medium",
                       )}
                     >
-                      {col.format === "phase_picker" ? (
-                        <PhaseCell row={row} />
-                      ) : col.format === "text" ? (
-                        String(row[col.key] ?? "")
-                      ) : (
-                        formatValue(row[col.key], col.format)
+                      {barMax[col.key] > 0 && typeof row[col.key] === "number" && (
+                        <span
+                          aria-hidden
+                          className="absolute inset-y-1 right-1 rounded bg-teal-500/10"
+                          style={{
+                            width: `${Math.max(
+                              (row[col.key] / barMax[col.key]) * 100, 0)}%`,
+                          }}
+                        />
                       )}
+                      <span className="relative">
+                        {col.format === "phase_picker" ? (
+                          <PhaseCell row={row} />
+                        ) : col.format === "text" ? (
+                          renderText(row[col.key], col.key)
+                        ) : (
+                          formatValue(row[col.key], col.format)
+                        )}
+                      </span>
                     </td>
                   ))}
                 </tr>
@@ -175,6 +204,28 @@ export default function DataTable({ table, onRowClick }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Text cells render as text, with one exception: the flag column carries a
+ * " · "-joined list of short phrases, and as plain text they run together into
+ * a sentence. Rendered as pills they read as the tags they are.
+ */
+function renderText(value: unknown, key: string) {
+  const text = String(value ?? "");
+  if (key !== "flag_label" || !text) return text || (key === "flag_label" ? "" : text);
+  return (
+    <span className="flex flex-wrap gap-1">
+      {text.split(" · ").map(part => (
+        <span
+          key={part}
+          className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-200/70"
+        >
+          {part}
+        </span>
+      ))}
+    </span>
   );
 }
 

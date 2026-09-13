@@ -9,14 +9,32 @@ export type ScopeType =
   | "firm" | "client" | "staff" | "service" | "engagement" | "composite";
 
 export type LensKey =
+  // Executive dashboard
+  | "overview" | "clients" | "team" | "distribution"
+  // Focused lenses
   | "pulse" | "trust" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
   | "engagements";
+
+/** Dimensions the control bar can narrow the whole dashboard by. */
+export type FilterDim = "client" | "staff" | "service" | "engagement";
+
+export type BillableFilter = "all" | "billable" | "non_billable";
+
+export interface ScopeFilters {
+  client?: number[];
+  staff?: number[];
+  /** TaskType ids — "Category" in the UI. */
+  service?: number[];
+  /** Project ids — "Project" in the UI. */
+  engagement?: number[];
+  billable?: BillableFilter;
+}
 
 export interface Scope {
   type: ScopeType;
   ids: number[];
-  filters?: Record<string, number[]>;
-  label?: string;
+  filters?: ScopeFilters | undefined;
+  label?: string | undefined;
 }
 
 export interface TimeRange {
@@ -93,6 +111,25 @@ export type ChartType =
   | "line" | "area" | "bar" | "horizontal_bar" | "stacked_bar"
   | "pie" | "wip_aging" | "sparkline" | "proportion_bar" | "dot_matrix";
 
+export interface ChartSeries {
+  key: string;
+  label: string;
+  color?: string;
+}
+
+/**
+ * One reading of a chart's data, selected client-side. `series` names the data
+ * keys this view draws — which is also how the backend's cost redactor removes
+ * a whole cost view for a viewer who may not see cost.
+ */
+export interface ChartToggleView {
+  key: string;
+  label: string;
+  series: string[];
+  format?: NumberFormat | undefined;
+  chart_type?: ChartType | undefined;
+}
+
 export interface ChartCardPayload {
   type: "chart_card";
   id: string;
@@ -100,10 +137,19 @@ export interface ChartCardPayload {
   subtitle: string;
   chart_type: ChartType;
   data: Array<Record<string, any>>;
-  series: Array<{ key: string; label: string; color?: string
+  series: ChartSeries[];
+  /** Non-empty when the card offers a measure toggle. */
+  toggle_views?: ChartToggleView[] | undefined;
+  toggle_label?: string | undefined;
+  /** Value format for a card with no toggle (axes + tooltips). */
+  value_format?: NumberFormat | "" | undefined;
+  /** X-axis key for cartesian charts; falls back to "label". */
+  x_key?: string | undefined;
+  // hero/hero_label belong to the CARD, not to a series. They used to be
+  // declared inside the series element type, which meant `card.hero` — what
+  // ChartCard actually reads — was not on the type at all.
   hero?: string | null;
   hero_label?: string | null;
-}>;
   state: MetricState;
   error_message?: string | null;
 }
@@ -124,6 +170,19 @@ export interface DataTablePayload {
   columns: DataTableColumn[];
   rows: Array<Record<string, any>>;
   default_sort?: { key: string; direction: "asc" | "desc" } | null;
+  /**
+   * Makes rows clickable. The row carries its id under `id_key`; the page
+   * builds a scope from it and navigates to `lens`.
+   */
+  row_drilldown?: {
+    scope_type: ScopeType;
+    lens: LensKey;
+    id_key: string;
+    label_key: string;
+  } | null;
+  /** Columns rendered with an in-cell proportion bar, scaled to the column max. */
+  bar_columns?: string[] | undefined;
+  footnote?: string | undefined;
   state: MetricState;
   error_message?: string | null;
 }
@@ -160,6 +219,8 @@ export interface Section {
   collapsible: boolean;
   /** Start folded. Caller can still expand it. */
   collapsed?: boolean;
+  /** Render children as tabs, labelled by each child's own title. */
+  tabbed?: boolean | undefined;
   children: SectionChild[];
 }
 
@@ -186,6 +247,8 @@ export interface AnalyticsResponse {
     version: string;
     // Custom — populated by our backend patches
     invoiceless?: boolean;
+    /** False when cost/margin were redacted for this viewer. */
+    cost_visible?: boolean;
   };
 }
 
@@ -195,7 +258,7 @@ export interface AnalyticsQueryBody {
   scope: Scope;
   lens: LensKey;
   time: { type: "relative" | "absolute"; value: string | { start: string; end: string } };
-  compare?: { type: "relative" | "absolute"; value: string | { start: string; end: string } } | null;
+  compare?: { type: "relative" | "absolute"; value: string | { start: string; end: string } } | null | undefined;
 }
 
 // ─── Permissions endpoint response ───────────────────────────────────────────

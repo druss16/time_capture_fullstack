@@ -64,6 +64,68 @@ def all_metric_ids() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Scope + filter application — the one place a Block queryset gets narrowed
+# ---------------------------------------------------------------------------
+
+# scope.filters dimension -> Block column it narrows.
+_FILTER_COLUMN = {
+    "client": "client_id__in",
+    "staff": "user_id__in",
+    "service": "task_type_id__in",      # "Category" in the UI
+    "engagement": "project_id__in",     # "Project" in the UI
+}
+
+
+def apply_scope(qs: QuerySet, scope: Scope) -> QuerySet:
+    """Narrow a Block queryset to a scope AND its filters.
+
+    Two separate ideas, deliberately applied together:
+
+      scope   — what the page is *about* (the whole firm, one client, one person)
+      filters — what is *included* while looking at it (only these categories,
+                only billable time, ...)
+
+    Filters used to be read only under `type="composite"`, which meant the
+    control bar could show a category filter while a client-scoped page ignored
+    it. They now apply to every scope type, so a filter set once holds for the
+    whole dashboard no matter what the viewer drills into. Scope ids and a
+    filter on the same dimension intersect, which is the conservative reading:
+    drilling into a client that the client filter excludes yields nothing
+    rather than silently widening the filter back out.
+    """
+    if scope.type == "client":
+        qs = qs.filter(client_id__in=scope.ids)
+    elif scope.type == "staff":
+        qs = qs.filter(user_id__in=scope.ids)
+    elif scope.type == "service":
+        qs = qs.filter(task_type_id__in=scope.ids)
+    elif scope.type == "engagement":
+        qs = qs.filter(project_id__in=scope.ids)
+
+    return apply_filters(qs, scope.filters)
+
+
+def apply_filters(qs: QuerySet, filters: dict) -> QuerySet:
+    """Apply the control-bar filters to a Block queryset."""
+    for dim, value in (filters or {}).items():
+        if not value:
+            continue
+        column = _FILTER_COLUMN.get(dim)
+        if column:
+            qs = qs.filter(**{column: value})
+        elif dim == "billable":
+            # Mirrors `billable_block_q`: billable means the flag AND a real
+            # external client. A block with the flag set but no client is not
+            # billable to anyone, so it belongs on the non-billable side.
+            if value == "billable":
+                qs = qs.filter(is_billable=True, client_id__isnull=False)
+            elif value == "non_billable":
+                from django.db.models import Q
+                qs = qs.filter(Q(is_billable=False) | Q(client_id__isnull=True))
+    return qs
+
+
+# ---------------------------------------------------------------------------
 # Threshold value object
 # ---------------------------------------------------------------------------
 
@@ -180,39 +242,7 @@ class Metric:
     
     def _apply_scope(self, qs: QuerySet, scope: Scope) -> QuerySet:
         """Add scope filters to an existing queryset."""
-        if scope.type == "firm":
-            return qs
-        
-        if scope.type == "client":
-            return qs.filter(client_id__in=scope.ids)
-        
-        if scope.type == "staff":
-            return qs.filter(user_id__in=scope.ids)
-        
-        if scope.type == "service":
-            # Service = task_type. scope.ids holds task_type IDs.
-            return qs.filter(task_type_id__in=scope.ids)
-        
-        if scope.type == "engagement":
-            # Engagement = project. scope.ids holds project IDs.
-            return qs.filter(project_id__in=scope.ids)
-        
-        if scope.type == "composite":
-            # Filters live in scope.filters dict
-            for dim, ids in scope.filters.items():
-                if not ids:
-                    continue
-                if dim == "client":
-                    qs = qs.filter(client_id__in=ids)
-                elif dim == "staff":
-                    qs = qs.filter(user_id__in=ids)
-                elif dim == "service":
-                    qs = qs.filter(task_type_id__in=ids)
-                elif dim == "engagement":
-                    qs = qs.filter(project_id__in=ids)
-            return qs
-        
-        return qs
+        return apply_scope(qs, scope)
     
     # ------------------------------------------------------------------------
     # Calibration check

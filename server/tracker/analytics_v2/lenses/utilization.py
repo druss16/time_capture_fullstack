@@ -63,20 +63,13 @@ class UtilizationLens(Lens):
     # ── shared per-user aggregation ─────────────────────────────────────────
     def _scoped_qs(self, org, scope, time):
         qs = Block.objects.filter(org=org, day__gte=time.start, day__lte=time.end)
-        if scope.type == "client":
-            qs = qs.filter(client_id__in=scope.ids)
-        elif scope.type == "service":
-            qs = qs.filter(task_type_id__in=scope.ids)
-        elif scope.type == "composite":
-            for dim, ids in scope.filters.items():
-                if not ids:
-                    continue
-                if dim == "client":
-                    qs = qs.filter(client_id__in=ids)
-                elif dim == "service":
-                    qs = qs.filter(task_type_id__in=ids)
-        elif scope.type == "staff":
-            qs = qs.filter(user_id__in=scope.ids)
+        # Shared with every metric, so a control-bar filter narrows this table
+        # the same way it narrows the headline it sits under. The local copy
+        # this replaced knew only client/service/staff, so a project filter
+        # left the by-staff rows reading firm-wide while the KPI above them
+        # had already narrowed — two different questions, one screen.
+        from ..metrics.base import apply_scope
+        qs = apply_scope(qs, scope)
         from ..blocks import working_qs
         # working_qs applies the confirmed-time rules, so these tables count the
         # same blocks as the headline metric and as Daily Review.

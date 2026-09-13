@@ -878,12 +878,5 @@ class TrustLens(Lens):
 
     # ── shared ──────────────────────────────────────────────────────────────
     def _apply_scope_qs(self, qs, scope):
-        if scope.type == "client":
-            return qs.filter(client_id__in=scope.ids)
-        if scope.type == "staff":
-            return qs.filter(user_id__in=scope.ids)
-        if scope.type == "service":
-            return qs.filter(task_type_id__in=scope.ids)
-        if scope.type == "engagement":
-            return qs.filter(project_id__in=scope.ids)
-        return qs
+        from ..metrics.base import apply_scope
+        return apply_scope(qs, scope)

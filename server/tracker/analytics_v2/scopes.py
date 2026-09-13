@@ -58,6 +58,14 @@ def _shift_months(d: date, months: int) -> date:
     return date(year, month, min(d.day, last_day))
 
 
+def _shift_years(d: date, years: int) -> date:
+    """Shift a date by N years. Feb 29 clamps to Feb 28 in a common year."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
 def resolve_relative_time(expr: str) -> TimeRange:
     """
     Map a relative expression to a concrete TimeRange.
@@ -172,6 +180,51 @@ def _valid_lens_keys() -> set[str]:
     return set(all_lens_keys())
 
 
+# Dimensions a viewer can filter the whole dashboard by. Each maps to a Block
+# column in `Metric._apply_scope`, which is the single place they are applied —
+# adding a key here without adding it there silently ignores the filter.
+ID_FILTER_DIMS: set[str] = {"client", "staff", "service", "engagement"}
+BILLABLE_FILTER_VALUES: set[str] = {"billable", "non_billable", "all"}
+
+
+def parse_filters(raw: Any) -> dict:
+    """Validate and normalize `scope.filters`.
+
+    Unknown keys are rejected rather than dropped. A filter the viewer set and
+    the backend quietly ignored is worse than an error: the dashboard would
+    answer a different question than the one the control bar claims to be
+    asking, and every number on it would look authoritative while being wrong.
+    """
+    if not isinstance(raw, dict):
+        raise RequestParseError("scope.filters must be an object")
+
+    out: dict = {}
+    for key, value in raw.items():
+        if key in ID_FILTER_DIMS:
+            if not isinstance(value, list):
+                raise RequestParseError(f"scope.filters.{key} must be a list of integers")
+            try:
+                ids = [int(v) for v in value]
+            except (TypeError, ValueError):
+                raise RequestParseError(f"scope.filters.{key} must be a list of integers")
+            if ids:
+                out[key] = ids
+        elif key == "billable":
+            if value in (None, "", "all"):
+                continue
+            if value not in BILLABLE_FILTER_VALUES:
+                raise RequestParseError(
+                    f"scope.filters.billable must be one of {sorted(BILLABLE_FILTER_VALUES)}"
+                )
+            out[key] = value
+        else:
+            raise RequestParseError(
+                f"Unknown filter dimension '{key}'. "
+                f"Valid: {sorted(ID_FILTER_DIMS | {'billable'})}"
+            )
+    return out
+
+
 def parse_scope(raw: Any) -> Scope:
     """Parse a scope dict from the request body."""
     if not isinstance(raw, dict):
@@ -192,9 +245,7 @@ def parse_scope(raw: Any) -> Scope:
     except (TypeError, ValueError):
         raise RequestParseError("scope.ids must be a list of integers")
     
-    filters = raw.get("filters", {})
-    if not isinstance(filters, dict):
-        raise RequestParseError("scope.filters must be an object")
+    filters = parse_filters(raw.get("filters", {}))
     
     # 'firm' scope must not specify ids
     if scope_type == "firm" and ids:
@@ -270,7 +321,18 @@ def parse_compare(raw: Any, base_time: TimeRange) -> Optional[TimeRange]:
         end = base_time.start - timedelta(days=1)
         start = end - delta
         return TimeRange(start, end, "Prior period", "prior_period")
-    
+
+    # "Same period last year" — the comparison a seasonal business actually
+    # wants. Resolved against the BASE window rather than re-evaluated as its
+    # own relative expression, so "this quarter vs last year" lines up with the
+    # quarter you are looking at even mid-quarter: a partial Q3 compares with
+    # the same partial slice of last year's Q3, not the whole of it.
+    if c_type == "relative" and value == "same_period_last_year":
+        start = _shift_years(base_time.start, -1)
+        end = _shift_years(base_time.end, -1)
+        return TimeRange(start, end, f"{start.year} same period",
+                         "same_period_last_year")
+
     return parse_time(raw)
 
 

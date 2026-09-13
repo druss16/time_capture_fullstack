@@ -53,6 +53,13 @@ COST_FIELD_KEYS = frozenset({
     "default_cost",
 })
 
+# Row flags that are statements about margin. The Client Performance table
+# flags rows with short phrases; two of them ("Losing money", "Below typical
+# margin") are cost disclosures wearing a badge, and stripping the margin
+# COLUMN while leaving the badge that summarises it would defeat the whole
+# redaction. Mirrors `lenses.clients.COST_DERIVED_FLAGS`, which a test pins.
+COST_FLAG_KEYS = frozenset({"losing_money", "below_typical"})
+
 
 def can_view_cost_data(user, org) -> bool:
     """True only for an owner of ``org`` (or a MavOps superuser doing support).
@@ -130,8 +137,7 @@ def _redact_node(node: Any) -> Any:
             if c.get("key") not in COST_FIELD_KEYS
         ]
         node["rows"] = [
-            {k: v for k, v in row.items() if k not in COST_FIELD_KEYS}
-            for row in node.get("rows") or []
+            _redact_row(row) for row in node.get("rows") or []
         ]
         # A default sort pointing at a column that no longer exists would leave
         # the table sorted by nothing; fall back to the first surviving column.
@@ -147,11 +153,27 @@ def _redact_node(node: Any) -> Any:
             s for s in node.get("series") or []
             if s.get("key") not in COST_FIELD_KEYS
         ]
+        # A toggle view whose series are all cost keys must go with them.
+        # Stripping only `data` would leave a viewer a "Labor cost" tab that
+        # renders an empty chart — which reads as "the firm has no labor cost",
+        # a worse answer than not offering the tab.
+        views = [
+            v for v in node.get("toggle_views") or []
+            if any(k not in COST_FIELD_KEYS for k in (v.get("series") or []))
+        ]
+        node["toggle_views"] = views if len(views) > 1 else []
         node["data"] = [
             {k: v for k, v in point.items() if k not in COST_FIELD_KEYS}
             if isinstance(point, dict) else point
             for point in node.get("data") or []
         ]
+        # The card's default series may itself have just been stripped; fall
+        # back to the first surviving toggle view so the chart still draws.
+        if not node["series"] and views:
+            first = views[0]
+            node["series"] = [{"key": k, "label": first.get("label", k)}
+                              for k in first.get("series") or []
+                              if k not in COST_FIELD_KEYS]
         node["subtitle"] = _scrub_subtitle(node.get("subtitle") or "")
         return node
 
@@ -170,6 +192,28 @@ def _redact_node(node: Any) -> Any:
         node["children"] = [c for c in node["children"] if not _is_empty_table(c)]
 
     return node
+
+
+def _redact_row(row: dict) -> dict:
+    """Strip cost columns from one table row, and the margin-derived flags.
+
+    Flags are rebuilt rather than dropped wholesale: "Heavy non-billable" and
+    "Hours growing fast" say nothing about money and are exactly what a manager
+    without cost access still needs to see.
+    """
+    out = {k: v for k, v in row.items() if k not in COST_FIELD_KEYS}
+
+    flags = out.get("flags")
+    if isinstance(flags, list):
+        kept = [
+            f for f in flags
+            if not (isinstance(f, dict) and f.get("key") in COST_FLAG_KEYS)
+        ]
+        out["flags"] = kept
+        out["flag_label"] = " · ".join(
+            str(f.get("label", "")) for f in kept if isinstance(f, dict)
+        )
+    return out
 
 
 def _is_empty_table(node: Any) -> bool:

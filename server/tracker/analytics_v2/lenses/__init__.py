@@ -3,6 +3,12 @@ Importing this package triggers @register_lens decorators.
 """
 from .base import Lens, all_lens_keys, get_lens, register_lens  # noqa: F401
 
+# Executive dashboard
+from . import overview  # noqa: F401
+from . import clients  # noqa: F401
+from . import team  # noqa: F401
+from . import distribution  # noqa: F401
+
 from . import pulse  # noqa: F401
 from . import trust  # noqa: F401
 from . import review  # noqa: F401

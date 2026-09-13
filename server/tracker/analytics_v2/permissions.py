@@ -385,7 +385,14 @@ def _all_lens_keys_for_plan(org: Organization) -> set[str]:
     # realization, which a firm's own ledger answers better, and it is
     # superseded by Trust as the landing lens. The lens stays registered so
     # bookmarked ?lens=pulse links still render rather than 404.
-    base = {"trust", "review", "profitability", "utilization",
+    # The executive dashboard (overview / clients / team / distribution) is
+    # the primary experience and is available on every paid plan: hours,
+    # billable share and where the time went are the questions a Professional
+    # firm bought the product to answer. Cost and margin inside those views are
+    # gated separately, per viewer, by `cost_visibility` — plan gating and
+    # role gating are different questions and are kept apart.
+    base = {"overview", "clients", "team", "distribution",
+            "trust", "review", "profitability", "utilization",
             "wip", "realization"}
     if plan.startswith(("executive", "trial")):
         # engagements was registered, given a lens, a sidebar entry and an icon,

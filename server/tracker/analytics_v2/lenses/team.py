@@ -159,7 +159,7 @@ class TeamLens(Lens):
     # ── one person ──────────────────────────────────────────────────────────
 
     def _person_detail(self, org, scope, time) -> list[Section]:
-        from ..breakdowns import split_unassigned, unassigned_note
+        from ..breakdowns import held_out_note, split_client_rows
         from ..series import trend_chart
         from .clients import client_table, flag_rows
 
@@ -168,11 +168,12 @@ class TeamLens(Lens):
             children=[trend_chart(org, scope, time, card_id="person_trend")],
         )]
 
-        rows, unassigned = split_unassigned(breakdown(org, scope, time, "client"))
+        rows, unassigned, internal = split_client_rows(
+            breakdown(org, scope, time, "client"))
         if rows:
             flag_rows(rows, None)
             subtitle = f"{time.label} · this person's time only"
-            note = unassigned_note(unassigned)
+            note = held_out_note(unassigned, internal)
             if note:
                 subtitle += f" · {note}"
             sections.append(Section(

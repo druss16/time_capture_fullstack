@@ -52,6 +52,8 @@ class LensSmokeTests(TestCase):
         OrganizationMembership.objects.create(
             organization=cls.org, user=cls.user, role="owner")
         cls.client_a = Client.objects.create(org=cls.org, name="Acme Co")
+        # `is_internal_client_name` matches "Internal" and "Internal - <x>".
+        cls.internal = Client.objects.create(org=cls.org, name="Internal - Tax")
 
         today = date.today()
         now = timezone.now()
@@ -66,6 +68,17 @@ class LensSmokeTests(TestCase):
                 is_billable=(i % 2 == 0),
                 classification_state="committed",
                 is_categorized=True,
+            )
+        # Internal work, flagged billable — the state that put $10,489 of
+        # "billable value" on an Internal - Tax row.
+        for i in range(2):
+            Block.objects.create(
+                org=cls.org, user=cls.user, hostname="h",
+                start=now - timedelta(days=i, hours=2),
+                end=now - timedelta(days=i, hours=1),
+                day=today - timedelta(days=i), minutes=60,
+                client=cls.internal, is_billable=True,
+                classification_state="committed", is_categorized=True,
             )
 
         cls.time = TimeRange(today - timedelta(days=30), today, "Last 30 days")
@@ -148,39 +161,75 @@ class LensSmokeTests(TestCase):
                   in breakdown(self.org, Scope(type="firm"), self.time, "client")}
         self.assertIn("No client assigned", labels)
 
-    def test_client_ranking_holds_out_the_unassigned_row(self):
-        """"No client assigned" is not a client: it has no billable hours, no
-        value, no margin and no drilldown, and at most firms it outranks every
-        real client on hours — pushing the actual answer down the page."""
-        from tracker.analytics_v2.breakdowns import breakdown, split_unassigned
+    def test_client_ranking_holds_out_unassigned_and_internal(self):
+        """Neither is a client. "No client assigned" has no value, no margin
+        and no drilldown; internal work is never billable by definition, so it
+        cannot be ranked on margin against work that is."""
+        from tracker.analytics_v2.breakdowns import breakdown, split_client_rows
 
-        rows, unassigned = split_unassigned(
+        rows, unassigned, internal = split_client_rows(
             breakdown(self.org, Scope(type="firm"), self.time, "client"))
 
         self.assertIsNotNone(unassigned)
-        self.assertTrue(all(r["id"] is not None for r in rows))
-        self.assertNotIn("No client assigned", {r["label"] for r in rows})
+        self.assertEqual([r["label"] for r in internal], ["Internal - Tax"])
+        labels = {r["label"] for r in rows}
+        self.assertNotIn("No client assigned", labels)
+        self.assertNotIn("Internal - Tax", labels)
+        self.assertIn("Acme Co", labels)
 
-    def test_holding_it_out_rescales_the_shares(self):
+    def test_internal_work_earns_no_revenue(self):
+        """Internal time was showing billable VALUE because the breakdown
+        priced it with the utilization rule (canonical PLUS billable-effort
+        clients) instead of the canonical billing rule the Revenue tile uses.
+        The row may carry hours; it must never carry money."""
+        from tracker.analytics_v2.breakdowns import breakdown
+
+        rows = breakdown(self.org, Scope(type="firm"), self.time, "client")
+        internal = next(r for r in rows if r["label"] == "Internal - Tax")
+
+        self.assertGreater(internal["hours"], 0)
+        self.assertEqual(internal["revenue"], 0.0)
+        self.assertEqual(internal["cost"], 0.0)
+        self.assertEqual(internal["margin"], 0.0)
+
+    def test_table_revenue_ties_to_the_revenue_tile(self):
+        """The whole point of the two-rule split: the money in these tables has
+        to add up to the money on the tile above them."""
+        from tracker.analytics_v2.breakdowns import breakdown
+        from tracker.analytics_v2.metrics.base import get_metric
+        from tracker.analytics_v2.types import MetricState
+
+        scope = Scope(type="firm")
+        rows = breakdown(self.org, scope, self.time, "client")
+        table_total = sum(r["revenue"] for r in rows)
+
+        tile = get_metric("revenue").compute(self.org, scope, self.time)
+        tile_total = tile.value if tile.state == MetricState.READY else 0.0
+
+        self.assertAlmostEqual(table_total, tile_total or 0.0, delta=1.0)
+
+    def test_holding_them_out_rescales_the_shares(self):
         """Shares must still sum to 100% over what is actually shown, or the
         "share of time" column silently stops being a share of anything."""
-        from tracker.analytics_v2.breakdowns import breakdown, split_unassigned
+        from tracker.analytics_v2.breakdowns import breakdown, split_client_rows
 
-        rows, _ = split_unassigned(
+        rows, _, _ = split_client_rows(
             breakdown(self.org, Scope(type="firm"), self.time, "client"))
         if rows:
             self.assertAlmostEqual(sum(r["share"] for r in rows), 100.0, delta=0.5)
 
-    def test_the_excluded_hours_are_still_named_somewhere(self):
+    def test_the_held_out_hours_are_still_named_somewhere(self):
         """Dropping a quarter of the firm's hours with no trace would leave a
         client table whose hours don't tie to the firm's hours."""
         from tracker.analytics_v2.breakdowns import (
-            breakdown, split_unassigned, unassigned_note,
+            breakdown, held_out_note, split_client_rows,
         )
 
-        _, unassigned = split_unassigned(
+        _, unassigned, internal = split_client_rows(
             breakdown(self.org, Scope(type="firm"), self.time, "client"))
-        self.assertIn("no client", unassigned_note(unassigned).lower())
+        note = held_out_note(unassigned, internal).lower()
+        self.assertIn("no client", note)
+        self.assertIn("internal", note)
 
     def test_no_project_and_uncategorized_still_appear(self):
         """Only the CLIENT dimension holds its unassigned row back. A missing

@@ -13,7 +13,7 @@ there is "how much of the total", and the ranking framing has nothing to rank.
 """
 from __future__ import annotations
 
-from ..breakdowns import breakdown, split_unassigned, unassigned_note
+from ..breakdowns import breakdown, held_out_note, split_client_rows
 from ..types import (
     ChartCardPayload, DataTablePayload, MetricState, Section,
 )
@@ -42,13 +42,14 @@ class DistributionLens(Lens):
             dim: breakdown(org, scope, time, dim)
             for dim, *_ in _DIMENSIONS
         }
-        # "No client assigned" is not a client, so it is held out of the client
-        # ranking the same way it is in the Clients view. "No project" and
-        # "Uncategorized" DO stay: unlike a missing client they are ordinary
-        # states for real work, and on a "where does the time go" page they are
-        # part of the answer.
-        rows_by_dim["client"], unassigned = split_unassigned(rows_by_dim["client"])
-        self._unassigned_note = unassigned_note(unassigned)
+        # Neither "No client assigned" nor the firm's own internal work is a
+        # client, so both are held out here exactly as in the Clients view.
+        # "No project" and "Uncategorized" DO stay: unlike a missing client
+        # they are ordinary states for real work, and on a "where does the time
+        # go" page they are part of the answer.
+        rows_by_dim["client"], unassigned, internal = split_client_rows(
+            rows_by_dim["client"])
+        self._held_out_note = held_out_note(unassigned, internal)
 
         children = [
             self._dimension_card(dim, tab_title, noun, rows_by_dim[dim], time)
@@ -97,7 +98,7 @@ class DistributionLens(Lens):
         total = round(sum(r["hours"] for r in rows), 1)
         subtitle = (f"{time.label} · {len(rows)} {noun.lower()}(s) · "
                     f"{total:,.1f} h total")
-        note = getattr(self, "_unassigned_note", "") if dim == "client" else ""
+        note = getattr(self, "_held_out_note", "") if dim == "client" else ""
         if note:
             subtitle += f" · {note}"
         return ChartCardPayload(
@@ -118,7 +119,7 @@ class DistributionLens(Lens):
         if drill_lens and drill_scope:
             drill = {"scope_type": drill_scope, "lens": drill_lens,
                      "id_key": "id", "label_key": "label"}
-        note = getattr(self, "_unassigned_note", "") if dim == "client" else ""
+        note = getattr(self, "_held_out_note", "") if dim == "client" else ""
         return DataTablePayload(
             id=f"where_{dim}_table",
             title=tab_title,

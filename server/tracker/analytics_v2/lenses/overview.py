@@ -105,13 +105,14 @@ class OverviewLens(Lens):
     # ── previews ────────────────────────────────────────────────────────────
 
     def _clients_preview(self, org, scope, time) -> Section:
-        from ..breakdowns import breakdown, split_unassigned, unassigned_note
+        from ..breakdowns import breakdown, held_out_note, split_client_rows
         from .clients import client_table
 
-        rows, unassigned = split_unassigned(breakdown(org, scope, time, "client"))
+        rows, unassigned, internal = split_client_rows(
+            breakdown(org, scope, time, "client"))
         subtitle = (f"{time.label} · top {_PREVIEW_ROWS} by hours · "
                     "open Clients for the full list")
-        note = unassigned_note(unassigned)
+        note = held_out_note(unassigned, internal)
         if note:
             subtitle += f" · {note}"
         table = client_table(

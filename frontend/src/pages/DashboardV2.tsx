@@ -1,26 +1,35 @@
 /**
- * DashboardV2 — top-level page for /analytics.
+ * Analytics — the executive dashboard at /analytics.
  *
  * Lifecycle:
- *   1. Read URL params → AnalyticsQueryBody
- *   2. Fire useAnalyticsQuery() with that body
- *   3. Render Sidebar + ViewSentence + Sections
- *   4. Any sidebar change → update URL → useEffect rebuilds query body
+ *   1. URL params → AnalyticsQueryBody
+ *   2. useAnalyticsQuery() fires with that body
+ *   3. Backend returns typed sections; this file renders them
+ *   4. Any control change → new URL → re-parse → re-fetch
  *
- * URL is the source of truth. Bookmarks, shared links, back/forward all work.
+ * The URL is the source of truth, so a view is a link: bookmarks, shared
+ * links and back/forward all work, including through a drilldown.
+ *
+ * The page renders whatever sections the backend sends rather than hard-coding
+ * a layout. That is what keeps a metric's definition, its formatting, its
+ * tooltip and — importantly — its cost redaction in one place on the server,
+ * instead of split across two languages that can disagree.
  */
 import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 
-import { useAnalyticsQuery } from "@/hooks/useAnalyticsQuery";
+import { useAnalyticsPermissions, useAnalyticsQuery } from "@/hooks/useAnalyticsQuery";
 import {
-  parseUrlState, serializeUrlState,
+  VIEW_OPTIONS, parseUrlState, serializeUrlState,
 } from "@/lib/analytics_v2/urlState";
-import type { AnalyticsQueryBody, KPITilePayload } from "@/lib/analytics_v2/types";
+import type {
+  AnalyticsQueryBody, DataTablePayload, KPITilePayload, LensKey, Scope,
+  Section as SectionPayload, SectionChild,
+} from "@/lib/analytics_v2/types";
 
-import Sidebar from "@/components/Sidebar";
+import ControlBar from "@/components/analytics/ControlBar";
 import ViewSentence from "@/components/ViewSentence";
 import EmptyStateInvoiceless from "@/components/EmptyStateInvoiceless";
 import KPITile from "@/components/primitives/KPITile";
@@ -28,22 +37,33 @@ import ChartCard from "@/components/primitives/ChartCard";
 import DataTable from "@/components/primitives/DataTable";
 import InsightCard from "@/components/primitives/InsightCard";
 import SectionHeader from "@/components/primitives/SectionHeader";
+import TabbedSection from "@/components/analytics/TabbedSection";
 
 export default function DashboardV2() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Derive query body from URL
   const body = useMemo<AnalyticsQueryBody>(
     () => parseUrlState(location.search),
     [location.search],
   );
 
-  // Fire the query
   const { data, error, isLoading, isFetching, refetch } = useAnalyticsQuery(body);
+  const { data: perms } = useAnalyticsPermissions();
 
-  // Sidebar change handler → updates URL → triggers re-parse and re-fetch
-  const handleSidebarChange = useCallback((next: Partial<AnalyticsQueryBody>) => {
+  // Until permissions land, offer the executive dashboard only. Showing every
+  // view and greying them out a moment later is worse than showing the four
+  // that are always available on a paid plan.
+  const availableViews = useMemo(() => {
+    const allowed = perms?.capabilities?.available_lenses;
+    return new Set<LensKey>(
+      allowed?.length
+        ? VIEW_OPTIONS.filter(v => allowed.includes(v.value)).map(v => v.value)
+        : ["overview", "clients", "team", "distribution"],
+    );
+  }, [perms]);
+
+  const push = useCallback((next: Partial<AnalyticsQueryBody>) => {
     const merged: AnalyticsQueryBody = {
       scope: next.scope ?? body.scope,
       lens: next.lens ?? body.lens,
@@ -54,84 +74,128 @@ export default function DashboardV2() {
     navigate({ pathname: "/analytics", search: search ? `?${search}` : "" });
   }, [body, navigate]);
 
-  // Drilldown handler (KPI tile or insight card click)
-  const handleDrilldown = useCallback((drilldown: {
-    scope: AnalyticsQueryBody["scope"];
-    lens: AnalyticsQueryBody["lens"];
-  }) => {
-    handleSidebarChange({ scope: drilldown.scope, lens: drilldown.lens });
-  }, [handleSidebarChange]);
+  /** KPI tiles and insight cards carry a fully-formed scope + lens. */
+  const handleDrilldown = useCallback(
+    (d: { scope: Scope; lens: LensKey }) => {
+      // Filters are deliberately carried through a drilldown: they are the
+      // viewer's standing narrowing of the whole dashboard, not a property of
+      // the tile they happened to click.
+      push({
+        scope: { ...d.scope, filters: body.scope.filters },
+        lens: d.lens,
+      });
+    },
+    [push, body.scope.filters],
+  );
 
-  // ─── Render ─────────────────────────────────────────────────────────────
+  /** Table rows carry a descriptor instead; build the scope from the row. */
+  const rowHandler = useCallback(
+    (table: DataTablePayload) => {
+      const dd = table.row_drilldown;
+      if (!dd) return undefined;
+      return (row: Record<string, any>) => {
+        const id = row[dd.id_key];
+        // A row with no id is a real case — "No client assigned", or the
+        // "+ 14 more" tail row. There is nothing to drill into, so the row
+        // simply isn't a link.
+        if (id === null || id === undefined) return;
+        push({
+          scope: {
+            type: dd.scope_type,
+            ids: [Number(id)],
+            label: String(row[dd.label_key] ?? ""),
+            filters: body.scope.filters,
+          },
+          lens: dd.lens,
+        });
+      };
+    },
+    [push, body.scope.filters],
+  );
+
   return (
-    <div className="flex min-h-[calc(100vh-64px)] -mx-4 -my-6 print:block print:m-0 print:min-h-0">
-      <Sidebar body={body} onChange={handleSidebarChange} />
+    <div className="-mx-4 -my-6 min-h-[calc(100vh-64px)] print:m-0 print:min-h-0"
+         style={{ backgroundColor: "#f6faf9", fontFamily: '"Inter", sans-serif' }}>
+      <ControlBar
+        body={body}
+        availableViews={availableViews}
+        scopeLabel={data?.view?.scope?.label}
+        onChange={push}
+      />
 
-      <main
-        className="flex-1 min-w-0 print:bg-white"
-        style={{ backgroundColor: "#eef4f3", fontFamily: '"Inter", sans-serif' }}
-      >
-        <ViewSentence
-          sentence={data?.view?.sentence ?? ""}
-          generatedAt={data?.meta?.generated_at}
-          dataFreshness={data?.meta?.data_freshness}
-          isFetching={isFetching}
-          onRefresh={() => refetch()}
-        />
+      <ViewSentence
+        sentence={data?.view?.sentence ?? ""}
+        generatedAt={data?.meta?.generated_at}
+        dataFreshness={data?.meta?.data_freshness}
+        isFetching={isFetching}
+        onRefresh={() => refetch()}
+      />
 
-        <div className="px-6 py-6 space-y-6 print:px-0 print:py-3 print:space-y-4">
-          {/* Loading state — only when there's no cached data at all */}
-          {isLoading && (
-            <div className="flex items-center justify-center py-24 text-slate-400">
-              <Loader2 className="h-6 w-6 animate-spin mr-2" />
-              <span className="text-sm">Loading dashboard…</span>
-            </div>
-          )}
+      <main className="mx-auto max-w-[1600px] px-6 py-6 print:px-0 print:py-3">
+        {isLoading && (
+          <div className="flex items-center justify-center py-24 text-slate-400">
+            <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+            <span className="text-sm">Loading…</span>
+          </div>
+        )}
 
-          {/* Error state */}
-          {error && (
-            <ErrorPanel error={error} onRetry={() => refetch()} />
-          )}
+        {error && <ErrorPanel error={error} onRetry={() => refetch()} />}
 
-          {/* Sections — render each in turn */}
-          {data && (
+        {data && (
+          <div className="space-y-8 print:space-y-4">
             <SectionRenderer
               body={body}
               data={data}
               onDrilldown={handleDrilldown}
+              rowHandler={rowHandler}
             />
-          )}
-        </div>
+          </div>
+        )}
       </main>
     </div>
   );
 }
 
-// ─── Section dispatcher ─────────────────────────────────────────────────────
+// ─── Sections ────────────────────────────────────────────────────────────────
 
 function SectionRenderer({
-  body, data, onDrilldown,
+  body, data, onDrilldown, rowHandler,
 }: {
   body: AnalyticsQueryBody;
   data: NonNullable<ReturnType<typeof useAnalyticsQuery>["data"]>;
-  onDrilldown: (d: any) => void;
+  onDrilldown: (d: { scope: Scope; lens: LensKey }) => void;
+  rowHandler: (t: DataTablePayload) => ((row: Record<string, any>) => void) | undefined;
 }) {
-  // Override: realization lens for invoice-less firms shows the empty state
-  // instead of "0% realization across the board." The meta flag is populated
-  // by the backend patches.
-  if (body.lens === "realization" && data.meta?.invoiceless) {
-    return <EmptyStateInvoiceless metric="realization" />;
+  // Realization and invoice trends have no numerator without invoices. A 0%
+  // reads as catastrophic billing performance rather than as missing data.
+  if (data.meta?.invoiceless && (body.lens === "realization" || body.lens === "trends")) {
+    return <EmptyStateInvoiceless metric={body.lens} />;
   }
-  if (body.lens === "trends" && data.meta?.invoiceless) {
-    return <EmptyStateInvoiceless metric="trends" />;
-  }
+
+  const renderChild = (child: SectionChild) => {
+    switch (child.type) {
+      case "kpi_tile":
+        return <KPITile key={child.id} tile={child as KPITilePayload} onDrilldown={onDrilldown} />;
+      case "chart_card":
+        return <ChartCard key={child.id} card={child} />;
+      case "data_table":
+        return <DataTable key={child.id} table={child} onRowClick={rowHandler(child)} />;
+      case "insight_card":
+        return <InsightCard key={child.id} card={child} onDrilldown={onDrilldown} />;
+      default:
+        return null;
+    }
+  };
 
   return (
     <>
       {data.sections.map(section => {
         if (section.type === "kpi_row") {
           return (
-            <div key={section.id} className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div
+              key={section.id}
+              className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-4"
+            >
               {section.tiles.map(tile => (
                 <KPITile key={tile.id} tile={tile} onDrilldown={onDrilldown} />
               ))}
@@ -139,46 +203,60 @@ function SectionRenderer({
           );
         }
 
+        const s = section as SectionPayload;
+        if (s.tabbed) {
+          return <TabbedSection key={s.id} section={s} renderChild={renderChild} />;
+        }
+
         return (
-          <section key={section.id} className="space-y-3">
-            {section.title && <SectionHeader title={section.title} />}
-            {section.children.map(child => {
-              if (child.type === "kpi_tile") {
-                return <KPITile key={child.id} tile={child as KPITilePayload} onDrilldown={onDrilldown} />;
-              }
-              if (child.type === "chart_card") {
-                return <ChartCard key={child.id} card={child} />;
-              }
-              if (child.type === "data_table") {
-                return <DataTable key={child.id} table={child} />;
-              }
-              if (child.type === "insight_card") {
-                return <InsightCard key={child.id} card={child} onDrilldown={onDrilldown} />;
-              }
-              return null;
-            })}
-          </section>
+          <CollapsibleSection key={s.id} section={s}>
+            <div className="space-y-4">{s.children.map(renderChild)}</div>
+          </CollapsibleSection>
         );
       })}
     </>
   );
 }
 
-// ─── Error panel ────────────────────────────────────────────────────────────
+function CollapsibleSection({
+  section, children,
+}: { section: SectionPayload; children: React.ReactNode }) {
+  if (!section.collapsible) {
+    return (
+      <section className="space-y-3">
+        {section.title && <SectionHeader title={section.title} />}
+        {children}
+      </section>
+    );
+  }
+  return (
+    <details className="group space-y-3" open={!section.collapsed}>
+      <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700 hover:text-slate-900">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="text-slate-400 transition-transform group-open:rotate-90">▸</span>
+          {section.title}
+        </span>
+      </summary>
+      <div className="pt-3">{children}</div>
+    </details>
+  );
+}
+
+// ─── Error ───────────────────────────────────────────────────────────────────
 
 function ErrorPanel({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const message = error.message || "Something went wrong";
   const isPermissionError = /403|permission/i.test(message);
 
   return (
-    <div className="rounded-[15px] border border-rose-200 bg-rose-50/40 p-6">
+    <div className={cn("rounded-[15px] border border-rose-200 bg-rose-50/40 p-6")}>
       <div className="flex items-start gap-3">
-        <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-rose-900">
             {isPermissionError ? "Access denied" : "Couldn't load dashboard"}
           </h3>
-          <p className="mt-1 text-xs text-rose-700 leading-relaxed">{message}</p>
+          <p className="mt-1 text-xs leading-relaxed text-rose-700">{message}</p>
           {!isPermissionError && (
             <button
               onClick={onRetry}

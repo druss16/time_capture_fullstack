@@ -79,6 +79,17 @@ NEIGHBOUR_WINDOW = timedelta(minutes=30)
 # How many prior human rulings we need before "they keep deciding X" counts.
 PRECEDENT_MIN = 1
 
+# Every signal gather_signals attempts, in the order it tries them. Sent with
+# each draft so a reader can see what was CHECKED, not only what was found.
+#
+# That asymmetry is most of the trust problem. "67% confident" invites you to
+# either swallow the number or dismiss it. "The folder doesn't say so, the work
+# either side doesn't say so, nobody has filed this file before" is the same
+# finding stated so you can argue with it — and it is the half that says how
+# hard the agent actually looked.
+SIGNAL_KINDS = ('title', 'file_path', 'qb_company_file', 'neighbours',
+                'human_precedent', 'prior_dismissal')
+
 VERDICT_REASSIGN = 'reassign'
 VERDICT_CONFIRM = 'confirm_correct'
 VERDICT_HUMAN = 'needs_human'
@@ -151,6 +162,10 @@ class Draft:
             'auto': self.auto,
             'summary': self.summary,
             'evidence': [s.as_dict() for s in self.signals],
+            # What was looked for. The reader derives "checked and found
+            # nothing" from (checked - evidence) rather than the UI hardcoding
+            # a list that goes quietly stale the day a seventh signal lands.
+            'checked': list(SIGNAL_KINDS),
             'vetoes': self.vetoes,
             'caveats': self.caveats,
         }

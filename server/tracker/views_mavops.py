@@ -1913,11 +1913,25 @@ def mavops_client_mismatches(request):
     for o in org_qs.only('id', 'name'):
         firm_by_org[o.id] = o.name
 
-    # Every block with a client assigned + a usable window title — no
-    # classification_state filter, so the auto-filed "Certain" lane (committed,
-    # never re-examined after the classifier's verdict) is scanned alongside the
-    # proposed ones still sitting in Needs-you. Certain is where the silent
-    # mis-attributions live, so it's the bucket that most needs the sweep.
+    # SETTLED time on a named client — the Certain lane and nothing else.
+    #
+    # This used to carry no classification_state filter at all, on the reasoning
+    # that Certain is where silent mis-attributions live and should be swept
+    # alongside everything else. The sweeping was right; the "alongside" was
+    # not. The other three states are all wrong for this question:
+    #
+    #   proposed   — already sitting in Daily Review's Needs-you, where someone
+    #                is about to decide it. Flagging it here asks two people the
+    #                same question and invites them to answer it differently.
+    #   suppressed — deliberately killed as "not a real activity". Telling
+    #                somebody a dead block is misfiled is noise about nothing.
+    #   captured   — not classified yet; there is no verdict to disagree with.
+    #
+    # In practice every one of those landed in the internal/admin bucket, so
+    # this changes little on screen (org 21: 10 captured, 7 suppressed, 3
+    # proposed rows out of 168). It makes the tab's promise — "time that is
+    # filed and billable is filed to the right client" — true by construction
+    # rather than by luck.
     #
     # No .order_by() here: keyset_iter pages by pk and imposes its own. Rows are
     # sorted newest-first on the way out instead.
@@ -1926,6 +1940,7 @@ def mavops_client_mismatches(request):
         .filter(
             deleted_at__isnull=True,
             client_id__isnull=False,
+            classification_state='committed',
             start__gte=cutoff,
         )
         .exclude(window_title__isnull=True)

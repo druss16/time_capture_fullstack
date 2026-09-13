@@ -2114,9 +2114,14 @@ def scan_org_mismatches(days=7, org_id=None):
 
     names_by_org, index_by_org, firm_by_org = _indexes_for_orgs(org_ids)
 
+    # Committed only — the same scope as the review tab reads (see
+    # views_mavops.mavops_client_mismatches for why the other three states are
+    # wrong for this question). The two MUST agree: a flag opened here that the
+    # tab does not show is a row nobody can ever clear, and it accumulates.
     blocks = (
         Block.objects
         .filter(deleted_at__isnull=True, client_id__isnull=False,
+                classification_state='committed',
                 start__gte=cutoff, org_id__in=org_ids)
         .exclude(window_title__isnull=True)
         .exclude(window_title='')

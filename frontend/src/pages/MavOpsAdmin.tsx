@@ -1873,8 +1873,13 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             Misfiled time
           </div>
           <div style={{ fontSize: 13, color: T.textMuted, marginTop: 2 }}>
+            {/* "settled" names the scope out loud. The tab only ever looks at
+                committed time on a named client — not the rows still in Daily
+                Review, not suppressed ones, not the No-client pile — and a
+                reader who assumes otherwise will trust a clean result further
+                than it deserves. */}
             {filterOrg
-              ? `${data ? data.scanned_blocks.toLocaleString() + " blocks" : "…"} checked from the last ${days} days`
+              ? `${data ? data.scanned_blocks.toLocaleString() : "…"} settled blocks checked from the last ${days} days`
               : "Pick an org in the selector above"}
           </div>
         </div>

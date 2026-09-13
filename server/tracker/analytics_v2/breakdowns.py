@@ -155,6 +155,39 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
     return out
 
 
+def split_unassigned(rows: list[dict]) -> tuple[list[dict], dict | None]:
+    """Pull the id-less row out of a breakdown, rescaling `share` over the rest.
+
+    A client table ranks clients, and "no client assigned" is not one: it has no
+    billable hours, no value, no cost, no margin, and no drilldown. It also
+    outranks every real client on hours at most firms, which pushes the actual
+    answer to "who consumes the most time" down the page.
+
+    The hours are not swept away silently — the callers put the excluded total
+    in the table's subtitle, because a client table whose hours no longer tie
+    to the firm's hours is its own kind of wrong. Unattributed time is a
+    real problem, but it is an ATTRIBUTION problem: Trust and the Needs-a-Client
+    queue are where it is actionable. Ranking it against paying clients only
+    makes the ranking harder to read.
+
+    Shares are recomputed over the remaining rows so they still sum to 100%.
+    """
+    kept = [r for r in rows if r.get("id") is not None]
+    unassigned = next((r for r in rows if r.get("id") is None), None)
+
+    total = sum(r["hours"] for r in kept)
+    for r in kept:
+        r["share"] = round(r["hours"] / total * 100, 1) if total > 0 else 0.0
+    return kept, unassigned
+
+
+def unassigned_note(unassigned: dict | None) -> str:
+    """A subtitle clause naming what was held out, or "" when nothing was."""
+    if not unassigned or unassigned["hours"] <= 0:
+        return ""
+    return f"{unassigned['hours']:,.1f} h with no client is not shown"
+
+
 def _label_users(org, acc: dict) -> None:
     """Fill in display names for the user dimension in one query."""
     from tracker.models import OrganizationMembership

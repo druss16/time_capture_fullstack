@@ -28,7 +28,7 @@ the "arbitrary threshold" test.
 """
 from __future__ import annotations
 
-from ..breakdowns import breakdown
+from ..breakdowns import breakdown, split_unassigned, unassigned_note
 from ..stats import median, partition_material
 from ..types import DataTablePayload, MetricState, Section, TimeRange
 from .base import Lens, register_lens
@@ -149,7 +149,7 @@ class ClientsLens(Lens):
     # ── firm scope: the ranking ─────────────────────────────────────────────
 
     def _client_ranking(self, org, scope, time, compare) -> list[Section]:
-        rows = breakdown(org, scope, time, "client")
+        rows, unassigned = split_unassigned(breakdown(org, scope, time, "client"))
 
         # Growth is measured against the comparison the viewer chose. With no
         # comparison selected there is no baseline, and inventing one (last
@@ -157,10 +157,9 @@ class ClientsLens(Lens):
         # ruled out — so the growth flag simply doesn't appear.
         prior_by_id = None
         if compare is not None:
-            prior_by_id = {
-                r["id"]: r["hours"]
-                for r in breakdown(org, scope, compare, "client")
-            }
+            prior_rows, _ = split_unassigned(
+                breakdown(org, scope, compare, "client"))
+            prior_by_id = {r["id"]: r["hours"] for r in prior_rows}
         flag_rows(rows, prior_by_id)
 
         material, immaterial = partition_material(
@@ -174,6 +173,9 @@ class ClientsLens(Lens):
         subtitle = f"{time.label} · {len(material)} clients"
         if compare is not None:
             subtitle += f" · growth vs {compare.label}"
+        note = unassigned_note(unassigned)
+        if note:
+            subtitle += f" · {note}"
 
         sections: list[Section] = [Section(
             id="client_ranking", type="section", title="Client performance",
@@ -241,6 +243,8 @@ class ClientsLens(Lens):
 
     def _dimension_table(self, org, scope, time, dimension, title):
         rows = breakdown(org, scope, time, dimension)
+        if dimension == "client":
+            rows, _ = split_unassigned(rows)
         if not rows:
             return None
         cols = [

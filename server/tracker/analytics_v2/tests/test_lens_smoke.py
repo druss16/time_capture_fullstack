@@ -139,9 +139,58 @@ class LensSmokeTests(TestCase):
                     self.assertIn("share", r)
 
     def test_unassigned_rows_are_named_not_blank(self):
-        """Half the fixture blocks have no client. That row must say so."""
+        """Half the fixture blocks have no client. `breakdown` still reports
+        that row, and names it rather than leaving the label blank — it is the
+        CALLER that decides whether a client ranking should show it."""
         from tracker.analytics_v2.breakdowns import breakdown
 
         labels = {r["label"] for r
                   in breakdown(self.org, Scope(type="firm"), self.time, "client")}
         self.assertIn("No client assigned", labels)
+
+    def test_client_ranking_holds_out_the_unassigned_row(self):
+        """"No client assigned" is not a client: it has no billable hours, no
+        value, no margin and no drilldown, and at most firms it outranks every
+        real client on hours — pushing the actual answer down the page."""
+        from tracker.analytics_v2.breakdowns import breakdown, split_unassigned
+
+        rows, unassigned = split_unassigned(
+            breakdown(self.org, Scope(type="firm"), self.time, "client"))
+
+        self.assertIsNotNone(unassigned)
+        self.assertTrue(all(r["id"] is not None for r in rows))
+        self.assertNotIn("No client assigned", {r["label"] for r in rows})
+
+    def test_holding_it_out_rescales_the_shares(self):
+        """Shares must still sum to 100% over what is actually shown, or the
+        "share of time" column silently stops being a share of anything."""
+        from tracker.analytics_v2.breakdowns import breakdown, split_unassigned
+
+        rows, _ = split_unassigned(
+            breakdown(self.org, Scope(type="firm"), self.time, "client"))
+        if rows:
+            self.assertAlmostEqual(sum(r["share"] for r in rows), 100.0, delta=0.5)
+
+    def test_the_excluded_hours_are_still_named_somewhere(self):
+        """Dropping a quarter of the firm's hours with no trace would leave a
+        client table whose hours don't tie to the firm's hours."""
+        from tracker.analytics_v2.breakdowns import (
+            breakdown, split_unassigned, unassigned_note,
+        )
+
+        _, unassigned = split_unassigned(
+            breakdown(self.org, Scope(type="firm"), self.time, "client"))
+        self.assertIn("no client", unassigned_note(unassigned).lower())
+
+    def test_no_project_and_uncategorized_still_appear(self):
+        """Only the CLIENT dimension holds its unassigned row back. A missing
+        project or category is an ordinary state for real work, and on a
+        "where does the time go" page it is part of the answer."""
+        from tracker.analytics_v2.breakdowns import breakdown
+
+        for dim, expected in (("project", "No project"),
+                              ("category", "Uncategorized")):
+            with self.subTest(dimension=dim):
+                labels = {r["label"] for r in breakdown(
+                    self.org, Scope(type="firm"), self.time, dim)}
+                self.assertIn(expected, labels)

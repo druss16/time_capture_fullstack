@@ -959,13 +959,18 @@ interface MismatchesTabProps {
 // reaches for the reasoning only when the verdict surprises them. Burying it
 // would make this a black box; leading with it would make the queue slower to
 // work than it was before.
-function DraftPanel({ draft, tone, onApprove, busy }: {
+function DraftPanel({ draft, tone, onApprove, busy, defaultOpen }: {
   draft: AgentDraft;
   tone: string;
   onApprove?: ((blockIds: number[]) => void) | undefined;
   busy?: boolean | undefined;
+  // Open the evidence without being asked when the queue is short. Behind a
+  // disclosure, "67% confident" is a number with nothing behind it, and the
+  // honest reaction to that is not to trust it. Two rows is not a list anyone
+  // is skimming — it is two decisions, and both deserve their reasons showing.
+  defaultOpen?: boolean | undefined;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!defaultOpen);
   if (draft.verdict === "needs_human" && !draft.evidence.length) {
     return (
       <div style={{ marginTop: 10, fontSize: 11, color: T.textMuted, ...mono }}>
@@ -992,8 +997,20 @@ function DraftPanel({ draft, tone, onApprove, busy }: {
         </span>
         <span style={{ fontSize: 12, color: T.text, ...mono }}>{draft.summary}</span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>
-          {(draft.confidence * 100).toFixed(0)}% confident
+        {/* What it is standing on, not just how sure it claims to be.
+            "67% confident" is a number with nothing behind it, and read alone
+            it sounds like a claim of accuracy when on this row it is the
+            opposite — the agent saying the only thing agreeing with the title
+            is the title. Naming the witnesses makes the percentage checkable
+            instead of something you either swallow or dismiss. */}
+        <span title={`${(draft.confidence * 100).toFixed(0)}% — weighted share of the evidence`}
+          style={{ fontSize: 10, color: T.textMuted, ...mono }}>
+          {(() => {
+            const ind = draft.evidence.filter(e => e.independent).length;
+            if (!draft.evidence.length) return "no evidence";
+            if (!ind) return `title only · ${(draft.confidence * 100).toFixed(0)}%`;
+            return `${ind} independent witness${ind === 1 ? "" : "es"} · ${(draft.confidence * 100).toFixed(0)}%`;
+          })()}
         </span>
         {actionable && onApprove && (
           <button disabled={busy}
@@ -1112,7 +1129,9 @@ function BucketDetail({
           happened, not whether anyone has since fixed it. Worst pairs and the
           flagged-block list below say the same things without the guesswork. */}
 
-      {bucket.top_pairs.length > 0 && (
+      {/* A "worst pairs" table over two rows is the same two rows again, one
+          line shorter. It earns its place when there is a pattern to see. */}
+      {bucket.top_pairs.length > 0 && bucket.mismatches.length > 3 && (
         <div style={{ ...card, marginBottom: 20, borderLeft: `3px solid ${tone}` }}>
           <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 12, fontWeight: 600 }}>
             <span style={{ color: tone }}>{label}</span>
@@ -1218,7 +1237,13 @@ function BucketDetail({
                   </span>
                 )}
                 <div style={{ flex: 1 }} />
-                {onReconcile && (
+                {/* "fix" moves the block to whatever the title names, with no
+                    corroboration required. When the agent has drafted a move
+                    for this row it has already asked that question and shown
+                    its working, so offering both put two buttons for the same
+                    action side by side — one of them the version the agent
+                    just explained it would not do unattended. */}
+                {onReconcile && drafts?.[m.block_id]?.verdict !== "reassign" && (
                   <button
                     disabled={reconcileBusy}
                     onClick={() => onReconcile([m.block_id], `block ${m.block_id}`)}
@@ -1253,6 +1278,11 @@ function BucketDetail({
                   </>
                 )}
               </div>
+              {drafts?.[m.block_id] && (
+                <DraftPanel draft={drafts[m.block_id]!} tone={tone}
+                  onApprove={onApprove} busy={agentBusy}
+                  defaultOpen={rows.length <= 3} />
+              )}
               <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
                 {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
                 {m.window_title}
@@ -1278,10 +1308,6 @@ function BucketDetail({
                     ✓ it's right
                   </button>
                 </div>
-              )}
-              {drafts?.[m.block_id] && (
-                <DraftPanel draft={drafts[m.block_id]!} tone={tone}
-                  onApprove={onApprove} busy={agentBusy} />
               )}
               <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
                 <span>coverage {((m.confidence.looks_like_coverage ?? m.confidence.top_candidate_coverage ?? 0) * 100).toFixed(0)}%</span>
@@ -1700,12 +1726,18 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                   reading the evidence around {Object.keys(drafts).length || "these"} rows…
                 </span>
               ) : (
+                // Lead with what it DID. The old wording opened with "no row
+                // clears the bar on its own", so a run that had read every row
+                // and written a recommendation on each one announced itself as
+                // a failure, and the drafts further down the page looked like
+                // they had come from somewhere else.
                 <span style={{ fontSize: 12, color: T.textSub, ...mono }}>
+                  {`read ${agentStats.total} row${agentStats.total === 1 ? "" : "s"}`}
                   {agentStats.ready > 0
-                    ? `${agentStats.ready} row${agentStats.ready === 1 ? "" : "s"} have independent evidence and are ready to approve`
-                    : `no row clears the bar on its own`}
+                    ? ` · ${agentStats.ready} ready to approve`
+                    : ``}
                   {agentStats.drafted > agentStats.ready &&
-                    ` · ${agentStats.drafted - agentStats.ready} more drafted but thin`}
+                    ` · ${agentStats.drafted - agentStats.ready} recommended, your call`}
                   {agentStats.held > 0 && ` · ${agentStats.held} held back`}
                   {agentStats.total > agentStats.drafted + agentStats.held &&
                     ` · ${agentStats.total - agentStats.drafted - agentStats.held} it cannot call`}
@@ -1804,48 +1836,22 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               selector (filterOrg); no per-client dropdown needed. */}
           {data.client.total > 0 ? (
             <>
-              {/* ── Prominent reconcile action bar (top of the money bucket) ── */}
-              <div style={{
-                ...card, marginBottom: 20,
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                gap: 16, flexWrap: "wrap" as const,
-                borderColor: filterOrg ? T.red + "55" : T.border,
-                background: filterOrg ? T.red + "0e" : T.surface,
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, color: T.text, ...mono, fontWeight: 700 }}>
-                    {data.client.total} client mismatch{data.client.total === 1 ? "" : "es"} to reconcile
-                  </div>
-                  <div style={{ fontSize: 12, color: T.textMuted, ...mono, marginTop: 3 }}>
-                    Reassigns each block to the client its title names, and logs an audit.
-                  </div>
-                  {/* The bulk button is where overwriting a deliberate human
-                      allocation is cheapest to do by accident, so the count is
-                      stated before the click, not just badged per row. */}
-                  {data.client.mismatches.some(m => m.set_by === "user") && (
-                    <div style={{ fontSize: 12, color: T.yellow, ...mono, marginTop: 5, fontWeight: 600 }}>
-                      ⚠ {data.client.mismatches.filter(m => m.set_by === "user").length} of these were put
-                      there by a person — reconciling overwrites their choice.
-                    </div>
-                  )}
-                </div>
-                {filterOrg ? (
-                  <button
-                    disabled={reconcileBusy}
-                    onClick={() => reconcile(data.client.mismatches.map(m => m.block_id), "all client mismatches")}
-                    style={{
-                      background: T.red, border: `1px solid ${T.red}`, color: "#fff",
-                      padding: "10px 20px", fontSize: 13, cursor: reconcileBusy ? "default" : "pointer",
-                      borderRadius: 6, ...mono, fontWeight: 700, opacity: reconcileBusy ? 0.5 : 1, whiteSpace: "nowrap" as const,
-                    }}>
-                    {reconcileBusy ? "reconciling…" : `⟲ Reconcile all ${data.client.mismatches.length}`}
-                  </button>
-                ) : (
-                  <span style={{ color: T.yellow, fontSize: 12, ...mono, fontWeight: 600, whiteSpace: "nowrap" as const }}>
-                    ↑ pick a single org above to reconcile
-                  </span>
-                )}
-              </div>
+              {/* The "Reconcile all N" bar stood here. Removed, not moved.
+                  It reassigned every flagged block to whatever its title named,
+                  in one click, with nothing required to corroborate the title —
+                  which is the precise thing the agent examines each row for and
+                  refuses to do on its own. Offering both put a button on screen
+                  that did what the sentence above it had just advised against,
+                  and put it in the largest, reddest element on the page.
+
+                  Its own warning admitted the cost ("N of these were put there
+                  by a person — reconciling overwrites their choice"). A control
+                  that has to talk you out of itself is not a control.
+
+                  Nothing is lost: the agent's banner approves everything that
+                  clears the bar in one click, each row keeps a "fix" for the
+                  title-only move when no draft covers it, and the bulk picker
+                  below still moves a selection anywhere a person chooses. */}
 
               <BucketDetail
                 bucket={data.client}

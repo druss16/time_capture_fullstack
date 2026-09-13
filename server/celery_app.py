@@ -107,6 +107,20 @@ app.conf.beat_schedule = {
             'expires': 3600,
         }
     },
+
+    # ✅ NIGHTLY 3:20 AM: Mismatch resolution agent — drafts a verdict for
+    # every flag the scan just opened, with the evidence behind it, and acts
+    # only for orgs that have opted in (mismatch_agent_autoresolve, off by
+    # default). Twenty minutes after the scan rather than chained to it: the
+    # detector is a backstop and must keep working even when the agent is off,
+    # wedged, or found to be wrong about an org.
+    'resolve-mismatches-nightly': {
+        'task': 'tracker.tasks.resolve_org_mismatches',
+        'schedule': crontab(hour=3, minute=20),
+        'options': {
+            'expires': 3600,
+        }
+    },
     
     # =========================================================================
     # DAILY NOTIFICATIONS (Mon-Fri)

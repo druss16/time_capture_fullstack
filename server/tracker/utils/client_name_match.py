@@ -296,6 +296,53 @@ _ZERO_WIDTH = dict.fromkeys(
 )
 
 
+# The QuickBooks Vendor/Customer Center segment — "[Vendor Center: Acme Supply]".
+#
+# This is NOT chrome and is deliberately never stripped: Stage 4.6 reads the
+# vendor as a FINGERPRINT, looking it up in a vendor→client map to tell
+# same-named parishes apart, and it corroborates the booked client besides.
+#
+# But a fingerprint and a name are different things, and scoring this segment
+# as if it were the client's own name is how a VENDOR of St. Mary's Church —
+# "Integrated Marketing Services, Inc." — got matched against the firm's
+# client "H & B Marketing" and accused a correctly-booked block.
+#
+# The bracket can never name the client of a QuickBooks block, because the
+# company file already does. Whatever screen is open inside St. Mary's books,
+# the work is in St. Mary's books. So the segment stays in the text for every
+# other purpose and is refused only as a mismatch TARGET.
+#
+# Measured before changing it: across every org over 180 days there is exactly
+# ONE client-bucket detection on a bracket-carrying title, and it is that false
+# positive. The rule costs nothing and removes it.
+_CENTER_BRACKET_RE = re.compile(
+    r"\[[^\]]*(?:Vendor|Customer)\s+Center\s*:[^\]]*\]", re.I
+)
+
+
+def _tokens_outside_center(title: str) -> set:
+    """Title tokens with the QB Vendor/Customer Center segment removed."""
+    return set(_tokenize(strip_app_chrome(_CENTER_BRACKET_RE.sub(" ", title or ""))))
+
+
+def _named_only_in_center(title: str, cid: int, index: dict) -> bool:
+    """True when this client is fingerprinted ONLY by the Center bracket.
+
+    Re-scores the candidate against the text outside the bracket. If it can no
+    longer clear the same strength gates it just cleared, the whole of its
+    evidence was the vendor/customer name — which identifies somebody the
+    client does business with, not the client.
+    """
+    if not _CENTER_BRACKET_RE.search(title or ""):
+        return False
+    outside = _tokens_outside_center(title)
+    if not outside:
+        return True
+    cov, topw, abs_hit = score_title_against_client(outside, cid, index)
+    return not (cov >= STRONG_COVERAGE and abs_hit >= MIN_ABS_HIT
+                and topw >= MIN_TOP_TOKEN)
+
+
 def strip_app_chrome(title: str) -> str:
     """Remove application-banner noise so only document text is scored."""
     text = (title or "").translate(_ZERO_WIDTH)
@@ -406,6 +453,11 @@ def detect_mismatch(
     # Ambiguity gate (mass-based): if another client's absolute fingerprint is
     # nearly as strong, the title doesn't point at ONE client → suppress.
     if second_abs >= AMBIGUITY_RATIO * best_abs:
+        return _acronym_match()
+
+    # A winner whose whole case is the Vendor/Customer Center bracket is naming
+    # somebody the booked client does business with, not a rival for the work.
+    if _named_only_in_center(title, best_cid, index):
         return _acronym_match()
 
     # Strict strength gates.
@@ -622,6 +674,13 @@ def detect_title_client(
 
     # Ambiguity gate — must fingerprint ONE client clearly.
     if second_abs >= AMBIGUITY_RATIO * best_abs:
+        return None
+
+    # Same refusal as detect_mismatch: a vendor or customer named in the QB
+    # Center bracket is not a reroute target. This path is what the reconcile
+    # button re-derives from, so letting it disagree would mean the fix sends
+    # the block somewhere the detector would never have accused it of.
+    if _named_only_in_center(title, best_cid, index):
         return None
 
     # Strength gates (same bar as detect_mismatch, minus the booked comparison).

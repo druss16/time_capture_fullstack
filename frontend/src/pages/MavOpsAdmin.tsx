@@ -899,6 +899,36 @@ interface MismatchRow {
     top_candidate_coverage?: number;
   };
 }
+// What the resolution agent thinks should happen to one flagged row, and the
+// evidence behind it. Fetched separately from the rows themselves (see
+// loadDrafts) so the list paints immediately and the reasoning fills in after.
+//
+// `vetoes` and `caveats` are NOT the same thing and the UI must not merge
+// them. A veto is a hard stop the Approve button also obeys — already
+// invoiced, a person set it, same-family names. A caveat is the agent
+// declining to act unattended on evidence a human is perfectly entitled to
+// accept. Showing them as one list would make half of them look unappealable.
+interface AgentSignal {
+  kind: string;
+  supports: number | null;
+  weight: number;
+  text: string;
+  independent: boolean;
+}
+interface AgentDraft {
+  block_id: number;
+  verdict: "reassign" | "confirm_correct" | "needs_human";
+  target_client_id: number | null;
+  target_client_name: string;
+  booked_client_name: string;
+  confidence: number;
+  auto: boolean;
+  summary: string;
+  evidence: AgentSignal[];
+  vetoes: string[];
+  caveats: string[];
+}
+
 interface MismatchBucket {
   total: number;
   returned: number;
@@ -922,6 +952,105 @@ interface MismatchesTabProps {
   filterOrg: number | null;
 }
 
+// The agent's reading of one row: what it would do, why, and what stopped it.
+//
+// The evidence list is the point of the whole feature and it is collapsed by
+// default anyway — someone working a queue wants the one-line verdict, and
+// reaches for the reasoning only when the verdict surprises them. Burying it
+// would make this a black box; leading with it would make the queue slower to
+// work than it was before.
+function DraftPanel({ draft, tone, onApprove, busy }: {
+  draft: AgentDraft;
+  tone: string;
+  onApprove?: ((blockIds: number[]) => void) | undefined;
+  busy?: boolean | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  if (draft.verdict === "needs_human" && !draft.evidence.length) {
+    return (
+      <div style={{ marginTop: 10, fontSize: 11, color: T.textMuted, ...mono }}>
+        agent: nothing outside the title points anywhere. This one is yours.
+      </div>
+    );
+  }
+
+  const blocked = draft.vetoes.length > 0;
+  const actionable = !blocked && draft.verdict !== "needs_human";
+  const hue = blocked ? T.textMuted : draft.auto ? T.green : tone;
+
+  return (
+    <div style={{
+      marginTop: 12, padding: "10px 12px", borderRadius: 4,
+      background: hue + "0c", border: `1px solid ${hue}44`,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
+        <span style={{
+          fontSize: 10, ...mono, fontWeight: 700, letterSpacing: 1,
+          textTransform: "uppercase" as const, color: hue,
+        }}>
+          {draft.auto ? "agent · ready" : blocked ? "agent · held" : "agent · draft"}
+        </span>
+        <span style={{ fontSize: 12, color: T.text, ...mono }}>{draft.summary}</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>
+          {(draft.confidence * 100).toFixed(0)}% confident
+        </span>
+        {actionable && onApprove && (
+          <button disabled={busy}
+            onClick={() => onApprove([draft.block_id])}
+            style={{
+              background: hue + "1e", border: `1px solid ${hue}`, color: hue,
+              padding: "3px 12px", fontSize: 11, borderRadius: 4, ...mono,
+              fontWeight: 700, cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.5 : 1,
+            }}>
+            ✓ approve
+          </button>
+        )}
+        <button onClick={() => setOpen(o => !o)}
+          style={{
+            background: "transparent", border: "none", color: T.textMuted,
+            fontSize: 11, cursor: "pointer", ...mono, padding: "3px 4px",
+          }}>
+          {open ? "▾ why" : "▸ why"}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column" as const, gap: 4 }}>
+          {draft.evidence.map((e, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+              <span title={e.independent
+                ? "Independent of the window title — this is what makes the flag more than one opinion counted twice"
+                : "Reads the window title, the same text that raised the flag"}
+                style={{
+                  fontSize: 9, ...mono, padding: "1px 5px", borderRadius: 2,
+                  color: e.independent ? T.teal : T.textMuted,
+                  border: `1px solid ${(e.independent ? T.teal : T.textMuted)}44`,
+                  whiteSpace: "nowrap" as const,
+                }}>
+                {e.independent ? "independent" : "from title"}
+              </span>
+              <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{e.text}</span>
+              <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>{e.weight.toFixed(2)}</span>
+            </div>
+          ))}
+          {draft.vetoes.map((v, i) => (
+            <div key={`v${i}`} style={{ fontSize: 11, color: T.red, ...mono }}>
+              ✕ {v}
+            </div>
+          ))}
+          {draft.caveats.map((c, i) => (
+            <div key={`c${i}`} style={{ fontSize: 11, color: T.yellow, ...mono }}>
+              ⚠ {c}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Shared renderer for one bucket's worst pairs + flagged list. The per-day
 // histogram this used to draw is gone; `histogram` survives in the payload
 // because the verdict still reads its last date to decide "ongoing".
@@ -930,6 +1059,7 @@ interface MismatchesTabProps {
 // client name (or "" for all).
 function BucketDetail({
   bucket, tone, label, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
+  drafts, onApprove, agentBusy,
 }: {
   bucket: MismatchBucket;
   tone: string;
@@ -954,6 +1084,12 @@ function BucketDetail({
     assign: (blockIds: number[], clientId: number, clientName: string) => void;
     dismiss: (blockIds: number[]) => void;
   } | undefined;
+  // The agent's reading of these rows, by block id. Absent while it is still
+  // thinking, and absent for good on an API that predates it — the rows must
+  // render exactly as they always did in both cases.
+  drafts?: Record<number, AgentDraft> | undefined;
+  onApprove?: ((blockIds: number[]) => void) | undefined;
+  agentBusy?: boolean | undefined;
 }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [bulkClient, setBulkClient] = useState<number | "">("");
@@ -1143,6 +1279,10 @@ function BucketDetail({
                   </button>
                 </div>
               )}
+              {drafts?.[m.block_id] && (
+                <DraftPanel draft={drafts[m.block_id]!} tone={tone}
+                  onApprove={onApprove} busy={agentBusy} />
+              )}
               <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 10, color: T.textMuted, ...mono }}>
                 <span>coverage {((m.confidence.looks_like_coverage ?? m.confidence.top_candidate_coverage ?? 0) * 100).toFixed(0)}%</span>
                 <span>vs booked {(m.confidence.booked_coverage * 100).toFixed(0)}%</span>
@@ -1179,6 +1319,12 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [cleared, setCleared] = useState<{ flag_id: number; block_id: number; cleared_at: string | null; booked_client_name: string | null; window_title: string }[]>([]);
   const [showCleared, setShowCleared] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
+  // The agent's drafts for whatever rows are currently on screen.
+  const [drafts, setDrafts] = useState<Record<number, AgentDraft>>({});
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [agentBusy, setAgentBusy] = useState(false);
+  // Whether this org lets the agent act on its own drafts overnight.
+  const [autoresolve, setAutoresolve] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1219,6 +1365,42 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
       ...(raw.unsure ? { unsure: strip(raw.unsure) } : {}),
     };
   }, [raw, hiddenIds]);
+
+  // Draft in a second pass, after the rows are already on screen.
+  //
+  // Folding this into /mavops/mismatches/ would have been one fewer request
+  // and the wrong trade: that endpoint is the page's first paint and already
+  // takes 8-14 seconds, and drafting reads neighbours, file paths and prior
+  // rulings per row on top of it. Rows first, reasoning behind them.
+  useEffect(() => {
+    if (!filterOrg || !raw) { setDrafts({}); return; }
+    // The two actionable buckets only. Internal/admin rows are noise by
+    // definition — nobody reroutes them — so drafting them would spend the
+    // per-row query budget on the pile no one is going to act on.
+    const ids = [
+      ...raw.client.mismatches,
+      ...(raw.unsure?.mismatches || []),
+    ].map(m => m.block_id).slice(0, 150);
+    if (!ids.length) { setDrafts({}); return; }
+
+    let live = true;
+    setDraftsLoading(true);
+    apiFetch(`/mavops/mismatches/drafts/`, {
+      method: "POST",
+      body: JSON.stringify({ org_id: filterOrg, block_ids: ids }),
+    })
+      .then(d => {
+        if (!live) return;
+        setDrafts(d.drafts || {});
+        setAutoresolve(!!d.autoresolve);
+      })
+      // Silent: the tab worked before the agent existed and has to keep
+      // working when it is unavailable. A failed draft fetch costs the
+      // suggestions, not the queue.
+      .catch(() => { if (live) { setDrafts({}); setAutoresolve(false); } })
+      .finally(() => { if (live) setDraftsLoading(false); });
+    return () => { live = false; };
+  }, [apiFetch, filterOrg, raw]);
 
   useEffect(() => {
     if (!filterOrg) { setOrgClients([]); return; }
@@ -1354,6 +1536,84 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     }
   }, [apiFetch, flash, filterOrg, hide]);
 
+  // Approve the agent's own draft for these rows — move the ones it wants
+  // moved, close the ones it says were never wrong.
+  //
+  // The server RE-DERIVES the draft rather than replaying the one on screen,
+  // and its vetoes still hold. So a row that has been invoiced since the tab
+  // loaded is refused here even though the button was showing — which is the
+  // behaviour you want, and why the result count is read back rather than
+  // assumed.
+  const approveDrafts = useCallback(async (blockIds: number[]) => {
+    if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
+    const bulk = blockIds.length > 1;
+    setAgentBusy(true);
+    try {
+      if (bulk) {
+        const dry = await apiFetch(`/mavops/mismatches/agent/approve/`, {
+          method: "POST",
+          body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, confirm: false }),
+        });
+        const n = dry.would_apply || 0;
+        if (!n) { flash(`Nothing to apply (${dry.skipped} held back).`); return; }
+        if (!window.confirm(
+          `Apply the agent's draft to ${n} block${n > 1 ? "s" : ""}?\n\n` +
+          `Each goes to the client the agent named, with its evidence recorded ` +
+          `on the block.\n` +
+          (dry.skipped ? `${dry.skipped} held back (invoiced, user-set, or same-family).` : "")
+        )) return;
+      }
+      const res = await apiFetch(`/mavops/mismatches/agent/approve/`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, confirm: true }),
+      });
+      if (!res.applied) {
+        flash(`Nothing applied — the agent held all ${blockIds.length} back.`, "err");
+        return;
+      }
+      hide((res.results || []).map((r: { block_id: number }) => r.block_id));
+      flash(`Applied ${res.applied} draft${res.applied === 1 ? "" : "s"}.`);
+      loadCleared();
+    } catch { flash("Failed to apply those drafts.", "err"); }
+    finally { setAgentBusy(false); }
+  }, [apiFetch, flash, filterOrg, hide, loadCleared]);
+
+  const toggleAutoresolve = useCallback(async () => {
+    if (!filterOrg) return;
+    const next = !autoresolve;
+    if (next && !window.confirm(
+      `Let the agent re-file blocks for org ${filterOrg} overnight, without ` +
+      `anyone approving them?\n\n` +
+      `It will only ever MOVE a block, never close a flag, and only where ` +
+      `something other than the window title agrees. Same-family names, ` +
+      `invoiced blocks and anything a person set stay untouched either way.`
+    )) return;
+    try {
+      const r = await apiFetch(`/mavops/orgs/${filterOrg}/mismatch-agent/`, {
+        method: "POST",
+        body: JSON.stringify({ autoresolve: next }),
+      });
+      setAutoresolve(!!r.autoresolve);
+      flash(r.autoresolve
+        ? "The agent will act on its own drafts overnight for this org."
+        : "The agent will draft only — every change waits for a person.");
+    } catch { flash("Could not change that setting.", "err"); }
+  }, [apiFetch, autoresolve, filterOrg, flash]);
+
+  // What the agent has to say about the rows on screen, in one line.
+  const agentStats = useMemo(() => {
+    const rows = Object.values(drafts);
+    return {
+      total: rows.length,
+      ready: rows.filter(d => d.auto).length,
+      drafted: rows.filter(d => d.verdict !== "needs_human" && !d.vetoes.length).length,
+      held: rows.filter(d => d.vetoes.length > 0).length,
+      readyIds: rows.filter(d => d.auto).map(d => d.block_id),
+      draftedIds: rows.filter(d => d.verdict !== "needs_human" && !d.vetoes.length)
+        .map(d => d.block_id),
+    };
+  }, [drafts]);
+
   // Verdict runs on the CLIENT bucket only — the money bucket. Internal noise
   // must never trigger the "ongoing" alarm.
   const verdict = (() => {
@@ -1414,6 +1674,72 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             <StatCard label="Lookback" value={`${data.params.days}d`} color={T.teal} />
           </div>
 
+          {/* What the agent made of this queue, and the one button that empties
+              the part of it that does not need a person.
+
+              Deliberately reports how many rows it could NOT settle alongside
+              how many it could. A panel that only counts its wins is how a tool
+              that quietly stopped working goes unnoticed for a month, and this
+              one has every incentive to look busy: the rows it holds back are
+              the rows that matter most. */}
+          {filterOrg && (draftsLoading || agentStats.total > 0) && (
+            <div style={{
+              ...card, marginBottom: 20, padding: "12px 16px",
+              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" as const,
+              borderColor: agentStats.ready ? T.green + "55" : T.border,
+              background: agentStats.ready ? T.green + "0c" : T.surface,
+            }}>
+              <span style={{
+                fontSize: 10, ...mono, fontWeight: 700, letterSpacing: 2,
+                textTransform: "uppercase" as const, color: T.teal,
+              }}>
+                resolution agent
+              </span>
+              {draftsLoading ? (
+                <span style={{ fontSize: 12, color: T.textMuted, ...mono }}>
+                  reading the evidence around {Object.keys(drafts).length || "these"} rows…
+                </span>
+              ) : (
+                <span style={{ fontSize: 12, color: T.textSub, ...mono }}>
+                  {agentStats.ready > 0
+                    ? `${agentStats.ready} row${agentStats.ready === 1 ? "" : "s"} have independent evidence and are ready to approve`
+                    : `no row clears the bar on its own`}
+                  {agentStats.drafted > agentStats.ready &&
+                    ` · ${agentStats.drafted - agentStats.ready} more drafted but thin`}
+                  {agentStats.held > 0 && ` · ${agentStats.held} held back`}
+                  {agentStats.total > agentStats.drafted + agentStats.held &&
+                    ` · ${agentStats.total - agentStats.drafted - agentStats.held} it cannot call`}
+                </span>
+              )}
+              <div style={{ flex: 1 }} />
+              <button onClick={toggleAutoresolve} title={autoresolve
+                ? "The agent re-files ready rows overnight for this org. It still never closes a flag on its own."
+                : "The agent only drafts for this org — nothing changes until a person approves it."}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${autoresolve ? T.teal : T.border}`,
+                  color: autoresolve ? T.teal : T.textMuted,
+                  padding: "5px 11px", fontSize: 11, borderRadius: 4, ...mono,
+                  cursor: "pointer", whiteSpace: "nowrap" as const,
+                }}>
+                {autoresolve ? "● acts overnight" : "○ drafts only"}
+              </button>
+              {agentStats.ready > 0 && (
+                <button disabled={agentBusy}
+                  onClick={() => approveDrafts(agentStats.readyIds)}
+                  style={{
+                    background: T.green + "18", border: `1px solid ${T.green}`,
+                    color: T.green, padding: "6px 14px", fontSize: 12,
+                    borderRadius: 4, ...mono, fontWeight: 700,
+                    cursor: agentBusy ? "default" : "pointer",
+                    opacity: agentBusy ? 0.5 : 1,
+                  }}>
+                  {agentBusy ? "applying…" : `✓ approve all ${agentStats.ready} ready`}
+                </button>
+              )}
+            </div>
+          )}
+
           {verdict && (
             <div style={{
               ...card, marginBottom: 20,
@@ -1466,6 +1792,9 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                     assign: assignTo,
                     dismiss: dismissRows,
                   } : undefined}
+                  drafts={drafts}
+                  onApprove={filterOrg ? approveDrafts : undefined}
+                  agentBusy={agentBusy}
                 />
               )}
             </div>
@@ -1531,6 +1860,9 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                   assign: assignTo,
                   dismiss: dismissRows,
                 } : undefined}
+                drafts={drafts}
+                onApprove={filterOrg ? approveDrafts : undefined}
+                agentBusy={agentBusy}
               />
             </>
           ) : (

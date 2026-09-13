@@ -27,6 +27,10 @@ export type MismatchBlock = {
   booked_client_name: string;
   looks_like_client_id: number | null;
   looks_like_client_name: string;
+  /** Why, in a sentence — what agreed and what came up silent. Optional: the
+   *  backend computes it per row and returns '' if the evidence engine is
+   *  unavailable, and an older API predates the field entirely. */
+  reason?: string;
 };
 
 /** One activity slice inside a split candidate (title → its own client guess). */

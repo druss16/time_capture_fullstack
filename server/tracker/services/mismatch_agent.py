@@ -88,7 +88,7 @@ PRECEDENT_MIN = 1
 # finding stated so you can argue with it — and it is the half that says how
 # hard the agent actually looked.
 SIGNAL_KINDS = ('title', 'file_path', 'qb_company_file', 'neighbours',
-                'human_precedent', 'prior_dismissal')
+                'same_day', 'human_precedent', 'prior_dismissal')
 
 VERDICT_REASSIGN = 'reassign'
 VERDICT_CONFIRM = 'confirm_correct'
@@ -116,11 +116,15 @@ class Signal:
     weight: float             # 0..1
     text: str                 # the line a human reads on the row
     independent: bool = False # does it count toward the corroboration rule?
+    # A few words naming THIS witness's specific finding, for a one-line row
+    # where the full `text` will not fit. Optional: falls back to the generic
+    # label for the signal kind.
+    short: str = ''
 
     def as_dict(self):
         return {'kind': self.kind, 'supports': self.supports,
                 'weight': round(self.weight, 3), 'text': self.text,
-                'independent': self.independent}
+                'short': self.short, 'independent': self.independent}
 
 
 @dataclass
@@ -149,6 +153,60 @@ class Draft:
     caveats: list = field(default_factory=list)
     summary: str = ''
 
+    # What each witness is called in a one-line row.
+    _SHORT = {
+        'file_path': 'the folder it sits in',
+        'qb_company_file': 'the QuickBooks company file',
+        'neighbours': 'the work either side of it',
+        'same_day': 'their other work that day',
+        'human_precedent': 'how this title was filed before',
+        'prior_dismissal': 'an earlier review of this row',
+    }
+
+    def row_reason(self):
+        """The reason as ONE short line, for a row that already shows the arrow.
+
+        `summary` is written for a card with room, and it leads with "Looks like
+        X" — which a row showing `Filed [A] -> [B]` has already said. Repeating
+        it costs the only line this row has. So this says the part the arrow
+        cannot: what agreed, and what stayed silent.
+        """
+        ind = [s for s in self.signals if s.independent]
+        for_t = [s for s in ind if s.supports == self.target_client_id]
+        against = [s for s in ind if s.supports == self.booked_client_id]
+
+        if self.vetoes:
+            return self.vetoes[0]
+
+        if for_t and against:
+            # The honest case, and the one a single nudge would misrepresent:
+            # there is real evidence on BOTH sides.
+            #
+            # When both witnesses are the same KIND, naming the kind twice says
+            # nothing — "their other work that day points one way and their
+            # other work that day the other". What the reader needs is the two
+            # findings, which is what `short` carries.
+            a, b = for_t[0], against[0]
+            if a.short and b.short:
+                return (f"They worked both today — {a.short} and {b.short}. "
+                        f"Only the title separates them.")
+            return ("Both are in play — " + self._SHORT.get(a.kind, a.kind)
+                    + " points one way and " + self._SHORT.get(b.kind, b.kind)
+                    + " the other. Only the title separates them.")
+        if for_t:
+            names = [self._SHORT.get(s.kind, s.kind) for s in for_t[:2]]
+            lead = names[0][0].upper() + names[0][1:]
+            return (f"{lead} agrees." if len(names) == 1
+                    else f"{lead} and {names[1]} both agree.")
+        if against:
+            return (self._SHORT.get(against[0].kind, against[0].kind)[0].upper()
+                    + self._SHORT.get(against[0].kind, against[0].kind)[1:]
+                    + " points back at where it already is.")
+        silent = [self._SHORT[k] for k in SIGNAL_KINDS
+                  if k in self._SHORT and not any(s.kind == k for s in self.signals)]
+        return ("Only the title says so — "
+                + ", ".join(silent[:3]) + " are all silent.")
+
     def as_dict(self):
         return {
             'block_id': self.block_id,
@@ -161,6 +219,7 @@ class Draft:
             'confidence': round(self.confidence, 3),
             'auto': self.auto,
             'summary': self.summary,
+            'row_reason': self.row_reason(),
             'evidence': [s.as_dict() for s in self.signals],
             # What was looked for. The reader derives "checked and found
             # nothing" from (checked - evidence) rather than the UI hardcoding
@@ -465,6 +524,78 @@ def _neighbour_signal(block, ctx):
     )
 
 
+def _same_day_signals(block, ctx, interested):
+    """Did this person actually work these clients today, on work that named them?
+
+    CORROBORATION, never nomination. The first version of this picked the
+    person's biggest block of the day and pointed at whoever it belonged to,
+    which on the case that motivated it named St. John the BAPTIST Church —
+    a client with nothing to do with the question. Same-day presence cannot
+    propose an answer; it can only agree with one already on the table.
+
+    The case that motivated it. Eileen, 31 August: at 10:16 she is in St John
+    Cemetery-Rome's QuickBooks, on a block whose own title reads "St. John's
+    Cemetery". At 10:26 she opens "8-30-2026 St. John's Cemetery bills
+    etc_.pdf" and it lands on St. Mary's Cemetery Bville, because that is what
+    she was on at 10:21 and again at 10:28. Session stickiness swallowed it,
+    and `neighbours` said nothing because it only trusts a neighbour a HUMAN
+    set, while every block that morning was classifier-filed.
+
+    It answers for BOTH sides, which is the point. On that block she worked St
+    John Cemetery-Rome at 10:16 AND St. Mary's Cemetery Bville at 10:21 — so
+    the signal fires twice, the two cancel, and the row says honestly that she
+    was on both. A one-sided nudge would have invented a certainty the day does
+    not contain.
+
+    Requires the other block's OWN title to name where it sits, so a whole day
+    of sticky mis-filing cannot vouch for itself.
+    """
+    from tracker.models import Block
+    from tracker.utils.client_name_match import detect_title_client
+
+    if not block.start or not block.user_id or not interested:
+        return []
+
+    day = timezone.localtime(block.start).date()
+    rows = (Block.objects
+            .filter(org_id=block.org_id, user_id=block.user_id, day=day,
+                    client_id__in=list(interested), deleted_at__isnull=True)
+            .exclude(id=block.id)
+            .exclude(window_title__isnull=True).exclude(window_title='')
+            .only('id', 'client_id', 'minutes', 'start', 'window_title')[:200])
+
+    # Nearest in time, not longest. For a block at 10:26, "they were on St John
+    # Cemetery-Rome at 10:16" is the sentence that decides it; "at 14:37" is
+    # four hours later and settles nothing. Both prove the client is in play,
+    # but only one of them is about THIS block.
+    best = {}
+    for r in rows:
+        det = detect_title_client(r.window_title, ctx.index, ctx.names,
+                                  firm_name=ctx.firm_name)
+        if not det or det['client_id'] != r.client_id or not r.start:
+            continue
+        gap = abs((r.start - block.start).total_seconds())
+        cur = best.get(r.client_id)
+        if cur is None or gap < cur[0]:
+            best[r.client_id] = (gap, r)
+    best = {cid: r for cid, (_gap, r) in best.items()}
+
+    out = []
+    for cid, r in best.items():
+        when = timezone.localtime(r.start).strftime('%H:%M')
+        out.append(Signal(
+            kind='same_day',
+            supports=cid,
+            weight=0.55,
+            text=(f"The same person worked {ctx.name(cid)} for "
+                  f"{r.minutes or 0} minute{'' if (r.minutes or 0) == 1 else 's'} "
+                  f"at {when} the same day, on work whose own title named it."),
+            short=f"{ctx.name(cid)} at {when}",
+            independent=True,
+        ))
+    return out
+
+
 def _precedent_signal(block, ctx):
     """How a human resolved this exact title before.
 
@@ -533,6 +664,15 @@ def gather_signals(block, ctx):
             continue
         if s:
             out.append(s)
+
+    # Same-day presence runs LAST and only for clients already on the table —
+    # the booked one and whoever the signals above named. It corroborates; it
+    # never nominates. See _same_day_signals.
+    interested = {block.client_id} | {s.supports for s in out if s.supports}
+    try:
+        out.extend(_same_day_signals(block, ctx, {c for c in interested if c}))
+    except Exception:
+        log.exception('[MISMATCH-AGENT] same_day failed on block %s', block.id)
     return out
 
 

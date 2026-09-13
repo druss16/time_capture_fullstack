@@ -4662,6 +4662,15 @@ def today_time(request):
             'learning':                 _learning,
         })
 
+    def _mismatch_reason(_blk, _org):
+        """One sentence saying what agrees and what came up silent."""
+        try:
+            from tracker.services.mismatch_agent import context_for, draft_for_block
+            _d = draft_for_block(_blk, context_for(_org.id))
+            return _d.row_reason() or ''
+        except Exception:
+            return ''
+
     # ── Mismatch flags: title clearly names a DIFFERENT client than booked ──
     # Same distinctive-token detector behind the MavOps Mismatches tab / admin
     # Daily Review. Scoped to THIS user's committed blocks for the day so the
@@ -4837,6 +4846,23 @@ def today_time(request):
                         'booked_client_name':     _names.get(_b.client_id, ''),
                         'looks_like_client_id':   _m.get('looks_like_client_id'),
                         'looks_like_client_name': _m['looks_like_client_name'],
+                        # WHY, in a sentence, instead of the hardcoded "the
+                        # title says so" this row used to carry.
+                        #
+                        # That phrase was true and useless. It invites a click,
+                        # and the title being the ONLY evidence is exactly when
+                        # nobody should click without thinking. The agent has
+                        # already weighed the file path, the company file, the
+                        # neighbours, this person's other work that day and any
+                        # prior human ruling — so the row can say which of those
+                        # agreed and which came up silent.
+                        #
+                        # Computed per mismatch row, and there are ~0-2 a day
+                        # per person, so this adds a handful of queries to an
+                        # endpoint that already scans the day. Defensive by
+                        # inheritance: the whole block sits inside the try that
+                        # blanks mismatch_blocks rather than fail the page.
+                        'reason':                 _mismatch_reason(_b, org),
                     })
     except Exception:
         mismatch_flags = {}

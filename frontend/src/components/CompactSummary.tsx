@@ -1020,9 +1020,7 @@ function MismatchGroupRow({ items, busy, onFixAll, onKeepAll, onFixOne, onKeepOn
               <span className="rounded-md border border-amber-500/40 bg-amber-500/[0.14] px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
                 {target}
               </span>
-            </div>
-            <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">
-              {items[0].reason || "the title says so"}
+              <span className="text-muted-foreground">— the title says so</span>
             </div>
           </div>
         </button>
@@ -1074,16 +1072,7 @@ function MismatchRow({ m, busy, onFix, onKeep, onPick }: {
           <span className="rounded-md border border-amber-500/40 bg-amber-500/[0.14] px-2 py-0.5 font-semibold text-amber-700 dark:text-amber-400">
             {m.looks_like_client_name}
           </span>
-        </div>
-        {/* WHY. "— the title says so" used to sit inline here: true, and an
-            invitation to click. The title being the ONLY evidence is exactly
-            when nobody should click without thinking, and that sentence could
-            not tell the two cases apart. The agent has already weighed the file
-            path, the company file, the neighbours, this person's other work
-            that day and any prior human ruling, so the row now says which of
-            those agreed and which came up silent. */}
-        <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">
-          {m.reason || "the title says so"}
+          <span className="text-muted-foreground">— the title says so</span>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">

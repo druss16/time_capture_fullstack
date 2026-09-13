@@ -105,16 +105,20 @@ class OverviewLens(Lens):
     # ── previews ────────────────────────────────────────────────────────────
 
     def _clients_preview(self, org, scope, time) -> Section:
-        from ..breakdowns import breakdown
+        from ..breakdowns import breakdown, split_unassigned, unassigned_note
         from .clients import client_table
 
-        rows = breakdown(org, scope, time, "client")
+        rows, unassigned = split_unassigned(breakdown(org, scope, time, "client"))
+        subtitle = (f"{time.label} · top {_PREVIEW_ROWS} by hours · "
+                    "open Clients for the full list")
+        note = unassigned_note(unassigned)
+        if note:
+            subtitle += f" · {note}"
         table = client_table(
             rows[:_PREVIEW_ROWS], time,
             table_id="overview_top_clients",
             title="Busiest clients",
-            subtitle=f"{time.label} · top {_PREVIEW_ROWS} by hours · "
-                     "open Clients for the full list",
+            subtitle=subtitle,
         )
         return Section(id="clients_preview", type="section", children=[table])
 

@@ -445,3 +445,16 @@
     transition: none !important;
   }
 }
+
+
+/* Analytics: cards fade up in sequence as the page reports in.
+   Paired with `stagger()` in lib/analytics_v2/motion.ts, which returns no
+   animation at all when the viewer prefers reduced motion. */
+@keyframes tt-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [style*="tt-rise"] { animation: none !important; }
+}

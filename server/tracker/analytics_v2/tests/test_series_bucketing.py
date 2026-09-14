@@ -16,7 +16,9 @@ from datetime import date
 from django.test import SimpleTestCase
 
 from tracker.analytics_v2.scopes import parse_compare, resolve_relative_time
-from tracker.analytics_v2.series import bucket_starts, choose_grain
+from tracker.analytics_v2.series import (
+    bucket_starts, choose_grain, whole_buckets,
+)
 from tracker.analytics_v2.types import TimeRange
 
 
@@ -60,6 +62,62 @@ class BucketStartsTests(SimpleTestCase):
         buckets = bucket_starts(_range("2026-01-15", "2026-03-02"), "month")
         self.assertEqual(buckets,
                          [date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)])
+
+
+class PartialBucketTests(SimpleTestCase):
+    """A clipped bucket under-counts by construction and reads as a slump.
+
+    This is the "why does it look like we're collapsing?" bug: on "this
+    quarter" the last weekly bucket holds only the days so far, and the FIRST
+    one is clipped too — a quarter starting Wednesday 1 Jul gets a week that
+    began Monday 29 Jun, two days of which are outside the window.
+    """
+
+    def test_the_week_in_progress_is_dropped(self):
+        # Quarter to date: 1 Jul .. Wed 12 Aug, "today" being that Wednesday.
+        t = _range("2026-07-01", "2026-08-12")
+        kept = whole_buckets(bucket_starts(t, "week"), t, "week",
+                             today=date(2026, 8, 12))
+        # Monday 10 Aug's week runs to Sunday 16 Aug — not finished.
+        self.assertNotIn(date(2026, 8, 10), kept)
+
+    def test_the_clipped_first_week_is_dropped_too(self):
+        t = _range("2026-07-01", "2026-08-12")
+        buckets = bucket_starts(t, "week")
+        self.assertEqual(buckets[0], date(2026, 6, 29))   # starts before 1 Jul
+        kept = whole_buckets(buckets, t, "week", today=date(2026, 8, 12))
+        self.assertNotIn(date(2026, 6, 29), kept)
+
+    def test_whole_weeks_in_the_middle_survive(self):
+        t = _range("2026-07-01", "2026-08-12")
+        kept = whole_buckets(bucket_starts(t, "week"), t, "week",
+                             today=date(2026, 8, 12))
+        self.assertIn(date(2026, 7, 6), kept)
+        self.assertIn(date(2026, 8, 3), kept)
+
+    def test_a_finished_period_keeps_every_bucket(self):
+        """Last quarter is entirely in the past: nothing is in progress, and
+        its calendar edges line up, so nothing should be trimmed."""
+        t = _range("2026-04-01", "2026-06-30")
+        buckets = bucket_starts(t, "month")
+        kept = whole_buckets(buckets, t, "month", today=date(2026, 9, 14))
+        self.assertEqual(kept, buckets)
+
+    def test_today_is_dropped_at_daily_grain(self):
+        """Today is half a day for the same reason this week is half a week."""
+        t = _range("2026-09-01", "2026-09-14")
+        kept = whole_buckets(bucket_starts(t, "day"), t, "day",
+                             today=date(2026, 9, 14))
+        self.assertNotIn(date(2026, 9, 14), kept)
+        self.assertIn(date(2026, 9, 13), kept)
+
+    def test_trimming_never_empties_the_chart(self):
+        """A one-week window is entirely "partial" by this rule. Showing a
+        short bar the label explains beats showing nothing at all."""
+        t = _range("2026-09-14", "2026-09-14")
+        buckets = bucket_starts(t, "day")
+        kept = whole_buckets(buckets, t, "day", today=date(2026, 9, 14))
+        self.assertEqual(kept, buckets)
 
 
 class SamePeriodLastYearTests(SimpleTestCase):

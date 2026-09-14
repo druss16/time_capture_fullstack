@@ -21,8 +21,13 @@ export default function ViewSentence({
     // Deliberately not sticky: the control bar above it is what stays pinned.
     // Two sticky headers at top-0 just overlap each other, and the page title
     // is not what a viewer needs in front of them while scrolling a table.
+    //
+    // No background and no rule of its own. It used to be a white band between
+    // a grey control bar and a grey page — three surfaces and two hairlines
+    // stacked in 120px, which is what made the top of the page look seamed.
+    // It now sits on the page ground, so the header reads as one surface.
     <header
-      className="border-b border-border/70 bg-white/95 print:static print:border-black/20"
+      className="print:static print:border-b print:border-black/20"
       style={{ fontFamily: '"Inter", sans-serif' }}
     >
       <div className="px-6 py-3.5 flex items-center justify-between gap-4">

@@ -35,6 +35,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db.models import DecimalField, F, Q, Sum
+from django.utils import timezone
 from django.db.models.functions import Coalesce
 
 from tracker.models import Block
@@ -99,6 +100,42 @@ def bucket_starts(time: TimeRange, grain: str) -> list[date]:
     return out
 
 
+def _is_partial(bucket: date, time: TimeRange, grain: str, today: date) -> bool:
+    """Is this bucket clipped, or still being filled?
+
+    Three ways a bucket under-counts, and all three make it dip:
+
+      clipped at the start  "This quarter" from 1 Jul gets a first WEEKLY
+          bucket beginning Monday 29 Jun; two of its days are outside the
+          window and were never counted.
+      clipped at the end    the last weekly bucket runs to the coming Sunday,
+          of which only the days so far exist.
+      still running         the bucket containing today, at any grain. Today is
+          not over, so a daily series ends on a half-day for the same reason a
+          weekly one ends on a half-week.
+
+    Plotted beside whole buckets each reads as a slump the firm never had.
+    """
+    end = _next_bucket(bucket, grain) - timedelta(days=1)
+    return bucket < time.start or end > time.end or end >= today
+
+
+def whole_buckets(buckets: list[date], time: TimeRange, grain: str,
+                  keep_at_least: int = 2, today: date | None = None) -> list[date]:
+    """`buckets` with the clipped ones at either end removed.
+
+    Only the ENDS are dropped: a partial bucket in the middle is impossible,
+    and a genuinely quiet week in the middle is real data that must stay.
+
+    Falls back to the full list when trimming would leave too little to draw —
+    a one-week window is entirely "partial" by this definition, and showing
+    nothing is worse than showing a short bar the label already explains.
+    """
+    ref = today or timezone.now().date()
+    whole = [b for b in buckets if not _is_partial(b, time, grain, ref)]
+    return whole if len(whole) >= keep_at_least else buckets
+
+
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
@@ -155,7 +192,9 @@ def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
     from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
 
     grain = choose_grain(time)
-    buckets = bucket_starts(time, grain)
+    # Clipped buckets at either end are dropped: they under-count by
+    # construction and read as a slump. See `whole_buckets`.
+    buckets = whole_buckets(bucket_starts(time, grain), time, grain)
 
     base = apply_scope(
         Block.objects.filter(org=org, day__gte=time.start, day__lte=time.end),
@@ -306,14 +345,22 @@ def trend_chart(org, scope: Scope, time: TimeRange, card_id: str = "performance_
     points, grain = build_series(org, scope, time)
     has_data = any(p["hours"] > 0 for p in points)
 
+    # Say what is missing. The last bucket is normally the one in progress and
+    # is dropped, so the line stops before "now" — a reader who expects a point
+    # for this week should be told why there isn't one, not left to wonder.
+    noun = _GRAIN_NOUN[grain]
+    full = bucket_starts(time, grain)
+    trimmed = len(full) - len(points)
+    parts = [f"By {noun}", time.label]
+    if trimmed:
+        parts.append(f"the current (part-){noun} is not plotted")
+    parts.append("billable value is hourly work only — retainers are "
+                 "recognized over their period, not per day")
+
     return ChartCardPayload(
         id=card_id,
         title="Performance trend",
-        subtitle=(
-            f"By {_GRAIN_NOUN[grain]} · {time.label} · "
-            "billable value is hourly work only — retainers are recognized "
-            "over their period, not per day"
-        ),
+        subtitle=" · ".join(parts),
         chart_type="area",
         x_key="label",
         data=points,

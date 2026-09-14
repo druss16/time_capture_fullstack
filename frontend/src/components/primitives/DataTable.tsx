@@ -11,6 +11,7 @@ import { ArrowUpDown, ArrowUp, ArrowDown, Inbox, Info } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
 import { API_BASE, safeFetchJson } from "@/lib/api";
+import InfoTip from "@/components/analytics/InfoTip";
 import type { DataTablePayload, DataTableColumn } from "@/lib/analytics_v2/types";
 
 /**
@@ -357,7 +358,6 @@ function HeaderCell({
   dir: "asc" | "desc";
   onSort: (() => void) | undefined;
 }) {
-  const [showTip, setShowTip] = useState(false);
   const numeric = col.format !== "text";
   return (
     <th
@@ -373,24 +373,10 @@ function HeaderCell({
     >
       <div className={cn("flex items-center gap-1.5", numeric && "justify-end")}>
         <span>{col.label}</span>
-        {col.tooltip && (
-          <span
-            className="relative inline-flex"
-            onMouseEnter={() => setShowTip(true)}
-            onMouseLeave={() => setShowTip(false)}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Info className="h-3 w-3 text-slate-400 hover:text-slate-600 cursor-help" />
-            {showTip && (
-              <span className={cn(
-                "absolute top-5 z-20 w-60 rounded-lg bg-slate-900 text-white text-[11px] normal-case tracking-normal font-normal p-2.5 shadow-lg leading-snug",
-                numeric ? "right-0" : "left-0",
-              )}>
-                {col.tooltip}
-              </span>
-            )}
-          </span>
-        )}
+        {/* Portalled: this header lives inside an overflow-x-auto container,
+            which clips on BOTH axes — the old absolute tooltip was cut off by
+            the edge of the table. */}
+        {col.tooltip && <InfoTip text={col.tooltip} />}
         {col.sortable && (active
           ? <SortIcon active dir={dir} />
           : <ArrowUpDown className="h-3 w-3 text-slate-300 opacity-0 transition-opacity group-hover/th:opacity-100" />)}

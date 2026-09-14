@@ -20,6 +20,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { SURFACE } from "@/lib/analytics_v2/theme";
+import { stagger, usePrefersReducedMotion } from "@/lib/analytics_v2/motion";
 
 import { useAnalyticsPermissions, useAnalyticsQuery } from "@/hooks/useAnalyticsQuery";
 import {
@@ -31,7 +32,6 @@ import type {
 } from "@/lib/analytics_v2/types";
 
 import ControlBar from "@/components/analytics/ControlBar";
-import ViewSentence from "@/components/ViewSentence";
 import EmptyStateInvoiceless from "@/components/EmptyStateInvoiceless";
 import KPITile from "@/components/primitives/KPITile";
 import ChartCard from "@/components/primitives/ChartCard";
@@ -121,15 +121,12 @@ export default function DashboardV2() {
         body={body}
         availableViews={availableViews}
         scopeLabel={data?.view?.scope?.label}
-        onChange={push}
-      />
-
-      <ViewSentence
         sentence={data?.view?.sentence ?? ""}
         generatedAt={data?.meta?.generated_at}
         dataFreshness={data?.meta?.data_freshness}
         isFetching={isFetching}
         onRefresh={() => refetch()}
+        onChange={push}
       />
 
       <main className="mx-auto max-w-[1560px] px-6 py-8 print:px-0 print:py-3">
@@ -167,6 +164,7 @@ function SectionRenderer({
   onDrilldown: (d: { scope: Scope; lens: LensKey }) => void;
   rowHandler: (t: DataTablePayload) => ((row: Record<string, any>) => void) | undefined;
 }) {
+  const reduced = usePrefersReducedMotion();
   // Realization and invoice trends have no numerator without invoices. A 0%
   // reads as catastrophic billing performance rather than as missing data.
   if (data.meta?.invoiceless && (body.lens === "realization" || body.lens === "trends")) {
@@ -190,30 +188,31 @@ function SectionRenderer({
 
   return (
     <>
-      {data.sections.map(section => {
+      {data.sections.map((section, si) => {
         if (section.type === "kpi_row") {
           return (
             <div
               key={section.id}
               className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
             >
-              {section.tiles.map(tile => (
-                <KPITile key={tile.id} tile={tile} onDrilldown={onDrilldown} />
+              {section.tiles.map((tile, ti) => (
+                <div key={tile.id} style={stagger(ti, reduced)}>
+                  <KPITile tile={tile} onDrilldown={onDrilldown} />
+                </div>
               ))}
             </div>
           );
         }
 
         const s = section as SectionPayload;
-        if (s.tabbed) {
-          return <TabbedSection key={s.id} section={s} renderChild={renderChild} />;
-        }
-
-        return (
-          <CollapsibleSection key={s.id} section={s}>
-            <div className="space-y-4">{s.children.map(renderChild)}</div>
-          </CollapsibleSection>
-        );
+        const body = s.tabbed
+          ? <TabbedSection section={s} renderChild={renderChild} />
+          : (
+            <CollapsibleSection section={s}>
+              <div className="space-y-4">{s.children.map(renderChild)}</div>
+            </CollapsibleSection>
+          );
+        return <div key={s.id} style={stagger(si + 2, reduced)}>{body}</div>;
       })}
     </>
   );

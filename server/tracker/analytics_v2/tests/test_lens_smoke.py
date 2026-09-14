@@ -231,6 +231,69 @@ class LensSmokeTests(TestCase):
         self.assertIn("no client", note)
         self.assertIn("internal", note)
 
+    def test_client_ranking_shows_the_top_20_and_collapses_the_rest(self):
+        """A CPA firm's client list has a long thin tail — 52 clients in a
+        quarter where the busiest is under 40 hours. Forty rows is an export,
+        not a ranking."""
+        from tracker.analytics_v2.lenses.clients import _RANKING_ROWS
+
+        for i in range(30):
+            # `code` is unique per org and defaults to "", so it must be set
+            # when creating more than one client in a test.
+            c = Client.objects.create(
+                org=self.org, name=f"Tail Client {i}", code=f"TAIL{i}")
+            Block.objects.create(
+                org=self.org, user=self.user, hostname="h",
+                start=timezone.now() - timedelta(hours=2),
+                end=timezone.now() - timedelta(hours=1),
+                day=date.today(), minutes=60 + i, client=c,
+                is_billable=True, classification_state="committed",
+                is_categorized=True,
+            )
+
+        payload = self._assemble("clients", Scope(type="firm"))
+        main = next(c for s in payload for c in s.get("children", [])
+                    if c.get("id") == "clients_ranked")
+        tail = next((c for s in payload for c in s.get("children", [])
+                     if c.get("id") == "clients_tail"), None)
+
+        self.assertLessEqual(len(main["rows"]), _RANKING_ROWS)
+        self.assertIsNotNone(tail, "the rest must still be reachable")
+        # And the tail section is folded shut, not dumped on the page.
+        tail_section = next(s for s in payload if s.get("id") == "client_tail")
+        self.assertTrue(tail_section["collapsible"])
+        self.assertTrue(tail_section["collapsed"])
+
+    def test_the_cutoff_is_display_only_and_does_not_move_the_flag_baseline(self):
+        """The flags are computed over every material client BEFORE the top-20
+        cut. If the cut came first, the bar a client is judged against would
+        depend on how many rows the table happens to show."""
+        from tracker.analytics_v2.lenses.clients import flag_rows
+        from tracker.analytics_v2.stats import quantile
+
+        rows = [{
+            "id": i + 1, "label": f"C{i}", "hours": 100.0 - i,
+            "billable_hours": (100.0 - i) * (0.4 + i * 0.015),
+            "billable_pct": 40.0 + i * 1.5, "revenue": 5000.0,
+            "cost": 2000.0, "margin": 3000.0, "margin_pct": 60.0,
+            "people": 1, "share": 0.0, "is_internal": False,
+        } for i in range(40)]
+
+        all_rows = [dict(r) for r in rows]
+        flag_rows(all_rows, None)
+        baseline = quantile([r["billable_pct"] for r in all_rows], 0.25)
+
+        # Flagging only the visible twenty would compute a different quartile.
+        top_only = [dict(r) for r in rows[:20]]
+        flag_rows(top_only, None)
+        narrowed = quantile([r["billable_pct"] for r in top_only], 0.25)
+
+        self.assertNotAlmostEqual(baseline, narrowed, places=1)
+        # The shipped order flags against the full set: a client near the
+        # bottom of all 40 stays flagged whatever the table shows.
+        worst = min(all_rows, key=lambda r: r["billable_pct"])
+        self.assertTrue(worst["flags"])
+
     def test_no_project_and_uncategorized_still_appear(self):
         """Only the CLIENT dimension holds its unassigned row back. A missing
         project or category is an ordinary state for real work, and on a

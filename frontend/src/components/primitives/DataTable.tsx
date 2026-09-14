@@ -4,7 +4,9 @@
  * Columns specify their format; cells render via formatValue().
  * Click a column header to sort. Default sort comes from the backend payload.
  */
-import { useMemo, useState } from "react";
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+} from "react";
 import { ArrowUpDown, ArrowUp, ArrowDown, Inbox, Info } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { formatValue } from "@/lib/analytics_v2/format";
@@ -113,6 +115,20 @@ export default function DataTable({ table, onRowClick }: Props) {
     return out;
   }, [table.rows, table.bar_columns]);
 
+  // Is there more table to the right than is currently visible?
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const updateScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollRight(el.scrollWidth - el.clientWidth - el.scrollLeft > 1);
+  }, []);
+  useEffect(() => {
+    updateScroll();
+    window.addEventListener("resize", updateScroll);
+    return () => window.removeEventListener("resize", updateScroll);
+  }, [updateScroll, table.rows, table.columns]);
+
   const handleSort = (key: string) => {
     if (sortKey === key) {
       setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -142,7 +158,18 @@ export default function DataTable({ table, onRowClick }: Props) {
           <p className="text-sm">No data for this period</p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        // Nine money columns will not always fit, and how wide they are
+        // depends on how long this firm's client names happen to be — so the
+        // table scrolls, and the fade makes that obvious. Without it a clipped
+        // "Margin %" reads as a missing column rather than an off-screen one.
+        <div className="relative">
+          {canScrollRight && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 z-[11] w-12 bg-gradient-to-l from-white to-transparent"
+            />
+          )}
+          <div ref={scrollRef} onScroll={updateScroll} className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[rgba(15,42,60,0.10)] bg-slate-50/70">
@@ -172,7 +199,7 @@ export default function DataTable({ table, onRowClick }: Props) {
                       key={col.key}
                       className={cn(
                         "relative py-2.5 align-middle",
-                        ci === 0 ? "pl-5 pr-4" : "px-3",
+                        ci === 0 ? "pl-4 pr-3" : "px-2.5",
                         col.key === "flag_label" && "w-px whitespace-nowrap",
                         (table.bar_columns ?? []).includes(col.key) && "pb-4",
                         // The first column is the row's identity: it carries
@@ -180,7 +207,7 @@ export default function DataTable({ table, onRowClick }: Props) {
                         // does not stack three lines tall and make every row a
                         // different height.
                         ci === 0
-                          ? "min-w-[13rem] max-w-[20rem] font-semibold leading-snug text-slate-900"
+                          ? "min-w-[11rem] max-w-[18rem] font-semibold leading-snug text-slate-900"
                           : "text-slate-600",
                         col.format !== "text" && col.format !== "phase_picker" &&
                           "whitespace-nowrap text-right font-medium tabular-nums text-slate-800",
@@ -199,7 +226,7 @@ export default function DataTable({ table, onRowClick }: Props) {
                       {barMax[col.key] > 0 && typeof row[col.key] === "number" && (
                         <span
                           aria-hidden
-                          className="absolute inset-x-3 bottom-1.5 h-[3px] rounded-full bg-slate-100"
+                          className="absolute inset-x-2.5 bottom-1.5 h-[3px] rounded-full bg-slate-100"
                         >
                           <span
                             className="absolute inset-y-0 right-0 rounded-full bg-teal-600/70"
@@ -225,6 +252,7 @@ export default function DataTable({ table, onRowClick }: Props) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -241,6 +269,9 @@ export default function DataTable({ table, onRowClick }: Props) {
  * is not the same news as "Hours growing fast", and one amber for all of them
  * said it was.
  */
+/** Badges shown inline before the rest fold into a "+N". */
+const MAX_FLAGS = 2;
+
 const FLAG_SHORT: Record<string, string> = {
   "Losing money": "Losing $",
   "Below typical margin": "Low margin",
@@ -259,9 +290,18 @@ const FLAG_TONE: Record<string, string> = {
 function renderText(value: unknown, key: string) {
   const text = String(value ?? "");
   if (key !== "flag_label" || !text) return text || (key === "flag_label" ? "" : text);
+
+  // At most two badges. A third pushed the flag column wide enough to shove
+  // Margin % off the right edge of the table, and the backend already orders
+  // flags worst-first — so the two shown are the two that matter. The rest are
+  // still readable on hover.
+  const all = text.split(" · ");
+  const shown = all.slice(0, MAX_FLAGS);
+  const hidden = all.slice(MAX_FLAGS);
+
   return (
     <span className="flex flex-nowrap items-center gap-1">
-      {text.split(" · ").map(part => (
+      {shown.map(part => (
         <span
           key={part}
           title={part}
@@ -276,6 +316,14 @@ function renderText(value: unknown, key: string) {
           {FLAG_SHORT[part] ?? part}
         </span>
       ))}
+      {hidden.length > 0 && (
+        <span
+          title={hidden.join(" · ")}
+          className="inline-block whitespace-nowrap rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 ring-1 ring-inset ring-slate-200"
+        >
+          +{hidden.length}
+        </span>
+      )}
     </span>
   );
 }
@@ -296,7 +344,7 @@ function HeaderCell({
       className={cn(
         // Sticky so the column meanings survive a 52-client scroll.
         "group/th sticky top-0 z-10 whitespace-nowrap bg-slate-50/95 py-2.5 backdrop-blur",
-        numeric ? "px-3" : "pl-5 pr-4",
+        numeric ? "px-2.5" : "pl-4 pr-3",
         "text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-500",
         numeric && "text-right",
         onSort && "cursor-pointer select-none hover:bg-slate-100 hover:text-slate-800",

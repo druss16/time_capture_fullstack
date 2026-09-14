@@ -13,13 +13,17 @@ explicit that invented thresholds are not wanted. So every flag here is either
 firm's own numbers this period. Nothing is a number somebody made up:
 
   losing money      margin below zero. Not a judgement call.
-  below typical     margin below this firm's own median client margin, and at
-                    least 10 points below it, so a tight spread doesn't flag
-                    half the list.
-  heavy non-billable  billable share below the firm's own median billable share.
+  below typical     margin in the firm's own BOTTOM QUARTILE, and at least 10
+                    points below the median.
+  heavy non-billable  billable share in the firm's own BOTTOM QUARTILE.
   growing fast      hours up more than half again on the comparison period the
                     viewer themselves selected. Absent when they picked no
                     comparison — the dashboard does not invent a baseline.
+
+A quartile, not a median. "Below the median" flags half the table BY
+DEFINITION — at org 21 that was 26 of 52 clients wearing a badge, which is
+wallpaper, not a signal. A flag has to be rare to mean anything, so the
+comparison is against the bottom quarter of the firm's own distribution.
 
 The one configured threshold in the app — the gross-margin band on the margin
 metric — is deliberately NOT used per-client: it was set for the firm as a
@@ -29,13 +33,17 @@ the "arbitrary threshold" test.
 from __future__ import annotations
 
 from ..breakdowns import breakdown, held_out_note, split_client_rows
-from ..stats import median, partition_material
+from ..stats import median, partition_material, quantile
 from ..types import DataTablePayload, MetricState, Section, TimeRange
 from .base import Lens, register_lens
 from .helpers import column, kpi_tile
 
 _GROWTH_FLAG_RATIO = 1.5     # hours at least half again the comparison period
 _MARGIN_GAP_POINTS = 10.0    # how far below median counts as "below typical"
+# A flag is only information if it is rare. Comparing against the bottom
+# quarter caps each rule at ~25% of the list; comparing against the median
+# flagged half of it by construction.
+_LOW_QUANTILE = 0.25
 
 _FLAG_LABEL = {
     "losing_money": "Losing money",
@@ -107,7 +115,8 @@ def flag_rows(rows: list[dict], prior_by_id: dict[int, float] | None) -> None:
     margins = [r["margin_pct"] for r in material if r["margin_pct"] is not None]
     billables = [r["billable_pct"] for r in material if r["hours"] > 0]
     median_margin = median(margins)
-    median_billable = median(billables)
+    low_margin = quantile(margins, _LOW_QUANTILE)
+    low_billable = quantile(billables, _LOW_QUANTILE)
 
     material_ids = {id(r) for r in material}
 
@@ -117,12 +126,14 @@ def flag_rows(rows: list[dict], prior_by_id: dict[int, float] | None) -> None:
         if id(r) in material_ids:
             if r["margin"] < 0 and r["revenue"] > 0:
                 flags.append("losing_money")
-            elif (median_margin is not None and r["margin_pct"] is not None
+            elif (low_margin is not None and median_margin is not None
+                    and r["margin_pct"] is not None
+                    and r["margin_pct"] <= low_margin
                     and r["margin_pct"] < median_margin - _MARGIN_GAP_POINTS):
                 flags.append("below_typical")
 
-            if (median_billable is not None
-                    and r["billable_pct"] < median_billable):
+            if (low_billable is not None
+                    and r["billable_pct"] <= low_billable):
                 flags.append("heavy_non_billable")
 
             if prior_by_id is not None:

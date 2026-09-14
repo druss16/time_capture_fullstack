@@ -49,6 +49,79 @@ class ParseFiltersTests(SimpleTestCase):
         self.assertEqual(scope.filters, {"billable": "billable"})
 
 
+class FlagRarityTests(SimpleTestCase):
+    """A flag has to be rare to carry information.
+
+    The first rule compared each client with the firm's MEDIAN, which flags
+    half the table by definition — at org 21 that was 26 of 52 clients wearing
+    a badge. Comparing against the bottom quartile caps each rule at about a
+    quarter and makes the badge worth reading.
+    """
+
+    def _rows(self, n=40):
+        """A smooth spread of clients, all material, none pathological."""
+        rows = []
+        for i in range(n):
+            hours = 20.0 + i
+            billable_pct = 40.0 + i * 1.5      # 40% .. 98.5%
+            revenue = 4000.0 + i * 100
+            margin_pct = 10.0 + i * 1.5        # 10% .. 68.5%
+            margin = revenue * margin_pct / 100
+            rows.append({
+                "id": i + 1, "label": f"Client {i}", "hours": hours,
+                "billable_hours": hours * billable_pct / 100,
+                "billable_pct": billable_pct, "revenue": revenue,
+                "cost": revenue - margin, "margin": margin,
+                "margin_pct": margin_pct, "people": 1, "share": 0.0,
+                "is_internal": False,
+            })
+        return rows
+
+    def test_a_smooth_spread_flags_about_a_quarter_not_a_half(self):
+        from tracker.analytics_v2.lenses.clients import flag_rows
+
+        rows = self._rows()
+        flag_rows(rows, None)
+        flagged = [r for r in rows if r["flags"]]
+
+        # Comfortably under half — the failure this test exists for.
+        self.assertLess(len(flagged), len(rows) * 0.40,
+                        f"{len(flagged)} of {len(rows)} flagged — too many to mean anything")
+        self.assertGreater(len(flagged), 0, "the rule should still flag the worst")
+
+    def test_only_the_bottom_of_the_spread_is_flagged(self):
+        """Whoever is flagged must actually be at the bottom of the list."""
+        from tracker.analytics_v2.lenses.clients import flag_rows
+
+        rows = self._rows()
+        flag_rows(rows, None)
+        non_billable_flagged = [
+            r["billable_pct"] for r in rows
+            if any(f["key"] == "heavy_non_billable" for f in r["flags"])
+        ]
+        others = [
+            r["billable_pct"] for r in rows
+            if not any(f["key"] == "heavy_non_billable" for f in r["flags"])
+        ]
+        if non_billable_flagged and others:
+            self.assertLess(max(non_billable_flagged), min(others))
+
+    def test_a_client_losing_money_is_always_flagged(self):
+        """The one objective rule must not be quantile-gated away."""
+        from tracker.analytics_v2.lenses.clients import flag_rows
+
+        rows = self._rows()
+        rows.append({
+            "id": 999, "label": "Underwater", "hours": 60.0,
+            "billable_hours": 55.0, "billable_pct": 91.0, "revenue": 5000.0,
+            "cost": 7000.0, "margin": -2000.0, "margin_pct": -40.0,
+            "people": 1, "share": 0.0, "is_internal": False,
+        })
+        flag_rows(rows, None)
+        loser = next(r for r in rows if r["label"] == "Underwater")
+        self.assertIn("losing_money", [f["key"] for f in loser["flags"]])
+
+
 class CostRedactionTests(SimpleTestCase):
     def _trend_card(self):
         return {

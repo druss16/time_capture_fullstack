@@ -8,7 +8,6 @@
 import { useState } from "react";
 import { Info, TrendingUp, TrendingDown, Minus, AlertTriangle, Sparkles } from "lucide-react";
 import { cn } from "@/lib/design-system";
-import { useCountUp } from "@/lib/analytics_v2/motion";
 import { formatValue, formatDelta } from "@/lib/analytics_v2/format";
 import type { KPITilePayload, ThresholdZone } from "@/lib/analytics_v2/types";
 
@@ -44,7 +43,6 @@ const ZONE_DOT: Record<ThresholdZone, string> = {
 export default function KPITile({ tile, onDrilldown }: Props) {
   const [showTooltip, setShowTooltip] = useState(false);
   const m = tile.metric;
-  const counted = useCountUp(m.value);
   const interactive = !!(tile.drilldown && onDrilldown);
 
   // Container sizing
@@ -118,9 +116,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
   }
 
   // ──────────── READY STATE ────────────
-  // Counts up on arrival and lands on the exact value; a no-op for anyone who
-  // asked for reduced motion.
-  const valueStr = formatValue(counted, tile.format);
+  const valueStr = formatValue(m.value, tile.format);
   const zoneAccent = m.threshold_zone
     ? cn(ZONE_BASE, ZONE_ACCENT[m.threshold_zone])
     : "";

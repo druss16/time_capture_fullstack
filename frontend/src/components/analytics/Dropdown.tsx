@@ -93,18 +93,16 @@ export default function Dropdown({
         aria-expanded={open}
         aria-haspopup="true"
         className={cn(
-          // The trigger sits on the dark masthead; the PANEL stays light,
-          // because a menu of twelve items is easier to read on white.
-          "group flex items-center gap-2 rounded-xl border px-3 py-1.5 text-left",
-          "transition-[background-color,border-color] duration-150",
+          "group flex items-center gap-2 rounded-xl border px-3 py-2 text-left",
+          "transition-[background-color,border-color,box-shadow] duration-150",
           active
-            ? "border-teal-400/40 bg-teal-400/15 text-teal-100"
-            : "border-white/10 bg-white/5 text-slate-200 hover:border-white/20 hover:bg-white/10",
+            ? "border-teal-600/30 bg-teal-50 text-teal-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
+            : "border-slate-200/90 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50/60",
         )}
       >
         <span className="min-w-0">
           {caption && (
-            <span className="mb-0.5 block text-[9.5px] font-semibold uppercase leading-none tracking-[0.12em] text-slate-400">
+            <span className="mb-0.5 block text-[10px] font-medium uppercase leading-none tracking-[0.12em] text-slate-400">
               {caption}
             </span>
           )}

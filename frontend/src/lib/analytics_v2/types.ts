@@ -114,7 +114,15 @@ export type ChartType =
 export interface ChartSeries {
   key: string;
   label: string;
-  color?: string;
+  color?: string | undefined;
+  /**
+   * Emphasis pairing, for a chart that is one measure and its remainder rather
+   * than N peers ("Billable" vs "Other tracked"). Two categorical hues would
+   * read as two equal categories; this says which one the chart is about.
+   * The backend names the ROLE and the frontend owns the hex, so the validated
+   * palette lives in exactly one place.
+   */
+  role?: "primary" | "muted" | undefined;
 }
 
 /**

@@ -15,12 +15,36 @@ import { formatValue } from "@/lib/analytics_v2/format";
 import type {
   ChartCardPayload, ChartToggleView, NumberFormat,
 } from "@/lib/analytics_v2/types";
+import {
+  CHROME, EMPHASIS, SERIES, SERIES_FALLBACK, seriesColor,
+} from "@/lib/analytics_v2/theme";
 
-// Brand palette — teal-led to match the Lightning primary (Daily Review / Reports)
-const SERIES_COLORS = ["#0d9488", "#0d1b2a", "#c9a84c", "#fb7185", "#f97316", "#94a3b8"];
+// WIP aging band colors — an ordered ramp, not categorical identity: these
+// bands have a natural order (fresher → staler), so a single-hue-to-status
+// progression is the right encoding.
+const WIP_AGING_COLORS = ["#0f766e", "#0d9488", "#eb6834", "#be123c"];
 
-// WIP aging band colors — green to red as age increases
-const WIP_AGING_COLORS = ["#10b981", "#c9a84c", "#f97316", "#dc2626"];
+/**
+ * Colour for a series, by IDENTITY not by row number.
+ *
+ * The old implementation was `SERIES_COLORS[i % SERIES_COLORS.length]` over a
+ * hand-picked six. Two problems: the modulo silently reused a hue for a 7th
+ * series, and the six were never checked for colour-vision separation. The
+ * palette in theme.ts is validated; `seriesColor` folds anything past it into
+ * a neutral instead of inventing a hue.
+ */
+/** Palette slot for a ROW index (proportion bar, dot matrix). Neutral past the end. */
+function rowColor(i: number): string {
+  return i < SERIES.length ? SERIES[i] : SERIES_FALLBACK;
+}
+
+function colorFor(card: ChartCardPayload, key: string, explicit?: string): string {
+  if (explicit) return explicit;
+  const role = card.series.find(x => x.key === key)?.role;
+  if (role === "primary") return EMPHASIS.primary;
+  if (role === "muted") return EMPHASIS.muted;
+  return seriesColor(key, card.series.map(x => x.key));
+}
 
 interface Props {
   card: ChartCardPayload;
@@ -51,7 +75,7 @@ export default function ChartCard({ card }: Props) {
     active?.format ?? (card.value_format || undefined);
 
   return (
-    <div className="rounded-[15px] border border-border/70 bg-white p-5 shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
+    <div className="rounded-2xl border border-[rgba(15,42,60,0.08)] bg-white p-5 shadow-[0_1px_2px_rgba(16,27,46,0.04),0_8px_24px_-12px_rgba(16,27,46,0.10)]">
       <header className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -103,9 +127,28 @@ export default function ChartCard({ card }: Props) {
       ) : card.state === "error" ? (
         <ErrorChart message={card.error_message} />
       ) : (
-        <div style={{ height: chartHeight(shown) }}>
-          <ChartByType card={shown} format={format} />
-        </div>
+        <>
+          {/* Identity is never colour alone: 2+ series always get a legend.
+              A single series needs none — the title already names it. */}
+          {shown.series.length > 1 && (
+            <ul className="mb-3 flex flex-wrap gap-x-5 gap-y-1.5">
+              {shown.series.map(sr => (
+                <li key={sr.key}
+                    className="inline-flex items-center gap-2 text-xs text-slate-600">
+                  <span
+                    aria-hidden
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: colorFor(shown, sr.key, sr.color) }}
+                  />
+                  {sr.label}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div style={{ height: chartHeight(shown) }}>
+            <ChartByType card={shown} format={format} />
+          </div>
+        </>
       )}
     </div>
   );
@@ -234,9 +277,9 @@ function AreaChartView({ card, format }: ViewProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-        <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+        <CartesianGrid stroke={CHROME.grid} strokeWidth={1} vertical={false} />
+        <XAxis dataKey={x} stroke={CHROME.tick} fontSize={11} tickLine={false} />
+        <YAxis stroke={CHROME.tick} fontSize={11} tickLine={false} axisLine={false}
                tickFormatter={axisTick(format)} width={56} />
         <Tooltip content={<ChartTooltip format={format} />} />
         {card.series.map((s, i) => (
@@ -245,10 +288,10 @@ function AreaChartView({ card, format }: ViewProps) {
             type="monotone"
             dataKey={s.key}
             name={s.label}
-            stroke={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
-            fill={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
-            fillOpacity={0.18}
-            strokeWidth={2}
+            stroke={colorFor(card, s.key, s.color)}
+            fill={colorFor(card, s.key, s.color)}
+            fillOpacity={CHROME.areaFillOpacity}
+            strokeWidth={CHROME.strokeWidth}
           />
         ))}
       </AreaChart>
@@ -261,9 +304,9 @@ function LineChartView({ card, format }: ViewProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-        <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+        <CartesianGrid stroke={CHROME.grid} strokeWidth={1} vertical={false} />
+        <XAxis dataKey={x} stroke={CHROME.tick} fontSize={11} tickLine={false} />
+        <YAxis stroke={CHROME.tick} fontSize={11} tickLine={false} axisLine={false}
                tickFormatter={axisTick(format)} width={56} />
         <Tooltip content={<ChartTooltip format={format} />} />
         {card.series.map((s, i) => (
@@ -272,7 +315,7 @@ function LineChartView({ card, format }: ViewProps) {
             type="monotone"
             dataKey={s.key}
             name={s.label}
-            stroke={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
+            stroke={colorFor(card, s.key, s.color)}
             strokeWidth={2}
             dot={false}
           />
@@ -287,9 +330,9 @@ function BarChartView({ card, format }: ViewProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-        <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+        <CartesianGrid stroke={CHROME.grid} strokeWidth={1} vertical={false} />
+        <XAxis dataKey={x} stroke={CHROME.tick} fontSize={11} tickLine={false} />
+        <YAxis stroke={CHROME.tick} fontSize={11} tickLine={false} axisLine={false}
                tickFormatter={axisTick(format)} width={56} />
         <Tooltip content={<ChartTooltip format={format} />} cursor={{ fill: "#f1f5f9" }} />
         {card.series.map((s, i) => (
@@ -297,8 +340,8 @@ function BarChartView({ card, format }: ViewProps) {
             key={s.key}
             dataKey={s.key}
             name={s.label}
-            fill={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
-            radius={[4, 4, 0, 0]}
+            fill={colorFor(card, s.key, s.color)}
+            radius={[CHROME.barRadius, CHROME.barRadius, 0, 0]}
           />
         ))}
       </BarChart>
@@ -311,8 +354,8 @@ function HorizontalBarView({ card, format }: ViewProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} layout="vertical" margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-        <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false}
+        <CartesianGrid stroke={CHROME.grid} strokeWidth={1} horizontal={false} />
+        <XAxis type="number" stroke={CHROME.tick} fontSize={11} tickLine={false}
                axisLine={false} tickFormatter={axisTick(format)} />
         {/* 180px: CPA client names are long ("St. Mary of the Assumption"),
             and a truncated label makes the ranking unreadable. */}
@@ -324,8 +367,8 @@ function HorizontalBarView({ card, format }: ViewProps) {
             key={s.key}
             dataKey={s.key}
             name={s.label}
-            fill={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
-            radius={[0, 4, 4, 0]}
+            fill={colorFor(card, s.key, s.color)}
+            radius={[0, CHROME.barRadius, CHROME.barRadius, 0]}
           />
         ))}
       </BarChart>
@@ -345,7 +388,7 @@ function ProportionBarView({ card }: { card: ChartCardPayload }) {
   const unit = card.series?.[0]?.label ?? "";
   const pct = (v: unknown) => (Number(v) || 0) / total * 100;
   const colorAt = (r: Record<string, unknown>, i: number) =>
-    (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+    (r.color as string) ?? rowColor(i);
 
   // Rows may declare a `group`. Five segments read as five peers and the
   // question the chart answers — which is a two-way split — disappears into the
@@ -454,7 +497,7 @@ function DotMatrixView({ card }: { card: ChartCardPayload }) {
 
   const cells: Array<{ fill: string; outline: boolean; label: string }> = [];
   rows.forEach((r, i) => {
-    const fill = (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+    const fill = (r.color as string) ?? rowColor(i);
     for (let n = 0; n < (Number(r.value) || 0); n++) {
       cells.push({ fill, outline: Boolean(r.outline), label: String(r.label) });
     }
@@ -483,7 +526,7 @@ function DotMatrixView({ card }: { card: ChartCardPayload }) {
       </svg>
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
         {rows.map((r, i) => {
-          const fill = (r.color as string) ?? SERIES_COLORS[i % SERIES_COLORS.length];
+          const fill = (r.color as string) ?? rowColor(i);
           return (
             <span key={String(r.label)} className="inline-flex items-center gap-2">
               <i className="h-2.5 w-2.5 rounded-sm inline-block"
@@ -505,9 +548,9 @@ function StackedBarView({ card, format }: ViewProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={card.data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-        <XAxis dataKey={x} stroke="#94a3b8" fontSize={11} tickLine={false} />
-        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false}
+        <CartesianGrid stroke={CHROME.grid} strokeWidth={1} vertical={false} />
+        <XAxis dataKey={x} stroke={CHROME.tick} fontSize={11} tickLine={false} />
+        <YAxis stroke={CHROME.tick} fontSize={11} tickLine={false} axisLine={false}
                tickFormatter={axisTick(format)} width={56} />
         <Tooltip content={<ChartTooltip format={format} />} cursor={{ fill: "#f1f5f9" }} />
         {card.series.map((s, i) => (
@@ -516,7 +559,16 @@ function StackedBarView({ card, format }: ViewProps) {
             dataKey={s.key}
             name={s.label}
             stackId="stack"
-            fill={s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]}
+            fill={colorFor(card, s.key, s.color)}
+            // A surface-coloured hairline between segments, so adjacent fills
+            // read as separate blocks rather than one gradient.
+            stroke={CHROME.surface}
+            strokeWidth={CHROME.segmentGap}
+            // Only the top segment gets the rounded data-end; the ones below
+            // it stay square so the stack reads as one column.
+            radius={i === card.series.length - 1
+              ? [CHROME.barRadius, CHROME.barRadius, 0, 0]
+              : [0, 0, 0, 0]}
           />
         ))}
       </BarChart>
@@ -541,7 +593,7 @@ function PieChartView({ card }: { card: ChartCardPayload }) {
           paddingAngle={2}
         >
           {card.data.map((_, i) => (
-            <Cell key={i} fill={SERIES_COLORS[i % SERIES_COLORS.length]} />
+            <Cell key={i} fill={SERIES[i % SERIES.length]} />
           ))}
         </Pie>
         <Tooltip content={<ChartTooltip />} />

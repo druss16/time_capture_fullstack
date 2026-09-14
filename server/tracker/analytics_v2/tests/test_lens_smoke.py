@@ -294,6 +294,55 @@ class LensSmokeTests(TestCase):
         worst = min(all_rows, key=lambda r: r["billable_pct"])
         self.assertTrue(worst["flags"])
 
+    def test_kpi_tiles_carry_a_sparkline(self):
+        """`Metric.sparkline()` was declared on the base class, never called by
+        safe_compute and never implemented, so MetricValue.sparkline was always
+        None and the frontend's sparkline branch was dead code. It is now fed
+        from one shared `build_series` pass per KPI row."""
+        payload = self._assemble("overview", Scope(type="firm"))
+        row = next(s for s in payload if s["type"] == "kpi_row")
+        withspark = [t for t in row["tiles"] if t["metric"].get("sparkline")]
+
+        self.assertTrue(withspark, "no tile carried a sparkline")
+        for t in withspark:
+            self.assertGreaterEqual(len(t["metric"]["sparkline"]), 3)
+            self.assertTrue(all(isinstance(v, (int, float))
+                                for v in t["metric"]["sparkline"]))
+
+    def test_sparklines_come_from_one_series_pass(self):
+        """Seven tiles must not mean seven trend queries.
+
+        The invariant is that the cost is FLAT in the number of metrics, not
+        that it is any particular number: one `build_series` pass plus the
+        fixed overhead of the shared rule helpers (internal-client ids, rate
+        maps, the utilization exclusions) covers every line on the row. Pinning
+        an absolute count would just break whenever a helper adds a lookup.
+        """
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+        from tracker.analytics_v2.series import sparklines_for
+
+        with CaptureQueriesContext(connection) as ctx:
+            sparks = sparklines_for(self.org, Scope(type="firm"), self.time)
+        one_pass = len(ctx.captured_queries)
+
+        self.assertGreaterEqual(len(sparks), 5,
+                                "one pass should cover most of the KPI row")
+        # Per-metric trend queries would cost at least one round trip each on
+        # top of this; flat means the whole row costs about what one does.
+        self.assertLess(one_pass, len(sparks) * 5)
+
+    def test_sparkline_drops_empty_buckets_rather_than_plotting_zero(self):
+        """A week that billed nothing has no margin percentage. Plotting it as
+        0% would draw a crash to the floor that never happened."""
+        from tracker.analytics_v2.series import build_series, sparklines_for
+
+        points, _ = build_series(self.org, Scope(type="firm"), self.time)
+        sparks = sparklines_for(self.org, Scope(type="firm"), self.time)
+        if "gross_margin" in sparks:
+            nulls = sum(1 for p in points if p.get("margin_pct") is None)
+            self.assertEqual(len(sparks["gross_margin"]), len(points) - nulls)
+
     def test_no_project_and_uncategorized_still_appear(self):
         """Only the CLIENT dimension holds its unassigned row back. A missing
         project or category is an ordinary state for real work, and on a

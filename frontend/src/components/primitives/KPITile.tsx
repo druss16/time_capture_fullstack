@@ -24,10 +24,38 @@ interface Props {
  * and washed the value itself onto a coloured ground. A hairline accent on the
  * inline edge says the same thing and lets the number stay the loudest element.
  */
-const ZONE_ACCENT: Record<ThresholdZone, string> = {
-  good:  "before:bg-teal-600",
-  watch: "before:bg-amber-500",
-  bad:   "before:bg-rose-500",
+type Tone = "good" | "watch" | "bad" | "neutral";
+
+/**
+ * One tone per tile, driving both the edge stripe and the sparkline.
+ *
+ * Order matters: an explicit threshold zone is a statement about the level and
+ * outranks the delta, which is only a statement about the direction. With
+ * neither, the tone is NEUTRAL — the stripe is then structure, not a claim.
+ * Painting every tile teal would make "fine" the default reading of figures
+ * nobody has set a target for.
+ */
+function toneFor(m: KPITilePayload["metric"]): Tone {
+  if (m.threshold_zone) return m.threshold_zone;
+  // `delta_good` is the metric's own answer to "did this move the right way?"
+  // — the backend decides it per metric, so labour cost rising is not good
+  // while revenue rising is. Reading it here is a statement, not decoration.
+  if (m.delta_good === true) return "good";
+  if (m.delta_good === false) return "watch";
+  // No target and no comparison: nothing is known about this figure beyond its
+  // level, so the stripe stays structural and the trend line stays grey.
+  return "neutral";
+}
+
+const TONE_HEX: Record<Tone, string> = {
+  good: "#0d9488", watch: "#b45309", bad: "#be123c", neutral: "#64748b",
+};
+
+const TONE_STRIPE: Record<Tone, string> = {
+  good:    "before:bg-teal-600",
+  watch:   "before:bg-amber-500",
+  bad:     "before:bg-rose-500",
+  neutral: "before:bg-slate-200",
 };
 
 const ZONE_BASE =
@@ -117,9 +145,10 @@ export default function KPITile({ tile, onDrilldown }: Props) {
 
   // ──────────── READY STATE ────────────
   const valueStr = formatValue(m.value, tile.format);
-  const zoneAccent = m.threshold_zone
-    ? cn(ZONE_BASE, ZONE_ACCENT[m.threshold_zone])
-    : "";
+  // Every tile gets the stripe so the row reads as one object; only its
+  // COLOUR carries meaning, and only when there is meaning to carry.
+  const tone = toneFor(m);
+  const zoneAccent = cn(ZONE_BASE, TONE_STRIPE[tone]);
   const hasDataQualityBadge = m.data_quality !== null && m.data_quality !== undefined && m.data_quality < 0.75;
 
   return (
@@ -148,6 +177,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
           low={m.threshold_low ?? null}
           high={m.threshold_high ?? null}
           benchmark={m.benchmark ?? null}
+          tone={tone}
         />
       )}
 
@@ -260,36 +290,60 @@ function Label({
   );
 }
 
-function Sparkline({ values, low, high, benchmark }: {
-  values: number[]; low: number | null; high: number | null; benchmark?: number | null;
+function Sparkline({ values, low, high, benchmark, tone }: {
+  values: number[]; low: number | null; high: number | null;
+  benchmark?: number | null; tone: Tone;
 }) {
-  const pts = values.filter((v) => v !== null && v !== undefined) as number[];
-  if (pts.length < 2) return null;
-  const W = 108, H = 28, pad = 3;
+  const pts = values.filter(v => v !== null && v !== undefined) as number[];
+  if (pts.length < 3) return null;
+
+  // viewBox units, scaled to the tile by width:100%. The old sparkline was a
+  // fixed 108px, so it sat in a puddle of dead space on a wide tile.
+  const W = 120, H = 30, pad = 3;
   const lo = Math.min(...pts, low ?? Infinity, benchmark ?? Infinity);
   const hi = Math.max(...pts, high ?? -Infinity, benchmark ?? -Infinity);
   const range = hi - lo || 1;
   const x = (i: number) => pad + (i / (pts.length - 1)) * (W - 2 * pad);
   const y = (v: number) => pad + (1 - (v - lo) / range) * (H - 2 * pad);
+
   const line = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const last = pts[pts.length - 1];
-  const inBand = low != null && last >= low;   // at/above your normal floor
+  const area = `${line} ${x(pts.length - 1).toFixed(1)},${H} ${x(0).toFixed(1)},${H}`;
+  const last = pts[pts.length - 1]!;
+  const stroke = TONE_HEX[tone];
+  const id = `spark-${tone}`;
+
   return (
-    <div className="mt-2" title="Trend vs your firm's normal range (band) and target (dashed), last ~12 weeks">
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
-        {low != null && high != null && (
-          <rect x={0} y={y(high)} width={W} height={Math.max(0, y(low) - y(high))} fill="#0d9488" opacity="0.10" />
-        )}
-        {benchmark != null && (
-          <line x1={0} y1={y(benchmark)} x2={W} y2={y(benchmark)}
-            stroke="#0f172a" strokeWidth="1" strokeDasharray="2 2" opacity="0.35" />
-        )}
-        <polyline points={line} fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinejoin="round" />
-        <circle cx={x(pts.length - 1)} cy={y(last)} r="2.6" fill={inBand ? "#0d9488" : "#f59e0b"} />
-      </svg>
-    </div>
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      height="30"
+      preserveAspectRatio="none"
+      className="mt-2 block overflow-visible"
+      role="img"
+      aria-label={`Trend over the period, ending at ${last.toFixed(1)}`}
+    >
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={stroke} stopOpacity="0.18" />
+          <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {/* The firm's own normal band, where the metric defines one. A solid
+          wash, not a dashed rule — dashing reads as "projection". */}
+      {low != null && high != null && (
+        <rect x={0} y={y(high)} width={W} height={Math.max(0, y(low) - y(high))}
+              fill={stroke} opacity="0.07" />
+      )}
+      <polygon points={area} fill={`url(#${id})`} />
+      <polyline points={line} fill="none" stroke={stroke} strokeWidth="1.75"
+                strokeLinejoin="round" strokeLinecap="round"
+                vectorEffect="non-scaling-stroke" />
+      {/* The endpoint is the value the tile prints, so it gets the emphasis. */}
+      <circle cx={x(pts.length - 1)} cy={y(last)} r="2.4" fill={stroke} />
+    </svg>
   );
 }
+
 
 function DeltaIcon({ dir, good }: { dir: "up" | "down" | "flat"; good: boolean | null }) {
   const colorClass = good === true ? "text-emerald-600"

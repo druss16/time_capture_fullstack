@@ -110,7 +110,7 @@ export default function DataTable({ table, onRowClick }: Props) {
     const out: Record<string, number> = {};
     for (const key of table.bar_columns ?? []) {
       out[key] = Math.max(
-        0, ...table.rows.map(r => (typeof r[key] === "number" ? r[key] : 0)));
+        0, ...table.rows.map(r => (typeof r[key] === "number" ? Math.abs(r[key]) : 0)));
     }
     return out;
   }, [table.rows, table.bar_columns]);
@@ -128,6 +128,16 @@ export default function DataTable({ table, onRowClick }: Props) {
     window.addEventListener("resize", updateScroll);
     return () => window.removeEventListener("resize", updateScroll);
   }, [updateScroll, table.rows, table.columns]);
+
+  // Rank is fixed to the order the backend sent — the ranking the subtitle
+  // names ("top 20 by hours"). Re-sorting by margin re-orders these twenty; it
+  // does not renumber them 1..20 by margin, which would claim a different
+  // ranking than the one that selected the rows.
+  const rankOf = useMemo(() => {
+    const m = new Map<Record<string, any>, number>();
+    table.rows.forEach((r, i) => m.set(r, i + 1));
+    return m;
+  }, [table.rows]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -173,6 +183,9 @@ export default function DataTable({ table, onRowClick }: Props) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[rgba(15,42,60,0.10)] bg-slate-50/70">
+                {table.ranked && (
+                  <th className="sticky top-0 z-10 w-8 bg-slate-50/95 py-2.5 pl-4 pr-1 text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 backdrop-blur" />
+                )}
                 {table.columns.map(col => (
                   <HeaderCell
                     key={col.key}
@@ -194,12 +207,17 @@ export default function DataTable({ table, onRowClick }: Props) {
                     onRowClick && "cursor-pointer hover:bg-teal-50/50",
                   )}
                 >
+                  {table.ranked && (
+                    <td className="w-8 py-2.5 pl-4 pr-1 text-left align-middle text-[11px] font-semibold tabular-nums text-slate-300">
+                      {rankOf.get(row) ?? ""}
+                    </td>
+                  )}
                   {table.columns.map((col, ci) => (
                     <td
                       key={col.key}
                       className={cn(
                         "relative py-2.5 align-middle",
-                        ci === 0 ? "pl-4 pr-3" : "px-2.5",
+                        ci === 0 ? "pl-4 pr-3" : "px-2",
                         col.key === "flag_label" && "w-px whitespace-nowrap",
                         (table.bar_columns ?? []).includes(col.key) && "pb-4",
                         // The first column is the row's identity: it carries
@@ -226,13 +244,16 @@ export default function DataTable({ table, onRowClick }: Props) {
                       {barMax[col.key] > 0 && typeof row[col.key] === "number" && (
                         <span
                           aria-hidden
-                          className="absolute inset-x-2.5 bottom-1.5 h-[3px] rounded-full bg-slate-100"
+                          className="absolute inset-x-2 bottom-1.5 h-[3px] rounded-full bg-slate-100"
                         >
                           <span
-                            className="absolute inset-y-0 right-0 rounded-full bg-teal-600/70"
+                            className={cn(
+                              "absolute inset-y-0 right-0 rounded-full",
+                              row[col.key] < 0 ? "bg-rose-500/80" : "bg-teal-600/70",
+                            )}
                             style={{
                               width: `${Math.min(100, Math.max(
-                                (row[col.key] / barMax[col.key]) * 100, 0))}%`,
+                                (Math.abs(row[col.key]) / barMax[col.key]) * 100, 0))}%`,
                             }}
                           />
                         </span>
@@ -344,7 +365,7 @@ function HeaderCell({
       className={cn(
         // Sticky so the column meanings survive a 52-client scroll.
         "group/th sticky top-0 z-10 whitespace-nowrap bg-slate-50/95 py-2.5 backdrop-blur",
-        numeric ? "px-2.5" : "pl-4 pr-3",
+        numeric ? "px-2" : "pl-4 pr-3",
         "text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-500",
         numeric && "text-right",
         onSort && "cursor-pointer select-none hover:bg-slate-100 hover:text-slate-800",

@@ -23,7 +23,7 @@ from __future__ import annotations
 from ..series import trend_chart
 from ..types import Section
 from .base import Lens, register_lens
-from .helpers import kpi_tile
+from .helpers import kpi_tile, safe_sparklines
 
 # The seven numbers a managing partner runs a firm on, in reading order:
 # volume, then the billable share of it, then what it is worth, then what it
@@ -59,9 +59,10 @@ class OverviewLens(Lens):
         if not invoiceless:
             kpis.append(_REALIZATION_KPI)
 
+        sparks = safe_sparklines(org, scope, time)
         tiles = [
             kpi_tile(mid, org, scope, time, compare, size="medium",
-                     drilldown_lens=lens)
+                     drilldown_lens=lens, sparklines=sparks)
             for mid, lens in kpis
             if scope.type in get_metric(mid).valid_scopes
         ]

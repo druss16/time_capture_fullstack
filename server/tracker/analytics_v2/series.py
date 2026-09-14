@@ -322,3 +322,61 @@ def trend_chart(org, scope: Scope, time: TimeRange, card_id: str = "performance_
         toggle_label="Measure",
         state=MetricState.READY if has_data else MetricState.EMPTY,
     )
+
+
+# ---------------------------------------------------------------------------
+# Sparklines
+# ---------------------------------------------------------------------------
+
+# KPI metric -> the series key that traces it over the window. A metric absent
+# from this map simply gets no sparkline; nothing invents a shape for a figure
+# whose history we cannot draw.
+_SPARK_SERIES = {
+    "total_hours": "hours",
+    "billable_hours": "billable_hours",
+    "revenue": "revenue",
+    "labor_cost": "cost",
+    "gross_margin": "margin_pct",
+    "billable_mix": "utilization",
+    "billable_utilization": "utilization",
+}
+
+
+def sparklines_for(org, scope: Scope, time: TimeRange) -> dict[str, list[float]]:
+    """{metric_id: [value per bucket]} for the tiles in one KPI row.
+
+    Built from ONE `build_series` pass and shared across the row, rather than
+    each metric running its own trend query — a row of seven tiles would
+    otherwise be seven more trips for data that all comes from the same
+    grouped aggregate.
+
+    `Metric.sparkline()` has existed on the base class since the dashboard was
+    written and was never called by `safe_compute` and never implemented by any
+    metric, so `MetricValue.sparkline` was always None and the frontend's
+    sparkline branch was dead. This is what fills it.
+
+    Buckets with no value (a week that billed nothing, so margin % is None) are
+    dropped rather than plotted as zero: a gap in the record is not a crash to
+    the floor.
+    """
+    points, _ = build_series(org, scope, time)
+    if len(points) < 3:
+        return {}
+
+    out: dict[str, list[float]] = {}
+    for metric_id, key in _SPARK_SERIES.items():
+        values = [p[key] for p in points if p.get(key) is not None]
+        if len(values) >= 3:
+            out[metric_id] = [round(float(v), 2) for v in values]
+
+    # Effective rate is not a series key — it is the ratio of two that are, so
+    # it is derived here rather than carried through the whole aggregate.
+    rates = [
+        round(p["revenue"] / p["billable_hours"], 2)
+        for p in points
+        if p.get("billable_hours") and p["billable_hours"] > 0
+    ]
+    if len(rates) >= 3:
+        out["effective_rate"] = rates
+
+    return out

@@ -29,7 +29,7 @@ from ..types import (
     ChartCardPayload, DataTablePayload, MetricState, Section, TimeRange,
 )
 from .base import Lens, register_lens
-from .helpers import column, kpi_tile
+from .helpers import column, kpi_tile, safe_sparklines
 
 
 def team_columns() -> list[dict]:
@@ -99,8 +99,10 @@ class TeamLens(Lens):
 
         sections: list[Section] = []
 
+        sparks = safe_sparklines(org, scope, time)
         tiles = [
-            kpi_tile(mid, org, scope, time, compare, size="medium")
+            kpi_tile(mid, org, scope, time, compare, size="medium",
+                     sparklines=sparks)
             for mid in ("total_hours", "billable_hours", "billable_mix",
                         "billable_utilization", "revenue", "labor_cost")
             if scope.type in get_metric(mid).valid_scopes

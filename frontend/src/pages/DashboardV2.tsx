@@ -195,7 +195,10 @@ function SectionRenderer({
           return (
             <div
               key={section.id}
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+              // 1 → 2 → 3 → 4. Without the 3-up step a 1100-1280px window
+              // dropped straight from four tiles to two, leaving each one
+              // half a screen wide with a number in the corner.
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
             >
               {section.tiles.map(tile => (
                 <KPITile key={tile.id} tile={tile} onDrilldown={onDrilldown} />

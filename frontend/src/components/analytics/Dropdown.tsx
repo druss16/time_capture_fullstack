@@ -92,24 +92,24 @@ export default function Dropdown({
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
         aria-haspopup="true"
+        // The caption used to sit above the value inside the pill. It survives
+        // as the accessible name and the tooltip, so the control is still
+        // self-describing without costing a second line.
+        aria-label={caption}
+        title={caption}
         className={cn(
-          "group flex items-center gap-2 rounded-xl border px-3 py-2 text-left",
-          "transition-[background-color,border-color,box-shadow] duration-150",
+          "group flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left",
+          "transition-[background-color,border-color] duration-150",
           active
-            ? "border-teal-600/30 bg-teal-50 text-teal-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]"
-            : "border-slate-200/90 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50/60",
+            ? "border-teal-600/30 bg-teal-50 text-teal-900"
+            : "border-slate-200/90 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50",
         )}
       >
-        <span className="min-w-0">
-          {caption && (
-            <span className="mb-0.5 block text-[10px] font-medium uppercase leading-none tracking-[0.12em] text-slate-400">
-              {caption}
-            </span>
-          )}
-          <span className="block truncate text-sm font-medium">{label}</span>
-        </span>
+        {/* One line. The stacked pill was ~52px tall, and three of them set
+            the height of the entire header row. */}
+        <span className="truncate text-[13px] font-medium leading-none">{label}</span>
         <ChevronDown
-          className={cn("h-4 w-4 shrink-0 text-slate-400 transition-transform duration-150",
+          className={cn("h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150",
                         open && "rotate-180")}
         />
       </button>

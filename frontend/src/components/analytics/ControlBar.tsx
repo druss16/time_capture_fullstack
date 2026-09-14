@@ -111,10 +111,15 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
           : "shadow-none",
       )}
     >
-      {/* Views */}
-      {/* overflow-x-auto clips on BOTH axes; the dropdowns here render through
-          a portal so they are not caught by it. See Dropdown.tsx. */}
-      <div className="mx-auto flex max-w-[1560px] items-end gap-0.5 overflow-x-auto px-6 pt-3">
+      {/* ONE row: what you are looking at on the left, how it is sliced on the
+          right. This used to be three stacked rows — tabs, then controls, then
+          the title — each left-aligned, leaving the entire right half of the
+          screen empty. Putting the controls beside the tabs uses that space
+          and sits the period next to the view it applies to. */}
+      <div className="mx-auto flex max-w-[1560px] flex-wrap items-center justify-between gap-x-8 gap-y-1 px-6 py-2">
+        {/* overflow-x-auto clips on BOTH axes; the dropdowns here render
+            through a portal so they are not caught by it. See Dropdown.tsx. */}
+        <div className="flex items-center gap-0.5 overflow-x-auto">
         {primary.map(v => (
           <ViewTab
             key={v.value}
@@ -151,13 +156,15 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
         )}
       </div>
 
-      {/* Controls */}
-      <div className="mx-auto flex max-w-[1560px] flex-wrap items-center gap-2 px-6 py-3">
+      {/* Controls — same row, pushed right by justify-between */}
+      <div className="flex flex-wrap items-center gap-1.5">
         <PeriodPicker body={body} onChange={onChange} />
 
         <Dropdown
           caption="Compare to"
-          label={compareLabelFor(body.compare)}
+          label={body.compare
+            ? `vs ${compareLabelFor(body.compare)}`
+            : "No comparison"}
           active={Boolean(body.compare)}
           widthClass="w-60"
         >
@@ -185,7 +192,9 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
 
         <Dropdown
           caption="Filters"
-          label={activeCount ? `${activeCount} applied` : "None"}
+          label={activeCount
+            ? `${activeCount} filter${activeCount > 1 ? "s" : ""}`
+            : "No filters"}
           active={activeCount > 0}
           widthClass="w-80"
           align="left"
@@ -255,6 +264,7 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
           </button>
         )}
       </div>
+      </div>
     </div>
     </>
   );
@@ -313,7 +323,7 @@ function PeriodPicker({
       caption="Period"
       label={
         <span className="inline-flex items-center gap-1.5">
-          <Calendar className="h-3.5 w-3.5 text-slate-400" />
+          <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
           {timeLabelFor(body.time)}
         </span>
       }

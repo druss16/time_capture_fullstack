@@ -921,6 +921,10 @@ interface EvidenceSignal {
   supports: number | null;
   weight: number;
   text: string;
+  /** A few words naming this witness's specific finding, for a line where the
+   *  full `text` will not fit — e.g. "St John Cemetery-Rome at 10:16".
+   *  Optional: only some signals set it. */
+  short?: string;
   independent: boolean;
 }
 interface RowEvidence {
@@ -1282,7 +1286,14 @@ function DecisionCard({
   const targetName = draft?.target_client_name || row.looks_like_client_name || "";
 
   const found = draft?.evidence || [];
-  const independent = found.filter(e => e.independent);
+  // Independent evidence, split by WHICH SIDE it supports. Filtering only on
+  // `independent` said "2 other things agree" and then listed a witness that
+  // agreed with keeping the block where it is — telling a reviewer the
+  // evidence was unanimous when it was split. On the live row that was the
+  // difference between "move it" and "they worked both that day".
+  const agreeing = found.filter(e => e.independent && e.supports === targetId);
+  const opposing = found.filter(
+    e => e.independent && e.supports === row.booked_client_id);
   const checked = draft?.checked || [];
   const missing = checked
     .filter(k => k !== "title" && !found.some(e => e.kind === k))
@@ -1332,7 +1343,7 @@ function DecisionCard({
 
         {draft && draft.verdict === "confirm_correct" && (
           <>Everything points back at <b style={{ color: T.text }}>{row.booked_client_name}</b>
-            {independent[0] ? <> — {independent[0].text.replace(/\.$/, "").toLowerCase()}</> : null}.
+            {opposing[0] ? <> — {opposing[0].short || opposing[0].text.replace(/\.$/, "")}</> : null}.
             {" "}The flag looks like the thing that was wrong.</>
         )}
 
@@ -1349,21 +1360,38 @@ function DecisionCard({
           <>
             {SIGNAL_NOUN[found[0]?.kind || "title"] || "The window title"} names{" "}
             <b style={{ color: T.text }}>{targetName}</b>, which is a different client.
-            {independent.length === 0 ? (
+            {agreeing.length === 0 && opposing.length === 0 && (
               <>
                 {" "}But that is the only thing pointing there
                 {missing.length > 0 ? <> — {joinEnglish(missing)}</> : null}.
                 {" "}<b style={{ color: T.text }}>One clue is not enough to move billable
                 time, so this is your call.</b>
               </>
-            ) : (
+            )}
+            {agreeing.length > 0 && opposing.length > 0 && (
+              <>
+                {" "}But the day cuts both ways: {joinEnglish(
+                  [agreeing[0], opposing[0]].map(e => e!.short || e!.text.replace(/\.$/, "")))}.
+                {" "}<b style={{ color: T.text }}>Only the title separates them, so this
+                is your call.</b>
+              </>
+            )}
+            {agreeing.length > 0 && opposing.length === 0 && (
               <>
                 {" "}
-                {independent.length === 1 ? "Something else agrees" : `${independent.length} other things agree`}
-                : {joinEnglish(independent.map(e => e.text.replace(/\.$/, "").toLowerCase()))}.
+                {agreeing.length === 1 ? "Something else agrees" : `${agreeing.length} other things agree`}
+                : {joinEnglish(agreeing.map(e => e.short || e.text.replace(/\.$/, "")))}.
                 {missing.length > 0 && (
                   <span style={{ color: T.textMuted }}> ({joinEnglish(missing)}.)</span>
                 )}
+              </>
+            )}
+            {agreeing.length === 0 && opposing.length > 0 && (
+              <>
+                {" "}And what evidence there is points back at{" "}
+                <b style={{ color: T.text }}>{row.booked_client_name}</b>:{" "}
+                {joinEnglish(opposing.map(e => e.short || e.text.replace(/\.$/, "")))}.
+                {" "}<b style={{ color: T.text }}>Leaving it may well be right.</b>
               </>
             )}
             {blocked && (

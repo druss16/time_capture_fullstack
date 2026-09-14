@@ -125,7 +125,7 @@ export default function DataTable({ table, onRowClick }: Props) {
   return (
     <div className="rounded-2xl border border-[rgba(15,42,60,0.08)] bg-white overflow-hidden shadow-[0_1px_2px_rgba(16,27,46,0.04),0_8px_24px_-12px_rgba(16,27,46,0.10)]">
       <header className="px-5 py-4 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-slate-900">{table.title}</h3>
+        <h3 className="text-[15px] font-bold tracking-[-0.015em] text-slate-900">{table.title}</h3>
         {table.subtitle && (
           <p className="text-xs text-slate-500 mt-0.5">{table.subtitle}</p>
         )}
@@ -145,7 +145,7 @@ export default function DataTable({ table, onRowClick }: Props) {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/50">
+              <tr className="border-b border-[rgba(15,42,60,0.10)] bg-slate-50/70">
                 {table.columns.map(col => (
                   <HeaderCell
                     key={col.key}
@@ -163,28 +163,52 @@ export default function DataTable({ table, onRowClick }: Props) {
                   key={i}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                   className={cn(
-                    "border-b border-slate-50 last:border-0",
-                    onRowClick && "hover:bg-primary/[0.05] cursor-pointer",
+                    "border-b border-[rgba(15,42,60,0.05)] transition-colors last:border-0",
+                    onRowClick && "cursor-pointer hover:bg-teal-50/50",
                   )}
                 >
-                  {table.columns.map(col => (
+                  {table.columns.map((col, ci) => (
                     <td
                       key={col.key}
                       className={cn(
-                        "relative px-4 py-3 text-slate-700",
+                        "relative py-2.5 align-middle",
+                        ci === 0 ? "pl-5 pr-4" : "px-3",
+                        col.key === "flag_label" && "w-px whitespace-nowrap",
+                        (table.bar_columns ?? []).includes(col.key) && "pb-4",
+                        // The first column is the row's identity: it carries
+                        // the weight, and enough width that a real client name
+                        // does not stack three lines tall and make every row a
+                        // different height.
+                        ci === 0
+                          ? "min-w-[13rem] max-w-[20rem] font-semibold leading-snug text-slate-900"
+                          : "text-slate-600",
                         col.format !== "text" && col.format !== "phase_picker" &&
-                          "text-right tabular-nums font-medium",
+                          "whitespace-nowrap text-right font-medium tabular-nums text-slate-800",
                       )}
+                      style={col.format !== "text" && col.format !== "phase_picker"
+                        ? { fontVariantNumeric: "tabular-nums",
+                            letterSpacing: "-0.01em" }
+                        : undefined}
                     >
+                      {/* A thin rule under the figure, not a wash behind it.
+                          The filled block this replaced read as a selected
+                          cell rather than as a measure, and its right-anchored
+                          growth made the geometry hard to parse. This is a
+                          baseline-anchored bar with a rounded data-end — the
+                          same mark spec the charts use. */}
                       {barMax[col.key] > 0 && typeof row[col.key] === "number" && (
                         <span
                           aria-hidden
-                          className="absolute inset-y-1 right-1 rounded bg-teal-500/10"
-                          style={{
-                            width: `${Math.max(
-                              (row[col.key] / barMax[col.key]) * 100, 0)}%`,
-                          }}
-                        />
+                          className="absolute inset-x-3 bottom-1.5 h-[3px] rounded-full bg-slate-100"
+                        >
+                          <span
+                            className="absolute inset-y-0 right-0 rounded-full bg-teal-600/70"
+                            style={{
+                              width: `${Math.min(100, Math.max(
+                                (row[col.key] / barMax[col.key]) * 100, 0))}%`,
+                            }}
+                          />
+                        </span>
                       )}
                       <span className="relative">
                         {col.format === "phase_picker" ? (
@@ -212,17 +236,44 @@ export default function DataTable({ table, onRowClick }: Props) {
  * " · "-joined list of short phrases, and as plain text they run together into
  * a sentence. Rendered as pills they read as the tags they are.
  */
+/**
+ * Flags are shortened for the column and coloured by severity — "Losing money"
+ * is not the same news as "Hours growing fast", and one amber for all of them
+ * said it was.
+ */
+const FLAG_SHORT: Record<string, string> = {
+  "Losing money": "Losing $",
+  "Below typical margin": "Low margin",
+  "Heavy non-billable": "Non-billable",
+  "Hours growing fast": "Growing",
+};
+
+const FLAG_TONE: Record<string, string> = {
+  "Losing money": "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
+  "Below typical margin": "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
+  "Heavy non-billable": "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
+  "Hours growing fast": "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200",
+  _default: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
+};
+
 function renderText(value: unknown, key: string) {
   const text = String(value ?? "");
   if (key !== "flag_label" || !text) return text || (key === "flag_label" ? "" : text);
   return (
-    <span className="flex flex-wrap gap-1">
+    <span className="flex flex-nowrap items-center gap-1">
       {text.split(" · ").map(part => (
         <span
           key={part}
-          className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-200/70"
+          title={part}
+          // Squared-off, not a soft blob, and never wrapping: a two-line pill
+          // pushed every row in the table taller than its neighbours.
+          className={cn(
+            "inline-block whitespace-nowrap rounded-md px-1.5 py-0.5",
+            "text-[10px] font-semibold uppercase tracking-[0.06em]",
+            FLAG_TONE[part] ?? FLAG_TONE._default,
+          )}
         >
-          {part}
+          {FLAG_SHORT[part] ?? part}
         </span>
       ))}
     </span>
@@ -243,9 +294,12 @@ function HeaderCell({
     <th
       onClick={onSort}
       className={cn(
-        "text-left text-xs font-medium uppercase tracking-wider text-slate-600 px-4 py-3",
+        // Sticky so the column meanings survive a 52-client scroll.
+        "group/th sticky top-0 z-10 whitespace-nowrap bg-slate-50/95 py-2.5 backdrop-blur",
+        numeric ? "px-3" : "pl-5 pr-4",
+        "text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-500",
         numeric && "text-right",
-        onSort && "cursor-pointer hover:bg-slate-100/60 select-none",
+        onSort && "cursor-pointer select-none hover:bg-slate-100 hover:text-slate-800",
       )}
     >
       <div className={cn("flex items-center gap-1.5", numeric && "justify-end")}>
@@ -268,7 +322,9 @@ function HeaderCell({
             )}
           </span>
         )}
-        {col.sortable && <SortIcon active={active} dir={dir} />}
+        {col.sortable && (active
+          ? <SortIcon active dir={dir} />
+          : <ArrowUpDown className="h-3 w-3 text-slate-300 opacity-0 transition-opacity group-hover/th:opacity-100" />)}
       </div>
     </th>
   );

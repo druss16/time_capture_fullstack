@@ -28,10 +28,10 @@ export default function ViewSentence({
       <div className="px-6 py-3.5 flex items-center justify-between gap-4">
         {/* Sentence */}
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+          <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
             Analytics
           </div>
-          <h1 className="mt-1 text-[22px] font-bold tracking-[-0.01em] text-slate-900 truncate">
+          <h1 className="mt-1.5 truncate text-[26px] font-bold leading-none tracking-[-0.025em] text-slate-900">
             {sentence || "Dashboard"}
           </h1>
           <p className="hidden print:block text-[11px] text-slate-600 mt-1 tabular-nums">

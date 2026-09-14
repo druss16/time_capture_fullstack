@@ -79,7 +79,7 @@ export default function ChartCard({ card }: Props) {
       <header className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-slate-900">{card.title}</h3>
+            <h3 className="text-[15px] font-bold tracking-[-0.015em] text-slate-900">{card.title}</h3>
             {card.subtitle && (
               <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
             )}

@@ -19,7 +19,7 @@ export default function SectionHeader({ title, collapsible, collapsed, onToggle,
         onClick={collapsible ? onToggle : undefined}
         disabled={!collapsible}
         className={cn(
-          "flex items-center gap-1.5 text-[11px] uppercase tracking-[0.16em] text-slate-400 font-semibold",
+          "flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400",
           collapsible && "hover:text-slate-600 cursor-pointer",
         )}
       >

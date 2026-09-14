@@ -76,9 +76,11 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
   const inSecondary = Boolean(currentView?.secondary);
 
   return (
-    <div className="sticky top-0 z-20 border-b border-slate-200/80 bg-[#f6faf9]/95 backdrop-blur print:hidden">
+    <div className="sticky top-0 z-20 border-b border-[rgba(15,42,60,0.08)] bg-[#f7f9f9]/85 backdrop-blur-xl print:hidden">
       {/* Views */}
-      <div className="flex items-end gap-1 overflow-x-auto px-6 pt-3">
+      {/* overflow-x-auto clips on BOTH axes; the dropdowns here render through
+          a portal so they are not caught by it. See Dropdown.tsx. */}
+      <div className="mx-auto flex max-w-[1560px] items-end gap-0.5 overflow-x-auto px-6 pt-3">
         {primary.map(v => (
           <ViewTab
             key={v.value}
@@ -116,7 +118,7 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
       </div>
 
       {/* Controls */}
-      <div className="flex flex-wrap items-center gap-2 px-6 py-3">
+      <div className="mx-auto flex max-w-[1560px] flex-wrap items-center gap-2 px-6 py-3">
         <PeriodPicker body={body} onChange={onChange} />
 
         <Dropdown
@@ -235,10 +237,12 @@ function ViewTab({
       title={title}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "whitespace-nowrap rounded-t-lg border-b-2 px-3.5 py-2 text-sm transition-colors",
+        "relative whitespace-nowrap rounded-t-lg px-3.5 py-2.5 text-sm",
+        "transition-colors duration-150",
+        "after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full",
         active
-          ? "border-teal-600 font-semibold text-teal-900"
-          : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800",
+          ? "font-semibold text-slate-900 after:bg-teal-600"
+          : "text-slate-500 hover:text-slate-900 after:bg-transparent hover:after:bg-slate-300",
       )}
     >
       {label}

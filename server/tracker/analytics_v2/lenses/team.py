@@ -148,9 +148,11 @@ class TeamLens(Lens):
             chart_type="stacked_bar",
             x_key="label",
             data=data,
+            # One measure and its remainder, not two peers — so the chart is
+            # painted with the emphasis pair rather than two categorical hues.
             series=[
-                {"key": "billable_hours", "label": "Billable"},
-                {"key": "other_hours", "label": "Other tracked"},
+                {"key": "billable_hours", "label": "Billable", "role": "primary"},
+                {"key": "other_hours", "label": "Other tracked", "role": "muted"},
             ],
             value_format="hours_1dp",
             state=MetricState.READY if data else MetricState.EMPTY,

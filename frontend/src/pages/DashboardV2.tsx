@@ -19,6 +19,7 @@ import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/design-system";
+import { SURFACE } from "@/lib/analytics_v2/theme";
 
 import { useAnalyticsPermissions, useAnalyticsQuery } from "@/hooks/useAnalyticsQuery";
 import {
@@ -115,7 +116,7 @@ export default function DashboardV2() {
 
   return (
     <div className="-mx-4 -my-6 min-h-[calc(100vh-64px)] print:m-0 print:min-h-0"
-         style={{ backgroundColor: "#f6faf9", fontFamily: '"Inter", sans-serif' }}>
+         style={{ backgroundColor: SURFACE.page, fontFamily: '"Inter", sans-serif' }}>
       <ControlBar
         body={body}
         availableViews={availableViews}
@@ -131,7 +132,7 @@ export default function DashboardV2() {
         onRefresh={() => refetch()}
       />
 
-      <main className="mx-auto max-w-[1600px] px-6 py-6 print:px-0 print:py-3">
+      <main className="mx-auto max-w-[1560px] px-6 py-8 print:px-0 print:py-3">
         {isLoading && (
           <div className="flex items-center justify-center py-24 text-slate-400">
             <Loader2 className="mr-2 h-6 w-6 animate-spin" />
@@ -142,7 +143,7 @@ export default function DashboardV2() {
         {error && <ErrorPanel error={error} onRetry={() => refetch()} />}
 
         {data && (
-          <div className="space-y-8 print:space-y-4">
+          <div className="space-y-10 print:space-y-4">
             <SectionRenderer
               body={body}
               data={data}
@@ -194,7 +195,7 @@ function SectionRenderer({
           return (
             <div
               key={section.id}
-              className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-4"
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
             >
               {section.tiles.map(tile => (
                 <KPITile key={tile.id} tile={tile} onDrilldown={onDrilldown} />
@@ -249,7 +250,7 @@ function ErrorPanel({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const isPermissionError = /403|permission/i.test(message);
 
   return (
-    <div className={cn("rounded-[15px] border border-rose-200 bg-rose-50/40 p-6")}>
+    <div className={cn("rounded-2xl border border-rose-200 bg-rose-50/40 p-6")}>
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
         <div className="flex-1">

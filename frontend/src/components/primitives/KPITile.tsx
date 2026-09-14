@@ -16,11 +16,23 @@ interface Props {
   onDrilldown?: (drilldown: NonNullable<KPITilePayload["drilldown"]>) => void;
 }
 
-const ZONE_RING: Record<ThresholdZone, string> = {
-  good:  "ring-emerald-200/60 bg-emerald-50/30",
-  watch: "ring-amber-200/60 bg-amber-50/30",
-  bad:   "ring-rose-200/60 bg-rose-50/30",
+/**
+ * Threshold treatment.
+ *
+ * This used to tint the whole tile (`bg-emerald-50/30` and friends), which made
+ * a row of KPIs read as four different kinds of card competing for attention —
+ * and washed the value itself onto a coloured ground. A hairline accent on the
+ * inline edge says the same thing and lets the number stay the loudest element.
+ */
+const ZONE_ACCENT: Record<ThresholdZone, string> = {
+  good:  "before:bg-teal-600",
+  watch: "before:bg-amber-500",
+  bad:   "before:bg-rose-500",
 };
+
+const ZONE_BASE =
+  "relative before:absolute before:inset-y-3 before:left-0 before:w-[3px] " +
+  "before:rounded-full";
 
 const ZONE_DOT: Record<ThresholdZone, string> = {
   good:  "bg-emerald-500",
@@ -36,21 +48,23 @@ export default function KPITile({ tile, onDrilldown }: Props) {
   // Container sizing
   const sizeClass = {
     small:  "p-4",
-    medium: "p-5",
-    large:  "p-6",
+    medium: "px-5 py-[18px]",
+    large:  "px-6 py-6",
   }[tile.size];
 
+  // -0.02em tracking on large tabular figures: default spacing makes big
+  // numerals look loose and cheap.
   const valueSizeClass = {
-    small:  "text-2xl",
-    medium: "text-3xl",
-    large:  "text-4xl",
+    small:  "text-[26px] leading-none",
+    medium: "text-[34px] leading-none",
+    large:  "text-[42px] leading-none",
   }[tile.size];
 
   // ──────────── ERROR STATE ────────────
   if (m.state === "error") {
     return (
       <div className={cn(
-        "rounded-[15px] border border-rose-200/60 bg-rose-50/20",
+        "rounded-2xl border border-rose-200/60 bg-rose-50/20",
         sizeClass,
       )}>
         <div className="flex items-center gap-2 text-rose-700 text-sm">
@@ -103,7 +117,9 @@ export default function KPITile({ tile, onDrilldown }: Props) {
 
   // ──────────── READY STATE ────────────
   const valueStr = formatValue(m.value, tile.format);
-  const zoneRing = m.threshold_zone ? ZONE_RING[m.threshold_zone] : "ring-slate-200/60 bg-white";
+  const zoneAccent = m.threshold_zone
+    ? cn(ZONE_BASE, ZONE_ACCENT[m.threshold_zone])
+    : "";
   const hasDataQualityBadge = m.data_quality !== null && m.data_quality !== undefined && m.data_quality < 0.75;
 
   return (
@@ -112,17 +128,17 @@ export default function KPITile({ tile, onDrilldown }: Props) {
       sizeClass={sizeClass}
       interactive={interactive}
       onDrilldown={onDrilldown}
-      extraClass={cn("ring-1", zoneRing)}
+      extraClass={zoneAccent}
     >
       <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
 
-      <div className="flex items-baseline gap-3 mt-1.5">
-        <div className={cn("font-bold text-slate-900 tracking-tight tabular-nums", valueSizeClass)}>
+      <div className="mt-2.5 flex items-baseline gap-2.5">
+        <div
+          className={cn("font-semibold tabular-nums text-slate-900", valueSizeClass)}
+          style={{ letterSpacing: "-0.022em", fontVariantNumeric: "tabular-nums" }}
+        >
           {valueStr}
         </div>
-        {m.threshold_zone && (
-          <div className={cn("h-2 w-2 rounded-full", ZONE_DOT[m.threshold_zone])} />
-        )}
       </div>
 
       {/* Trend sparkline vs the firm's own normal band (WHOOP-style baseline) */}
@@ -144,17 +160,17 @@ export default function KPITile({ tile, onDrilldown }: Props) {
 
       {/* Delta vs comparison period */}
       {m.delta_value !== null && m.delta_value !== undefined && m.delta_direction && (
-        <div className="mt-2 flex items-center gap-1.5 text-xs">
+        <div className="mt-3 flex items-center gap-1.5 text-xs">
           <DeltaIcon dir={m.delta_direction} good={m.delta_good ?? null} />
           <span className={cn(
-            "font-medium",
-            m.delta_good === true && "text-emerald-700",
-            m.delta_good === false && "text-rose-700",
+            "font-semibold tabular-nums",
+            m.delta_good === true && "text-teal-700",
+            m.delta_good === false && "text-rose-600",
             m.delta_good === null && "text-slate-600",
           )}>
             {formatDelta(m.delta_value, tile.format)}
           </span>
-          <span className="text-slate-500">vs prior</span>
+          <span className="text-slate-400">vs prior</span>
         </div>
       )}
 
@@ -198,10 +214,17 @@ function TileShell({
         ? () => tile.drilldown && onDrilldown && onDrilldown(tile.drilldown)
         : undefined}
       className={cn(
-        "rounded-[15px] text-left transition-all shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]",
-        interactive && "hover:shadow-md hover:-translate-y-0.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/30",
+        // The card surface is unconditional. It used to be the FALLBACK for
+        // extraClass (`extraClass ?? "border ... bg-white"`), so any tile with
+        // a threshold lost its border and background along with it — the zone
+        // classes happened to re-supply a tint, which hid the bug until the
+        // tint was removed.
+        "rounded-2xl border border-[rgba(15,42,60,0.08)] bg-white text-left",
+        "shadow-[0_1px_2px_rgba(16,27,46,0.04),0_8px_24px_-12px_rgba(16,27,46,0.10)]",
+        "transition-[transform,box-shadow,border-color] duration-200 ease-out",
+        interactive && "cursor-pointer hover:-translate-y-px hover:border-[rgba(15,42,60,0.14)] hover:shadow-[0_1px_2px_rgba(16,27,46,0.05),0_16px_40px_-16px_rgba(16,27,46,0.18)] focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600/30",
         sizeClass,
-        extraClass ?? "border border-border/70 bg-white",
+        extraClass,
       )}
     >
       {children}
@@ -217,7 +240,7 @@ function Label({
   setShowTooltip: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500 font-medium">
+    <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.13em] text-slate-400">
       <span>{tile.label}</span>
       {tile.tooltip && (
         <span

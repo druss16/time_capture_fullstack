@@ -123,7 +123,7 @@ export default function DataTable({ table, onRowClick }: Props) {
   };
 
   return (
-    <div className="rounded-[15px] border border-border/70 bg-white overflow-hidden shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)]">
+    <div className="rounded-2xl border border-[rgba(15,42,60,0.08)] bg-white overflow-hidden shadow-[0_1px_2px_rgba(16,27,46,0.04),0_8px_24px_-12px_rgba(16,27,46,0.10)]">
       <header className="px-5 py-4 border-b border-slate-100">
         <h3 className="text-sm font-semibold text-slate-900">{table.title}</h3>
         {table.subtitle && (

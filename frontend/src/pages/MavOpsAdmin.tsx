@@ -903,23 +903,27 @@ interface MismatchRow {
     top_candidate_coverage?: number;
   };
 }
-// What the resolution agent thinks should happen to one flagged row, and the
-// evidence behind it. Fetched separately from the rows themselves (see
-// loadDrafts) so the list paints immediately and the reasoning fills in after.
+// Why a flagged row is flagged, and what each witness said. Fetched separately
+// from the rows themselves so the list paints immediately and the reasoning
+// fills in after — it reads neighbours, file paths and prior rulings per row.
+//
+// This was an autonomous agent's DRAFT, with an approve button and an overnight
+// switch. Both are gone: on a real book of business the agent had one row a
+// quarter to act on. What was worth keeping is the reading.
 //
 // `vetoes` and `caveats` are NOT the same thing and the UI must not merge
 // them. A veto is a hard stop the Approve button also obeys — already
 // invoiced, a person set it, same-family names. A caveat is the agent
 // declining to act unattended on evidence a human is perfectly entitled to
 // accept. Showing them as one list would make half of them look unappealable.
-interface AgentSignal {
+interface EvidenceSignal {
   kind: string;
   supports: number | null;
   weight: number;
   text: string;
   independent: boolean;
 }
-interface AgentDraft {
+interface RowEvidence {
   block_id: number;
   // "stale" = the detector no longer flags this block at all, so the row is
   // left over rather than a judgement the agent is making.
@@ -930,7 +934,7 @@ interface AgentDraft {
   confidence: number;
   auto: boolean;
   summary: string;
-  evidence: AgentSignal[];
+  evidence: EvidenceSignal[];
   // Every signal the agent ATTEMPTED, sent by the server so the card can say
   // what it checked and found nothing — the half that makes a verdict
   // arguable rather than something to swallow whole.
@@ -1003,7 +1007,7 @@ function BucketDetail({
   // The agent's reading of these rows, by block id. Absent while it is still
   // thinking, and absent for good on an API that predates it — the rows must
   // render exactly as they always did in both cases.
-  drafts?: Record<number, AgentDraft> | undefined;
+  drafts?: Record<number, RowEvidence> | undefined;
   onApprove?: ((blockIds: number[]) => void) | undefined;
   agentBusy?: boolean | undefined;
 }) {
@@ -1254,10 +1258,15 @@ const joinEnglish = (xs: string[]) =>
     : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
 
 function DecisionCard({
-  row, draft, clients, busy, onMove, onCorrect, onSkip,
+  row, draft, clients, busy, onMove, onCorrect, onSkip, evidencePending,
 }: {
   row: MismatchRow;
-  draft?: AgentDraft | undefined;
+  draft?: RowEvidence | undefined;
+  // Whether evidence is even being fetched. Without it the card said "Still
+  // reading the evidence around this one…" forever whenever no single org was
+  // selected, because the fetch is per-org and never fired. A spinner that
+  // cannot finish is worse than saying plainly that nothing is coming.
+  evidencePending?: boolean | undefined;
   clients: { id: number; name: string }[];
   busy: boolean;
   onMove: (blockIds: number[], clientId: number, clientName: string) => void;
@@ -1314,7 +1323,12 @@ function DecisionCard({
         padding: "2px 0 2px 14px", marginBottom: 20,
         color: T.textSub, fontSize: 13.5, lineHeight: 1.6,
       }}>
-        {!draft && <>Still reading the evidence around this one…</>}
+        {!draft && (evidencePending
+          ? <>Reading the evidence around this one…</>
+          : <>The title names <b style={{ color: T.text }}>{targetName || "another client"}</b>,
+             which is a different client. Pick a single org in the selector above to see
+             what else agrees — the folder, the QuickBooks company file, the work around
+             it, and whether anyone has filed this title before.</>)}
 
         {draft && draft.verdict === "confirm_correct" && (
           <>Everything points back at <b style={{ color: T.text }}>{row.booked_client_name}</b>
@@ -1475,7 +1489,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   const [showCleared, setShowCleared] = useState(false);
   const [reconcileBusy, setReconcileBusy] = useState(false);
   // The agent's drafts for whatever rows are currently on screen.
-  const [drafts, setDrafts] = useState<Record<number, AgentDraft>>({});
+  const [drafts, setDrafts] = useState<Record<number, RowEvidence>>({});
   const [draftsLoading, setDraftsLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -1684,7 +1698,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
                 than it deserves. */}
             {filterOrg
               ? `${data ? data.scanned_blocks.toLocaleString() : "…"} settled blocks checked from the last ${days} days`
-              : "Pick an org in the selector above"}
+              : `${data ? data.scanned_blocks.toLocaleString() : "…"} settled blocks checked across all orgs — pick one to see the evidence`}
           </div>
         </div>
         <div style={{ flex: 1 }} />
@@ -1734,6 +1748,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               key={m.block_id}
               row={m}
               draft={drafts[m.block_id]}
+              evidencePending={!!filterOrg && draftsLoading}
               clients={orgClients}
               busy={resolveBusy}
               onMove={assignTo}

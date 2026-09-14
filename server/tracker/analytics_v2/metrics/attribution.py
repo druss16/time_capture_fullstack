@@ -50,8 +50,9 @@ NEEDS_YOU_CEILING = 25_000
 _needs_you_cache: dict = {}
 
 
-def needs_you(org_id: int, time) -> tuple[int, float, int]:
-    """Open Needs You items, their hours, and how many people own them.
+def needs_you(org_id: int, time) -> tuple[int, float, int, dict[int, int]]:
+    """Open Needs You items, their hours, how many people own them, and the
+    per-owner counts — so a caller can tell whose queue the pile is sitting in.
 
     One definition shared by both burden metrics. They were computed apart and
     disagreed on screen — 737 items against 115.9 h — because one walked the
@@ -104,14 +105,14 @@ def needs_you(org_id: int, time) -> tuple[int, float, int]:
 
     items = 0
     minutes = 0
-    owners: set = set()
+    by_user: dict[int, int] = {}
     for b in candidates:
         if is_pending_review_block(b):
             items += 1
             minutes += (b.minutes or 0)
-            owners.add(b.user_id)
+            by_user[b.user_id] = by_user.get(b.user_id, 0) + 1
 
-    result = (items, minutes / 60.0, len(owners))
+    result = (items, minutes / 60.0, len(by_user), by_user)
     _needs_you_cache[key] = (_time.monotonic(), result)
     return result
 
@@ -217,14 +218,24 @@ class AttributionPrecisionMetric(Metric):
 class ReviewBurdenMetric(Metric):
     """How many items are sitting in one person's Needs You. Lower is better."""
 
-    label = "Waiting on Each Person"
+    label = "Waiting on Each Reviewer"
     format = "integer"
     tooltip = (
-        "Waiting on Each Person = open Needs You items ÷ people\n\n"
+        "Waiting on Each Reviewer = open Needs You items ÷ REVIEWERS\n\n"
         "Exactly the rows Daily Review puts in front of someone: a client\n"
         "guess to confirm, a mismatch, a split, or a look-alike to pick\n"
         "between. Gated on the same predicate Daily Review and the reports\n"
         "use, so this number and that screen can never disagree.\n\n"
+        "A REVIEWER is someone whose queue has actually been worked by a\n"
+        "person in the last 60 days — not someone whose job title says they\n"
+        "should. An owner doing bookkeeping counts; an owner who never opens\n"
+        "Daily Review does not, and no setting has to be maintained for\n"
+        "either. Dividing by everyone with recorded time flattered this\n"
+        "number, because people who never work a queue were counted as\n"
+        "though they were sharing the load.\n\n"
+        "Items sitting with people who do NOT review are held out of this\n"
+        "average and reported separately — that work is real, it is just not\n"
+        "waiting on anybody in particular.\n\n"
         "It is NOT every unreviewed block — work already filed, and the\n"
         "legacy pile that is categorised but never surfaced, are not in\n"
         "anyone's queue and are not counted here.\n"
@@ -236,20 +247,33 @@ class ReviewBurdenMetric(Metric):
     threshold = ThresholdRange(low=15, high=40, direction="lower_is_better")
 
     def compute(self, org, scope, time):
-        items, _hours, owners = needs_you(org.id, time)
+        items, _hours, _owners, by_user = needs_you(org.id, time)
         if not items:
             return MetricValue(value=0.0, secondary_value=0.0,
                                secondary_label="Nothing waiting",
                                secondary_format="integer")
-        people = _people_in(org.id, time) or owners or 1
+
+        reviewers = reviewers_in(org.id, time)
+        # A firm where nobody has reviewed anything in 60 days would divide by
+        # zero. Fall back to everyone with time: the number is then the old,
+        # flattering one, but it is a number rather than a crash, and the
+        # secondary line still says the pile is unattended.
+        on_reviewers = sum(n for uid, n in by_user.items() if uid in reviewers)
+        unworked = items - on_reviewers
+        divisor = len(reviewers) or _people_in(org.id, time) or len(by_user) or 1
+        counted = on_reviewers if reviewers else items
+
+        if unworked and reviewers:
+            label = f"items on {len(by_user) - len(reviewers & by_user.keys())} who don't review"
+            secondary = float(unworked)
+        else:
+            label = f"items total, across {divisor} reviewer(s)"
+            secondary = float(items)
+
         return MetricValue(
-            value=round(items / people),
-            secondary_value=float(items),
-            # Say what is being counted. "Across 9 people: 1,292" sits beside a
-            # tile called "Hours Waiting on You", so an unlabelled 1,292 reads
-            # as hours — and 1,292 hours against a quarter that only recorded
-            # 1,153 looks broken. They are ITEMS: rows in someone's queue.
-            secondary_label=f"items, across {people} people",
+            value=round(counted / divisor),
+            secondary_value=secondary,
+            secondary_label=label,
             secondary_format="integer",
         )
 
@@ -273,7 +297,10 @@ class HoursWaitingMetric(Metric):
 
     def compute(self, org, scope, time):
         # Same pile as the tile beside it, by construction.
-        _items, hours, _owners = needs_you(org.id, time)
+        # Deliberately the whole pile, reviewer or not: this tile answers "how
+        # much time is sitting unbooked", and time nobody is working on is
+        # still unbooked. The per-person split belongs to the tile beside it.
+        _items, hours, _owners, _by_user = needs_you(org.id, time)
         total = (acc.coverage(org.id, time.start, time.end)
                  .get("total_minutes") or 0) / 60.0
         if not total:
@@ -284,6 +311,52 @@ class HoursWaitingMetric(Metric):
             secondary_label="Share of recorded time",
             secondary_format="percent_1dp",
         )
+
+
+# A person "reviews" if they have actually worked a queue lately — not if their
+# job title suggests they should. Role is the wrong lever here: a partner doing
+# bookkeeping reviews their own time, and an owner who never opens Daily Review
+# does not, and the org chart cannot tell them apart.
+REVIEWER_WINDOW_DAYS = 60
+# Enough to show a habit rather than one stray click.
+MIN_RESOLUTIONS = 5
+# The state-machine values that mean a PERSON decided. Everything else on that
+# field is the software deciding: classifier, rule, end-of-day auto-commit, and
+# the mismatch agent (which is deliberately not 'correction' — see models.py).
+HUMAN_RESOLUTIONS = ("user", "user_edit", "correction")
+
+
+def reviewers_in(org_id: int, time) -> set[int]:
+    """Whose queues are actually being worked.
+
+    Read from the blocks themselves: a block belonging to someone, moved by a
+    human in the last REVIEWER_WINDOW_DAYS, means that queue gets attention.
+
+    ASSUMPTION, stated plainly: `state_changed_by` records the KIND of actor,
+    not which person, so this reads "this person's queue was worked by a human"
+    rather than "this person did the work". Daily Review is per-user, so those
+    coincide in practice; a manager clearing someone else's backlog would count
+    toward that someone. Good enough for deciding who to divide by, and it is
+    the strongest signal the schema carries.
+
+    Behavioural on purpose: it needs no configuration, works on day one for
+    every org, and self-corrects — an owner who starts doing bookkeeping shows
+    up here automatically, and one who stops drops out.
+    """
+    from datetime import timedelta
+    from django.db.models import Count
+    from django.utils import timezone
+    from tracker.models import Block
+
+    cutoff = timezone.now() - timedelta(days=REVIEWER_WINDOW_DAYS)
+    rows = (Block.objects
+            .filter(org_id=org_id, deleted_at__isnull=True,
+                    state_changed_at__gte=cutoff,
+                    state_changed_by__in=HUMAN_RESOLUTIONS)
+            .values("user_id")
+            .annotate(n=Count("id"))
+            .filter(n__gte=MIN_RESOLUTIONS))
+    return {r["user_id"] for r in rows}
 
 
 def _people_in(org_id: int, time) -> int:

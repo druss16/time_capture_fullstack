@@ -577,13 +577,10 @@ urlpatterns = [
     path("mavops/mismatches/cleared/", views_mavops.mavops_cleared_mismatches, name="mavops_cleared_mismatches"),
     path("mavops/mismatches/undismiss/", views_mavops.mavops_undismiss_mismatches, name="mavops_undismiss_mismatches"),
 
-    # The resolution agent. /drafts/ is what the tab reads to show "here is
-    # what I'd do and why"; /agent/approve/ carries out a draft a person read
-    # and agreed with; /agent/run/ is the batch sweep (dry unless apply=true).
+    # Why a flagged row is flagged: the sweep POSTs the block ids it is
+    # showing and gets back one sentence each, with the witnesses behind it.
+    # Read-only. The agent's acting endpoints were removed with the agent.
     path("mavops/mismatches/drafts/", views_mavops.mavops_mismatch_drafts, name="mavops_mismatch_drafts"),
-    path("mavops/mismatches/agent/approve/", views_mavops.mavops_approve_mismatch_drafts, name="mavops_approve_mismatch_drafts"),
-    path("mavops/mismatches/agent/run/", views_mavops.mavops_run_mismatch_agent, name="mavops_run_mismatch_agent"),
-    path("mavops/orgs/<int:org_id>/mismatch-agent/", views_mavops.mavops_set_org_mismatch_agent, name="mavops_set_org_mismatch_agent"),
 
     # What is holding up the time about to be billed — evidence coverage per
     # client. Deliberately NOT an accuracy score; see the view's docstring.

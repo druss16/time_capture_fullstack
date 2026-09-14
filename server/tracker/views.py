@@ -78,6 +78,20 @@ from django.utils.timezone import get_current_timezone, localtime
 import datetime as _dt
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+
+# Does a misfiled CERTAIN block get lifted into the Daily Review "Needs you"
+# lane? No. Certain is settled time that flows to My Week and is submitted as
+# the record; Needs you is the classifier saying it is unsure. A misfile is
+# neither of those — it is settled time that is WRONG, which is a different
+# question, asked of a different person, at a different cadence. Moving it
+# made the two indistinguishable on screen, and made the firm-wide Misfiled
+# sweep look like it was scanning Needs-you when the block only appeared
+# there BECAUSE the sweep had flagged it.
+#
+# Named rather than deleted so the decision is findable, and so restoring the
+# old behaviour is one line rather than an archaeology exercise.
+MISFILES_IN_NEEDS_YOU = False
+
 from django.utils.timezone import get_current_timezone, localtime
 
 from django.contrib.auth.decorators import login_required
@@ -4825,9 +4839,15 @@ def today_time(request):
                     continue
 
                 # MISMATCH: title clearly names ONE different client than booked.
+                # Flagged where it sits (mismatch_flags badges the row), never
+                # lifted into Needs-you. See MISFILES_IN_NEEDS_YOU at the top of
+                # this module. Misfiles live in ONE place now: the firm-wide
+                # Misfiled time sweep over the same committed scope.
                 _m = detect_mismatch(_b.window_title, _b.client_id, _index, _names, firm_name=org.name)
                 if _m and _m.get('bucket') == 'client' and _b.id is not None:
                     mismatch_flags[_b.id] = _m['looks_like_client_name']
+                if MISFILES_IN_NEEDS_YOU and _m and _m.get('bucket') == 'client' \
+                        and _b.id is not None:
                     mismatch_blocks.append({
                         'block_id':               _b.id,
                         'window_title':           _b.window_title or '',

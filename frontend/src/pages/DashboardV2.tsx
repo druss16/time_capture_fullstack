@@ -125,6 +125,9 @@ export default function DashboardV2() {
       />
 
       <ViewSentence
+        subject={data?.view?.scope?.label || data?.meta?.org_name || ""}
+        period={data?.view?.time?.label}
+        compare={data?.view?.compare?.label}
         sentence={data?.view?.sentence ?? ""}
         generatedAt={data?.meta?.generated_at}
         dataFreshness={data?.meta?.data_freshness}

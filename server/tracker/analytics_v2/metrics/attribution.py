@@ -90,9 +90,17 @@ def needs_you(org_id: int, time) -> tuple[int, float, int]:
     # field list here would have to track a predicate three call levels away in
     # another module, so the whole row is the only safe thing to load.
     if candidates.count() > NEEDS_YOU_CEILING:
-        result = (0, 0.0, 0)
-        _needs_you_cache[key] = (_time.monotonic(), result)
-        return result
+        # Bail out rather than run a per-row Python predicate over tens of
+        # thousands of blocks. But do NOT cache the bail-out as a real answer:
+        # returning (0, 0, 0) makes both tiles read "nothing waiting", which is
+        # the exact opposite of the truth and indistinguishable from a clean
+        # queue. Raise instead, so `safe_compute` renders the tile in its ERROR
+        # state and the viewer is told the number could not be produced.
+        raise RuntimeError(
+            f"Needs You queue too large to measure "
+            f"({candidates.count():,} candidate blocks over {time.label}). "
+            f"Narrow the period."
+        )
 
     items = 0
     minutes = 0
@@ -237,7 +245,11 @@ class ReviewBurdenMetric(Metric):
         return MetricValue(
             value=round(items / people),
             secondary_value=float(items),
-            secondary_label=f"Across {people} people",
+            # Say what is being counted. "Across 9 people: 1,292" sits beside a
+            # tile called "Hours Waiting on You", so an unlabelled 1,292 reads
+            # as hours — and 1,292 hours against a quarter that only recorded
+            # 1,153 looks broken. They are ITEMS: rows in someone's queue.
+            secondary_label=f"items, across {people} people",
             secondary_format="integer",
         )
 

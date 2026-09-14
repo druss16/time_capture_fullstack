@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { Info, TrendingUp, TrendingDown, Minus, AlertTriangle, Sparkles } from "lucide-react";
 import { cn } from "@/lib/design-system";
+import InfoTip from "@/components/analytics/InfoTip";
 import { formatValue, formatDelta } from "@/lib/analytics_v2/format";
 import type { KPITilePayload, ThresholdZone } from "@/lib/analytics_v2/types";
 
@@ -69,7 +70,6 @@ const ZONE_DOT: Record<ThresholdZone, string> = {
 };
 
 export default function KPITile({ tile, onDrilldown }: Props) {
-  const [showTooltip, setShowTooltip] = useState(false);
   const m = tile.metric;
   const interactive = !!(tile.drilldown && onDrilldown);
 
@@ -110,7 +110,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
   if (m.state === "empty") {
     return (
       <TileShell tile={tile} sizeClass={sizeClass} interactive={interactive} onDrilldown={onDrilldown}>
-        <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
+        <Label tile={tile} />
         <div className={cn("font-bold tracking-tight tabular-nums text-slate-300 mt-1", valueSizeClass)}>—</div>
         <p className="mt-1 text-xs text-slate-500">No data for this period</p>
       </TileShell>
@@ -122,7 +122,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
     const pct = m.days_needed ? Math.min(100, Math.round(((m.days_in ?? 0) / m.days_needed) * 100)) : 0;
     return (
       <TileShell tile={tile} sizeClass={sizeClass} interactive={interactive} onDrilldown={onDrilldown}>
-        <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
+        <Label tile={tile} />
         <div className="flex items-baseline gap-2 mt-1">
           <div className={cn("font-bold tracking-tight tabular-nums text-slate-700", valueSizeClass)}>
             {m.preview_value !== null && m.preview_value !== undefined
@@ -159,7 +159,7 @@ export default function KPITile({ tile, onDrilldown }: Props) {
       onDrilldown={onDrilldown}
       extraClass={zoneAccent}
     >
-      <Label tile={tile} showTooltip={showTooltip} setShowTooltip={setShowTooltip} />
+      <Label tile={tile} />
 
       <div className="mt-2.5 flex items-baseline gap-2.5">
         <div
@@ -262,30 +262,11 @@ function TileShell({
   );
 }
 
-function Label({
-  tile, showTooltip, setShowTooltip,
-}: {
-  tile: KPITilePayload;
-  showTooltip: boolean;
-  setShowTooltip: (v: boolean) => void;
-}) {
+function Label({ tile }: { tile: KPITilePayload }) {
   return (
     <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.13em] text-slate-400">
       <span>{tile.label}</span>
-      {tile.tooltip && (
-        <span
-          className="relative inline-flex"
-          onMouseEnter={() => setShowTooltip(true)}
-          onMouseLeave={() => setShowTooltip(false)}
-        >
-          <Info className="h-3 w-3 text-slate-400 hover:text-slate-600 cursor-help" />
-          {showTooltip && (
-            <span className="absolute left-5 top-0 z-10 w-72 rounded-lg bg-slate-900 text-white text-[11px] normal-case tracking-normal p-2.5 shadow-lg leading-snug font-normal whitespace-pre-line">
-              {tile.tooltip}
-            </span>
-          )}
-        </span>
-      )}
+      {tile.tooltip && <InfoTip text={tile.tooltip} />}
     </div>
   );
 }

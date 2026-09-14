@@ -7,6 +7,12 @@ import { RefreshCw, Clock, Settings, Printer } from "lucide-react";
 import { cn } from "@/lib/design-system";
 
 interface Props {
+  /** Who the page is about — the firm, or the client/person drilled into. */
+  subject: string;
+  /** The window, e.g. "Q3 2026". Rendered as a chip, not part of the title. */
+  period?: string | undefined;
+  /** "Prior period", when a comparison is on. */
+  compare?: string | undefined;
   sentence: string;
   generatedAt?: string | null | undefined;
   dataFreshness?: string | null | undefined;
@@ -15,7 +21,8 @@ interface Props {
 }
 
 export default function ViewSentence({
-  sentence, generatedAt, dataFreshness, isFetching, onRefresh,
+  subject, period, compare, sentence, generatedAt, dataFreshness,
+  isFetching, onRefresh,
 }: Props) {
   return (
     // Deliberately not sticky: the control bar above it is what stays pinned.
@@ -35,10 +42,30 @@ export default function ViewSentence({
         <div className="flex-1 min-w-0">
           {/* No "ANALYTICS" eyebrow: the nav tab already says Analytics, and
               a label repeating where you are costs a line and tells you
-              nothing. */}
-          <h1 className="truncate text-[26px] font-bold leading-none tracking-[-0.025em] text-slate-900">
-            {sentence || "Dashboard"}
-          </h1>
+              nothing.
+
+              The period is a CHIP, not part of the heading. As one bold black
+              string — "TL Wall Accounting · Q3 2026" — this read like the
+              title of a Word document rather than product chrome; splitting
+              the subject from the window it is scoped to makes it a header.
+
+              leading-[1.2], not leading-none: line-height 1 clips descenders,
+              which is why the g in "Accounting" was losing its tail. */}
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <h1 className="truncate pb-0.5 text-[22px] font-bold leading-[1.2] tracking-[-0.02em] text-slate-900">
+              {subject || sentence || "Dashboard"}
+            </h1>
+            {period && (
+              <span className="inline-flex items-center rounded-md bg-slate-900/[0.055] px-2 py-0.5 text-[12px] font-semibold tabular-nums text-slate-600">
+                {period}
+              </span>
+            )}
+            {compare && (
+              <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[12px] font-medium text-slate-400">
+                vs {compare}
+              </span>
+            )}
+          </div>
           <p className="hidden print:block text-[11px] text-slate-600 mt-1 tabular-nums">
             Printed {new Date().toLocaleString(undefined, {
               year: "numeric", month: "short", day: "numeric",

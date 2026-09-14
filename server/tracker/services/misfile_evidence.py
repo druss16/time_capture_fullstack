@@ -1,45 +1,42 @@
-# tracker/services/mismatch_agent.py
+# tracker/services/misfile_evidence.py
 """
-Mismatch resolution agent — drafts a verdict for every flagged block.
+Why is this block on this client? Six witnesses, and what each one says.
 
-The detector (services/mismatch_scan) answers one question: "does this block's
-window title name a different client than it's booked to?" That question has a
-yes/no answer and no opinion about what to DO, so every flag it raises lands on
-a person. The review tab is therefore a queue you WORK: read the title, guess
-what happened, pick a client, move on. At a handful of rows a month that is
-fine. It stops being fine the moment a firm turns the detector on historical
-data, or a second detector bucket (`unsure`) starts contributing rows that by
-construction have no single answer.
+This began as an autonomous agent that drafted resolutions and, above a
+confidence bar, applied them. That part is gone, and the reason is worth
+keeping: on a real book of business it had nothing to do. Org 21 produces
+roughly ONE client-name mismatch a quarter across 7,724 settled billable
+blocks, and the errors that matter — 436 hours a quarter booked to a look-alike
+parish — carry no evidence to act on at all, because the QuickBooks company
+file reaches the server on 0.1% of events. An agent that acts on that would be
+guessing, and the whole design refused to guess. So it sat there recommending
+one row every ninety days.
 
-This module reads the flag AND the evidence around the block — the file that
-was actually open, the QuickBooks company file, what the same person was
-booked to on either side of it, what a human decided about this same title
-before — and drafts a resolution with that evidence attached. Above a
-confidence bar it applies the draft itself. Below it, the draft rides along
-with the row so the tab becomes a queue you APPROVE.
+What survived is what it was built out of: an evidence reader. Given a block it
+asks six independent questions and reports what each one said, including the
+silences — "the folder doesn't say so, no QuickBooks company file was open,
+nobody has filed this title before". That is the sentence the Misfiled-time
+sweep puts on a row, and the tally behind services/attribution_evidence.
 
-Three rules the agent never breaks, each one paid for:
+It decides nothing and writes nothing. Every caller is read-only.
 
-  1. It never adjudicates a same-family pair. `are_lookalikes(booked, target)`
-     is a hard veto. 27% of org 21's booked time is committed with no
-     distinguishing word in the text; an agent that "resolves" St. Mary's
-     Church vs St. Mary's Cemetery is not resolving anything, it is picking.
+The three rules it was built with still hold, because they are what make the
+sentence trustworthy rather than merely confident:
 
-  2. Corroboration must be INDEPENDENT of the title. The title is what raised
-     the flag; scoring it twice is not a second opinion. Auto-apply needs at
-     least one signal that does not read the window title at all — the file on
-     disk, the company file, the neighbours, a human's prior ruling.
+  1. Corroboration must be INDEPENDENT of the window title. The title is what
+     raised the flag; scoring it twice is one opinion counted twice.
 
-  3. Any independent signal pointing back at the BOOKED client vetoes the
-     auto-apply outright, however strong the title looks. A browser banner once
-     leaked the word "edge" into a title and matched a real client; the decoy
-     never had to win, it only had to look like a second opinion. That cuts
-     both ways: a contradicting signal here does not lower the score, it stops
-     the machine and calls a human.
+  2. Same-family pairs are never adjudicated. 27% of org 21's booked time
+     carries no distinguishing word at all; "resolving" St. Mary's Church vs
+     St. Mary's Cemetery would be picking, not resolving.
 
-No model call anywhere in this file. Every signal is derived from data the
-system already holds, which is what makes the evidence line readable and the
-verdict reproducible.
+  3. Evidence pointing back at where the block already sits is reported as
+     loudly as evidence pointing away. A one-sided reading invents certainty
+     the data does not contain — see _same_day_signals, which fires for BOTH
+     clients when a person worked both that day, and says so.
+
+No model call anywhere. Every signal is data the system already holds, which is
+what makes the sentence reproducible and free.
 """
 from __future__ import annotations
 
@@ -101,10 +98,9 @@ VERDICT_HUMAN = 'needs_human'
 # guards against, so it is the one closure the agent may do alone.
 VERDICT_STALE = 'stale'
 
-# Stamped on blocks the agent moves. NOT 'correction'/'manual': those mean a
-# person decided, and the accuracy sampler, the heal commands and this very
-# detector all key off that distinction. The agent is the system filing time,
-# so its work stays inside the population we measure ourselves on.
+# Historical. Blocks the agent moved while it ran carry this in
+# state_changed_by / categorized_by, and Block's choices still list it, so the
+# value has to stay legible. Nothing writes it any more.
 AGENT_ACTOR = 'mismatch_agent'
 
 
@@ -138,7 +134,10 @@ class Draft:
     target_client_id: int | None = None
     target_client_name: str = ''
     confidence: float = 0.0
-    auto: bool = False                      # clears the bar AND has no veto
+    # Kept as "this would have cleared the bar", because the sweep sorts by it
+    # and because a row with independent corroboration deserves to read
+    # differently from one without. It no longer authorises anything.
+    auto: bool = False
     signals: list = field(default_factory=list)
     # Hard stops. These block the agent AND a human clicking Approve, because
     # what they guard is not "thin evidence" but irreversibility (already
@@ -881,282 +880,18 @@ def _score(for_sigs, against_sigs):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Applying a draft
+# What used to live here
 # ─────────────────────────────────────────────────────────────────────────────
-
-def apply_draft(draft, block, ctx, approved_by=None):
-    """Carry out one draft. Returns the resolved_reason, or None if nothing done.
-
-    Re-checks the vetoes against the live row rather than trusting the draft:
-    a draft written at 3am and applied after somebody edited the block at 9 is
-    a draft about a block that no longer exists.
-
-    `approved_by` is the person who read the draft and agreed with it, when
-    there was one. The RESOLUTION REASON does not change either way — a moved
-    block is 'reconciled' and a cleared flag is 'confirmed_correct', the same
-    two words the scan, the manual assign path and the Cleared list already
-    speak. Inventing agent-only reasons would have split that vocabulary in
-    four and quietly broken the skip logic that makes "I checked, it's right"
-    stick. Who did it lives in `resolved_by`, which is where it belongs.
-    """
-    from tracker.models import ClassificationAudit
-    from tracker.services.classification_service import ClassificationService
-
-    # resolved_by is 32 chars; a username here is an email address, so this
-    # can and does run over.
-    actor = (f'approved:{approved_by}'[:32] if approved_by else AGENT_ACTOR)
-
-    if draft.verdict == VERDICT_STALE:
-        # Bookkeeping, not judgement — 'reconciled' is the same reason and the
-        # same basis the nightly scan closes in-window flags on.
-        _resolve_flag(block, reason='reconciled', draft=draft, by=actor)
-        return 'reconciled'
-
-    if draft.verdict == VERDICT_CONFIRM:
-        if not approved_by and not AGENT_MAY_CLOSE_FLAGS:
-            return None
-        _resolve_flag(block, reason='confirmed_correct', draft=draft, by=actor)
-        return 'confirmed_correct'
-
-    if draft.verdict != VERDICT_REASSIGN or not draft.target_client_id:
-        return None
-    if _vetoes(block, ctx, draft.target_client_id):
-        return None
-    if not approved_by and not draft.auto:
-        return None
-    if block.client_id == draft.target_client_id:
-        return None
-
-    old_client = block.client_id
-    cat_before = ClassificationService._extract_dominant_category(block)
-
-    block.client_id = draft.target_client_id
-    fields = ['client_id']
-    # The agent is the system filing time, not a person correcting it — see
-    # AGENT_ACTOR. Stamping it as a human correction would quietly remove the
-    # block from the random accuracy sample, which is the one measurement that
-    # would catch this agent being wrong.
-    block.state_changed_by = AGENT_ACTOR
-    block.state_changed_at = timezone.now()
-    block.categorized_by = AGENT_ACTOR
-    if block.classification_state != 'committed':
-        # Same trap the manual assign path hit: a block stranded in
-        # proposed-limbo stays invisible to billing AND review unless the fix
-        # also commits it, and then nothing anyone can see has changed.
-        block.classification_state = 'committed'
-        block.is_categorized = True
-    fields += ['state_changed_by', 'state_changed_at', 'categorized_by',
-               'classification_state', 'is_categorized']
-    block.save(update_fields=fields, force_classifier=True)
-
-    ClassificationAudit.objects.create(
-        block=block, source='auto',
-        client_before_id=old_client, client_after_id=draft.target_client_id,
-        category_before=cat_before,
-        category_after=ClassificationService._extract_dominant_category(block),
-        confidence_client=draft.confidence,
-        confidence_category=0.0,
-        overall_confidence=draft.confidence,
-        matched_signals=[{
-            'type': 'mismatch_agent',
-            'strength': round(s.weight, 3),
-            'evidence': s.text,
-            'detail': s.kind,
-        } for s in draft.signals],
-        # False even when a person clicked Approve: the CONTENT of the decision
-        # is the agent's, and this flag is what the accuracy sampler reads to
-        # decide whether a block is our filing or someone's judgement. Marking
-        # approvals as human corrections would quietly excuse the agent from
-        # the one measurement that can catch it being wrong.
-        corrected_by_user=False,
-    )
-    _resolve_flag(block, reason='reconciled', draft=draft, by=actor,
-                  title_client_id=draft.target_client_id,
-                  title_client_name=draft.target_client_name)
-    return 'reconciled'
-
-
-def _resolve_flag(block, reason, draft, by=AGENT_ACTOR,
-                  title_client_id=None, title_client_name=None):
-    """Close the open flag (or record one) with the agent's reasoning attached."""
-    from tracker.models import MismatchFlag
-
-    now = timezone.now()
-    payload = {
-        'resolved_at': now,
-        'resolved_reason': reason,
-        'resolved_by': by,
-        'agent_verdict': draft.verdict,
-        'agent_confidence': draft.confidence,
-        'agent_evidence': _evidence_payload(draft),
-        'agent_summary': draft.summary,
-        'agent_drafted_at': now,
-    }
-    if title_client_id:
-        payload['agent_target_client_id'] = title_client_id
-
-    f = MismatchFlag.objects.filter(block=block, resolved_at__isnull=True).first()
-    if f:
-        for k, v in payload.items():
-            setattr(f, k, v)
-        f.save(update_fields=list(payload.keys()))
-        return f
-    return MismatchFlag.objects.create(
-        org_id=block.org_id, block=block,
-        booked_client_id=block.client_id,
-        title_client_id=title_client_id,
-        title_client_name=title_client_name or '',
-        bucket='client', match_score=draft.confidence,
-        window_title=(block.window_title or '')[:512],
-        **payload,
-    )
-
-
-def _evidence_payload(draft):
-    """What gets stored on the flag — the reasoning, not just the witnesses.
-
-    The vetoes and caveats travel WITH the signals because they are half the
-    reasoning: "the file agrees" and "but this was already invoiced" are one
-    thought, and a stored justification missing its second half reads as a
-    confident recommendation the agent never made.
-    """
-    return {
-        'signals': [s.as_dict() for s in draft.signals],
-        'vetoes': list(draft.vetoes),
-        'caveats': list(draft.caveats),
-    }
-
-
-def save_draft(flag, draft):
-    """Attach a draft to an OPEN flag without resolving it — the queue-to-approve."""
-    flag.agent_verdict = draft.verdict
-    flag.agent_target_client_id = draft.target_client_id
-    flag.agent_confidence = draft.confidence
-    flag.agent_evidence = _evidence_payload(draft)
-    flag.agent_summary = draft.summary
-    flag.agent_drafted_at = timezone.now()
-    flag.save(update_fields=['agent_verdict', 'agent_target_client',
-                             'agent_confidence', 'agent_evidence',
-                             'agent_summary', 'agent_drafted_at'])
-    return flag
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# The run
-# ─────────────────────────────────────────────────────────────────────────────
-
-# The columns migration 0162 adds to MismatchFlag. Nothing in a dry run reads
-# them, so nothing in a dry run should select them.
-_DRAFT_FIELDS = ('resolved_by', 'agent_verdict', 'agent_target_client',
-                 'agent_confidence', 'agent_evidence', 'agent_summary',
-                 'agent_drafted_at')
-
-
-def _draft_fields_on_model():
-    """Which of those the running MODEL actually declares.
-
-    Two different kinds of "not there yet" have to be survived and they fail at
-    different layers. Between merge and the hand-applied migrate, the model has
-    the fields and the database has no columns — deferring fixes that. Running
-    this service against an older models.py (copying it into a checkout to try
-    it before merging anything) has neither, and `.defer()` on a name the model
-    does not declare raises FieldDoesNotExist before a single query is built.
-
-    Asking the model what it has covers both, and costs one cached lookup.
-    """
-    from tracker.models import MismatchFlag
-
-    have = {f.name for f in MismatchFlag._meta.get_fields()}
-    return tuple(f for f in _DRAFT_FIELDS if f in have)
-
-
-def run(org_ids=None, days=90, apply=False, limit=500, respect_optin=True):
-    """Draft a resolution for every OPEN flag; apply the ones above the bar.
-
-    Read-only unless `apply=True`, and even then only for orgs that have
-    switched `mismatch_agent_autoresolve` on. The dry run is the useful mode:
-    it is how you find out what the agent WOULD have done before letting it.
-
-    `respect_optin=False` is for a deliberate operator-run sweep on one org
-    (the management command's `--force`), never for the scheduled task.
-    """
-    from tracker.models import MismatchFlag, Organization
-
-    if not org_ids:
-        org_ids = list(Organization.objects.values_list('id', flat=True))
-
-    # Which orgs have said the agent may act. Everyone else still gets drafts.
-    acting = set()
-    if apply:
-        acting = set(
-            Organization.objects
-            .filter(id__in=org_ids, mismatch_agent_autoresolve=True)
-            .values_list('id', flat=True)
-        ) if respect_optin else set(org_ids)
-
-    cutoff = timezone.now() - timedelta(days=days)
-    flags = (MismatchFlag.objects
-             .filter(org_id__in=org_ids, resolved_at__isnull=True,
-                     block__deleted_at__isnull=True,
-                     block__start__gte=cutoff)
-             .select_related('block', 'block__client', 'booked_client')
-             # Nothing here READS a previous draft — every run re-derives from
-             # the block as it is now — so don't select those columns. Not a
-             # micro-optimisation: it is what lets a dry run survive a database
-             # that migration 0162 has not reached yet, which is every database
-             # between the merge and the hand-applied migrate.
-             #
-             # Deferred on the FLAG only. Deferring anything on `block` would
-             # reintroduce the refresh_from_db-per-row trap that SIGKILLed a
-             # worker in #439.
-             .defer(*_draft_fields_on_model())
-             .order_by('-detected_at')[:limit])
-
-    summary = {'drafted': 0, 'auto_reassigned': 0, 'auto_confirmed': 0,
-               'queued': 0, 'skipped': 0, 'drafts': [],
-               'acting_orgs': sorted(acting)}
-
-    for flag in flags:
-        block = flag.block
-        if not block or not block.client_id:
-            summary['skipped'] += 1
-            continue
-        ctx = context_for(block.org_id)
-        draft = draft_for_block(block, ctx)
-        summary['drafted'] += 1
-        summary['drafts'].append(draft)
-
-        may_act = apply and block.org_id in acting
-        if not may_act or not draft.auto:
-            # Persisting the draft is the whole point of the non-acting path:
-            # the flag stays open, but the row now carries a proposed answer
-            # and the evidence behind it.
-            if apply:
-                save_draft(flag, draft)
-            summary['queued'] += 1
-            continue
-
-        try:
-            with transaction.atomic():
-                reason = apply_draft(draft, block, ctx)
-        except Exception:
-            log.exception('[MISMATCH-AGENT] apply failed on block %s', block.id)
-            summary['skipped'] += 1
-            continue
-
-        if reason == 'reconciled':
-            summary['auto_reassigned'] += 1
-        elif reason == 'confirmed_correct':
-            summary['auto_confirmed'] += 1
-        else:
-            save_draft(flag, draft)
-            summary['queued'] += 1
-
-    log.info('[MISMATCH-AGENT] orgs=%s drafted=%s reassigned=%s confirmed=%s '
-             'queued=%s apply=%s', len(org_ids), summary['drafted'],
-             summary['auto_reassigned'], summary['auto_confirmed'],
-             summary['queued'], apply)
-    return summary
+#
+# apply_draft / _resolve_flag / save_draft / run() — the acting half. Removed
+# with the nightly task, the approve endpoint and the per-org autoresolve
+# switch. Nothing reads a stored draft any more: every caller asks the question
+# fresh and gets an answer that describes the block as it is now, which is the
+# only kind of answer worth putting in front of somebody.
+#
+# The MismatchFlag.agent_* columns it wrote are left in place. Dropping them
+# needs a migration to buy nothing, and they are a record of what the agent
+# proposed while it ran.
 
 
 def drafts_for_blocks(org_id, block_ids):

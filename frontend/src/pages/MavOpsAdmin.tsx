@@ -962,121 +962,11 @@ interface MismatchesTabProps {
   filterOrg: number | null;
 }
 
-// The agent's reading of one row: what it would do, why, and what stopped it.
-//
-// The evidence list is the point of the whole feature and it is collapsed by
-// default anyway — someone working a queue wants the one-line verdict, and
-// reaches for the reasoning only when the verdict surprises them. Burying it
-// would make this a black box; leading with it would make the queue slower to
-// work than it was before.
-function DraftPanel({ draft, tone, onApprove, busy, defaultOpen }: {
-  draft: AgentDraft;
-  tone: string;
-  onApprove?: ((blockIds: number[]) => void) | undefined;
-  busy?: boolean | undefined;
-  // Open the evidence without being asked when the queue is short. Behind a
-  // disclosure, "67% confident" is a number with nothing behind it, and the
-  // honest reaction to that is not to trust it. Two rows is not a list anyone
-  // is skimming — it is two decisions, and both deserve their reasons showing.
-  defaultOpen?: boolean | undefined;
-}) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  if (draft.verdict === "needs_human" && !draft.evidence.length) {
-    return (
-      <div style={{ marginTop: 10, fontSize: 11, color: T.textMuted, ...mono }}>
-        agent: nothing outside the title points anywhere. This one is yours.
-      </div>
-    );
-  }
-
-  const blocked = draft.vetoes.length > 0;
-  const actionable = !blocked && draft.verdict !== "needs_human";
-  const hue = blocked ? T.textMuted : draft.auto ? T.green : tone;
-
-  return (
-    <div style={{
-      marginTop: 12, padding: "10px 12px", borderRadius: 4,
-      background: hue + "0c", border: `1px solid ${hue}44`,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
-        <span style={{
-          fontSize: 10, ...mono, fontWeight: 700, letterSpacing: 1,
-          textTransform: "uppercase" as const, color: hue,
-        }}>
-          {draft.auto ? "agent · ready" : blocked ? "agent · held" : "agent · draft"}
-        </span>
-        <span style={{ fontSize: 12, color: T.text, ...mono }}>{draft.summary}</span>
-        <div style={{ flex: 1 }} />
-        {/* What it is standing on, not just how sure it claims to be.
-            "67% confident" is a number with nothing behind it, and read alone
-            it sounds like a claim of accuracy when on this row it is the
-            opposite — the agent saying the only thing agreeing with the title
-            is the title. Naming the witnesses makes the percentage checkable
-            instead of something you either swallow or dismiss. */}
-        <span title={`${(draft.confidence * 100).toFixed(0)}% — weighted share of the evidence`}
-          style={{ fontSize: 10, color: T.textMuted, ...mono }}>
-          {(() => {
-            const ind = draft.evidence.filter(e => e.independent).length;
-            if (!draft.evidence.length) return "no evidence";
-            if (!ind) return `title only · ${(draft.confidence * 100).toFixed(0)}%`;
-            return `${ind} independent witness${ind === 1 ? "" : "es"} · ${(draft.confidence * 100).toFixed(0)}%`;
-          })()}
-        </span>
-        {actionable && onApprove && (
-          <button disabled={busy}
-            onClick={() => onApprove([draft.block_id])}
-            style={{
-              background: hue + "1e", border: `1px solid ${hue}`, color: hue,
-              padding: "3px 12px", fontSize: 11, borderRadius: 4, ...mono,
-              fontWeight: 700, cursor: busy ? "default" : "pointer",
-              opacity: busy ? 0.5 : 1,
-            }}>
-            ✓ approve
-          </button>
-        )}
-        <button onClick={() => setOpen(o => !o)}
-          style={{
-            background: "transparent", border: "none", color: T.textMuted,
-            fontSize: 11, cursor: "pointer", ...mono, padding: "3px 4px",
-          }}>
-          {open ? "▾ why" : "▸ why"}
-        </button>
-      </div>
-
-      {open && (
-        <div style={{ marginTop: 8, display: "flex", flexDirection: "column" as const, gap: 4 }}>
-          {draft.evidence.map((e, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-              <span title={e.independent
-                ? "Independent of the window title — this is what makes the flag more than one opinion counted twice"
-                : "Reads the window title, the same text that raised the flag"}
-                style={{
-                  fontSize: 9, ...mono, padding: "1px 5px", borderRadius: 2,
-                  color: e.independent ? T.teal : T.textMuted,
-                  border: `1px solid ${(e.independent ? T.teal : T.textMuted)}44`,
-                  whiteSpace: "nowrap" as const,
-                }}>
-                {e.independent ? "independent" : "from title"}
-              </span>
-              <span style={{ fontSize: 11, color: T.textSub, ...mono }}>{e.text}</span>
-              <span style={{ fontSize: 10, color: T.textMuted, ...mono }}>{e.weight.toFixed(2)}</span>
-            </div>
-          ))}
-          {draft.vetoes.map((v, i) => (
-            <div key={`v${i}`} style={{ fontSize: 11, color: T.red, ...mono }}>
-              ✕ {v}
-            </div>
-          ))}
-          {draft.caveats.map((c, i) => (
-            <div key={`c${i}`} style={{ fontSize: 11, color: T.yellow, ...mono }}>
-              ⚠ {c}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// `DraftPanel` stood here — a collapsible evidence panel with an Approve
+// button, rendered inside BucketDetail rows. Dead since the tab rebuild moved
+// the reasoning into DecisionCard, and its Approve button went with the agent.
+// BucketDetail now only renders the internal/admin bucket, which never carries
+// evidence, so nothing reached it.
 
 // Shared renderer for one bucket's worst pairs + flagged list. The per-day
 // histogram this used to draw is gone; `histogram` survives in the payload
@@ -1086,7 +976,6 @@ function DraftPanel({ draft, tone, onApprove, busy, defaultOpen }: {
 // client name (or "" for all).
 function BucketDetail({
   bucket, tone, label, clientFilter, onReconcile, reconcileBusy, hideBulkButton, resolve,
-  drafts, onApprove, agentBusy,
 }: {
   bucket: MismatchBucket;
   tone: string;
@@ -1248,12 +1137,10 @@ function BucketDetail({
                 )}
                 <div style={{ flex: 1 }} />
                 {/* "fix" moves the block to whatever the title names, with no
-                    corroboration required. When the agent has drafted a move
-                    for this row it has already asked that question and shown
-                    its working, so offering both put two buttons for the same
-                    action side by side — one of them the version the agent
-                    just explained it would not do unattended. */}
-                {onReconcile && drafts?.[m.block_id]?.verdict !== "reassign" && (
+                    corroboration required. Only reachable on the internal/admin
+                    bucket now, which is the one place BucketDetail still
+                    renders and where no evidence is offered either way. */}
+                {onReconcile && (
                   <button
                     disabled={reconcileBusy}
                     onClick={() => onReconcile([m.block_id], `block ${m.block_id}`)}
@@ -1288,11 +1175,6 @@ function BucketDetail({
                   </>
                 )}
               </div>
-              {drafts?.[m.block_id] && (
-                <DraftPanel draft={drafts[m.block_id]!} tone={tone}
-                  onApprove={onApprove} busy={agentBusy}
-                  defaultOpen={rows.length <= 3} />
-              )}
               <code style={{ display: "block", fontSize: 12, color: T.textSub, ...mono, background: T.bg, padding: "8px 12px", borderRadius: 4, wordBreak: "break-all" as const }}>
                 {m.app_name && <span style={{ color: T.textMuted }}>{m.app_name} — </span>}
                 {m.window_title}
@@ -1595,9 +1477,6 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   // The agent's drafts for whatever rows are currently on screen.
   const [drafts, setDrafts] = useState<Record<number, AgentDraft>>({});
   const [draftsLoading, setDraftsLoading] = useState(false);
-  const [agentBusy, setAgentBusy] = useState(false);
-  // Whether this org lets the agent act on its own drafts overnight.
-  const [autoresolve, setAutoresolve] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1662,15 +1541,11 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
       method: "POST",
       body: JSON.stringify({ org_id: filterOrg, block_ids: ids }),
     })
-      .then(d => {
-        if (!live) return;
-        setDrafts(d.drafts || {});
-        setAutoresolve(!!d.autoresolve);
-      })
+      .then(d => { if (live) setDrafts(d.drafts || {}); })
       // Silent: the tab worked before the agent existed and has to keep
       // working when it is unavailable. A failed draft fetch costs the
       // suggestions, not the queue.
-      .catch(() => { if (live) { setDrafts({}); setAutoresolve(false); } })
+      .catch(() => { if (live) setDrafts({}); })
       .finally(() => { if (live) setDraftsLoading(false); });
     return () => { live = false; };
   }, [apiFetch, filterOrg, raw]);
@@ -1769,83 +1644,12 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
   // click what it spends a paragraph explaining it will not do. The endpoint
   // is untouched for callers outside this tab.
 
-  // Approve the agent's own draft for these rows — move the ones it wants
-  // moved, close the ones it says were never wrong.
-  //
-  // The server RE-DERIVES the draft rather than replaying the one on screen,
-  // and its vetoes still hold. So a row that has been invoiced since the tab
-  // loaded is refused here even though the button was showing — which is the
-  // behaviour you want, and why the result count is read back rather than
-  // assumed.
-  const approveDrafts = useCallback(async (blockIds: number[]) => {
-    if (!filterOrg) { flash("Pick a single org first.", "err"); return; }
-    const bulk = blockIds.length > 1;
-    setAgentBusy(true);
-    try {
-      if (bulk) {
-        const dry = await apiFetch(`/mavops/mismatches/agent/approve/`, {
-          method: "POST",
-          body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, confirm: false }),
-        });
-        const n = dry.would_apply || 0;
-        if (!n) { flash(`Nothing to apply (${dry.skipped} held back).`); return; }
-        if (!window.confirm(
-          `Apply the agent's draft to ${n} block${n > 1 ? "s" : ""}?\n\n` +
-          `Each goes to the client the agent named, with its evidence recorded ` +
-          `on the block.\n` +
-          (dry.skipped ? `${dry.skipped} held back (invoiced, user-set, or same-family).` : "")
-        )) return;
-      }
-      const res = await apiFetch(`/mavops/mismatches/agent/approve/`, {
-        method: "POST",
-        body: JSON.stringify({ org_id: filterOrg, block_ids: blockIds, confirm: true }),
-      });
-      if (!res.applied) {
-        flash(`Nothing applied — the agent held all ${blockIds.length} back.`, "err");
-        return;
-      }
-      hide((res.results || []).map((r: { block_id: number }) => r.block_id));
-      flash(`Applied ${res.applied} draft${res.applied === 1 ? "" : "s"}.`);
-      loadCleared();
-    } catch { flash("Failed to apply those drafts.", "err"); }
-    finally { setAgentBusy(false); }
-  }, [apiFetch, flash, filterOrg, hide, loadCleared]);
-
-  const toggleAutoresolve = useCallback(async () => {
-    if (!filterOrg) return;
-    const next = !autoresolve;
-    if (next && !window.confirm(
-      `Let the agent re-file blocks for org ${filterOrg} overnight, without ` +
-      `anyone approving them?\n\n` +
-      `It will only ever MOVE a block, never close a flag, and only where ` +
-      `something other than the window title agrees. Same-family names, ` +
-      `invoiced blocks and anything a person set stay untouched either way.`
-    )) return;
-    try {
-      const r = await apiFetch(`/mavops/orgs/${filterOrg}/mismatch-agent/`, {
-        method: "POST",
-        body: JSON.stringify({ autoresolve: next }),
-      });
-      setAutoresolve(!!r.autoresolve);
-      flash(r.autoresolve
-        ? "The agent will act on its own drafts overnight for this org."
-        : "The agent will draft only — every change waits for a person.");
-    } catch { flash("Could not change that setting.", "err"); }
-  }, [apiFetch, autoresolve, filterOrg, flash]);
-
-  // What the agent has to say about the rows on screen, in one line.
-  const agentStats = useMemo(() => {
-    const rows = Object.values(drafts);
-    return {
-      total: rows.length,
-      ready: rows.filter(d => d.auto).length,
-      drafted: rows.filter(d => d.verdict !== "needs_human" && !d.vetoes.length).length,
-      held: rows.filter(d => d.vetoes.length > 0).length,
-      readyIds: rows.filter(d => d.auto).map(d => d.block_id),
-      draftedIds: rows.filter(d => d.verdict !== "needs_human" && !d.vetoes.length)
-        .map(d => d.block_id),
-    };
-  }, [drafts]);
+  // `approveDrafts` and `toggleAutoresolve` lived here — one click to carry
+  // out the agent's draft, and the per-org switch that let it act unattended
+  // overnight. Both removed with the agent: on a real book of business it had
+  // one row a quarter to act on, and the errors that matter carry no evidence
+  // to act on at all. A row is settled by the same assign / dismiss endpoints
+  // a person has always used.
 
   // The ongoing-vs-historical verdict banner was computed here. Gone with the
   // banner: it read the newest flag's DATE and announced "likely historical,
@@ -1916,34 +1720,12 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             </div>
           )}
 
-          {/* The agent line only appears when it has something to say about
-              these rows, and says it in one clause. It used to be a standing
-              banner that announced itself even while reporting that it had
-              nothing to add. */}
-          {filterOrg && decisions.length > 0 && (draftsLoading || agentStats.ready > 0) && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" as const,
-              marginBottom: 14, padding: "10px 14px", borderRadius: 8,
-              border: `1px solid ${agentStats.ready ? T.green + "55" : T.border}`,
-              background: agentStats.ready ? T.green + "0c" : "transparent",
-            }}>
-              <span style={{ fontSize: 13, color: T.textSub }}>
-                {draftsLoading
-                  ? "Reading the evidence around these…"
-                  : `${agentStats.ready} of them have independent evidence behind the move.`}
-              </span>
-              <div style={{ flex: 1 }} />
-              {agentStats.ready > 0 && (
-                <button disabled={agentBusy}
-                  onClick={() => approveDrafts(agentStats.readyIds)}
-                  style={{
-                    background: T.green, border: `1px solid ${T.green}`, color: "#06281c",
-                    padding: "7px 14px", fontSize: 12.5, borderRadius: 7, fontWeight: 600,
-                    cursor: agentBusy ? "default" : "pointer", opacity: agentBusy ? 0.5 : 1,
-                  }}>
-                  {agentBusy ? "moving…" : `Move all ${agentStats.ready}`}
-                </button>
-              )}
+          {/* An agent banner stood here — a Move-all button and an
+              overnight switch. Gone with the agent. The rows below carry
+              the reasoning, which was the part worth keeping. */}
+          {draftsLoading && decisions.length > 0 && (
+            <div style={{ marginBottom: 14, fontSize: 13, color: T.textMuted }}>
+              Reading the evidence around these…
             </div>
           )}
 
@@ -1953,7 +1735,7 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
               row={m}
               draft={drafts[m.block_id]}
               clients={orgClients}
-              busy={resolveBusy || agentBusy}
+              busy={resolveBusy}
               onMove={assignTo}
               onCorrect={dismissRows}
               onSkip={hide}
@@ -1970,22 +1752,8 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
             <span style={{ color: T.textMuted, fontSize: 12.5 }}>
               {asideCount} internal/admin row{asideCount === 1 ? "" : "s"}
               {cleared.length > 0 && ` · ${cleared.length} you've already cleared`}
-              {autoresolve && ` · agent acts overnight`}
             </span>
             <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-              {filterOrg && (
-                <button onClick={toggleAutoresolve}
-                  title={autoresolve
-                    ? "The agent re-files rows with independent evidence overnight. It never closes a flag on its own."
-                    : "The agent only recommends. Nothing changes unless you click."}
-                  style={{
-                    background: "transparent", border: "none", fontSize: 12.5,
-                    color: autoresolve ? T.teal : T.textMuted, cursor: "pointer",
-                    borderBottom: `1px dotted ${T.textMuted}`, padding: 0,
-                  }}>
-                  {autoresolve ? "agent acts overnight" : "agent recommends only"}
-                </button>
-              )}
               <button onClick={() => { setShowInternal(v => !v); setShowCleared(v => !v); }}
                 style={{
                   background: "transparent", border: "none", color: T.textSub,

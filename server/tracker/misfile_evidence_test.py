@@ -25,7 +25,7 @@ Approve is allowed to overrule thin evidence, and is not allowed to overrule
 
 Pure module — no database, no Django settings. Run inside the app container or
 bare:
-    python tracker/mismatch_agent_test.py
+    python tracker/misfile_evidence_test.py
 Exits non-zero if any assertion fails.
 """
 import importlib.util
@@ -52,12 +52,12 @@ if 'django' not in sys.modules:
     sys.modules['django.utils'].timezone = sys.modules['django.utils.timezone']
 
 _PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     'services', 'mismatch_agent.py')
-_spec = importlib.util.spec_from_file_location('_mismatch_agent', _PATH)
+                     'services', 'misfile_evidence.py')
+_spec = importlib.util.spec_from_file_location('_misfile_evidence', _PATH)
 ma = importlib.util.module_from_spec(_spec)
 # Register before exec: @dataclass resolves annotations through
 # sys.modules[cls.__module__], and a module that isn't there yet reads as None.
-sys.modules['_mismatch_agent'] = ma
+sys.modules['_misfile_evidence'] = ma
 _spec.loader.exec_module(ma)
 
 Signal = ma.Signal

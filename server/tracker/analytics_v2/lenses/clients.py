@@ -36,7 +36,7 @@ from ..breakdowns import breakdown, held_out_note, split_client_rows
 from ..stats import median, partition_material, quantile
 from ..types import DataTablePayload, MetricState, Section, TimeRange
 from .base import Lens, register_lens
-from .helpers import column, kpi_tile
+from .helpers import column, kpi_tile, safe_sparklines
 
 _GROWTH_FLAG_RATIO = 1.5     # hours at least half again the comparison period
 _MARGIN_GAP_POINTS = 10.0    # how far below median counts as "below typical"
@@ -101,7 +101,10 @@ def client_table(rows: list[dict], time: TimeRange, *, table_id: str,
             "scope_type": "client", "lens": "clients",
             "id_key": "id", "label_key": "label",
         },
-        bar_columns=["hours"],
+        # Hours says how big the client is; margin % says whether that size is
+        # worth having. Both read better as a length than as a figure.
+        bar_columns=["hours", "margin_pct"],
+        ranked=True,
         footnote=footnote,
         state=MetricState.READY if rows else MetricState.EMPTY,
     )
@@ -256,8 +259,10 @@ class ClientsLens(Lens):
 
         sections: list[Section] = []
 
+        sparks = safe_sparklines(org, scope, time)
         tiles = [
-            kpi_tile(mid, org, scope, time, compare, size="medium")
+            kpi_tile(mid, org, scope, time, compare, size="medium",
+                     sparklines=sparks)
             for mid in ("total_hours", "billable_hours", "billable_mix",
                         "revenue", "effective_rate", "labor_cost", "gross_margin")
             if scope.type in get_metric(mid).valid_scopes

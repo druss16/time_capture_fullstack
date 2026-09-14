@@ -261,6 +261,9 @@ class DataTablePayload:
     # Columns worth reading as a share of the table, not just a number. The
     # frontend paints an in-cell bar behind these, scaled to the column max.
     bar_columns: list[str] = field(default_factory=list)
+    # Number the rows in their default order. A ranking that says "top 20 by
+    # hours" should show the rank, not leave the reader counting.
+    ranked: bool = False
     # Rendered above the table as context the rows alone do not carry.
     footnote: str = ""
     
@@ -275,6 +278,7 @@ class DataTablePayload:
             "default_sort": self.default_sort,
             "row_drilldown": self.row_drilldown,
             "bar_columns": self.bar_columns,
+            "ranked": self.ranked,
             "footnote": self.footnote,
             "state": self.state.value if isinstance(self.state, Enum) else self.state,
             "error_message": self.error_message,

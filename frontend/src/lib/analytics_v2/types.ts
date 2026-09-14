@@ -190,6 +190,8 @@ export interface DataTablePayload {
   } | null;
   /** Columns rendered with an in-cell proportion bar, scaled to the column max. */
   bar_columns?: string[] | undefined;
+  /** Number the rows in their default order. */
+  ranked?: boolean | undefined;
   footnote?: string | undefined;
   state: MetricState;
   error_message?: string | null;

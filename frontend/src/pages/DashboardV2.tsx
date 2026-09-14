@@ -17,7 +17,7 @@
  */
 import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { SURFACE } from "@/lib/analytics_v2/theme";
 
@@ -230,15 +230,28 @@ function CollapsibleSection({
       </section>
     );
   }
+  // A real control, not grey text floating under a table. It is the only way
+  // to reach the long tail of the client list, so it has to look clickable.
   return (
-    <details className="group space-y-3" open={!section.collapsed}>
-      <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700 hover:text-slate-900">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="text-slate-400 transition-transform group-open:rotate-90">▸</span>
-          {section.title}
+    <details className="group" open={!section.collapsed}>
+      <summary
+        className={cn(
+          "flex cursor-pointer list-none items-center gap-2 rounded-xl border border-dashed",
+          "border-[rgba(15,42,60,0.16)] bg-white/50 px-4 py-2.5",
+          "text-[13px] font-semibold text-slate-600",
+          "transition-colors hover:border-[rgba(15,42,60,0.28)] hover:bg-white hover:text-slate-900",
+        )}
+      >
+        <ChevronRight
+          className="h-4 w-4 shrink-0 text-slate-400 transition-transform duration-150 group-open:rotate-90"
+        />
+        {section.title}
+        <span className="ml-auto text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
+          <span className="group-open:hidden">Show</span>
+          <span className="hidden group-open:inline">Hide</span>
         </span>
       </summary>
-      <div className="pt-3">{children}</div>
+      <div className="pt-4">{children}</div>
     </details>
   );
 }

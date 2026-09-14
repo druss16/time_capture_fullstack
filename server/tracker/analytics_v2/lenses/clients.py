@@ -45,6 +45,12 @@ _MARGIN_GAP_POINTS = 10.0    # how far below median counts as "below typical"
 # flagged half of it by construction.
 _LOW_QUANTILE = 0.25
 
+# Clients in the main ranking. A CPA firm's client list has a long thin tail —
+# org 21 has 52 clients in a quarter where the busiest is under 40 hours — and
+# a table you have to scroll past forty rows of is not a ranking, it is a
+# export. The tail is one click away, not gone.
+_RANKING_ROWS = 20
+
 _FLAG_LABEL = {
     "losing_money": "Losing money",
     "below_typical": "Below typical margin",
@@ -181,8 +187,18 @@ class ClientsLens(Lens):
         material.sort(key=lambda r: -r["hours"])
         immaterial.sort(key=lambda r: -r["hours"])
 
-        flagged = sum(1 for r in material if r["flags"])
-        subtitle = f"{time.label} · {len(material)} clients"
+        # The cut is on HOURS and the flags were computed over the whole
+        # material set above, so the display cutoff never moves the bar a
+        # client is judged against. (The table re-sorts client-side, which is
+        # why the subtitle says "by hours" — re-sorting by margin reorders
+        # these twenty, it does not go and fetch a different twenty.)
+        top = material[:_RANKING_ROWS]
+        rest = material[_RANKING_ROWS:]
+
+        flagged = sum(1 for r in top if r["flags"])
+        shown = (f"top {len(top)} of {len(material)} by hours"
+                 if rest else f"{len(material)} clients")
+        subtitle = f"{time.label} · {shown}"
         if compare is not None:
             subtitle += f" · growth vs {compare.label}"
         note = held_out_note(unassigned, internal)
@@ -192,29 +208,41 @@ class ClientsLens(Lens):
         sections: list[Section] = [Section(
             id="client_ranking", type="section", title="Client performance",
             children=[client_table(
-                material, time,
+                top, time,
                 table_id="clients_ranked",
-                title="All clients",
+                title="Clients" if rest else "All clients",
                 subtitle=subtitle,
                 footnote=(
-                    f"{flagged} client(s) flagged. Flags compare each client "
-                    "with this firm's own median this period — they are not "
-                    "fixed targets."
+                    f"{flagged} of these flagged. Flags compare each client "
+                    "with the bottom quarter of this firm's own spread this "
+                    "period — they are not fixed targets."
                 ) if flagged else "",
             )],
         )]
 
-        if immaterial:
+        tail = rest + immaterial
+        if tail:
+            # One collapsed section, not two. The reader does not need the
+            # distinction between "21st by hours" and "under an hour" to find
+            # a client; the subtitle keeps the one fact that matters — that the
+            # smallest rows are also out of the medians the flags use.
             sections.append(Section(
-                id="client_tail", type="section", title="Low-materiality clients",
+                id="client_tail",
+                type="section",
+                title=f"The other {len(tail)} clients",
                 collapsible=True, collapsed=True,
                 children=[client_table(
-                    immaterial, time,
-                    table_id="clients_immaterial",
-                    title="Under an hour, or under $250",
-                    subtitle="Held out of the ranking and out of the medians: "
-                             "a few minutes of work produces a margin "
-                             "percentage with no information in it.",
+                    tail, time,
+                    table_id="clients_tail",
+                    title="Everything below the top " + str(len(top)),
+                    subtitle=(
+                        f"{time.label} · {len(rest)} more client(s) by hours"
+                        + (f", plus {len(immaterial)} under an hour or under "
+                           "$250 — those are also held out of the medians the "
+                           "flags compare against, because a few minutes of "
+                           "work produces a margin percentage with no "
+                           "information in it." if immaterial else "")
+                    ),
                 )],
             ))
         return sections

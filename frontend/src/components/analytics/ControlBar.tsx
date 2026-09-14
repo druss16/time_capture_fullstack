@@ -15,7 +15,7 @@
  * tiers, which are a cost grouping, not an org chart — and offering a Team
  * control backed by tiers would label something as a team that is not one.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, X } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import {
@@ -59,6 +59,25 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
   // inside the filter popover's render callback — that callback only runs
   // while the popover is open, so hooks called from it would mount and
   // unmount with the menu.
+  // Is the sticky bar floating over content yet?
+  //
+  // Watched with an IntersectionObserver on a sentinel above the bar, NOT with
+  // a window scroll listener: the app layout scrolls an inner container, so
+  // `window.scrollY` never leaves 0 and the listener never fired. A sentinel
+  // works whichever ancestor is doing the scrolling.
+  const sentinel = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      ([entry]) => setStuck(!entry?.isIntersecting),
+      { threshold: 1 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   const clientOptions = useClientOptions(canPickClient);
   const projectOptions = useProjectOptions();
   const staffOptions = useStaffOptions(canPickStaff);
@@ -76,7 +95,22 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
   const inSecondary = Boolean(currentView?.secondary);
 
   return (
-    <div className="sticky top-0 z-20 border-b border-[rgba(15,42,60,0.08)] bg-[#f7f9f9]/85 backdrop-blur-xl print:hidden">
+    <>
+    {/* Sentinel: while this is on screen the bar is at rest. */}
+    <div ref={sentinel} aria-hidden className="h-px w-full" />
+    <div
+      className={cn(
+        "sticky top-0 z-20 bg-[#f7f9f9] print:hidden",
+        // At rest there is no rule at all — the bar, the title beneath it and
+        // the page are one ground, so there is nothing to see a seam in. The
+        // separation appears only once the bar is actually floating over
+        // content, which is the only moment it means anything.
+        "transition-shadow duration-200",
+        stuck
+          ? "shadow-[0_1px_0_rgba(15,42,60,0.08),0_8px_20px_-14px_rgba(15,42,60,0.35)]"
+          : "shadow-none",
+      )}
+    >
       {/* Views */}
       {/* overflow-x-auto clips on BOTH axes; the dropdowns here render through
           a portal so they are not caught by it. See Dropdown.tsx. */}
@@ -222,6 +256,7 @@ export default function ControlBar({ body, availableViews, scopeLabel, onChange 
         )}
       </div>
     </div>
+    </>
   );
 }
 

@@ -16,10 +16,7 @@
  * control backed by tiers would label something as a team that is not one.
  */
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
-import {
-  Calendar, Clock, Printer, RefreshCw, Settings, X,
-} from "lucide-react";
+import { Calendar, X } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import {
   useAnalyticsCategories, useAnalyticsClients, useAnalyticsPermissions,
@@ -38,12 +35,6 @@ import Dropdown, { MenuGroupLabel, MenuItem } from "./Dropdown";
 interface Props {
   body: AnalyticsQueryBody;
   availableViews: Set<LensKey>;
-  /** The resolved view sentence — "TL Wall Accounting · Q3 2026". */
-  sentence: string;
-  dataFreshness?: string | null | undefined;
-  generatedAt?: string | null | undefined;
-  isFetching: boolean;
-  onRefresh: () => void;
   /**
    * The scope label the backend resolved for the current response. The URL
    * carries only `client:42` — putting the name in it would rot the moment a
@@ -59,10 +50,7 @@ const BILLABLE_OPTIONS: Array<{ value: BillableFilter; label: string }> = [
   { value: "non_billable", label: "Non-billable only" },
 ];
 
-export default function ControlBar({
-  body, availableViews, scopeLabel, sentence, dataFreshness, generatedAt,
-  isFetching, onRefresh, onChange,
-}: Props) {
+export default function ControlBar({ body, availableViews, scopeLabel, onChange }: Props) {
   const { data: perms } = useAnalyticsPermissions();
   const canPickClient = perms?.capabilities?.can_pick_any_client ?? false;
   const canPickStaff = perms?.capabilities?.can_pick_any_staff ?? false;
@@ -88,60 +76,11 @@ export default function ControlBar({
   const inSecondary = Boolean(currentView?.secondary);
 
   return (
-    /* One masthead, continuous with the app nav above it.
-       This replaced three stacked grey bands — tabs, controls, then a tall
-       title block — which cost about 200px of chrome before any data and gave
-       the page no focal point. Dark ground also makes the white cards below
-       read as lit, which is where the energy comes from: contrast, not
-       louder charts. */
-    <div className="sticky top-0 z-20 bg-slate-800 text-white shadow-[0_10px_30px_-20px_rgba(2,6,23,0.9)] print:static print:bg-white print:text-black print:shadow-none">
-      {/* Title + actions */}
-      <div className="mx-auto flex max-w-[1560px] items-center justify-between gap-4 px-6 pt-4">
-        <div className="min-w-0">
-          <h1 className="truncate text-[22px] font-bold leading-none tracking-[-0.025em] text-white print:text-black">
-            {sentence || "Analytics"}
-          </h1>
-          {dataFreshness && (
-            <p className="mt-1.5 flex items-center gap-1 text-[11px] tabular-nums text-slate-400 print:text-slate-600">
-              <Clock className="h-3 w-3" />
-              Data through {formatRelative(dataFreshness)}
-            </p>
-          )}
-          <p className="mt-1 hidden text-[11px] tabular-nums text-slate-600 print:block">
-            Printed {new Date().toLocaleString(undefined, {
-              year: "numeric", month: "short", day: "numeric",
-              hour: "numeric", minute: "2-digit",
-            })}
-            {generatedAt ? ` · data generated ${new Date(generatedAt).toLocaleString(undefined, {
-              month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-            })}` : ""}
-          </p>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5 print:hidden">
-          <IconAction icon={Printer} label="Print" onClick={() => window.print()} />
-          <IconAction
-            icon={RefreshCw}
-            label={isFetching ? "Refreshing" : "Refresh"}
-            spinning={isFetching}
-            onClick={onRefresh}
-          />
-          <Link
-            to="/settings?tab=economics"
-            title="Economics & capacity settings"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            <Settings className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Settings</span>
-          </Link>
-        </div>
-      </div>
-
+    <div className="sticky top-0 z-20 border-b border-[rgba(15,42,60,0.08)] bg-[#f7f9f9]/85 backdrop-blur-xl print:hidden">
       {/* Views */}
       {/* overflow-x-auto clips on BOTH axes; the dropdowns here render through
           a portal so they are not caught by it. See Dropdown.tsx. */}
-      <div className="mx-auto flex max-w-[1560px] flex-wrap items-end justify-between gap-x-6 gap-y-2 px-6 pt-3 print:hidden">
-      <div className="flex items-end gap-0.5 overflow-x-auto">
+      <div className="mx-auto flex max-w-[1560px] items-end gap-0.5 overflow-x-auto px-6 pt-3">
         {primary.map(v => (
           <ViewTab
             key={v.value}
@@ -179,8 +118,7 @@ export default function ControlBar({
       </div>
 
       {/* Controls */}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 pb-3">
+      <div className="mx-auto flex max-w-[1560px] flex-wrap items-center gap-2 px-6 py-3">
         <PeriodPicker body={body} onChange={onChange} />
 
         <Dropdown
@@ -263,7 +201,7 @@ export default function ControlBar({
           <button
             type="button"
             onClick={() => setFilters({})}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
           >
             <X className="h-3 w-3" /> Clear filters
           </button>
@@ -275,7 +213,7 @@ export default function ControlBar({
             onClick={() => onChange({
               scope: { type: "firm", ids: [], filters: body.scope.filters },
             })}
-            className="inline-flex items-center gap-1 rounded-lg border border-teal-400/30 bg-teal-400/15 px-2.5 py-1 text-xs font-semibold text-teal-200 transition-colors hover:bg-teal-400/25"
+            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-900 hover:bg-teal-100"
             title="Back to the whole firm"
           >
             {scopeLabel || body.scope.label || "Showing one item"}
@@ -285,45 +223,6 @@ export default function ControlBar({
       </div>
     </div>
   );
-}
-
-function IconAction({
-  icon: Icon, label, onClick, spinning,
-}: {
-  icon: typeof Printer; label: string; onClick: () => void; spinning?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={spinning}
-      title={label}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5",
-        "text-xs font-semibold text-slate-300 transition-colors hover:bg-white/10 hover:text-white",
-        spinning && "cursor-not-allowed opacity-60",
-      )}
-    >
-      <Icon className={cn("h-3.5 w-3.5", spinning && "animate-spin")} />
-      <span className="hidden sm:inline">{label}</span>
-    </button>
-  );
-}
-
-function formatRelative(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const diffMin = Math.round((Date.now() - d.getTime()) / 60_000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin} min ago`;
-    const diffHr = Math.round(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return d.toLocaleString(undefined, {
-      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
 }
 
 // ─── View tab ────────────────────────────────────────────────────────────────
@@ -340,10 +239,10 @@ function ViewTab({
       className={cn(
         "relative whitespace-nowrap rounded-t-lg px-3.5 py-2.5 text-sm",
         "transition-colors duration-150",
-        "after:absolute after:inset-x-3 after:bottom-0 after:h-[2.5px] after:rounded-full",
+        "after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full",
         active
-          ? "font-semibold text-white after:bg-teal-400"
-          : "text-slate-400 hover:text-white after:bg-transparent hover:after:bg-white/20",
+          ? "font-semibold text-slate-900 after:bg-teal-600"
+          : "text-slate-500 hover:text-slate-900 after:bg-transparent hover:after:bg-slate-300",
       )}
     >
       {label}

@@ -52,6 +52,14 @@ def check(label, cond):
 
 
 REAL = {
+    # The magnets the first production run of this rule exposed: a short name
+    # that is the generic form of a longer one, and a client whose whole
+    # distinctive mass is a single word.
+    1: "Christ our Hope Church-Boonville",
+    2: "Christ our Hope Church",
+    3: "St Patrick's Jordan Cemetery",
+    4: "St. Patrick's Church",
+    5: "St Patricks_St Anthony_Chadwicks",
     105: "Sacred Heart & St. Mary's Church",
     175: "Basilica of The Sacred Heart of Jesus",
     360: "Sacred Heart- Cicero",
@@ -119,6 +127,30 @@ def main():
           detect("Sacred Heart - QuickBooks", False) is None
           and detect("St Mary's Church- Clinton and St. Mary's of the Lake",
                      False) is None)
+
+    print("\nTHE MAGNETS — org 21's first run of this rule accused 35 rows,")
+    print("and every one was one of these two shapes:")
+    # 1. the winner is the rival's generic form
+    check("'Christ our Hope Church' inside '…-Boonville' is a magnet",
+          cnm._is_magnet(2, 1, IDX))
+    check("'St. Patrick's Church' inside 'St Patrick's Jordan Cemetery' is too",
+          cnm._is_magnet(4, 3, IDX))
+    # 2. one distinctive word, so "fully named" is free
+    check("a one-distinctive-word client is a magnet against anyone",
+          cnm._is_magnet(4, 5, IDX))
+    # …and the case the rule is FOR survives both
+    check("Sacred Heart & St. Mary's is nobody's generic form",
+          not cnm._is_magnet(105, 360, IDX)
+          and not cnm._is_magnet(105, 175, IDX))
+
+    print("\nSo the magnet rows go back to abstaining:")
+    check("'Office - Christ Our Hope' names neither parish",
+          detect("Office - Christ Our Hope - Office - Outlook") is None)
+    check("'Christ Our Hope Church' still cannot pick Boonville from plain",
+          detect("Christ Our Hope Church  - QuickBooks") is None)
+    check("'St Patrick Chadwicks' does not become the bare St Patrick's",
+          detect("St Patrick Chadwicks_P&L MTD_JUNE26.pdf") != 4)
+    check("…while block 70787 still resolves", detect(LIVE) == 105)
 
     print()
     if FAILED:

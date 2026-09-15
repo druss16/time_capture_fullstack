@@ -577,6 +577,42 @@ FULLY_NAMED = 0.95       # "the title contains this client's entire name"
 FULL_NAME_BEATS_PARTIAL = False
 
 
+def _is_magnet(winner: int, rival: int, index: dict) -> bool:
+    """Is "fully named" meaningless for this winner against this rival?
+
+    Two ways it can be, both found in org 21's first run of this rule, where
+    35 of 35 new accusations were one or the other:
+
+    1. THE WINNER IS THE RIVAL'S GENERIC FORM. Every distinctive word the
+       winner has, the rival also has — "Christ our Hope Church" inside
+       "Christ our Hope Church-Boonville", "St. Patrick's Church" inside
+       "St Patrick's Jordan Cemetery". A title saying only the shared part
+       fully names the short one by construction, so the short one wins every
+       time and becomes a magnet for its whole family's work. That is not a
+       complete match beating a partial one, it is the ambiguity the gate
+       exists for.
+
+    2. THE WINNER HAS ONE DISTINCTIVE WORD. Coverage is a fraction of a
+       client's OWN distinctive mass, so a client whose mass is a single token
+       is "fully named" by any title mentioning it. 21% of org 21's roster is
+       in this position (see the attribution audit). "St. Patrick's Church"
+       reduces to {patrick}, and every Patrick in the firm fully names it.
+
+    The case this rule is actually for survives both: "Sacred Heart & St.
+    Mary's Church" carries {sacred, heart, mary}, and "mary" appears in
+    neither "Sacred Heart- Cicero" nor "Basilica of The Sacred Heart of
+    Jesus", so it is nobody's generic form.
+    """
+    weights = index["client_weights"]
+    w_dist = {t for t, x in weights.get(winner, {}).items()
+              if x > CORROBORATION_FLOOR}
+    if len(w_dist) < 2:
+        return True
+    r_dist = {t for t, x in weights.get(rival, {}).items()
+              if x > CORROBORATION_FLOOR}
+    return w_dist <= r_dist
+
+
 def rank_rivals(title, title_tokens, index, cids):
     """Score `cids` against the title; return (best, second_abs).
 
@@ -654,7 +690,8 @@ def rank_rivals(title, title_tokens, index, cids):
             # by a wide margin. Same words, less of them — a subset reading,
             # not a competing one.
             if (FULL_NAME_BEATS_PARTIAL and best[2] >= FULLY_NAMED
-                    and _cov <= best[2] - COVERAGE_MARGIN):
+                    and _cov <= best[2] - COVERAGE_MARGIN
+                    and not _is_magnet(best[1], cid, index)):
                 continue
         second_abs = abs_hit
         break                # sorted: the first survivor is the strongest

@@ -98,16 +98,17 @@ launch:
   * `pynput` — genuinely optional (the ⌃⌥T hotkey), but intended.
   * `psutil` — both Mac meeting probes are gated on it.
 
-Three modules show up in PyInstaller's warn file as missing and that is
+Two modules show up in PyInstaller's warn file as missing, and both are
 correct: `qb_company_tracker` (Windows-only, and every collector in
 `collect_all_evidence` is individually exception-wrapped, so it degrades to
-producing no evidence), `mac_agent` (an import fallback that cannot resolve
-inside a bundle and never needs to), and `pdf_identity` (dormant on both
-platforms — nothing imports it).
+producing no evidence) and `mac_agent` (an import fallback that cannot resolve
+inside a bundle and never needs to). A third, `pdf_identity`, is dormant on
+both platforms — nothing imports it — so a spec-less build leaves it out;
+`TimeTracker.spec` forces it in for parity with the Windows agent.
 
-After a build, check that list is still only those three:
+After a build, check that list is still only those:
 
-    grep '^missing module named' build/TimeTrackerAgent/warn-TimeTrackerAgent.txt
+    grep '^missing module named' build/TimeTracker*/warn-TimeTracker*.txt
 
 ## Testing a build end to end
 

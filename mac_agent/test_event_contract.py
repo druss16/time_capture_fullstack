@@ -15,11 +15,28 @@ in a plain interpreter, on any machine, with no GUI and no network.
 import os
 import sqlite3
 import sys
+import tempfile
 import time
 import types
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Redirect HOME before main is imported. main.py runs `_logger =
+# setup_logging()` at MODULE level, and LOG_DIR is ~/Library/Logs/TimeTracker
+# — so merely importing it opens the real agent's log file and every log()
+# from a test lands in the running agent's log. That actually happened: a
+# test run dropped ~20 synthetic "Varacchi 2024 1040.xlsx" events and a
+# deliberately-inverted interval into a production log, and they were still
+# there being read as real capture afterwards.
+#
+# Same import also evaluates CONFIG_FILE (~/.timetracker/config.json), so
+# without this the suite reads the machine's real device key and API base,
+# and write_event's client lookup calls the live server.
+_TEST_HOME = tempfile.mkdtemp(prefix="tt-test-home-")
+os.environ["HOME"] = _TEST_HOME
+os.makedirs(os.path.join(_TEST_HOME, ".timetracker"), exist_ok=True)
+os.environ.setdefault("AGENT_API_BASE", "http://127.0.0.1:9/api")
 
 
 def _stub(name, **attrs):

@@ -137,11 +137,13 @@ def setup_readiness(request):
                        f"agent captured."),
             "unlocks": "A fee to set against on Set Fees · burn-vs-pace you can "
                        "act on · which fixed fees are quietly unprofitable",
-            # The per-row editor is right for a handful. A firm with a hundred
-            # jobs should send us the fee schedule and we import it in one pass
-            # (set_engagement_budgets --csv), so say both.
-            "where": "Settings → Economics → Engagement budgets, or send us your "
-                     "fee schedule and we'll import it",
+            # Three ways in, all the same grain and the same rules: the fee
+            # box on a client's row in Fees, the per-row editor here, and the
+            # CSV upload on this tab for a firm pricing everything at once.
+            # Naming the upload matters — a hundred rows typed one at a time is
+            # how a required item quietly never gets done.
+            "where": "Set a fee on any client in Fees, or upload your whole fee "
+                     "schedule in Settings → Economics → Engagement budgets",
             "link": "/settings?tab=economics",
         })
 

@@ -31,6 +31,7 @@ which does include retainers, is the complete number.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -62,11 +63,18 @@ def choose_grain(time: TimeRange) -> str:
     return "month"
 
 
+def quarter_start(d: date) -> date:
+    """First day of the calendar quarter containing `d`."""
+    return date(d.year, 3 * ((d.month - 1) // 3) + 1, 1)
+
+
 def _bucket_start(d: date, grain: str) -> date:
     if grain == "day":
         return d
     if grain == "week":
         return d - timedelta(days=d.weekday())   # Monday
+    if grain == "quarter":
+        return quarter_start(d)
     return d.replace(day=1)
 
 
@@ -75,6 +83,8 @@ def _next_bucket(d: date, grain: str) -> date:
         return d + timedelta(days=1)
     if grain == "week":
         return d + timedelta(days=7)
+    if grain == "quarter":
+        return quarter_start(d.replace(day=1) + timedelta(days=100))
     return (d.replace(day=28) + timedelta(days=4)).replace(day=1)
 
 
@@ -83,6 +93,8 @@ def _bucket_label(d: date, grain: str) -> str:
         return d.strftime("%-d %b")
     if grain == "week":
         return f"w/c {d.strftime('%-d %b')}"
+    if grain == "quarter":
+        return f"Q{(d.month - 1) // 3 + 1} {d.year}"
     return d.strftime("%b %Y")
 
 
@@ -151,12 +163,14 @@ def _grouped(qs, grain: str, extra: dict) -> list[dict]:
     be applied in Python without a query per person: each row already carries
     the user whose bill/cost rate applies to it.
     """
-    from django.db.models.functions import TruncMonth, TruncWeek
+    from django.db.models.functions import TruncMonth, TruncQuarter, TruncWeek
 
     if grain == "day":
         qs = qs.annotate(bucket=F("day"))
     elif grain == "week":
         qs = qs.annotate(bucket=TruncWeek("day"))
+    elif grain == "quarter":
+        qs = qs.annotate(bucket=TruncQuarter("day"))
     else:
         qs = qs.annotate(bucket=TruncMonth("day"))
 
@@ -171,7 +185,8 @@ def _as_date(v) -> date | None:
     return v.date() if hasattr(v, "date") else v
 
 
-def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
+def build_series(org, scope: Scope, time: TimeRange,
+                 grain: str | None = None) -> tuple[list[dict], str]:
     """Return (points, grain).
 
     Each point carries every measure for one bucket:
@@ -191,7 +206,7 @@ def build_series(org, scope: Scope, time: TimeRange) -> tuple[list[dict], str]:
     from .metrics.base import apply_scope
     from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
 
-    grain = choose_grain(time)
+    grain = grain or choose_grain(time)
     # Clipped buckets at either end are dropped: they under-count by
     # construction and read as a slump. See `whole_buckets`.
     buckets = whole_buckets(bucket_starts(time, grain), time, grain)
@@ -335,23 +350,92 @@ _TREND_VIEWS = [
      "format": "percent_1dp", "chart_type": "line"},
 ]
 
-_GRAIN_NOUN = {"day": "day", "week": "week", "month": "month"}
+_GRAIN_NOUN = {"day": "day", "week": "week", "month": "month",
+               "quarter": "quarter"}
+
+# How far back a coarse grain reaches. One quarter is one dot, so asking for
+# quarter buckets is really asking to see this quarter among its neighbours:
+# the CHART window widens to this many quarters ending with the selected one.
+# Nothing else on the page moves — the tiles, tables and insights stay on the
+# period in the control bar, and the subtitle says so.
+_QUARTERS_BACK = 8
+
+# Below this span "By quarter" is not offered: next to "Today" or "This week",
+# a control that silently swaps in two years of history is a trap rather than
+# a view. A month is the shortest window for which quarterly context reads as
+# a deliberate zoom out.
+_MIN_DAYS_FOR_QUARTER = 28
+
+
+def quarter_window(time: TimeRange) -> TimeRange:
+    """`time` widened to the last `_QUARTERS_BACK` quarters ending with its own.
+
+    Quarter buckets over a single quarter would be one dot. What a viewer means
+    by "show me quarters" is this quarter among the ones before it, so the
+    chart — and only the chart — reaches back far enough to draw that.
+    """
+    last = quarter_start(time.end)
+    first = last
+    for _ in range(_QUARTERS_BACK - 1):
+        first = quarter_start(first - timedelta(days=1))
+    return replace(
+        time,
+        start=first,
+        end=max(time.end, _next_bucket(last, "quarter") - timedelta(days=1)),
+        label=f"{_bucket_label(first, 'quarter')} → {_bucket_label(last, 'quarter')}",
+    )
+
+
+def _grain_options(time: TimeRange, auto_grain: str) -> list[dict]:
+    """The bucketings worth offering for this window, or [] for none.
+
+    Returned by the server rather than hard-coded in the frontend because only
+    the server knows what the window can support: "By quarter" over a single
+    week is not a view, it is two years of history arriving unannounced.
+    """
+    options = [{"key": "auto", "label": f"By {_GRAIN_NOUN[auto_grain]}"}]
+    if auto_grain != "quarter" and time.days() >= _MIN_DAYS_FOR_QUARTER:
+        # Just "By quarter" — the subtitle prints the actual range it covers,
+        # so putting the count in the button too is noise on a header that is
+        # already carrying six measure buttons.
+        options.append({"key": "quarter", "label": "By quarter"})
+    return options if len(options) > 1 else []
 
 
 def trend_chart(org, scope: Scope, time: TimeRange, card_id: str = "performance_trend"):
-    """The Performance Trend card: one window, six readings, switched client-side."""
+    """The Performance Trend card: one window, six readings, switched client-side.
+
+    The bucketing is the one exception to "switched client-side": a different
+    grain is different rows, not a different reading of the same rows, so it
+    goes back through the query. `time.grain` carries the viewer's choice.
+    """
     from .types import ChartCardPayload, MetricState
 
-    points, grain = build_series(org, scope, time)
+    auto_grain = choose_grain(time)
+    want = (time.grain or "auto").lower()
+    options = _grain_options(time, auto_grain)
+    # An unusable choice — "quarter" left in the URL while the period is now a
+    # single week — falls back to auto rather than drawing one bar.
+    if want not in {o["key"] for o in options}:
+        want = "auto"
+
+    window = quarter_window(time) if want == "quarter" else time
+    points, grain = build_series(org, scope, window,
+                                 grain=None if want == "auto" else want)
     has_data = any(p["hours"] > 0 for p in points)
 
     # Say what is missing. The last bucket is normally the one in progress and
     # is dropped, so the line stops before "now" — a reader who expects a point
     # for this week should be told why there isn't one, not left to wonder.
     noun = _GRAIN_NOUN[grain]
-    full = bucket_starts(time, grain)
+    full = bucket_starts(window, grain)
     trimmed = len(full) - len(points)
-    parts = [f"By {noun}", time.label]
+    parts = [f"By {noun}", window.label]
+    if want != "auto":
+        # The chart is now showing a wider window than the tiles above it. Not
+        # saying so would leave two different periods on one screen both
+        # looking like "the period".
+        parts.append(f"wider than {time.label} above")
     if trimmed:
         parts.append(f"the current (part-){noun} is not plotted")
     parts.append("billable value is hourly work only — retainers are "
@@ -367,6 +451,8 @@ def trend_chart(org, scope: Scope, time: TimeRange, card_id: str = "performance_
         series=[{"key": "hours", "label": "Total hours"}],
         toggle_views=_TREND_VIEWS,
         toggle_label="Measure",
+        grain_options=options,
+        grain=want,
         state=MetricState.READY if has_data else MetricState.EMPTY,
     )
 

@@ -131,8 +131,16 @@ export function parseUrlState(search: string): AnalyticsQueryBody {
     ? { type: "relative" as const, value: rawCompare }
     : null;
 
-  return { scope, lens, time, compare };
+  // Trend bucketing. Unknown values are dropped rather than sent on: the
+  // backend falls back to auto anyway, and a link carrying "quarter" into a
+  // one-week period should open on the week, not on an error.
+  const rawGrain = params.get("g");
+  const grain = rawGrain && VALID_GRAINS.has(rawGrain) ? rawGrain : undefined;
+
+  return { scope, lens, time, compare, grain };
 }
+
+const VALID_GRAINS = new Set(["auto", "day", "week", "month", "quarter"]);
 
 /** "custom:2026-01-01:2026-03-31", or a relative expression. */
 function parseTimeParam(raw: string): AnalyticsQueryBody["time"] {
@@ -204,6 +212,8 @@ export function serializeUrlState(body: AnalyticsQueryBody): string {
   }
 
   if (body.compare) params.set("compare", String(body.compare.value));
+
+  if (body.grain && body.grain !== "auto") params.set("g", body.grain);
 
   const filters = body.scope.filters ?? {};
   for (const dim of ID_FILTER_DIMS) {

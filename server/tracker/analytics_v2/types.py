@@ -55,7 +55,13 @@ class TimeRange:
     end: date
     label: str                 # Human-readable: "Q2 2026", "This week", etc.
     relative_expr: Optional[str] = None  # "this_quarter" if originally relative
-    
+    # How the viewer asked for this window to be BUCKETED on trend charts:
+    # None/"auto" lets the chart pick from the span, "quarter" forces quarter
+    # buckets. It rides on the time range because it is a property of how the
+    # window is being read, not of the data — and putting it here keeps it out
+    # of every Lens.assemble signature.
+    grain: Optional[str] = None
+
     def days(self) -> int:
         return (self.end - self.start).days + 1
     
@@ -65,6 +71,7 @@ class TimeRange:
             "end": self.end.isoformat(),
             "label": self.label,
             "relative_expr": self.relative_expr,
+            "grain": self.grain,
         }
 
 
@@ -209,6 +216,12 @@ class ChartCardPayload:
     #     "format": "hours_1dp", "chart_type": "area"}]
     toggle_views: list[dict] = field(default_factory=list)
     toggle_label: str = ""
+    # Optional BUCKETING control, unlike toggle_views a server round trip: a
+    # different grain is different data, not a different reading of the same
+    # rows. [{"key": "auto", "label": "By week"}, ...]; `grain` is the one in
+    # force. Only offered where more than one bucketing makes sense.
+    grain_options: list[dict] = field(default_factory=list)
+    grain: str = "auto"
     # How to render values in axes and tooltips on a card with no toggle.
     # Without it the frontend has to guess from magnitude, which renders 1,800
     # hours as "$1.8k".
@@ -236,6 +249,8 @@ class ChartCardPayload:
             "series": self.series,
             "toggle_views": self.toggle_views,
             "toggle_label": self.toggle_label,
+            "grain_options": self.grain_options,
+            "grain": self.grain,
             "value_format": self.value_format,
             "x_key": self.x_key,
             "state": self.state.value if isinstance(self.state, Enum) else self.state,

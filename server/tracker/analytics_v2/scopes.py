@@ -13,6 +13,7 @@ Request shape:
 from __future__ import annotations
 
 from calendar import monthrange
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, Optional
 
@@ -347,6 +348,21 @@ def parse_request_body(body: dict) -> tuple[Scope, LensKey, TimeRange, Optional[
     scope = parse_scope(body.get("scope", {"type": "firm"}))
     lens = parse_lens(body.get("lens", "pulse"))
     time = parse_time(body.get("time", {"type": "relative", "value": "this_quarter"}))
+    time = replace(time, grain=parse_grain(body.get("grain")))
+    # Deliberately NOT carried onto `compare`: the comparison window is a
+    # single aggregate, never a series, so a bucketing means nothing to it.
     compare = parse_compare(body.get("compare"), time)
     
     return scope, lens, time, compare
+
+
+# Bucketings a chart may be asked for. Anything else is ignored rather than
+# rejected: a stale link with an old grain in it should still open.
+VALID_GRAINS = frozenset({"auto", "day", "week", "month", "quarter"})
+
+
+def parse_grain(raw) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    g = raw.strip().lower()
+    return g if g in VALID_GRAINS else None

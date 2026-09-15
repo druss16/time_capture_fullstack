@@ -141,6 +141,44 @@ class LensSmokeTests(TestCase):
             ["hours", "billable_hours", "revenue", "cost", "margin", "utilization"],
         )
 
+    def test_quarter_grain_widens_the_window_and_groups_by_quarter(self):
+        """The whole point of "By quarter": quarter buckets over a window
+        longer than the one selected, so the selected quarter has neighbours
+        to be read against. Also the only check that TruncQuarter compiles."""
+        from dataclasses import replace
+
+        from tracker.analytics_v2.series import trend_chart
+
+        card = trend_chart(
+            self.org, Scope(type="firm"), replace(self.time, grain="quarter"),
+        ).to_dict()
+
+        self.assertEqual(card["grain"], "quarter")
+        self.assertEqual([o["key"] for o in card["grain_options"]],
+                         ["auto", "quarter"])
+        # Labels are quarters, not weeks.
+        for point in card["data"]:
+            self.assertRegex(point["label"], r"^Q[1-4] \d{4}$")
+        # And the chart says it is showing more than the tiles above it.
+        self.assertIn("wider than", card["subtitle"])
+        # Every measure still rides along — the grain changes the x-axis, not
+        # what the card can be read as.
+        for key in ("hours", "revenue", "cost", "margin", "utilization"):
+            self.assertIn(key, card["data"][0])
+        json.dumps(card)
+
+    def test_an_impossible_grain_falls_back_rather_than_drawing_one_bar(self):
+        from dataclasses import replace
+
+        from tracker.analytics_v2.series import trend_chart
+
+        # "quarter" left in the URL while the period is now a single week.
+        week = TimeRange(date.today() - timedelta(days=6), date.today(),
+                         "This week", grain="quarter")
+        card = trend_chart(self.org, Scope(type="firm"), week).to_dict()
+        self.assertEqual(card["grain"], "auto")
+        self.assertEqual(card["grain_options"], [])
+
     def test_breakdown_runs_for_every_dimension(self):
         from tracker.analytics_v2.breakdowns import breakdown
 

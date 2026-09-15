@@ -149,6 +149,14 @@ export interface ChartCardPayload {
   /** Non-empty when the card offers a measure toggle. */
   toggle_views?: ChartToggleView[] | undefined;
   toggle_label?: string | undefined;
+  /**
+   * Bucketing choices for a time series. Unlike toggle_views this is a server
+   * round trip — a different grain is different rows, not a different reading
+   * of the same rows. Empty when only one bucketing makes sense for the window.
+   */
+  grain_options?: Array<{ key: string; label: string }> | undefined;
+  /** The bucketing in force. */
+  grain?: string | undefined;
   /** Value format for a card with no toggle (axes + tooltips). */
   value_format?: NumberFormat | "" | undefined;
   /** X-axis key for cartesian charts; falls back to "label". */
@@ -269,6 +277,8 @@ export interface AnalyticsQueryBody {
   lens: LensKey;
   time: { type: "relative" | "absolute"; value: string | { start: string; end: string } };
   compare?: { type: "relative" | "absolute"; value: string | { start: string; end: string } } | null | undefined;
+  /** Trend-chart bucketing: "auto" (from the window) or e.g. "quarter". */
+  grain?: string | undefined;
 }
 
 // ─── Permissions endpoint response ───────────────────────────────────────────

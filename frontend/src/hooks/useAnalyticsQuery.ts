@@ -56,6 +56,9 @@ function buildKey(body: AnalyticsQueryBody) {
           ? body.compare.value
           : JSON.stringify(body.compare.value))
       : "no_compare",
+    // Grain changes the chart's rows AND its window, so it is a different
+    // response, not a different rendering of one.
+    body.grain ?? "auto",
   ];
 }
 

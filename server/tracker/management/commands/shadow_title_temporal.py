@@ -109,12 +109,38 @@ class Command(BaseCommand):
 
         flipped, withdrawn, other = [], [], []
         scanned = 0
+        # A zero in the three buckets below is ambiguous on its own: the rule
+        # might be changing nothing because the title and the clock always
+        # agree, or because the title signal is never there to be outvoted in
+        # the first place. Those are opposite findings, so the population is
+        # counted as well as the diff. See the SIGNALS block in the output.
+        pop = {'title': 0, 'temporal': 0, 'both': 0, 'disagree': 0,
+               'title_is_booked': 0, 'neither': 0}
         # No .iterator(): the Neon pooler silently TRUNCATES server-side
         # cursors (see utils/db_iter), and a shadow run that quietly stops
         # early reports numbers that look fine and are wrong. Flagged rows fit
         # in memory; the wider scan in shadow_title_specificity pages by key.
         for b in blocks:
             scanned += 1
+
+            sigs = me.gather_signals(b, ctx)
+            t = next((x for x in sigs
+                      if x.kind == 'title' and x.supports is not None), None)
+            temporal = [x for x in sigs if x.kind in me.TEMPORAL_KINDS
+                        and x.supports is not None]
+            if t:
+                pop['title'] += 1
+                if t.supports == b.client_id:
+                    pop['title_is_booked'] += 1
+            if temporal:
+                pop['temporal'] += 1
+            if t and temporal:
+                pop['both'] += 1
+                if any(x.supports != t.supports for x in temporal):
+                    pop['disagree'] += 1
+            if not t and not temporal:
+                pop['neither'] += 1
+
             old = self._draft(b, ctx, False)
             new = self._draft(b, ctx, True)
             if (old.target_client_id == new.target_client_id
@@ -135,6 +161,15 @@ class Command(BaseCommand):
         w("")
         w(f"org {org_id} · {opts['days']}d · {scanned:,} blocks drafted twice")
         w("")
+        w("  SIGNALS — what the rule had to work with")
+        w(f"    title names somebody      {pop['title']:>6}   "
+          f"({pop['title_is_booked']} of them name the client it is already on)")
+        w(f"    temporal evidence present {pop['temporal']:>6}")
+        w(f"    both present              {pop['both']:>6}")
+        w(f"    …and they DISAGREE        {pop['disagree']:>6}   "
+          f"<- the only rows this rule can change")
+        w(f"    neither                   {pop['neither']:>6}")
+        w("")
         w(f"  FLIPPED    {len(flipped):>6}   now recommends the client the TITLE named")
         w(f"  WITHDRAWN  {len(withdrawn):>6}   now makes no recommendation "
           f"(title named the booked client)")
@@ -153,3 +188,20 @@ class Command(BaseCommand):
             if len(rows) > opts['samples']:
                 w(f"  … and {len(rows) - opts['samples']:,} more")
             w("")
+
+        if not (flipped or withdrawn or other):
+            if pop['disagree'] == 0 and pop['title'] == 0:
+                w("No change, and the reason is that the title signal never "
+                  "fired on any of these rows — there was nothing to outvote. "
+                  "That is a finding about the TITLE MATCHER, not about this "
+                  "rule: run shadow_title_specificity --explain on one of "
+                  "these blocks to see which gate is silencing it.")
+            elif pop['disagree'] == 0:
+                w("No change, and the reason is that where the title spoke, "
+                  "the clock never contradicted it. The rule is correct and "
+                  "idle on this window.")
+            else:
+                w(f"No change, but {pop['disagree']} rows DID have the title "
+                  f"and the clock disagreeing. That combination should have "
+                  f"produced a difference — suspect the harness before "
+                  f"believing the zero.")

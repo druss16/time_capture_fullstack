@@ -29,17 +29,22 @@ USAGE
 
 READING THE RESULT
 ------------------
-  GAINED   silent before, names a client now. The point of the change.
-  LOST     named a client before, silent now. Should be ZERO — the flag only
-           ever removes a candidate that could not have won anyway. Any LOST
-           row is a reason not to ship.
-  CHANGED  named a DIFFERENT client. Read every one of these by hand. This is
-           where a wrong answer would hide.
+  CONFIRMS   silent before, now names THE CLIENT IT IS ALREADY BOOKED TO.
+             These can only help: the worst case is the detector agreeing with
+             a booking nobody was going to question.
+  ACCUSES    silent before, now names a DIFFERENT client. Every one of these is
+             a NEW accusation against a booking. Read them all. A gain is not
+             free just because nothing was lost — this is where a wrong answer
+             hides, and it is the bucket an earlier version of this command
+             wrongly counted as clean.
+  LOST       named a client before, silent now. Should be ZERO — the flag only
+             ever removes a candidate that could not have won anyway.
+  CHANGED    named one client before, a different one now. Read every one.
 
-If GAINED is healthy and LOST/CHANGED are empty, flip the default in
-tracker/utils/client_name_match.py:
+Flip the default only when LOST and CHANGED are empty AND every ACCUSES row
+has been read and is right:
 
-    CENTER_ONLY_CANNOT_SUPPRESS = True
+    CENTER_ONLY_CANNOT_SUPPRESS = True   # tracker/utils/client_name_match.py
 """
 from django.core.management.base import BaseCommand, CommandError
 
@@ -97,7 +102,7 @@ class Command(BaseCommand):
             .only('id', 'window_title', 'client_id', 'day', 'minutes'),
             chunk_size=1000)
 
-        gained, lost, changed = [], [], []
+        confirms, accuses, lost, changed = [], [], [], []
         scanned = 0
         # Titles repeat constantly (the same document alt-tabbed all morning),
         # and the detector is pure, so score each distinct one once.
@@ -119,7 +124,11 @@ class Command(BaseCommand):
                    old['client_name'] if old else None,
                    new['client_name'] if new else None)
             if old_id is None:
-                gained.append(row)
+                # Split the gains by what they imply. Naming the client the
+                # block is already on is a confirmation; naming a different one
+                # is an accusation, and the two do not deserve the same line in
+                # a summary somebody decides from.
+                (confirms if new_id == b.client_id else accuses).append(row)
             elif new_id is None:
                 lost.append(row)
             else:
@@ -130,14 +139,18 @@ class Command(BaseCommand):
         w(f"org {org_id} · {opts['days']}d · {scanned:,} blocks "
           f"({len(seen):,} distinct titles) · {len(ctx.names):,} clients")
         w("")
-        w(f"  GAINED   {len(gained):>6}   silent before, names a client now")
+        w(f"  CONFIRMS {len(confirms):>6}   now names the client it is already "
+          f"booked to — safe")
+        w(f"  ACCUSES  {len(accuses):>6}   now names a DIFFERENT client — a NEW "
+          f"accusation  {'<-- READ EVERY ONE' if accuses else 'ok'}")
         w(f"  LOST     {len(lost):>6}   named a client before, silent now   "
           f"{'<-- MUST BE ZERO' if lost else 'ok'}")
-        w(f"  CHANGED  {len(changed):>6}   names a DIFFERENT client now     "
+        w(f"  CHANGED  {len(changed):>6}   named a different client than before "
           f"{'<-- READ EVERY ONE' if changed else 'ok'}")
         w("")
 
-        for label, rows in (("CHANGED", changed), ("LOST", lost), ("GAINED", gained)):
+        for label, rows in (("ACCUSES", accuses), ("CHANGED", changed),
+                            ("LOST", lost), ("CONFIRMS", confirms)):
             if not rows:
                 continue
             w(f"── {label} " + "─" * 58)
@@ -151,14 +164,26 @@ class Command(BaseCommand):
                   f"(raise --samples to see them)")
             w("")
 
-        if gained and not lost and not changed:
-            w("Clean. Flip CENTER_ONLY_CANNOT_SUPPRESS = True in "
-              "tracker/utils/client_name_match.py")
-        elif not gained:
+        if not (confirms or accuses or lost or changed):
             w("No effect on this window — the flag is not worth shipping on "
               "this evidence.")
+        elif lost or changed:
+            w("NOT clean. Read the LOST/CHANGED rows before shipping.")
+        elif accuses:
+            w(f"{len(accuses)} row(s) became a NEW ACCUSATION against a "
+              f"booking. Read every one above and satisfy yourself it is "
+              f"right before flipping the flag — a gain is not free just "
+              f"because nothing was lost.")
+            w("")
+            w("If one looks wrong, check the BOOKED client's spelling in the "
+              "roster first: _tokenize does not stem, so a roster reading "
+              "'St. Peters Church' cannot match a document saying "
+              "\"St. Peter's\" — peters and peter are different tokens — and "
+              "the correct client is then invisible in its own file.")
         else:
-            w("Not clean. Read the LOST/CHANGED rows before shipping.")
+            w("Clean — every gain confirms an existing booking. Flip "
+              "CENTER_ONLY_CANNOT_SUPPRESS = True in "
+              "tracker/utils/client_name_match.py")
 
     # ── one block, in full ──────────────────────────────────────────────────
 

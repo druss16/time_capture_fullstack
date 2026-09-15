@@ -116,13 +116,30 @@ class Command(BaseCommand):
         # counted as well as the diff. See the SIGNALS block in the output.
         pop = {'title': 0, 'temporal': 0, 'both': 0, 'disagree': 0,
                'title_is_booked': 0, 'neither': 0}
+        verdicts = {}
+        live = 0
         # No .iterator(): the Neon pooler silently TRUNCATES server-side
         # cursors (see utils/db_iter), and a shadow run that quietly stops
         # early reports numbers that look fine and are wrong. Flagged rows fit
         # in memory; the wider scan in shadow_title_specificity pages by key.
         for b in blocks:
             scanned += 1
+            old = self._draft(b, ctx, False)
+            new = self._draft(b, ctx, True)
+            verdicts[old.verdict] = verdicts.get(old.verdict, 0) + 1
 
+            # Count the population ONLY over rows whose draft actually reaches
+            # draft_from_signals. draft_for_block asks _stale_flag_draft first
+            # and short-circuits when the detector no longer flags the block —
+            # and a queue fills up with those (org 21 once had 19 open flags,
+            # 18 already correct). An earlier version of this command counted
+            # signals for every row via gather_signals directly, so it could
+            # report "5 rows where the title and the clock disagree" about rows
+            # whose verdict never consulted either. That is what produced a
+            # contradiction between the SIGNALS block and a zero diff.
+            if old.verdict == me.VERDICT_STALE:
+                continue
+            live += 1
             sigs = me.gather_signals(b, ctx)
             t = next((x for x in sigs
                       if x.kind == 'title' and x.supports is not None), None)
@@ -140,9 +157,6 @@ class Command(BaseCommand):
                     pop['disagree'] += 1
             if not t and not temporal:
                 pop['neither'] += 1
-
-            old = self._draft(b, ctx, False)
-            new = self._draft(b, ctx, True)
             if (old.target_client_id == new.target_client_id
                     and old.verdict == new.verdict):
                 continue
@@ -161,7 +175,15 @@ class Command(BaseCommand):
         w("")
         w(f"org {org_id} · {opts['days']}d · {scanned:,} blocks drafted twice")
         w("")
-        w("  SIGNALS — what the rule had to work with")
+        stale = verdicts.get(me.VERDICT_STALE, 0)
+        w("  VERDICTS — what these flagged rows actually are")
+        for v, n in sorted(verdicts.items(), key=lambda kv: -kv[1]):
+            note = ("   <- already fixed; draft_for_block short-circuits "
+                    "before any signal is weighed" if v == me.VERDICT_STALE else "")
+            w(f"    {v:<24} {n:>6}{note}")
+        w("")
+        w(f"  SIGNALS — over the {live:,} rows that reach the rule "
+          f"({stale:,} stale rows excluded)")
         w(f"    title names somebody      {pop['title']:>6}   "
           f"({pop['title_is_booked']} of them name the client it is already on)")
         w(f"    temporal evidence present {pop['temporal']:>6}")
@@ -190,7 +212,14 @@ class Command(BaseCommand):
             w("")
 
         if not (flipped or withdrawn or other):
-            if pop['disagree'] == 0 and pop['title'] == 0:
+            if live == 0:
+                w(f"No change, and no row could have changed: all {scanned:,} "
+                  f"flagged blocks are STALE — the detector no longer flags "
+                  f"them, so draft_for_block returns 'already fixed' before "
+                  f"any signal is weighed. This window says nothing about the "
+                  f"rule either way. Widen --days, or clear the stale queue "
+                  f"first (tasks.scan_org_mismatches closes them).")
+            elif pop['disagree'] == 0 and pop['title'] == 0:
                 w("No change, and the reason is that the title signal never "
                   "fired on any of these rows — there was nothing to outvote. "
                   "That is a finding about the TITLE MATCHER, not about this "

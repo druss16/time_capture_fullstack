@@ -27,6 +27,11 @@
 //     dressed up as the answer.
 //   · A CLICK NEVER COSTS A RELOAD. Rows resolve optimistically, requests never
 //     serialise, and the payload reconciles quietly once the clicking stops.
+//   · NOTHING THE VERDICT RESTS ON IS ELLIPSISED. The document title and the two
+//     client names ARE the finding. Cut any of them off and the reviewer is
+//     being asked to rule on evidence they cannot read — worst of all on names
+//     from one family, which differ only in the tail an ellipsis eats. They
+//     wrap; the column widths live in a <colgroup> so they actually apply.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
@@ -169,7 +174,35 @@ const cleanTitle = (title: string, app: string): string => {
   return out.trim().length >= 3 ? out.trim() : raw;
 };
 
+// ── Column widths ─────────────────────────────────────────────────────────────
+//
+// These live in a <colgroup>, not on the cells. Under `table-layout: fixed` the
+// FIRST row sizes the columns — so widths written on body <td>s were ignored
+// and the browser fell back to five equal fifths: the document title and both
+// client names were cut off mid-word while the bare arrow sat in a column as
+// wide as either of them. A colgroup outranks the first row, so one declaration
+// sizes the ledger and the internal table identically.
+//
+// The two client columns and the button column are fixed; the title column is
+// the only `auto` one, so every pixel the window gains goes to the evidence.
+const COLS = (
+  <colgroup>
+    <col />
+    <col style={{ width: '20%' }} />
+    <col style={{ width: 28 }} />
+    <col style={{ width: '22%' }} />
+    <col style={{ width: 148 }} />
+  </colgroup>
+);
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/** "MSEDGE.EXE" -> "Msedge". The app is context, not a headline. */
+const appLabel = (app: string): string => {
+  const a = (app || '').replace(/\.exe$/i, '').trim();
+  if (!a) return '';
+  return /[a-z]/.test(a) ? a : a.charAt(0) + a.slice(1).toLowerCase();
+};
 
 const formatMinutes = (m: number): string => {
   if (!m) return '0m';
@@ -192,19 +225,32 @@ const LedgerLine: React.FC<{
 }> = ({ item, clients, onMove, onCorrect }) => {
   const { row, targets, confident, pending, week } = item;
   const [picking, setPicking] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const locked = week ? !week.editable : false;
   const self: Ref[] = [{ id: row.block_id, clientId: row.booked_client_id }];
   const one = targets.length === 1 ? targets[0] : null;
 
+  // The title is the whole case for the finding — it is the text the detector
+  // read. Truncating it asks a reviewer to rule on evidence they can't see, so
+  // it wraps, and where cleanup dropped anything the untouched original is one
+  // click away instead of hidden behind a hover only a mouse can reach.
+  const raw = (row.window_title || '').trim();
+  const clean = cleanTitle(row.window_title, row.app_name);
+  const hasOriginal = raw !== clean;
+
   return (
-    <tr className="border-b border-border/40 last:border-b-0 hover:bg-slate-50/70 transition-colors">
+    <tr className="align-top border-b border-border/40 last:border-b-0 hover:bg-slate-50/70 transition-colors">
       {/* What was open */}
-      <td className="px-4 py-3 max-w-0 w-[42%]">
-        <p className="text-sm font-semibold text-slate-800 truncate" title={row.window_title}>
-          {cleanTitle(row.window_title, row.app_name)}
+      <td className="px-4 py-3">
+        <p className={cn(
+          'text-sm font-semibold text-slate-800 break-words',
+          showRaw ? 'font-mono text-[12px] leading-relaxed' : 'line-clamp-3'
+        )}>
+          {showRaw ? raw : clean}
         </p>
-        <p className="text-xs text-slate-400 truncate mt-0.5">
+        <p className="text-xs text-slate-400 mt-1 break-words">
           {row.user} · {formatDate(row.date)} · {formatMinutes(row.minutes)}
+          {appLabel(row.app_name) && ` · ${appLabel(row.app_name)}`}
           {pending && ' · not accepted yet'}
           {row.set_by === 'user' && (
             <span className="text-amber-600"
@@ -213,33 +259,43 @@ const LedgerLine: React.FC<{
             </span>
           )}
         </p>
+        {hasOriginal && (
+          <button
+            onClick={() => setShowRaw((v) => !v)}
+            className="mt-1 text-[11px] font-medium text-slate-400 hover:text-slate-700 hover:underline"
+          >
+            {showRaw ? 'Hide the original title' : 'Show the original title'}
+          </button>
+        )}
       </td>
 
-      {/* Filed under */}
-      <td className="px-3 py-3 max-w-0 w-[20%]">
-        <span className="block text-sm text-slate-500 truncate" title={row.booked_client_name}>
+      {/* Filed under. Look-alike client names differ only in their TAIL — "of
+          Syracuse" against "of Solvay" — so an ellipsis lands exactly on the
+          word the reviewer is here to compare. These wrap instead. */}
+      <td className="px-3 py-3">
+        <span className="block text-sm text-slate-500 break-words">
           {row.booked_client_name}
         </span>
       </td>
 
-      <td className="w-5 text-center text-slate-300" aria-hidden>→</td>
+      <td className="px-0 py-3 text-center text-slate-300" aria-hidden>→</td>
 
       {/* Looks like */}
-      <td className="px-3 py-3 max-w-0 w-[22%]">
+      <td className="px-3 py-3">
         {one ? (
-          <span className="block text-sm font-bold text-emerald-700 truncate" title={one.name}>
+          <span className="block text-sm font-bold text-emerald-700 break-words">
             {one.name}
           </span>
         ) : (
           /* A tie: list them rather than pick one. Clicking a name files it there. */
-          <span className="flex flex-col items-start gap-0.5">
+          <span className="flex flex-col items-start gap-1">
             {targets.map((t) => (
               <button
                 key={t.id}
                 disabled={locked}
                 onClick={() => onMove(self, t.id, t.name)}
                 title={`File this under ${t.name}`}
-                className="max-w-full text-left text-sm font-semibold text-slate-700 hover:text-emerald-700 hover:underline truncate disabled:text-slate-400 disabled:no-underline"
+                className="max-w-full text-left text-sm font-semibold text-slate-700 hover:text-emerald-700 hover:underline break-words disabled:text-slate-400 disabled:no-underline"
               >
                 {t.name}
               </button>
@@ -640,7 +696,7 @@ const MisfiledTimeReview: React.FC<{
 
         {/* ── The ledger ─────────────────────────────────────────────────── */}
         {open && data && !loading && (
-          <div className="border-t border-border/60 max-h-[52vh] overflow-auto">
+          <div className="border-t border-border/60 max-h-[62vh] overflow-auto">
             {total === 0 && (
               <div className="px-5 py-7 text-center">
                 <CheckCircle2 className="w-8 h-8 text-emerald-200 mx-auto mb-3" />
@@ -656,7 +712,8 @@ const MisfiledTimeReview: React.FC<{
               </div>
             )}
             {total > 0 && (
-            <table className="w-full table-fixed border-collapse" style={{ minWidth: 720 }}>
+            <table className="w-full table-fixed border-collapse" style={{ minWidth: 760 }}>
+              {COLS}
               {HEAD}
               <tbody>
                 {rows.map((item) => (
@@ -683,7 +740,8 @@ const MisfiledTimeReview: React.FC<{
                   </span>
                 </button>
                 {showInternal && (
-                  <table className="w-full table-fixed border-collapse" style={{ minWidth: 720 }}>
+                  <table className="w-full table-fixed border-collapse" style={{ minWidth: 760 }}>
+                    {COLS}
                     <tbody>
                       {internalRows.map((item) => (
                         <LedgerLine key={item.row.block_id} item={item} clients={data.clients}

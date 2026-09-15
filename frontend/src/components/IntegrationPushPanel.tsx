@@ -10,14 +10,11 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
-  ExternalLink,
   Loader2,
   Calendar,
   Eye,
   Send,
   XCircle,
-  CloudOff,
-  Plug,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -225,32 +222,12 @@ const IntegrationPushPanel: React.FC = () => {
   };
 
   // ── Not connected state ──
-  if (!loading && !hasAnyConnection) {
-    return (
-      <div className="bg-white rounded-2xl border-2 border-slate-200 p-8">
-        <div className="flex flex-col items-center text-center py-8">
-          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
-            <CloudOff className="w-7 h-7 text-slate-400" />
-          </div>
-          <h3 className="text-lg font-extrabold text-slate-900 mb-2">
-            No Billing System Connected
-          </h3>
-          <p className="text-slate-600 font-medium mb-6 max-w-sm">
-            Connect QuickBooks Online or Xero to push approved time entries directly to your billing
-            system.
-          </p>
-          <a
-            href="/account"
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white font-bold rounded-xl hover:opacity-90 transition-all shadow-lg shadow-primary/25"
-          >
-            <Plug className="w-4 h-4" />
-            Connect in Settings
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
-      </div>
-    );
-  }
+  // This panel now sits directly beneath the QuickBooks and Xero cards on the
+  // Integrations page (it used to live in the Client Billing tab, where it had
+  // to explain itself). With nothing connected there is nothing to say that the
+  // cards above have not already said, and its "Connect in Settings" button
+  // pointed back at the page it is on. Stay quiet until there is a push to make.
+  if (!loading && !hasAnyConnection) return null;
 
   if (loading) {
     return (

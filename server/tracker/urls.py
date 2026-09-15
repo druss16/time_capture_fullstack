@@ -205,7 +205,6 @@ urlpatterns = [
     path("billing/approval-queue/", views_billing.approval_queue, name="approval-queue"),
     
     # Client Billing Summary (for invoicing)
-    path("billing/client-summary/", views_billing.client_summary_view, name="client-summary"),
     
     # Invoice Export
     path("billing/invoice/<int:client_id>/", views_billing.invoice_export, name="invoice-export"),

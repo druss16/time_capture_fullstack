@@ -10,8 +10,9 @@ them compared with the invoice-prep view:
   · Completeness beats precision. Time hidden from this screen is money quietly
     left on the table, so it counts every committed block and reports what has
     not been reviewed as a caveat rather than filtering it away. The older
-    client-summary view defaults to only_approved=True, which is right when the
-    output is an invoice and wrong when the output is a judgement call.
+    client-summary view defaulted to only_approved=True, which is right when the
+    output is an invoice and wrong when the output is a judgement call — that
+    view has since been removed along with the Client Billing tab it served.
 
   · A number alone settles nothing. "Acme: 47 hours" is not a decision; it
     becomes one next to what you charged last year, what the engagement was

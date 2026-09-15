@@ -67,8 +67,8 @@ def setup_readiness(request):
                    "billed, and two tabs stay empty."),
         "unlocks": "Actual revenue instead of estimated · WIP that drains · "
                    "Realization and Trends · real leakage",
-        "where": "Billing → Invoices → Import CSV",
-        "link": "/billing?tab=invoices",
+        "where": "Settings → Invoices → Import CSV",
+        "link": "/settings?tab=invoices",
     })
 
     # ── 2. per-person cost, and whether it's loaded ────────────────────────

@@ -882,7 +882,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
             </div>
           </div>
           
-            <a href="/billing?tab=invoices&filter=conflicts"
+            <a href="/settings?tab=invoices&filter=conflicts"
             className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white rounded-lg font-bold text-xs hover:bg-amber-700 transition-colors"
           >
             Review <ArrowRight className="w-3 h-3" />

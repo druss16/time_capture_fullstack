@@ -70,12 +70,12 @@ class SubscriptionMiddleware:
                     'error': 'subscription_required',
                     'message': 'Your trial has expired. Please subscribe to continue.',
                     'trial_ended_at': org.trial_ends_at.isoformat(),
-                    'billing_url': '/billing',
+                    'billing_url': '/account/billing',
                 }, status=402)
         
         # No trial and no subscription
         return JsonResponse({
             'error': 'subscription_required',
             'message': 'A subscription is required to access this feature.',
-            'billing_url': '/billing',
+            'billing_url': '/account/billing',
         }, status=402)

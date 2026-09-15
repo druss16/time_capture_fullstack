@@ -8,7 +8,7 @@ import {
   Building2, Users, Briefcase, Monitor, Key,
   DollarSign, Lock, Shield, Sparkles,
   CheckCircle2, AlertCircle, RefreshCw,
-  Folder, Link2, Tag, Layers,
+  Folder, Link2, Tag, Layers, Receipt,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -24,6 +24,18 @@ import TokenTab             from '@/pages/settings/TokenTab';
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientGroupManager      from '@/components/ClientGroupManager';
 import IntegrationsTab         from '@/components/IntegrationsTab';
+// Invoices live here, beside the QuickBooks connection that fills them, rather
+// than in the main nav. Nothing in TimeTracker sends an invoice — an invoice is
+// an INPUT: it anchors "what you charged last year" on Set Fees, and it is what
+// realization and WIP relief are computed against. A firm that invoices
+// elsewhere never needs to open this; one that connects QuickBooks gets it
+// backfilled without typing anything.
+import InvoiceManager          from '@/components/InvoiceManager';
+import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
+// The manual QuickBooks/Xero time push used to live inside the Client Billing
+// tab, which is gone. Its home is the page that advertises "push approved time
+// entries" in the first place.
+import IntegrationPushPanel    from '@/components/IntegrationPushPanel';
 import DeploymentTab           from '@/components/DeploymentTab';
 import TaskTypesTab        from '@/pages/settings/TaskTypesTab';
 import TaskTypeSetsTab     from '@/pages/settings/TaskTypeSetsTab';
@@ -75,9 +87,14 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','economics','devices','token','deployment','task-types','task-type-sets'];
+    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','invoices','economics','devices','token','deployment','task-types','task-type-sets'];
     return valid.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
+
+  // ?filter=conflicts arrives from the Integrations tab's invoice-conflict link.
+  const [invoiceFilter, setInvoiceFilter] = useState<string>(
+    () => new URLSearchParams(window.location.search).get('filter') || ''
+  );
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -206,6 +223,12 @@ export default function Settings() {
     { id: 'task-types',     label: terms.task_types,             icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
     { id: 'task-type-sets', label: `${terms.task_type} Sets`,     icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
+    // Role-gated like Integrations, not plan-gated: orgPlan is only fetched by
+    // the Organization and Economics tabs and defaults to 'professional', so a
+    // requiredPlan here would flash a false "upgrade" at an executive org that
+    // simply had not loaded its plan yet. The endpoints behind this tab carry
+    // @require_professional_plan, so the real gate is still enforced.
+    { id: 'invoices',     label: 'Invoices',      icon: <Receipt className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'economics',    label: 'Economics',     icon: <DollarSign className="w-4 h-4" />, requiredPlan: EXECUTIVE_PLANS, requiredRole: ['owner'] },
     { id: 'devices',      label: 'Devices',       icon: <Monitor className="w-4 h-4" /> },
     { id: 'deployment',   label: 'MDM Deploy',    icon: <Monitor className="w-4 h-4" />, requiredRole: ['owner','admin'] },
@@ -217,7 +240,7 @@ export default function Settings() {
     { label: 'General',     ids: ['organization', 'team'] },
     { label: 'Clients',     ids: ['clients', 'assignments', 'groups'] },
     { label: 'Work Types',  ids: ['task-types', 'task-type-sets'] },
-    { label: 'Connections', ids: ['integrations', 'devices', 'deployment'] },
+    { label: 'Connections', ids: ['integrations', 'invoices', 'devices', 'deployment'] },
     { label: 'Billing',     ids: ['economics'] },
   ];
 
@@ -396,7 +419,19 @@ export default function Settings() {
                 />
               )}
               {activeTab === 'integrations' && (
-                <IntegrationsTab onSuccess={showSuccess} onError={showError} />
+                <div className="space-y-6">
+                  <IntegrationsTab onSuccess={showSuccess} onError={showError} />
+                  <IntegrationPushPanel />
+                </div>
+              )}
+              {activeTab === 'invoices' && (
+                <div className="space-y-6">
+                  <InvoiceManager
+                    filter={invoiceFilter}
+                    onFilterClear={() => setInvoiceFilter('')}
+                  />
+                  <IntegrationInvoicePanel />
+                </div>
               )}
               {activeTab === 'economics' && (
                 <EconomicsTab

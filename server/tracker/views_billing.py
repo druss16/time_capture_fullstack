@@ -1035,119 +1035,13 @@ def weekly_timesheet_view(request):
         'grand_total': grand_total, 'billable_total': billable_total,
         'daily_span': daily_span,
     })
-# ===============================
-# CLIENT SUMMARY VIEW (MANAGER/BILLING)
-# ===============================
-
-@api_view(['GET'])
-def client_summary_view(request):
-    """
-    Manager/billing view - hours and amounts by client.
-    Used for invoicing.
-    """
-    org = get_request_org_override_billing(request)
-    if not org:
-        return Response({'error': 'No organization'}, status=400)
-    
-    # Date range
-    start_date = request.query_params.get('start_date')
-    end_date = request.query_params.get('end_date')
-    
-    if not start_date or not end_date:
-        # Default to current month
-        today = timezone.now().date()
-        start_date = today.replace(day=1)
-        end_date = (start_date + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-    else:
-        start_date = date.fromisoformat(start_date)
-        end_date = date.fromisoformat(end_date)
-    
-    # Filter options
-    client_id = request.query_params.get('client_id')
-    user_id = request.query_params.get('user_id')
-    only_approved = request.query_params.get('only_approved', 'true').lower() == 'true'
-    only_billable = request.query_params.get('only_billable', 'false').lower() == 'true'
-    
-    # Base query
-    blocks = Block.objects.filter(
-        org=org,
-        day__gte=start_date,
-        day__lte=end_date,
-    ).select_related('client', 'user', 'task_type')
-    
-    if client_id:
-        blocks = blocks.filter(client_id=client_id)
-    if user_id:
-        blocks = blocks.filter(user_id=user_id)
-    if only_approved:
-        blocks = blocks.filter(approved=True)
-    if only_billable:
-        blocks = blocks.filter(is_billable=True)
-    
-    # Aggregate by client
-    client_data = blocks.values('client_id', 'client__name', 'client__code').annotate(
-        total_minutes=Sum('minutes'),
-        billable_minutes=Sum('minutes', filter=Q(is_billable=True)),
-        total_amount=Coalesce(Sum('billing_amount'), Decimal('0')),
-    ).order_by('client__name')
-    
-    results = []
-    for item in client_data:
-        # Get staff breakdown
-        staff = blocks.filter(client_id=item['client_id']).values(
-            'user_id', 'user__username'
-        ).annotate(
-            hours=Sum('minutes'),
-            amount=Sum('billing_amount'),
-        ).order_by('user__username')
-        
-        # Get task breakdown
-        tasks = blocks.filter(client_id=item['client_id']).values(
-            'task_type_id', 'task_type__name'
-        ).annotate(
-            hours=Sum('minutes'),
-            amount=Sum('billing_amount'),
-        ).order_by('task_type__name')
-        
-        results.append({
-            'client_id': item['client_id'],
-            'client_name': item['client__name'] or 'Unassigned',
-            'client_code': item['client__code'] or '',
-            'total_hours': round(Decimal(item['total_minutes'] or 0) / 60, 2),
-            'billable_hours': round(Decimal(item['billable_minutes'] or 0) / 60, 2),
-            'non_billable_hours': round(Decimal((item['total_minutes'] or 0) - (item['billable_minutes'] or 0)) / 60, 2),
-            'total_amount': item['total_amount'],
-            'staff_breakdown': [
-                {
-                    'user_id': s['user_id'],
-                    'username': s['user__username'],
-                    'hours': round(Decimal(s['hours'] or 0) / 60, 2),
-                    'amount': s['amount'] or Decimal('0'),
-                }
-                for s in staff
-            ],
-            'task_breakdown': [
-                {
-                    'task_type_id': t['task_type_id'],
-                    'task_type': t['task_type__name'] or 'General',
-                    'hours': round(Decimal(t['hours'] or 0) / 60, 2),
-                    'amount': t['amount'] or Decimal('0'),
-                }
-                for t in tasks
-            ],
-        })
-    
-    return Response({
-        'period_start': start_date.isoformat(),
-        'period_end': end_date.isoformat(),
-        'clients': results,
-        'totals': {
-            'total_hours': sum(r['total_hours'] for r in results),
-            'billable_hours': sum(r['billable_hours'] for r in results),
-            'total_amount': sum(r['total_amount'] for r in results),
-        }
-    })
-
+# Client Billing (the tab this served) is gone. Its one action, "Create
+# Invoice", navigated to /invoices/create — a route that never existed — and
+# the table underneath was a plainer copy of the by-client panel Reports
+# already leads with. Set Fees reads the same blocks through
+# views_fee_basis.fee_basis, which counts every committed block instead of
+# filtering to approved: a fee is a judgement, and time hidden from it is
+# money left on the table.
 
 # ===============================
 # INVOICE EXPORT

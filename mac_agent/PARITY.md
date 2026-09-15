@@ -109,6 +109,36 @@ After a build, check that list is still only those three:
 
     grep '^missing module named' build/TimeTrackerAgent/warn-TimeTrackerAgent.txt
 
+## Testing a build end to end
+
+`test_event_contract.py` checks the payload shape without a server. To check
+the whole chain, run the built app against a stub backend that replays
+`tracker/views.raw_events`' validation — an event that stub accepts is one
+production accepts.
+
+Two things make the difference between a test that proves something and one
+that quietly proves nothing:
+
+**Run the `.app`, never the bare binary.** The notification manager calls
+`+[UNUserNotificationCenter currentNotificationCenter]`, which throws
+`NSInternalInconsistencyException` ("bundleProxyForCurrentProcess is nil")
+when the process has no bundle. That is an Objective-C exception — no Python
+`try/except` catches it, and the process aborts with SIGABRT partway through
+startup, right after the first sync. Production is
+`/Applications/TimeTracker.app`, so it never sees this; a `--onefile` binary
+run from `dist/` dies every time. Note that `build_and_release.sh` installs
+the bare binary to `/usr/local/bin/TimeTrackerAgent`, which would hit the
+same wall — the working install on this machine is the `.app`.
+
+**A fresh build holds no permissions.** It is a new code signature, so TCC
+treats it as a different application: no Accessibility, which means
+`get_window_title_via_ax` returns nothing and EVERY window title arrives
+empty. Detection still works (NSWorkspace/System Events name the app) and so
+does everything that reads a path over AppleScript, but anything that
+depends on the title reads as a total failure when it is really a missing
+permission. Grant Accessibility to the test build, or verify title-dependent
+behavior with the module-level tests instead.
+
 ## Things that bite
 
 - **`TimeTracker.spec` does not discover modules for you.** Anything new

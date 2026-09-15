@@ -1868,6 +1868,22 @@ _DOC_PATH_SCRIPTS = {
         'return POSIX path of ((file of document 1) as alias)\n'
         'on error\nreturn ""\nend try'
     ),
+    # Finder's front window as a path. finder_watcher feeds the same path to
+    # the AI switcher, but that is a different channel: the switcher decides
+    # the CURRENT CLIENT, while the event payload is what the inference
+    # engine reasons over on the server. Without this, a Finder event reached
+    # the backend carrying no path at all, and the folder the user was
+    # actually looking at was invisible to attribution.
+    #
+    # The Windows agent gets this for free because Explorer puts the folder
+    # in its window title. Finder's title is the leaf name only, and is empty
+    # altogether unless the app holds Accessibility permission.
+    "com.apple.finder": (
+        'tell application "Finder" to try\n'
+        'if (count of Finder windows) is 0 then return ""\n'
+        'return POSIX path of ((target of front Finder window) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
     "com.apple.TextEdit": (
         # TextEdit's `path` is ALREADY a POSIX string, unlike every other
         # app here. Wrapping it in `POSIX path of` raises. Verified on
@@ -1930,6 +1946,12 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
     script = _DOC_PATH_SCRIPTS.get(bundle_id)
     if script:
         path = osa_retry(script)
+        if path:
+            # Finder hands back a directory with a trailing slash. Left on,
+            # the basename is the empty string, so content_identity yields
+            # nothing for the very folder the user is looking at. finder_watcher
+            # strips it too — the two channels must agree on the same path.
+            path = path.rstrip("/") or "/"
         return {"url": None, "file_path": path or None}
 
     return {"url": None, "file_path": None}

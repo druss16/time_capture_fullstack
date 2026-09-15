@@ -117,19 +117,31 @@ def setup_readiness(request):
     manual_pairs = set(open_eng.filter(budget_source="manual")
                        .values_list("client_id", "engagement_type"))
     if pairs:
+        # Was OPTIONAL, gated on "you want the Engagements tab". That premise
+        # is gone: Set Fees is a top-level page now, and a fee you set is the
+        # ONLY thing that puts a budget on it — the derived ladder is no longer
+        # quoted, because a budget guessed from an under-captured month reports
+        # overruns the firm never had. A partner opening Set Fees with none of
+        # these entered sees hours and no fee reference at all, which is the
+        # definition of the product not doing its job.
         checks.append({
             "id": "engagement_budgets",
-            "tier": OPTIONAL,
+            "tier": REQUIRED,
             "title": "Enter what each job is worth",
-            "only_if": "you want the Engagements tab",
             "status": (OK if len(manual_pairs) == len(pairs)
                        else PARTIAL if manual_pairs else MISSING),
             "detail": (f"{len(manual_pairs)} of {len(pairs)} jobs have a fee you set. "
-                       f"The rest use a budget guessed from previously recorded "
-                       f"hours, which is only as good as what the agent captured."),
-            "unlocks": "Burn-vs-pace you can act on, and which fixed fees are "
-                       "quietly unprofitable",
-            "where": "Settings → Economics → Engagement budgets",
+                       f"Set Fees shows a budget only for those — the rest fall back "
+                       f"to what this client usually takes, because a budget guessed "
+                       f"from previously recorded hours is only as good as what the "
+                       f"agent captured."),
+            "unlocks": "A fee to set against on Set Fees · burn-vs-pace you can "
+                       "act on · which fixed fees are quietly unprofitable",
+            # The per-row editor is right for a handful. A firm with a hundred
+            # jobs should send us the fee schedule and we import it in one pass
+            # (set_engagement_budgets --csv), so say both.
+            "where": "Settings → Economics → Engagement budgets, or send us your "
+                     "fee schedule and we'll import it",
             "link": "/settings?tab=economics",
         })
 

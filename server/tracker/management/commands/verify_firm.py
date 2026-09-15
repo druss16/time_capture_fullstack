@@ -14,6 +14,7 @@ Run the same command at every stage and watch the numbers move:
     after mappings       → 19/19 resolve
     at go-live           → invites out, pairing starts
     24h later            → blocks flowing, task types attached
+    once time is landing → fees and invoices in, or the numbers are estimates
 
 Checks are ordered by how silently the thing fails. industry_type is first
 because it breaks category mapping without any error at provisioning time —
@@ -34,6 +35,7 @@ from django.utils import timezone
 from tracker.models import (
     Organization, OrganizationMembership, Client, TaskType, TaskTypeSet,
     OrgDeploymentToken, DeviceProvisioningMap, Block, AgentDevice,
+    Engagement, Invoice,
 )
 
 OK, WARN, BAD = 'ok', 'warn', 'bad'
@@ -94,6 +96,7 @@ class Command(BaseCommand):
             self._check_mappings,
             self._check_pairing,
             self._check_pipeline,
+            self._check_fees,
         ):
             results.extend(check(org, quiet))
 
@@ -357,3 +360,47 @@ class Command(BaseCommand):
                      f'{null_tt}/{cat_total} categorized blocks have no task_type ({pct:.0f}%) — '
                      f'a canonical category is missing from the mapping CSV')]
         return []
+
+    def _check_fees(self, org, quiet):
+        """The two things only the firm can hand us: their fees and their invoices.
+
+        Last, because neither stops a single block being captured — and that is
+        exactly why they go unnoticed for weeks. The product keeps producing
+        numbers either way; what nobody can see is that revenue is an estimate
+        because no invoice was ever imported, or that a job's budget was
+        invented from an under-captured month. TL Wall ran for months at 2 of
+        168 jobs with a real fee, and the only place that showed was a page
+        telling every large client it was over budget.
+
+        WARN, never BAD. This is the firm's paperwork, not our configuration,
+        and go-live should not wait on it — but it should never be silent
+        either.
+        """
+        out = []
+
+        n_inv = Invoice.objects.filter(org=org).count()
+        self._line('invoices', OK if n_inv else WARN,
+                   f'{n_inv:,} imported' if n_inv else 'none imported', quiet)
+        if not n_inv:
+            out.append((WARN, 'invoices',
+                        'none imported — revenue is time at standard rates rather than '
+                        'what was billed, WIP only grows because nothing marks work as '
+                        'billed, and realization has nothing to divide by. Import a CSV '
+                        'or connect QuickBooks'))
+
+        open_eng = Engagement.objects.filter(org=org, status='open').exclude(client=None)
+        pairs = set(open_eng.values_list('client_id', 'engagement_type'))
+        if pairs:
+            manual = set(open_eng.filter(budget_source='manual')
+                         .values_list('client_id', 'engagement_type'))
+            state = OK if len(manual) == len(pairs) else WARN
+            self._line('fee schedule', state,
+                       f'{len(manual)}/{len(pairs)} jobs have a fee the firm set', quiet)
+            if state != OK:
+                out.append((WARN, 'fee schedule',
+                            f'{len(pairs) - len(manual)} of {len(pairs)} jobs have no fee '
+                            f'from the firm, so Set Fees shows them no budget. Send the '
+                            f'firm a template and import what comes back: '
+                            f'manage.py set_engagement_budgets --org {org.id} --template '
+                            f'> fees.csv, then --csv fees.csv (dry run) and --apply'))
+        return out

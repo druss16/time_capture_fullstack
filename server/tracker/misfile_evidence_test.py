@@ -103,6 +103,11 @@ def neighbours(cid, w=0.70):
                   independent=True)
 
 
+def same_day(cid, w=0.55):
+    return Signal('same_day', cid, w, f'They worked {name_of(cid)} at 10:24.',
+                  short=f'{name_of(cid)} at 10:24', independent=True)
+
+
 def precedent(cid, w=0.90):
     return Signal('human_precedent', cid, w,
                   f'A person filed this title to {name_of(cid)} before.',
@@ -213,6 +218,50 @@ check('evidence is overwhelming', d.confidence > 0.85)
 check('and it STILL does not close the flag unattended', d.auto is False)
 check('it says whose call it is',
       any('person' in c.lower() for c in d.caveats))
+
+print('\n10. The title outranks the clock, and the clock may not outvote it')
+# The firm's standing rule: read the block's OWN title for a company name
+# FIRST; the work before and after may only speak when the title names nobody.
+# The target used to be a straight sum of weights, which the title always lost:
+# 0.85 against a neighbour (0.70) plus a same-day sighting (0.55) = 1.25.
+d = decide(4, [title(1), neighbours(2), same_day(2)])
+check('the title\'s client is the target, not the two clock witnesses',
+      d.target_client_id == 1)
+check('…and it is still a reassignment, not a shrug',
+      d.verdict == ma.VERDICT_REASSIGN)
+
+# Losing the vote is not the same as losing the evidence. Once the title has
+# chosen, temporal agreement still counts for everything it used to.
+d = decide(4, [title(1), neighbours(1), same_day(1)])
+check('temporal evidence still corroborates the client it agrees with',
+      d.target_client_id == 1 and d.confidence >= ma.AUTO_BAR)
+
+print('   …the clock still decides when the title names nobody')
+d = decide(4, [neighbours(2), same_day(2)])
+check('no title signal: temporal picks the target exactly as before',
+      d.target_client_id == 2 and d.verdict == ma.VERDICT_REASSIGN)
+
+print('   …evidence about THIS block still outranks the title')
+# The rule is title-over-clock, not title-over-everything. A .qbw company file
+# IS the client's books; a file path is where the bytes are. Both read this
+# block, so both keep the right to beat the title.
+d = decide(4, [title(1), qb_file(2)])
+check('the QuickBooks company file still wins', d.target_client_id == 2)
+d = decide(4, [title(1, w=0.55), file_path(2)])
+check('the file path still wins', d.target_client_id == 2)
+d = decide(4, [title(1), precedent(2)])
+check('how a person filed this same title before still wins',
+      d.target_client_id == 2)
+
+print('   …and a title naming the BOOKED client refuses to move at all')
+# This is the case the old sum got most wrong: the block\'s own title agrees
+# with where it sits, and two neighbours drag it somewhere else anyway.
+d = decide(1, [title(1), neighbours(2), same_day(2)])
+check('no target is proposed', d.target_client_id is None)
+check('verdict is a shrug, not a reassignment', d.verdict == ma.VERDICT_HUMAN)
+check('confidence is zero, not a hedged number', d.confidence == 0.0)
+check('the summary says the title named the client it is already on',
+      'already on' in d.summary)
 
 print()
 if FAILURES:

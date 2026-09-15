@@ -807,8 +807,21 @@ def draft_from_signals(block_id, org_id, booked_id, signals, name_of, veto_fn):
             d.summary = 'No evidence points anywhere. Needs a person.'
         return d
 
-    top_cid, top_sigs = max(rivals.items(),
-                            key=lambda kv: sum(s.weight for s in kv[1]))
+    top_cid, top_sigs = _pick_target(rivals, signals)
+    if top_cid is None:
+        # The title named somebody, and the only thing arguing for anywhere
+        # else is the clock. Under the firm's standing rule that is not a
+        # recommendation — see _pick_target.
+        d.verdict = VERDICT_HUMAN
+        named = next((s for s in signals if s.kind == 'title'), None)
+        d.confidence = 0.0
+        d.summary = (
+            f"The title names {name_of(named.supports)}"
+            f"{' — the client it is already on' if named.supports == booked else ''}"
+            f". The work around it was booked elsewhere, but nothing in this "
+            f"block's own text agrees, so there is no recommendation to make."
+            if named else 'No evidence points anywhere. Needs a person.')
+        return d
     d.target_client_id = top_cid
     d.target_client_name = name_of(top_cid)
 
@@ -863,6 +876,64 @@ def draft_from_signals(block_id, org_id, booked_id, signals, name_of, veto_fn):
                  f"Looks like {d.target_client_name}, but a person should say: "
                  + (blocker[0] if blocker else 'evidence is thin.'))
     return d
+
+
+# Evidence that is about WHEN the work happened, not what it was. Both witness
+# the same thing — a person filed neighbouring work to some client — and neither
+# reads this block's own text.
+TEMPORAL_KINDS = frozenset({'neighbours', 'same_day'})
+
+# Default ON: this encodes a rule the firm already holds, not a hypothesis about
+# the data. It is switchable so the shadow harness can run old against new, and
+# so it can be turned off in place if the measured effect is not what we want:
+#   manage.py shadow_title_temporal --org 21 --days 120
+TITLE_OUTRANKS_TEMPORAL = True
+
+
+def _pick_target(rivals, signals):
+    """Which rival client the evidence points at, or None to make no claim.
+
+    THE STANDING RULE: read the block's OWN title for a company name FIRST; the
+    work before and after it may only speak when the title names nobody.
+
+    The target used to be `max(rivals, key=sum of weight)`, a straight popularity
+    contest, and the title always lost it. A title signal is capped at 0.85; a
+    neighbour (0.70) plus a same-day sighting (0.55) sums to 1.25. So on a block
+    whose title said one parish, two clock-based witnesses for a different one
+    carried the verdict — the exact inversion the rule exists to prevent, and
+    visible in the live card that read "the work either side of it names X"
+    while the title said Y.
+
+    Temporal evidence is not discarded. Once a target is chosen it still
+    corroborates, still feeds confidence, and still shows in the card. What it
+    may no longer do is CHOOSE. Everything that reads the block itself — the
+    file path, the QuickBooks company file, how a person filed this same title
+    before — keeps its full say, including the right to outrank the title, which
+    is why a .qbw at 0.95 still beats a title at 0.85. The file on disk is
+    evidence about this block; a neighbour is evidence about a different one.
+    """
+    if not rivals:
+        return None, []
+
+    title_named = next((s.supports for s in signals
+                        if s.kind == 'title' and s.supports is not None), None)
+    if not TITLE_OUTRANKS_TEMPORAL:
+        title_named = None          # straight popularity contest, as before
+
+    def weight(sigs):
+        return sum(s.weight for s in sigs
+                   if title_named is None or s.kind not in TEMPORAL_KINDS)
+
+    eligible = {cid: ss for cid, ss in rivals.items() if weight(ss) > 0}
+    if not eligible:
+        # Every rival's whole case is the clock, and the title named somebody
+        # (possibly the booked client). Refuse rather than promote a guess.
+        return None, []
+
+    top_cid = max(eligible, key=lambda cid: (weight(eligible[cid]), -cid))
+    # The chosen client keeps ALL of its signals — the restriction was about
+    # who gets picked, not about what counts once they have been.
+    return top_cid, rivals[top_cid]
 
 
 def _score(for_sigs, against_sigs):

@@ -544,6 +544,38 @@ AMBIGUITY_RATIO = 0.65   # runner-up other-client's ABSOLUTE hit must be < this
 CENTER_ONLY_CANNOT_SUPPRESS = False  # a client named only inside [Vendor
                                      # Center: X] is not a second opinion
 
+# ── A partial match is not a second opinion to a complete one ───────────────
+#
+# The ambiguity gate ranks on ABSOLUTE distinctive mass. That is right for
+# picking a winner and wrong for deciding whether the title is ambiguous,
+# because a long name sharing a common prefix carries a lot of mass while
+# naming almost none of itself. Org 21 block 70787, from the real roster:
+#
+#   "Church of Sacred Heart and St. Mary (Secondary) - QuickBooks …"
+#     abs  cov
+#   12.38 1.00  Sacred Heart & St. Mary's Church        <- every word present
+#    8.99 0.43  Basilica of The Sacred Heart of Jesus   = 73% -> gate trips
+#    8.84 0.60  Sacred Heart- Cicero
+#    8.84 0.65  Sacred Heart Parish-Rome
+#
+# "Basilica", "Jesus", "Cicero" and "Rome" appear nowhere in that title. Those
+# three cannot win — they fail the coverage gate — yet they were enough to make
+# the detector say the title names nobody, on a title that spells one client
+# out in full. The firm reads "Church of Sacred Heart and St. Mary" and sees an
+# obvious answer; the machine saw four Sacred Hearts and shrugged.
+#
+# So: when the title contains the WHOLE of one client's name, a client whose
+# name is only partly there is a subset reading of the same words, not a rival
+# interpretation. It stops being allowed to veto.
+#
+# Deliberately narrow. Both conditions must hold — the winner fully named AND
+# the rival well short of it — so a genuine tie between two fully-named clients
+# still abstains, and a bare "Sacred Heart" title (where nobody reaches full
+# coverage) still abstains. Those are the two abstentions worth keeping and
+# they are pinned as tests.
+FULLY_NAMED = 0.95       # "the title contains this client's entire name"
+FULL_NAME_BEATS_PARTIAL = False
+
 
 def rank_rivals(title, title_tokens, index, cids):
     """Score `cids` against the title; return (best, second_abs).
@@ -583,7 +615,8 @@ def rank_rivals(title, title_tokens, index, cids):
             return True
         return False
 
-    if not CENTER_ONLY_CANNOT_SUPPRESS and not ENTITY_CLASS_SEPARATES:
+    if not (CENTER_ONLY_CANNOT_SUPPRESS or ENTITY_CLASS_SEPARATES
+            or FULL_NAME_BEATS_PARTIAL):
         # Today's behaviour, preserved exactly: rank everything, refuse only if
         # the WINNER turns out to be bracket-only. (The old code ran that check
         # after the ambiguity gate; both paths refuse identically, so moving it
@@ -614,8 +647,15 @@ def rank_rivals(title, title_tokens, index, cids):
         # it is taken as the runner-up without paying for the filter. That keeps
         # the reported `runner_up_abs_hit` honest rather than collapsing it to
         # zero whenever the strongest rival happened to be filtered out.
-        if abs_hit >= AMBIGUITY_RATIO * best_abs and _excluded(cid, _cov):
-            continue
+        if abs_hit >= AMBIGUITY_RATIO * best_abs:
+            if _excluded(cid, _cov):
+                continue
+            # The winner's whole name is in this title and this rival's is not,
+            # by a wide margin. Same words, less of them — a subset reading,
+            # not a competing one.
+            if (FULL_NAME_BEATS_PARTIAL and best[2] >= FULLY_NAMED
+                    and _cov <= best[2] - COVERAGE_MARGIN):
+                continue
         second_abs = abs_hit
         break                # sorted: the first survivor is the strongest
 

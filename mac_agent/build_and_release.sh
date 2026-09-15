@@ -4,6 +4,15 @@
 # Usage: ./build_and_release.sh [version]
 # Example: ./build_and_release.sh 1.0.1
 #
+# THIS DOES NOT RELEASE ANYTHING, despite the name. It produces a signed,
+# notarized TimeTracker.pkg in this directory and stops. No tag is created,
+# no GitHub release is touched, and no agent — Mac or Windows — learns that
+# a new version exists. Use it to build and test a package locally.
+#
+# Shipping goes through a tag on this repo, which runs .github/workflows/
+# release.yml: it builds BOTH agents and publishes all four artifacts to
+# druss16/timetracker-releases in one release. See the closing notes.
+#
 # SHIPS AN .app, NOT A BARE BINARY.
 # This is not a packaging preference. The agent's notification manager calls
 # +[UNUserNotificationCenter currentNotificationCenter], which throws
@@ -288,11 +297,23 @@ echo "  launchctl list | grep ${LAUNCH_LABEL}"
 echo "A PID in the first column means it is up. A number in the second with"
 echo "no PID is the exit status of a job that failed (2 = file not found)."
 echo ""
-echo "Next steps:"
-echo "  1. Test locally: sudo installer -pkg ${APP_NAME}.pkg -target /"
-echo "  2. Push to GitHub:"
-echo "     gh release create v${VERSION} ${APP_NAME}.pkg \\"
-echo "         --repo YOUR_USERNAME/timetracker-releases \\"
-echo "         --title \"TimeTracker v${VERSION}\" \\"
-echo "         --notes \"Release notes here\""
+echo "This package has NOT been released. Nothing downstream knows it exists."
+echo ""
+echo "Test it locally:"
+echo "  sudo installer -pkg ${APP_NAME}.pkg -target /"
+echo ""
+echo "To actually SHIP ${VERSION}, push a tag on this repo:"
+echo "  git tag v${VERSION} && git push origin v${VERSION}"
+echo ""
+echo "That runs .github/workflows/release.yml, which builds the Mac AND"
+echo "Windows agents and publishes all four artifacts together to"
+echo "druss16/timetracker-releases."
+echo ""
+echo "⚠️  Do NOT publish this .pkg on its own with \`gh release create\`."
+echo "    The server resolves every agent's update against the SAME"
+echo "    releases/latest tag and only picks the download URL by platform."
+echo "    A release carrying just the .pkg tells Windows agents that"
+echo "    ${VERSION} is current, and they then fetch"
+echo "    TimeTracker-Windows-Setup.exe from a release that has no such"
+echo "    file — a 404, and Windows auto-update stops working."
 echo ""

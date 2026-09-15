@@ -361,7 +361,20 @@ MIN_BLOCK_DURATION = 6          # minutes
 BLOCK_GRANULARITY = 6           # round to 6-min increments
 
 USE_AUTH = bool(getattr(settings, "USE_AUTH", False))
-PermUI = IsAuthenticated if USE_AUTH else AllowAny
+
+# PermUI used to be `IsAuthenticated if USE_AUTH else AllowAny`, and
+# settings.USE_AUTH is False — so all fourteen views carrying it were
+# reachable with NO credentials at all. Verified against production:
+#
+#     GET /api/settings/organization/  -> 200
+#     GET /api/settings/entities/      -> 200
+#     GET /api/timecards/summary/day/  -> 200, 6856 bytes
+#
+# The set includes writes (create_client, import_clients_csv,
+# save_block_classification, confirm_all_blocks), not just reads.
+# Authentication is not a deployment mode. USE_AUTH may still select other
+# dev conveniences; it does not get to switch off the front door.
+PermUI = IsAuthenticated
 
 IDLE_STICKY_MINUTES = int(getattr(settings, "IDLE_STICKY_MINUTES", 4))
 FUZZY_HOST_MATCH = True
@@ -1388,12 +1401,19 @@ def blocks_today(request):
     if hostname:
         qs = qs.filter(hostname=hostname)
     
-    # Match your dev/prod org scoping
-    if USE_AUTH and org:
+    # Tenant isolation. This used to read `if USE_AUTH and org:` — and with
+    # USE_AUTH False the filter never ran, so ANY authenticated caller got
+    # EVERY org's blocks. A Mac agent's device key returned 662 blocks
+    # belonging to a different firm: client names, window titles, email
+    # subjects. Scoping is not an auth-mode option.
+    if org:
         if settings.DEBUG:
             qs = qs.filter(Q(org=org) | Q(org__isnull=True))
         else:
             qs = qs.filter(org=org)
+    else:
+        # No resolvable org means no basis for showing anything.
+        qs = qs.none()
     
     if limit_str:
         try: 
@@ -2171,12 +2191,15 @@ def timecards_summary_day(request):
     if hostname:
         qs = qs.filter(hostname=hostname)
 
-    # ✅ Keep legacy NULL-org rows in dev; be strict in prod
-    if USE_AUTH and org:
+    # Keep legacy NULL-org rows in dev; be strict in prod. NOT gated on
+    # USE_AUTH — see blocks_today for what that cost.
+    if org:
         if settings.DEBUG:
             qs = qs.filter(Q(org=org) | Q(org__isnull=True))
         else:
             qs = qs.filter(org=org)
+    else:
+        qs = qs.none()
 
     blocks = list(qs.select_related("client", "project"))
 

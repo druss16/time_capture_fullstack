@@ -848,7 +848,27 @@ NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_I
 NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
 
 
+# Vendor gate (from org_settings sync). Default False = hands-off: the desktop
+# ticker stays hidden and MANUAL client switches are ignored. Auto-switching
+# (ai_switcher / meeting detection) and attribution still run — hiding the
+# ticker does not cost accuracy. MavOps flips this on per-org for demos.
+_show_client_widget = False
+
+
+def _set_show_client_widget(val):
+    """Set the module-level hands-off gate, so callers need no `global`."""
+    global _show_client_widget
+    _show_client_widget = bool(val)
+
+
 def _apply_client_switch(client_id, client_name, source="unknown"):
+    # Hands-off gate: ignore MANUAL switches (menu bar / picker / hotkey /
+    # notification) when the ticker is disabled for this org. Automatic
+    # sources still flow through, so attribution is unaffected.
+    if source in ("gui_prompt", "notification") and not _show_client_widget:
+        log(f"[CLIENT-SWITCH] ignored manual switch → {client_name} (hands-off mode)")
+        return
+
     log(f"[CLIENT-SWITCH] → {client_name} (id={client_id}) via {source}")
     
     api_key_val = config.get("api_key") or API_KEY
@@ -1716,13 +1736,122 @@ def get_window_title_via_ax(pid: int) -> Optional[str]:
         log(f"[WARN] AX read failed: {e}")
         return None
 
+# Chromium browsers all answer the same AppleScript, differing only in the
+# application name. Edge and Arc were missing entirely, so a client's portal
+# opened in Edge contributed no URL at all.
+_CHROMIUM_APPS = {
+    "com.google.Chrome":         "Google Chrome",
+    "com.google.Chrome.canary":  "Google Chrome Canary",
+    "com.google.Chrome.beta":    "Google Chrome Beta",
+    "com.brave.Browser":         "Brave Browser",
+    "com.microsoft.edgemac":     "Microsoft Edge",
+    "com.microsoft.edgemac.Beta": "Microsoft Edge Beta",
+    "com.vivaldi.Vivaldi":       "Vivaldi",
+    "company.thebrowser.Browser": "Arc",
+}
+
+# Office and iWork apps that can name the document they have open. The
+# AppleScript differs per app, so each carries its own snippet.
+_DOC_PATH_SCRIPTS = {
+    # The `path` check is the important part. An unsaved scratch workbook
+    # has full name "Book1" and no path, and POSIX path turns that into the
+    # absolute-looking "/Book1" — a path to nothing, which the inference
+    # engine would then read for a client name. Only a workbook that lives
+    # somewhere on disk has a path to report.
+    "com.microsoft.Excel": (
+        'tell application "Microsoft Excel" to try\n'
+        'if not (exists active workbook) then return ""\n'
+        'if (path of active workbook) is "" then return ""\n'
+        'set p to (full name of active workbook)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.microsoft.Word": (
+        'tell application "Microsoft Word" to try\n'
+        'if not (exists active document) then return ""\n'
+        'if (path of active document) is "" then return ""\n'
+        'set p to (full name of active document)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.microsoft.Powerpoint": (
+        'tell application "Microsoft PowerPoint" to try\n'
+        'if not (exists active presentation) then return ""\n'
+        'if (path of active presentation) is "" then return ""\n'
+        'set p to (full name of active presentation)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.apple.Preview": (
+        'tell application "Preview" to try\n'
+        'set theDoc to document 1\nset p to path of theDoc\n'
+        'POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Numbers": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Numbers on macOS 15.
+        'tell application "Numbers" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Pages": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Pages on macOS 15.
+        'tell application "Pages" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Keynote": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Keynote on macOS 15.
+        'tell application "Keynote" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.TextEdit": (
+        # TextEdit's `path` is ALREADY a POSIX string, unlike every other
+        # app here. Wrapping it in `POSIX path of` raises. Verified on
+        # macOS 15: "Can't make POSIX path of path of document 1 into type
+        # reference."
+        'tell application "TextEdit" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return (path of document 1) as text\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.sublimetext.4": (
+        'tell application "Sublime Text" to try\n'
+        'if not (exists window 1) then return ""\n'
+        'set theDoc to document of window 1\n'
+        'if theDoc is missing value then return ""\n'
+        'set p to (path of theDoc)\nreturn POSIX path of p\n'
+        'on error\nreturn ""\nend try'
+    ),
+}
+_DOC_PATH_SCRIPTS["com.sublimetext.3"] = _DOC_PATH_SCRIPTS["com.sublimetext.4"]
+
+
 def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
+    """The URL or document path behind the frontmost window.
+
+    This is the Mac's equivalent of the Windows agent reading Explorer's
+    address bar and the browser address bar over UI Automation. Every app
+    missing from these tables contributes a window title and nothing else,
+    which for a document app means the client's own file is invisible.
+    """
     if bundle_id == "com.apple.Safari":
-        url = osa_retry('tell application "Safari" to try\nset u to URL of current tab of front window\nreturn u\non error\nreturn ""\nend try')
+        url = osa_retry(
+            'tell application "Safari" to try\n'
+            'set u to URL of current tab of front window\n'
+            'return u\non error\nreturn ""\nend try'
+        )
         return {"url": url or None, "file_path": None}
-    
-    if bundle_id in ("com.google.Chrome", "com.google.Chrome.canary"):
-        script = '''tell application "Google Chrome"
+
+    app = _CHROMIUM_APPS.get(bundle_id)
+    if app:
+        script = f'''tell application "{app}"
             try
                 if (count of windows) > 0 then
                     return URL of active tab of window 1
@@ -1734,33 +1863,18 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
         end tell'''
         url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
-    
-    if bundle_id == "com.brave.Browser":
-        script = '''tell application "Brave Browser"
-            try
-                if (count of windows) > 0 then
-                    return URL of active tab of window 1
-                end if
-                return ""
-            on error
-                return ""
-            end try
-        end tell'''
-        url = osa_retry(script, tries=3, delay=0.1)
-        return {"url": url or None, "file_path": None}
-    
-    if bundle_id == "com.apple.Preview":
-        path = osa_retry('tell application "Preview" to try\nset theDoc to document 1\nset p to path of theDoc\nPOSIX path of p\non error\nreturn ""\nend try')
+
+    if bundle_id == "org.mozilla.firefox":
+        # Firefox exposes no scripting dictionary for the address bar. Its
+        # window title carries the page title, which the matcher already
+        # reads; there is nothing further to extract.
+        return {"url": None, "file_path": None}
+
+    script = _DOC_PATH_SCRIPTS.get(bundle_id)
+    if script:
+        path = osa_retry(script)
         return {"url": None, "file_path": path or None}
-    
-    if bundle_id == "com.microsoft.Excel":
-        path = osa_retry('tell application "Microsoft Excel" to try\nif not (exists active workbook) then return ""\nset p to (full name of active workbook)\nreturn POSIX path of p\non error\nreturn ""\nend try')
-        return {"url": None, "file_path": path or None}
-    
-    if bundle_id in ("com.sublimetext.4", "com.sublimetext.3"):
-        path = osa_retry('tell application "Sublime Text" to try\nif not (exists window 1) then return ""\nset theDoc to document of window 1\nif theDoc is missing value then return ""\nset p to (path of theDoc)\nreturn POSIX path of p\non error\nreturn ""\nend try')
-        return {"url": None, "file_path": path or None}
-    
+
     return {"url": None, "file_path": None}
 
 # ---------------- PID utils ----------------
@@ -3384,17 +3498,57 @@ def run_agent():
                 # Push org client patterns (Tier-0 rules) to switcher
                 if hasattr(sync, 'client_patterns') and sync.client_patterns:
                     ai_switcher.update_client_patterns(sync.client_patterns)
+                # Tier -1 org routing rules — the highest-priority matcher.
+                # These never reached the Mac agent before: the switcher had
+                # no update_routing_rules() and sync never fetched them.
+                if hasattr(sync, 'routing_rules'):
+                    ai_switcher.update_routing_rules(sync.routing_rules or [])
                 # Push org AI sensitivity setting to the switcher on every sync
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
+                    # Vendor ticker gate → hands-off unless enabled for this org.
+                    _sw = bool(sync.org_settings.get("show_client_widget", False))
+                    _set_show_client_widget(_sw)
+                    try:
+                        if gui_menu_bar is not None and hasattr(
+                            gui_menu_bar, "set_client_widget_enabled"
+                        ):
+                            gui_menu_bar.set_client_widget_enabled(_sw)
+                    except Exception as _e:
+                        log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher
+            # Push anything that arrived before the switcher existed
+            if hasattr(sync, 'routing_rules') and sync.routing_rules:
+                ai_switcher.update_routing_rules(sync.routing_rules)
 
         log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
     except Exception as e:
         log(f"[AI-SWITCH] Init failed: {e}")
+
+    # === FINDER FOLDER WATCHER ===
+    # A Finder window's title is only the folder's leaf name ("2024 1040"),
+    # which names no client. Its path is "/Users/dan/Clients/Varacchi/2024
+    # 1040", which names one. The tracking loop only ever saw the title, so
+    # browsing a client's folder produced no signal. This feeds the path.
+    finder_watcher = None
+    try:
+        from finder_watcher import FinderFolderWatcher
+
+        if ai_switcher:
+            finder_watcher = FinderFolderWatcher(
+                ai_switcher=ai_switcher,
+                log_fn=log,
+                poll_seconds=2.0,
+                enabled=True,
+            )
+            finder_watcher.start()
+    except ImportError:
+        log("[FINDER] finder_watcher.py not found — folder signal disabled")
+    except Exception as e:
+        log(f"[FINDER] Init failed: {e}")
 
     _tracking_stop_event = threading.Event()
 
@@ -3832,6 +3986,11 @@ def run_agent():
                 pass
             if notif_worker:
                 notif_worker.stop()
+            if finder_watcher:
+                try:
+                    finder_watcher.stop()
+                except Exception:
+                    pass
             remove_pid()
 
     # === START TRACKING THREAD ===

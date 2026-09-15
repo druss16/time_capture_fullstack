@@ -134,14 +134,51 @@ NORMALIZE_PLURALS = False
 def _stem(tok: str) -> str:
     if not NORMALIZE_PLURALS:
         return tok
-    if len(tok) > 3 and tok.endswith("s") and not tok.endswith(("ss", "us", "is")):
-        return tok[:-1]
-    return tok
+    if len(tok) <= 3 or not tok.endswith("s") or tok.endswith(("ss", "us", "is")):
+        return tok
+    stem = tok[:-1]
+    # NEVER stem a distinctive word into a generic one. "saints" is a real
+    # fingerprint; "saint" is in _STOPish and capped at 0.15, explicitly unable
+    # to identify anybody. Folding one into the other stopped "All Saints
+    # Church" matching its own name — 54 detections lost on org 21 in 30 days,
+    # an own-goal by exactly the mechanism this was meant to fix.
+    if stem in _STOPish:
+        return tok
+    return stem
 
 
-def _tokenize(name: str) -> list[str]:
-    return [_stem(t) for t in _TOKEN_RE.findall((name or "").lower())
-            if len(t) > 1]
+def _tokenize(name: str, stem: bool = True) -> list[str]:
+    """Tokens for `name`. `stem=False` gives the UNSTEMMED reading, which is
+    what tells us whether a match depended on stemming at all."""
+    raw = [t for t in _TOKEN_RE.findall((name or "").lower()) if len(t) > 1]
+    return [_stem(t) for t in raw] if stem else raw
+
+
+# ── Fix 2: a bent word must carry the whole name ────────────────────────────
+#
+# Stemming does not only rescue "St. Peters" -> "St. Peter's". It also lets a
+# generic English plural in a window title reach a client's distinctive word:
+# org 21's title "Client Communications" started accusing the union local
+# "Communication Workers", 314 times in 30 days, off one folded "s".
+#
+# Both are single-token, stem-dependent matches, so no rule about how MANY
+# tokens matched can separate them. Coverage can: the rescue names the client
+# in full (1.00), the false positive names half of it (0.50). So a match that
+# exists only because a word was bent has to clear a much higher bar — if we
+# had to change the spelling to make it fit, we want the whole name present.
+STEM_COVERAGE = 0.90
+
+
+def _stem_dependent(title_raw: set, cid: int, index: dict) -> bool:
+    """True when this client matches only after stemming, not as written."""
+    if not NORMALIZE_PLURALS:
+        return False
+    weights = index["client_weights"].get(cid, {})
+    raw = index.get("client_tokens_raw", {}).get(cid, set())
+    distinctive = {t for t, w in weights.items() if w > CORROBORATION_FLOOR}
+    # What it matched as written, against what it matched once both sides were
+    # folded. A difference means the fold is load-bearing.
+    return bool(distinctive) and not (distinctive & raw & title_raw)
 
 
 # ── Entity class ────────────────────────────────────────────────────────────
@@ -245,10 +282,12 @@ def build_token_index(client_names: dict[int, str]) -> dict:
     """
     df: dict[str, int] = defaultdict(int)
     client_tokens: dict[int, set[str]] = {}
+    client_tokens_raw: dict[int, set[str]] = {}
 
     for cid, name in client_names.items():
         toks = set(_tokenize(name))
         client_tokens[cid] = toks
+        client_tokens_raw[cid] = set(_tokenize(name, stem=False))
         for t in toks:
             df[t] += 1
 
@@ -305,6 +344,8 @@ def build_token_index(client_names: dict[int, str]) -> dict:
         "client_distinctive": client_distinctive,
         "client_generic": client_generic,
         "client_tokens": client_tokens,
+        # As written, before any fold — see _stem_dependent.
+        "client_tokens_raw": client_tokens_raw,
         "client_weights": client_weights,
         "client_mass": client_mass,
         "distinctiveness": distinctiveness,
@@ -528,10 +569,19 @@ def rank_rivals(title, title_tokens, index, cids):
     def _center_only(cid):
         return has_center and _named_only_in_center(title, cid, index)
 
-    def _excluded(cid):
-        # Two independent reasons a candidate is not a rival: its whole case is
-        # the QB Center bracket, or it claims an entity class the title denies.
-        return _center_only(cid) or _class_contradicts(title_tokens, cid, index)
+    title_raw = set(_tokenize(strip_app_chrome(title), stem=False))
+
+    def _excluded(cid, cov=None):
+        # Three independent reasons a candidate is not a rival: its whole case
+        # is the QB Center bracket; it claims an entity class the title denies;
+        # or it only fits after a word was bent and it does not name the client
+        # in full.
+        if _center_only(cid) or _class_contradicts(title_tokens, cid, index):
+            return True
+        if cov is not None and cov < STEM_COVERAGE \
+                and _stem_dependent(title_raw, cid, index):
+            return True
+        return False
 
     if not CENTER_ONLY_CANNOT_SUPPRESS and not ENTITY_CLASS_SEPARATES:
         # Today's behaviour, preserved exactly: rank everything, refuse only if
@@ -550,7 +600,7 @@ def rank_rivals(title, title_tokens, index, cids):
     # few candidates can ever matter.
     best, rest = None, []
     for i, row in enumerate(scored):
-        if _excluded(row[1]):
+        if _excluded(row[1], row[2]):
             continue
         best, rest = row, scored[i + 1:]
         break
@@ -564,7 +614,7 @@ def rank_rivals(title, title_tokens, index, cids):
         # it is taken as the runner-up without paying for the filter. That keeps
         # the reported `runner_up_abs_hit` honest rather than collapsing it to
         # zero whenever the strongest rival happened to be filtered out.
-        if abs_hit >= AMBIGUITY_RATIO * best_abs and _excluded(cid):
+        if abs_hit >= AMBIGUITY_RATIO * best_abs and _excluded(cid, _cov):
             continue
         second_abs = abs_hit
         break                # sorted: the first survivor is the strongest

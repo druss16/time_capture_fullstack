@@ -128,6 +128,67 @@ def main():
           cnm.detect_title_client("St. Peter's Church 2026 audit",
                                   idx_off, NAMES) is None)
 
+    print("\nThe rows org 21's 30-day shadow run actually broke on:")
+    # Not invented. Every title below is copied from the run that reported
+    # 314 NEW FLAGS and 54 LOST, which is what the two guards exist to fix.
+    REAL = {**PAD,
+            101: "Communication Workers", 102: "All Saints Church",
+            103: "St. Peters Church", 104: "St Peter's Cemetery",
+            105: "St. Marks Church", 106: "St. Francis Xavier Church",
+            107: "St. Francis Xavier Cemetery"}
+    CASES = [
+        # The 314-row false positive: a generic English plural in a title
+        # reaching a client's distinctive word through one folded "s".
+        ("Client Communications", None),
+        # The 54 LOST: "saints" folded into the stopword "saint".
+        ("All Saints Church  - QuickBooks", 102),
+        ("All Saints Client Information - Processing, Managing Info - Excel", 102),
+        ("FW: All Saints JUN26 - Message (HTML)", 102),
+        ("St Marks_Balance Sheet_JUNE 2026.pdf - Adobe Acrobat Reader (64-bit)", 105),
+        ("July reports for St Marks - Message (HTML)", 105),
+        # Block 66704, the row this whole line of work started from.
+        ("St. Peter's Church 2026 audit", 103),
+        ("St Peters Church 2026 audit", 103),
+        # Entity class earning its place: a CEMETERY title must not read as
+        # the Church, and must reach the Cemetery when one exists.
+        ("ST. FRANCIS XAVIER CEMETERY (Secondary)  - QuickBooks", 107),
+        ("St Peter's Cemetery plots", 104),
+    ]
+
+    def run(plurals, entity):
+        cnm.NORMALIZE_PLURALS, cnm.ENTITY_CLASS_SEPARATES = plurals, entity
+        idx = cnm.build_token_index(REAL)
+        n = sum(1 for t, want in CASES
+                if (cnm.detect_title_client(t, idx, REAL) or {}).get("client_id") == want)
+        cnm.NORMALIZE_PLURALS = cnm.ENTITY_CLASS_SEPARATES = False
+        return n
+
+    off, on = run(False, False), run(True, True)
+    print(f"    flags off {off}/{len(CASES)} · all on {on}/{len(CASES)}")
+    check("every one of them is right with the guards in place",
+          on == len(CASES))
+    check("…and that is better than today", on > off)
+
+    print("\nEach guard is load-bearing:")
+    cnm.NORMALIZE_PLURALS = True
+    check("'saints' is NOT folded — it would land in _STOPish",
+          cnm._stem("saints") == "saints")
+    check("'peters' still is — 'peter' is distinctive",
+          cnm._stem("peters") == "peter")
+    idx = cnm.build_token_index(REAL)
+    raw = lambda t: set(cnm._tokenize(cnm.strip_app_chrome(t), stem=False))
+    check("the Communications match is recognised as stem-dependent",
+          cnm._stem_dependent(raw("Client Communications"), 101, idx))
+    check("…so is the St. Peters rescue — the two are indistinguishable there",
+          cnm._stem_dependent(raw("St. Peter's Church 2026 audit"), 103, idx))
+    check("only COVERAGE separates them, which is what the bar uses",
+          cnm.score_title_against_client(
+              set(cnm._tokenize("Client Communications")), 101, idx)[0]
+          < cnm.STEM_COVERAGE
+          <= cnm.score_title_against_client(
+              set(cnm._tokenize("St. Peter's Church 2026 audit")), 103, idx)[0])
+    cnm.NORMALIZE_PLURALS = False
+
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED:")

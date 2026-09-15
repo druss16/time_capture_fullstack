@@ -1626,8 +1626,13 @@ if RUMPS_AVAILABLE:
             self._client_callbacks = {}
             # Vendor ticker gate. Default off = hands-off: the manual client
             # controls stay out of the menu until org_settings says otherwise.
-            # main.py pushes the real value down on every sync.
-            self.client_widget_enabled = False
+            # main.py pushes the real value down on every sync — but a sync
+            # can land BEFORE the menu bar exists ("[SYNC] GUI not ready
+            # yet"), so adopt whatever the controller already holds rather
+            # than overwriting it with the default.
+            self.client_widget_enabled = bool(
+                getattr(controller, "client_widget_enabled", False)
+            )
             self._start_keepalive()
             
             # Set initial title from state
@@ -1750,12 +1755,6 @@ if RUMPS_AVAILABLE:
             self.menu.add(switch_menu)
             self.menu.add(None)
 
-            # Re-link is a manual repair action, so it lives behind the same
-            # gate as the other manual controls.
-            relink_item = rumps.MenuItem("Re-link Device...")
-            relink_item.set_callback(self._on_relink_device)
-            self.menu.add(relink_item)
-
             self._add_tail_menu_items()
 
         def _add_tail_menu_items(self):
@@ -1763,6 +1762,19 @@ if RUMPS_AVAILABLE:
             today_item = rumps.MenuItem("Today's Time...")
             today_item.set_callback(self._on_today_time)
             self.menu.add(today_item)
+
+            self.menu.add(None)
+
+            # Re-link is device RECOVERY, not a manual client control, so it
+            # is never gated. A machine paired to the wrong account — or with
+            # a key the server no longer honours — has no other way back:
+            # the agent only offers its pairing window when it has no key at
+            # all, so once a bad key is stored this menu item is the only
+            # route. Hiding it behind an org display flag is how a device
+            # becomes permanently unrecoverable.
+            relink_item = rumps.MenuItem("Re-link Device...")
+            relink_item.set_callback(self._on_relink_device)
+            self.menu.add(relink_item)
 
             self.menu.add(None)
 
@@ -2044,6 +2056,25 @@ class TimeTrackerSystemTray:
             except Exception as e:
                 print(f"[GUI] Failed to schedule menu rebuild: {e}")
     
+    def set_client_widget_enabled(self, enabled):
+        """Vendor ticker gate, pushed down from org_settings on each sync.
+
+        run_gui_app returns THIS object, so this is the method main.py
+        reaches. The flag itself lives on the rumps app, which draws the
+        menu. Without this passthrough main.py's hasattr() check simply
+        found nothing and skipped the call — silently, because it is
+        guarded — so the gate stayed closed no matter what the org had
+        configured.
+        """
+        self.client_widget_enabled = bool(enabled)
+        app = getattr(self, "app", None)
+        if app is not None and hasattr(app, "set_client_widget_enabled"):
+            app.set_client_widget_enabled(enabled)
+        else:
+            # The menu bar may not be up yet; TimeTrackerMenuBarApp reads
+            # this off the controller when it builds.
+            print(f"[GUI] client widget flag stored ({enabled}); menu not up yet")
+
     def run(self):
         if RUMPS_AVAILABLE:
             self.app = TimeTrackerMenuBarApp(self)

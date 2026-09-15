@@ -42,6 +42,7 @@ class AgentSync:
         self.projects: List[Dict] = []
         self.task_types: List[Dict] = []
         self.client_patterns: List[Dict] = []   # Org-admin Tier-0 patterns
+        self.routing_rules: List[Dict] = []     # Org-admin Tier -1 hard rules
         self.org_settings: Dict = {}            # ai_sensitivity, idle threshold, etc.
 
         # State
@@ -123,7 +124,12 @@ class AgentSync:
             needs_sync = False
             changed_entities = []
 
-            for key in ['clients', 'projects', 'task_types', 'client_patterns']:
+            # routing_rules and org_settings were missing here, so a firm
+            # could add a Tier -1 rule or move the sensitivity slider and the
+            # Mac agent would not notice until something else happened to
+            # change. The two agents watch the same set now.
+            for key in ['clients', 'projects', 'task_types', 'client_patterns',
+                        'routing_rules', 'org_settings']:
                 new_hash = entities.get(key, {}).get('hash', '')
                 old_hash = self._hashes.get(key, '')
                 if new_hash and new_hash != old_hash:
@@ -152,6 +158,7 @@ class AgentSync:
             self.projects = data.get('projects', [])
             self.task_types = data.get('task_types', [])
             self.client_patterns = data.get('client_patterns', [])  # Tier-0 org rules
+            self.routing_rules = data.get('routing_rules', [])       # Tier -1 hard rules
             self.org_settings = data.get('org_settings', {})        # ai_sensitivity etc.
             self.last_sync = datetime.now()
 
@@ -160,7 +167,8 @@ class AgentSync:
             log(
                 f"[SYNC] Full sync complete: {len(self.clients)} clients, "
                 f"{len(self.projects)} projects, "
-                f"{len(self.client_patterns)} client patterns"
+                f"{len(self.client_patterns)} client patterns, "
+                f"{len(self.routing_rules)} routing rules"
             )
 
             if self.on_update:
@@ -206,6 +214,7 @@ class AgentSync:
                     'projects': self.projects,
                     'task_types': self.task_types,
                     'client_patterns': self.client_patterns,
+                    'routing_rules': self.routing_rules,
                     'org_settings': self.org_settings,
                     'hashes': self._hashes,
                 }, f)
@@ -222,6 +231,7 @@ class AgentSync:
                 self.projects = data.get('projects', [])
                 self.task_types = data.get('task_types', [])
                 self.client_patterns = data.get('client_patterns', [])
+                self.routing_rules = data.get('routing_rules', [])
                 self.org_settings = data.get('org_settings', {})
                 self._hashes = data.get('hashes', {})
                 log(f"[SYNC] Loaded {len(self.clients)} clients from cache")

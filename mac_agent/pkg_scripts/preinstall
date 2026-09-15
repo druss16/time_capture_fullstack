@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# Stop any running copy before the payload is replaced. Guarded throughout:
+# a preinstall that exits non-zero aborts the whole install.
+#
+set -euo pipefail
+LOG="/var/tmp/mavops-timetracker-preinstall.log"
+exec >>"$LOG" 2>&1
+echo "== preinstall $(date)"
+
+LABEL="com.mavops.timetracker"
+PLIST="/Library/LaunchAgents/$LABEL.plist"
+
+CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null || true)"
+if [[ -n "${CONSOLE_USER:-}" && "$CONSOLE_USER" != "root" ]]; then
+  GUI_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")"
+  if [[ -n "$GUI_UID" ]]; then
+    /bin/launchctl bootout "gui/$GUI_UID" "$PLIST" 2>/dev/null || true
+    /bin/launchctl kill TERM "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+  fi
+fi
+
+echo "preinstall ok"
+exit 0

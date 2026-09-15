@@ -39,6 +39,47 @@ except ImportError:
     import tkinter as tk
     from tkinter import ttk, messagebox
 
+    # This module defines StyledFrame/StyledButton/StyledEntry/Badge by
+    # SUBCLASSING ctk.* at module scope. Without these stand-ins the class
+    # statements below raise NameError while the module is still importing,
+    # and main.py — which imports this at module level — never starts. A
+    # binary built from a requirements.txt that omitted customtkinter died
+    # instantly on launch with "name 'ctk' is not defined", which is a
+    # confusing way to learn a dependency is missing.
+    #
+    # These make the failure honest instead: the module imports, the agent
+    # runs and tracks time, and only the styled dialogs are unavailable —
+    # which is what the try/except was reaching for. customtkinter IS a real
+    # dependency and is declared in requirements.txt; this is the net under
+    # a build that forgets it.
+    class _MissingCTK:
+        """Stands in for a customtkinter widget class that isn't installed."""
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "customtkinter is not installed — the styled dialogs are "
+                "unavailable. Install it (see requirements.txt); the agent "
+                "itself tracks time without it."
+            )
+
+    class _CTKShim:
+        CTkFrame = CTkButton = CTkEntry = CTkLabel = _MissingCTK
+        CTk = CTkToplevel = CTkScrollableFrame = CTkTextbox = _MissingCTK
+
+        @staticmethod
+        def CTkFont(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def set_appearance_mode(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def set_default_color_theme(*args, **kwargs):
+            return None
+
+    ctk = _CTKShim()
+
 # macOS native menu bar
 # CRITICAL: Only import rumps/AppKit in the main process.
 # Subprocesses (spawn) re-import this module, and rumps/AppKit init
@@ -89,6 +130,11 @@ CLIENT_USAGE_FILE = os.path.expanduser("~/.timetracker/client_usage.json")
 # ============================================================
 # Version - updated by build process, shows "dev" for local development
 APP_VERSION = "dev"
+
+# Where the menu bar's "Daily Review" item sends the user. This is the one
+# surface a hands-off firm should touch: confirm or correct the day's time.
+DAILY_REVIEW_URL = os.getenv("AGENT_DAILY_REVIEW_URL",
+                             "https://timetracker.mavops.ai/daily")
 
 # ============================================================
 # PROFESSIONAL COLOR SCHEME
@@ -1578,6 +1624,10 @@ if RUMPS_AVAILABLE:
             
             self.controller = controller
             self._client_callbacks = {}
+            # Vendor ticker gate. Default off = hands-off: the manual client
+            # controls stay out of the menu until org_settings says otherwise.
+            # main.py pushes the real value down on every sync.
+            self.client_widget_enabled = False
             self._start_keepalive()
             
             # Set initial title from state
@@ -1636,9 +1686,27 @@ if RUMPS_AVAILABLE:
                 self.menu.add(None)  # Separator
             
             # ============================================================
-            # CLIENT CONTROLS
+            # DAILY REVIEW — always present
             # ============================================================
-            
+            # The one surface a hands-off user should use: confirm or correct
+            # their day in the web app. Shown regardless of the ticker flag,
+            # because it is where the firm's people do the reviewing.
+            review_item = rumps.MenuItem("📋 Daily Review")
+            review_item.set_callback(self._on_daily_review)
+            self.menu.add(review_item)
+
+            # ============================================================
+            # CLIENT CONTROLS — hidden in hands-off mode
+            # ============================================================
+            # When the org's ticker is off, the manual client controls are not
+            # shown at all. Automatic switching and attribution keep running;
+            # this only removes the invitation to fiddle. MavOps turns the
+            # ticker on per-org for demos, and _rebuild_menu runs again.
+            if not getattr(self, "client_widget_enabled", False):
+                self.menu.add(None)
+                self._add_tail_menu_items()
+                return
+
             # Search clients
             search_item = rumps.MenuItem("Search Clients...    ⌃⌥T")
             search_item.set_callback(self._on_search)
@@ -1681,40 +1749,56 @@ if RUMPS_AVAILABLE:
             
             self.menu.add(switch_menu)
             self.menu.add(None)
-            
-            # ============================================================
-            # TIME & INFO
-            # ============================================================
-            
-            # Today's time
-            today_item = rumps.MenuItem("Today's Time...")
-            today_item.set_callback(self._on_today_time)
-            self.menu.add(today_item)
-            
-            self.menu.add(None)
-            
-            # ============================================================
-            # DEVICE MANAGEMENT
-            # ============================================================
-            
-            # Re-link device option
+
+            # Re-link is a manual repair action, so it lives behind the same
+            # gate as the other manual controls.
             relink_item = rumps.MenuItem("Re-link Device...")
             relink_item.set_callback(self._on_relink_device)
             self.menu.add(relink_item)
-            
-            # Version info
+
+            self._add_tail_menu_items()
+
+        def _add_tail_menu_items(self):
+            """The items every user gets, hands-off or not."""
+            today_item = rumps.MenuItem("Today's Time...")
+            today_item.set_callback(self._on_today_time)
+            self.menu.add(today_item)
+
+            self.menu.add(None)
+
             version_item = rumps.MenuItem(f"Version {APP_VERSION}")
             version_item.set_callback(None)
             self.menu.add(version_item)
-            
+
             self.menu.add(None)
-            
-            # ============================================================
-            # QUIT
-            # ============================================================
+
             quit_item = rumps.MenuItem("Quit TimeTracker")
             quit_item.set_callback(rumps.quit_application)
             self.menu.add(quit_item)
+
+        def _on_daily_review(self, _):
+            """Open the web Daily Review."""
+            try:
+                import webbrowser
+                webbrowser.open(DAILY_REVIEW_URL)
+            except Exception as e:
+                print(f"[GUI] open Daily Review failed: {e}")
+
+        def set_client_widget_enabled(self, enabled):
+            """Vendor ticker gate, pushed down from org_settings on each sync.
+
+            Flipping it rebuilds the menu, so a demo org sees the manual
+            controls appear without restarting the agent.
+            """
+            enabled = bool(enabled)
+            if getattr(self, "client_widget_enabled", None) == enabled:
+                return
+            self.client_widget_enabled = enabled
+            print(f"[GUI] client widget {'enabled' if enabled else 'disabled'}")
+            try:
+                self._rebuild_menu()
+            except Exception as e:
+                print(f"[GUI] menu rebuild after ticker flip failed: {e}")
         
         def _on_search(self, _):
             """Open the searchable client picker window"""

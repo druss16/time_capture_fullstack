@@ -57,6 +57,31 @@ from Quartz import (
 
 from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
 
+# Progress-based heartbeat + idle classification, shared with windows_agent.
+# The watchdog's own heartbeat says the thread is alive; progress_tick() says
+# it is actually getting somewhere. classify_idle() then separates a user who
+# deliberately stopped from a loop that froze or a machine that slept — the
+# second kind is not a real absence and should not be billed as one.
+try:
+    from tracking_health import (
+        progress_tick,
+        record_window_change,
+        record_idle_enter,
+        record_idle_exit,
+        record_wake_event,
+        classify_idle,
+        IdleKind,
+    )
+    _TRACKING_HEALTH = True
+except Exception as _th_err:  # pragma: no cover - import guard
+    _TRACKING_HEALTH = False
+    progress_tick = lambda: 0
+    record_window_change = record_idle_enter = record_idle_exit = \
+        record_wake_event = lambda: None
+    classify_idle = None
+    IdleKind = None
+    print(f"[HEALTH] tracking_health unavailable: {_th_err}", flush=True)
+
 import certifi
 import ssl
 
@@ -97,6 +122,156 @@ except ImportError:
 sync = None  # Global sync manager, initialized in run_agent()
 notif_manager = None  # Global notification manager, initialized in run_agent()
 ai_switcher = None          # ← ADD THIS
+
+# ── v1.4.0 inference engine ──────────────────────────────────────────────
+# Confidence-graded client inference. The structured result rides along on
+# every outgoing RawEvent payload; the server-side classifier reads it via
+# RawEvent.inference. Shared verbatim with windows_agent — the evidence
+# collectors are pure Python and must reach the same verdict on both
+# platforms, or the same firm gets different answers depending on whose
+# desk the work happened at.
+try:
+    from inference import (
+        WindowContext as _InferenceWindowContext,
+        infer_client as _infer_client,
+    )
+    _INFERENCE_AVAILABLE = True
+except Exception as _inference_import_err:  # pragma: no cover - import guard
+    _INFERENCE_AVAILABLE = False
+    _InferenceWindowContext = None
+    _infer_client = None
+    print(f"[INFERENCE] Module not available: {_inference_import_err}", flush=True)
+
+try:
+    from content_identity import content_identity as _content_identity
+except Exception as _ci_import_err:  # pragma: no cover - import guard
+    _content_identity = None
+    print(f"[CONTENT-ID] Module not available: {_ci_import_err}", flush=True)
+
+# Last computed inference result. The menu bar reads this (with decay
+# applied) to show the live client + confidence.
+_last_inference_lock = threading.Lock()
+_last_inference: Optional[dict] = None  # InferenceResult.to_dict() shape
+
+
+def _content_identity_safe(title: str, url: str, file_path: str) -> str:
+    """content_identity() that can never take the event handler down with it.
+
+    Returns the stable per-activity identity string ("file=varacchi 2024 1040",
+    "qbo:customer=...") or "" when nothing is confident — the same contract as
+    tracker/utils/content_identity.py on the server, which this mirrors.
+
+    The server currently recomputes this in compaction and ignores what we
+    send; it rides along for parity with windows_agent, so that the day the
+    server starts trusting the agent's value, both agents already supply it.
+    """
+    if _content_identity is None:
+        return ""
+    try:
+        return _content_identity(title, url, file_path) or ""
+    except Exception as e:
+        log(f"[CONTENT-ID] extraction failed: {e}", "warning")
+        return ""
+
+
+def _inference_clients():
+    """The client list the engine reasons over, plus the Internal-Tax id."""
+    clients = list(sync.clients) if sync and getattr(sync, "clients", None) else []
+    internal_cid = None
+    for c in clients:
+        if (c.get("name") or "").strip().lower() == "internal - tax":
+            internal_cid = c.get("id")
+            break
+    return clients, internal_cid
+
+
+def _run_inference(app_name, bundle_id, title, url, fpath, when=None):
+    """Run the engine for one window and publish the result to the cache.
+
+    Returns the result dict (the payload's `inference` field). Returns {}
+    when the engine is unavailable or blew up — inference is additive, and
+    an event without it is still a usable event.
+
+    MAC: the Windows agent passes app_name as exe_name, because on Windows
+    app_name already IS the executable name. Here the bundle identifier is
+    the stable handle, so that is what goes into exe_name — which is what
+    the collectors' exe_family rules and the switcher both expect.
+    """
+    if not _INFERENCE_AVAILABLE:
+        return {}
+
+    from inference_cache import (
+        get_manual_override as _get_override,
+        update_inference_cache as _update_cache,
+    )
+
+    clients, internal_cid = _inference_clients()
+
+    ctx = _InferenceWindowContext(
+        title=title or "",
+        app_name=app_name or "",
+        exe_name=bundle_id or "",   # MAC: see docstring
+        bundle_id=bundle_id,
+        file_path=fpath,
+        url=url,
+        timestamp=when or datetime.now(timezone.utc),
+        manual_override=_get_override(),
+    )
+
+    learned = None
+    try:
+        if ai_switcher is not None:
+            learned = getattr(ai_switcher, "learned_rules", None)
+    except Exception:
+        learned = None
+
+    result = _infer_client(
+        ctx=ctx,
+        clients=clients,
+        learned_rules=learned,
+        is_idle=False,
+        firm_name_patterns=None,
+        internal_client_id=internal_cid,
+    )
+
+    result_dict = result.to_dict()
+    client_name = None
+    if result.client_id is not None:
+        client_name = next(
+            (c.get("name") for c in clients if c.get("id") == result.client_id),
+            None,
+        )
+
+    _update_cache(result_dict, client_name)
+
+    global _last_inference
+    with _last_inference_lock:
+        _last_inference = {**result_dict, "client_name": client_name}
+
+    return result_dict
+
+
+def _compute_inference_for_event(app_name, bundle_id, title, url, fpath, when=None):
+    """Inference on the event-emit path. Never raises."""
+    try:
+        return _run_inference(app_name, bundle_id, title, url, fpath, when)
+    except Exception as e:
+        log(f"[INFERENCE] compute failed: {e}", "warning")
+        return {}
+
+
+def _compute_window_inference_snapshot(app_name, bundle_id, title, url, fpath):
+    """Inference at window-change time, so the menu bar reflects the new
+    window within a poll instead of waiting for the next heartbeat (~60s).
+
+    Deliberately duplicates the compute in the emit path: inference is cheap
+    (~10ms) and both write the same cache, last write wins. The manual
+    override survives because it is read back into the context each time.
+    """
+    try:
+        _run_inference(app_name, bundle_id, title, url, fpath)
+    except Exception as e:
+        log(f"[INFERENCE] snapshot compute failed: {e}", "warning")
 
 # ── Local client cache ────────────────────────────────────────────────────────
 # Eliminates the HTTP round-trip in write_event() every 5 seconds.
@@ -323,6 +498,54 @@ DEVICE_ID_FILE    = _get("device_id_file", os.path.expanduser("~/.mavops_device_
 
 POLL_SECONDS      = int(_get("poll_seconds", _get("AGENT_POLL_SECONDS", 5, "AGENT_POLL_SECONDS")) or 5)
 MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS", 5, "AGENT_MIN_DWELL_SECONDS")) or 5)
+
+# ── Heartbeat emission (parity with windows_agent, v1.3.38) ──────────────
+# The agent used to emit ONE event when a dwell ended, stamped with a single
+# ts_utc, and the server guessed the duration. It no longer guesses: every
+# event carries the interval it actually covers, so a long dwell is emitted
+# as a series of heartbeats rather than withheld until the user looks away.
+#
+# The server has required both stamps since v1.3.38 and returns 400 for an
+# event carrying only ts_utc — there is no compatibility path.
+HEARTBEAT_INTERVAL_S = int(_get("heartbeat_interval_seconds", 60))
+
+# Meeting detection. The detector was written cross-platform in
+# windows_agent and carries its own MacMeetingProbe (camera via lsof on
+# VDCAssistant, audio via coreaudiod, both cross-referenced against the
+# process table). The Mac agent had only is_in_meeting() — a title and URL
+# test that answers "does this window look like a meeting", never "a meeting
+# just started" — so meetings produced no blocks of their own.
+try:
+    from meeting_detector import MeetingDetector, MeetingState
+    MEETING_DETECTOR_AVAILABLE = True
+except Exception as _md_err:  # pragma: no cover - import guard
+    MEETING_DETECTOR_AVAILABLE = False
+    MeetingDetector = None
+    MeetingState = None
+    print(f"[MEETING] Module not available: {_md_err}", flush=True)
+
+
+def _meeting_sig(meeting_app: str, title: str = None):
+    """Build a window signature for a Meeting event.
+
+    Matches the (app_name, bundle_id, window_title, url, file_path) tuple
+    write_event expects. bundle_id uses the 'meeting:' prefix so the backend
+    compactor recognises it as a meeting block.
+    """
+    return (
+        "Meeting",
+        f"meeting:{meeting_app}",
+        title or f"{meeting_app.title()} meeting",
+        None,
+        None,
+    )
+
+
+# Hard ceiling on a single emitted event's duration. If the tracking loop
+# stalls (sleep, network hang, a hung osascript) and recovers, we still want
+# to emit sane intervals rather than one four-hour event. Anything longer is
+# split into max_event_duration chunks.
+MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 PRINT_EVERY_POLL  = bool(_get("print_every", os.getenv("AGENT_PRINT_EVERY") == "1"))
 DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"))
@@ -682,7 +905,27 @@ NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_I
 NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
 
 
+# Vendor gate (from org_settings sync). Default False = hands-off: the desktop
+# ticker stays hidden and MANUAL client switches are ignored. Auto-switching
+# (ai_switcher / meeting detection) and attribution still run — hiding the
+# ticker does not cost accuracy. MavOps flips this on per-org for demos.
+_show_client_widget = False
+
+
+def _set_show_client_widget(val):
+    """Set the module-level hands-off gate, so callers need no `global`."""
+    global _show_client_widget
+    _show_client_widget = bool(val)
+
+
 def _apply_client_switch(client_id, client_name, source="unknown"):
+    # Hands-off gate: ignore MANUAL switches (menu bar / picker / hotkey /
+    # notification) when the ticker is disabled for this org. Automatic
+    # sources still flow through, so attribution is unaffected.
+    if source in ("gui_prompt", "notification") and not _show_client_widget:
+        log(f"[CLIENT-SWITCH] ignored manual switch → {client_name} (hands-off mode)")
+        return
+
     log(f"[CLIENT-SWITCH] → {client_name} (id={client_id}) via {source}")
     
     api_key_val = config.get("api_key") or API_KEY
@@ -1550,13 +1793,138 @@ def get_window_title_via_ax(pid: int) -> Optional[str]:
         log(f"[WARN] AX read failed: {e}")
         return None
 
+# Chromium browsers all answer the same AppleScript, differing only in the
+# application name. Edge and Arc were missing entirely, so a client's portal
+# opened in Edge contributed no URL at all.
+_CHROMIUM_APPS = {
+    "com.google.Chrome":         "Google Chrome",
+    "com.google.Chrome.canary":  "Google Chrome Canary",
+    "com.google.Chrome.beta":    "Google Chrome Beta",
+    "com.brave.Browser":         "Brave Browser",
+    "com.microsoft.edgemac":     "Microsoft Edge",
+    "com.microsoft.edgemac.Beta": "Microsoft Edge Beta",
+    "com.vivaldi.Vivaldi":       "Vivaldi",
+    "company.thebrowser.Browser": "Arc",
+}
+
+# Office and iWork apps that can name the document they have open. The
+# AppleScript differs per app, so each carries its own snippet.
+_DOC_PATH_SCRIPTS = {
+    # The `path` check is the important part. An unsaved scratch workbook
+    # has full name "Book1" and no path, and POSIX path turns that into the
+    # absolute-looking "/Book1" — a path to nothing, which the inference
+    # engine would then read for a client name. Only a workbook that lives
+    # somewhere on disk has a path to report.
+    "com.microsoft.Excel": (
+        'tell application "Microsoft Excel" to try\n'
+        'if not (exists active workbook) then return ""\n'
+        'if (path of active workbook) is "" then return ""\n'
+        'set p to (full name of active workbook)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.microsoft.Word": (
+        'tell application "Microsoft Word" to try\n'
+        'if not (exists active document) then return ""\n'
+        'if (path of active document) is "" then return ""\n'
+        'set p to (full name of active document)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.microsoft.Powerpoint": (
+        'tell application "Microsoft PowerPoint" to try\n'
+        'if not (exists active presentation) then return ""\n'
+        'if (path of active presentation) is "" then return ""\n'
+        'set p to (full name of active presentation)\n'
+        'return POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.apple.Preview": (
+        'tell application "Preview" to try\n'
+        'set theDoc to document 1\nset p to path of theDoc\n'
+        'POSIX path of p\non error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Numbers": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Numbers on macOS 15.
+        'tell application "Numbers" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Pages": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Pages on macOS 15.
+        'tell application "Pages" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.iWork.Keynote": (
+        # `file of document 1` is an HFS specifier ("Macintosh HD:Users:...").
+        # POSIX path cannot take it directly; coercing to alias first is what
+        # works. Verified against Keynote on macOS 15.
+        'tell application "Keynote" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return POSIX path of ((file of document 1) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    # Finder's front window as a path. finder_watcher feeds the same path to
+    # the AI switcher, but that is a different channel: the switcher decides
+    # the CURRENT CLIENT, while the event payload is what the inference
+    # engine reasons over on the server. Without this, a Finder event reached
+    # the backend carrying no path at all, and the folder the user was
+    # actually looking at was invisible to attribution.
+    #
+    # The Windows agent gets this for free because Explorer puts the folder
+    # in its window title. Finder's title is the leaf name only, and is empty
+    # altogether unless the app holds Accessibility permission.
+    "com.apple.finder": (
+        'tell application "Finder" to try\n'
+        'if (count of Finder windows) is 0 then return ""\n'
+        'return POSIX path of ((target of front Finder window) as alias)\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.apple.TextEdit": (
+        # TextEdit's `path` is ALREADY a POSIX string, unlike every other
+        # app here. Wrapping it in `POSIX path of` raises. Verified on
+        # macOS 15: "Can't make POSIX path of path of document 1 into type
+        # reference."
+        'tell application "TextEdit" to try\n'
+        'if (count of documents) is 0 then return ""\n'
+        'return (path of document 1) as text\n'
+        'on error\nreturn ""\nend try'
+    ),
+    "com.sublimetext.4": (
+        'tell application "Sublime Text" to try\n'
+        'if not (exists window 1) then return ""\n'
+        'set theDoc to document of window 1\n'
+        'if theDoc is missing value then return ""\n'
+        'set p to (path of theDoc)\nreturn POSIX path of p\n'
+        'on error\nreturn ""\nend try'
+    ),
+}
+_DOC_PATH_SCRIPTS["com.sublimetext.3"] = _DOC_PATH_SCRIPTS["com.sublimetext.4"]
+
+
 def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
+    """The URL or document path behind the frontmost window.
+
+    This is the Mac's equivalent of the Windows agent reading Explorer's
+    address bar and the browser address bar over UI Automation. Every app
+    missing from these tables contributes a window title and nothing else,
+    which for a document app means the client's own file is invisible.
+    """
     if bundle_id == "com.apple.Safari":
-        url = osa_retry('tell application "Safari" to try\nset u to URL of current tab of front window\nreturn u\non error\nreturn ""\nend try')
+        url = osa_retry(
+            'tell application "Safari" to try\n'
+            'set u to URL of current tab of front window\n'
+            'return u\non error\nreturn ""\nend try'
+        )
         return {"url": url or None, "file_path": None}
-    
-    if bundle_id in ("com.google.Chrome", "com.google.Chrome.canary"):
-        script = '''tell application "Google Chrome"
+
+    app = _CHROMIUM_APPS.get(bundle_id)
+    if app:
+        script = f'''tell application "{app}"
             try
                 if (count of windows) > 0 then
                     return URL of active tab of window 1
@@ -1568,33 +1936,24 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
         end tell'''
         url = osa_retry(script, tries=3, delay=0.1)
         return {"url": url or None, "file_path": None}
-    
-    if bundle_id == "com.brave.Browser":
-        script = '''tell application "Brave Browser"
-            try
-                if (count of windows) > 0 then
-                    return URL of active tab of window 1
-                end if
-                return ""
-            on error
-                return ""
-            end try
-        end tell'''
-        url = osa_retry(script, tries=3, delay=0.1)
-        return {"url": url or None, "file_path": None}
-    
-    if bundle_id == "com.apple.Preview":
-        path = osa_retry('tell application "Preview" to try\nset theDoc to document 1\nset p to path of theDoc\nPOSIX path of p\non error\nreturn ""\nend try')
+
+    if bundle_id == "org.mozilla.firefox":
+        # Firefox exposes no scripting dictionary for the address bar. Its
+        # window title carries the page title, which the matcher already
+        # reads; there is nothing further to extract.
+        return {"url": None, "file_path": None}
+
+    script = _DOC_PATH_SCRIPTS.get(bundle_id)
+    if script:
+        path = osa_retry(script)
+        if path:
+            # Finder hands back a directory with a trailing slash. Left on,
+            # the basename is the empty string, so content_identity yields
+            # nothing for the very folder the user is looking at. finder_watcher
+            # strips it too — the two channels must agree on the same path.
+            path = path.rstrip("/") or "/"
         return {"url": None, "file_path": path or None}
-    
-    if bundle_id == "com.microsoft.Excel":
-        path = osa_retry('tell application "Microsoft Excel" to try\nif not (exists active workbook) then return ""\nset p to (full name of active workbook)\nreturn POSIX path of p\non error\nreturn ""\nend try')
-        return {"url": None, "file_path": path or None}
-    
-    if bundle_id in ("com.sublimetext.4", "com.sublimetext.3"):
-        path = osa_retry('tell application "Sublime Text" to try\nif not (exists window 1) then return ""\nset theDoc to document of window 1\nif theDoc is missing value then return ""\nset p to (path of theDoc)\nreturn POSIX path of p\non error\nreturn ""\nend try')
-        return {"url": None, "file_path": path or None}
-    
+
     return {"url": None, "file_path": None}
 
 # ---------------- PID utils ----------------
@@ -2307,42 +2666,119 @@ def post_event_async(event: dict, user: str, host: str):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | None = None):
+def write_event(
+    conn,
+    cur,
+    user: str,
+    hostname: str,
+    sig,
+    start_ts: float,
+    end_ts: float,
+    client_override=None,
+):
+    """
+    Persist + transmit a single activity interval.
+
+    PARAMETERS
+    ==========
+      sig:           (app_name, bundle_id, window_title, url, file_path) tuple
+      start_ts:      epoch seconds — when this interval began
+      end_ts:        epoch seconds — when this interval ended (now, or sleep_ts)
+      client_override:  client_id captured at dwell_start. When provided, it
+                        overrides the cached client so an AI-switcher flip
+                        mid-dwell does not retroactively reattribute earlier
+                        heartbeats.
+
+    GUARANTEES
+    ==========
+      - end_ts > start_ts (caller must ensure)
+      - end_ts - start_ts <= MAX_EVENT_DURATION_S (caller chunks if longer)
+      - Local SQLite write always succeeds (even offline)
+      - Backend POST is fire-and-forget; failure does not block tracking
+    """
     app_name, bundle_id, title, url, fpath = sig
 
-    if ts_override is not None:
-        ts_dt = datetime.fromtimestamp(ts_override, tz=timezone.utc)
-    else:
-        ts_dt = datetime.now(timezone.utc)
-    ts_iso = ts_dt.isoformat()
+    if end_ts <= start_ts:
+        log(f"[EVENT] ⚠️ Skipping invalid interval: start={start_ts} end={end_ts}")
+        return
 
+    duration = end_ts - start_ts
+    if duration > MAX_EVENT_DURATION_S + 1:  # +1s tolerance for clock jitter
+        log(f"[EVENT] ⚠️ Interval {duration:.0f}s exceeds max {MAX_EVENT_DURATION_S}s — "
+            f"caller should have chunked. Recording as-is.")
+
+    start_iso = datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat()
+    end_iso = datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat()
+
+    # ── Local SQLite write FIRST — always succeeds offline ──
+    # The local schema still keys on ts_utc; start_ts goes there.
     cur.execute(
         "INSERT INTO raw_events (ts_utc, app_name, bundle_id, window_title, url, file_path, user, hostname) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (ts_iso, app_name, bundle_id, title or "", url, fpath, user, hostname),
+        (start_iso, app_name, bundle_id, title or "", url, fpath, user, hostname),
     )
     conn.commit()
 
-    # Use local cache — no HTTP call every 5 seconds
-    current_client_id, current_client_name = _get_cached_client()
+    # ── Client resolution: override wins, else the inference cache, else the
+    # legacy state-machine cache. The inference cache is the source of truth
+    # once the engine is available; _get_cached_client() remains the fallback
+    # so an agent built without the inference package still attributes.
+    current_client_id = None
+    current_client_name = None
+    if client_override is not None:
+        current_client_id = client_override
+        if sync and getattr(sync, "clients", None):
+            obj = next((c for c in sync.clients if c.get("id") == client_override), None)
+            current_client_name = obj.get("name") if obj else None
+    else:
+        _inf = None
+        if _INFERENCE_AVAILABLE:
+            try:
+                from inference_cache import get_current_inference as _gci_inline
+                _inf = _gci_inline()
+            except Exception as e:
+                log(f"[INFERENCE] cache read failed: {e}", "warning")
+        if _inf:
+            current_client_id = _inf.get("client_id")
+            current_client_name = _inf.get("client_name")
+        else:
+            current_client_id, current_client_name = _get_cached_client()
 
     # Update notification state with current client
     if notif_manager:
         notif_manager.set_current_client(current_client_id, current_client_name)
 
+    # ── v1.4.0: confidence-graded inference ──
+    # Result goes in payload['inference']; the server-side classifier reads it
+    # via RawEvent.inference. current_client_id stays populated for backwards
+    # compatibility with older server code paths.
+    inference_dict = {}
+    if _INFERENCE_AVAILABLE:
+        try:
+            inference_dict = _compute_inference_for_event(
+                app_name, bundle_id, title or "", url, fpath
+            )
+        except Exception as e:
+            log(f"[INFERENCE] compute failed: {e}", "warning")
+            inference_dict = {}
+
     payload = {
-        "ts_utc": ts_iso,
+        "start_ts": start_iso,
+        "end_ts": end_iso,
         "app_name": app_name,
         "bundle_id": bundle_id,
         "window_title": title or "",
         "url": url,
         "file_path": fpath,
+        "content_identity": _content_identity_safe(title or "", url or "", fpath or ""),
         "hostname": hostname,
         "server_user_id": SERVER_USER_ID,
         "device_id": get_device_id(),
         "ctx": snapshot_ctx(),
         "current_client_id": current_client_id,
         "current_client_name": current_client_name,
+        "agent_version": APP_VERSION,
+        "inference": inference_dict,
     }
 
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)
@@ -2355,12 +2791,13 @@ def write_event(conn, cur, user: str, hostname: str, sig, ts_override: float | N
     post_event_async(payload, user, hostname)
     client_msg = f" → {current_client_name}" if current_client_name else ""
     log(
-        f"[EVENT] dwell-finalized • {app_name} • {title or '(no title)'} "
+        f"[EVENT] {int(duration)}s • {app_name} • {title or '(no title)'} "
         f"• url={url or '-'} • path={fpath or '-'}"
         + (f" • toolish({tool_reason})" if toolish else "")
         + client_msg
-        + f" at {ts_iso}"
     )
+
+
 
 def handle_client_confirmed(client_id, client_name, prompt_data):
     """Called when user confirms a client via GUI."""
@@ -3140,17 +3577,93 @@ def run_agent():
                 # Push org client patterns (Tier-0 rules) to switcher
                 if hasattr(sync, 'client_patterns') and sync.client_patterns:
                     ai_switcher.update_client_patterns(sync.client_patterns)
+                # Tier -1 org routing rules — the highest-priority matcher.
+                # These never reached the Mac agent before: the switcher had
+                # no update_routing_rules() and sync never fetched them.
+                if hasattr(sync, 'routing_rules'):
+                    ai_switcher.update_routing_rules(sync.routing_rules or [])
                 # Push org AI sensitivity setting to the switcher on every sync
                 if hasattr(sync, 'org_settings') and sync.org_settings:
                     ai_sensitivity = sync.org_settings.get("ai_sensitivity", 50)
                     ai_switcher.update_sensitivity(ai_sensitivity)
+                    # Vendor ticker gate → hands-off unless enabled for this org.
+                    _sw = bool(sync.org_settings.get("show_client_widget", False))
+                    _set_show_client_widget(_sw)
+                    try:
+                        if gui_menu_bar is not None and hasattr(
+                            gui_menu_bar, "set_client_widget_enabled"
+                        ):
+                            gui_menu_bar.set_client_widget_enabled(_sw)
+                    except Exception as _e:
+                        log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher
+            # Push anything that arrived before the switcher existed
+            if hasattr(sync, 'routing_rules') and sync.routing_rules:
+                ai_switcher.update_routing_rules(sync.routing_rules)
 
         log(f"[AI-SWITCH] ✅ Initialized")
     except ImportError:
         log("[AI-SWITCH] ai_client_switcher.py not found — disabled")
     except Exception as e:
         log(f"[AI-SWITCH] Init failed: {e}")
+
+    # === FINDER FOLDER WATCHER ===
+    # A Finder window's title is only the folder's leaf name ("2024 1040"),
+    # which names no client. Its path is "/Users/dan/Clients/Varacchi/2024
+    # 1040", which names one. The tracking loop only ever saw the title, so
+    # browsing a client's folder produced no signal. This feeds the path.
+    finder_watcher = None
+    try:
+        from finder_watcher import FinderFolderWatcher
+
+        if ai_switcher:
+            finder_watcher = FinderFolderWatcher(
+                ai_switcher=ai_switcher,
+                log_fn=log,
+                poll_seconds=2.0,
+                enabled=True,
+            )
+            finder_watcher.start()
+    except ImportError:
+        log("[FINDER] finder_watcher.py not found — folder signal disabled")
+    except Exception as e:
+        log(f"[FINDER] Init failed: {e}")
+
+    # === MEETING DETECTOR ===
+    meeting_detector = None
+    if MEETING_DETECTOR_AVAILABLE:
+        try:
+            def _get_fg_title():
+                """Foreground window title, for browser-hosted meetings."""
+                try:
+                    front = get_frontmost_app()
+                    if front:
+                        _app, _bundle, pid, fallback_title = front
+                        return get_window_title_via_ax(pid) or fallback_title
+                except Exception:
+                    pass
+                return None
+
+            def _on_meeting_start(state):
+                log(f"[MEETING] Started: {state.app} — {state.title or '(no title)'}")
+
+            def _on_meeting_end(state):
+                dur = int(state.ended_at - state.started_at) if state.started_at else 0
+                log(f"[MEETING] Ended: {state.app} ({dur}s)")
+
+            meeting_detector = MeetingDetector(
+                on_meeting_start=_on_meeting_start,
+                on_meeting_end=_on_meeting_end,
+                context_bus=_CONTEXT,
+                get_foreground_title=_get_fg_title,
+                enabled=True,
+            )
+            meeting_detector.start()
+            log("[MEETING] ✅ Detector initialized")
+        except Exception as e:
+            log(f"[MEETING] Failed to initialize: {e}")
+    else:
+        log("[MEETING] Module not available — meeting capture disabled")
 
     _tracking_stop_event = threading.Event()
 
@@ -3182,16 +3695,59 @@ def run_agent():
             report_error_to_backend("tracking_init", str(e), traceback.format_exc())
             return
         
+        # ── Dwell state ──
         current_sig = None
-        dwell_start = None
+        dwell_start = None          # epoch when this dwell began
+        last_emit_ts = None         # epoch of the last event emitted for it
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
         LOCK_SCREEN_BUNDLES = {"com.apple.loginwindow", "com.apple.ScreenSaver.Engine"}
         LOCK_SCREEN_APPS = {"loginwindow", "screensaverengine"}
-        
-        # FIX 1: Track last flush time for periodic meeting/long-dwell writes
-        last_flush_time = None
-        MEETING_FLUSH_INTERVAL = 300  # Flush every 5 minutes during meetings
+
+        def _emit_current_dwell(end_ts: float):
+            """Emit events covering [last_emit_ts → end_ts].
+
+            Each event reads the live client at write time, so a mid-dwell
+            AI-switcher flip applies to the next heartbeat rather than
+            rewriting the ones already sent.
+
+            An interval longer than MAX_EVENT_DURATION_S is split, so no
+            single event claims more than ~5 minutes.
+            """
+            nonlocal last_emit_ts
+            if current_sig is None or last_emit_ts is None:
+                return
+            if end_ts <= last_emit_ts:
+                return
+            if (end_ts - last_emit_ts) < 1.0:
+                return
+
+            cursor_ts = last_emit_ts
+            while cursor_ts < end_ts:
+                chunk_end = min(cursor_ts + MAX_EVENT_DURATION_S, end_ts)
+                write_event(
+                    conn, cur, os_user, hostname, current_sig,
+                    start_ts=cursor_ts,
+                    end_ts=chunk_end,
+                )
+                cursor_ts = chunk_end
+
+            last_emit_ts = end_ts
+
+        def _start_new_dwell(sig, start_ts: float):
+            """Enter a new dwell."""
+            nonlocal current_sig, dwell_start, last_emit_ts
+            current_sig = sig
+            dwell_start = start_ts
+            last_emit_ts = start_ts
+            cid, _ = _get_cached_client()
+            log(f"[DWELL] Started {sig[0]} • {(sig[2] or '')[:40]} • client={cid}")
+
+        def _clear_dwell():
+            nonlocal current_sig, dwell_start, last_emit_ts
+            current_sig = None
+            dwell_start = None
+            last_emit_ts = None
 
         try:
             while not _tracking_stop_event.is_set():
@@ -3201,6 +3757,35 @@ def run_agent():
                     # wake), this timestamp goes stale and mac_watchdog fires
                     # os._exit(1) after WATCHDOG_FROZEN_THRESHOLD (90s).
                     _last_detect_heartbeat = heartbeat_touch()
+                    progress_tick()
+
+                    # ── Drain meeting detector events ──
+                    # The detector runs on its own thread; sqlite belongs to
+                    # this one, so it queues and we write. Start and end are
+                    # 1-second marker events — the compactor turns the pair
+                    # into the meeting block.
+                    if meeting_detector:
+                        for kind, state in meeting_detector.drain_events():
+                            try:
+                                if kind == "start":
+                                    sig = _meeting_sig(state.app, state.title)
+                                    write_event(
+                                        conn, cur, os_user, hostname, sig,
+                                        start_ts=state.started_at,
+                                        end_ts=state.started_at + 1.0,
+                                    )
+                                    log(f"[MEETING] START event: {sig[0]} / {sig[2]}")
+                                elif kind == "end":
+                                    sig = ("Meeting-End", f"meeting:{state.app}",
+                                           state.title or "", None, None)
+                                    write_event(
+                                        conn, cur, os_user, hostname, sig,
+                                        start_ts=state.ended_at,
+                                        end_ts=state.ended_at + 1.0,
+                                    )
+                                    log("[MEETING] END event written")
+                            except Exception as e:
+                                log(f"[MEETING] Failed to write {kind} event: {e}")
 
                     # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
@@ -3235,23 +3820,27 @@ def run_agent():
                     if _wake_event.is_set() or _suspended:
                         _wake_event.clear()
                         
+                        record_wake_event()
                         if _suspended:
                             log(f"[TRACKING] ⏰ Thread was suspended for {int(iter_gap)}s (sleep or Power Nap)")
                         else:
                             log("[TRACKING] 🔄 Wake event detected — resetting tracking state")
                         
-                        if current_sig and dwell_start and current_sig != IDLE_SIG:
-                            dwell = now_t - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                try:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
-                                    log(f"[TRACKING] Flushed pre-suspend dwell ({int(dwell)}s)")
-                                except Exception as e:
-                                    log(f"[TRACKING] Failed to flush dwell: {e}")
-                        
-                        current_sig = None
-                        dwell_start = None
-                        last_flush_time = None
+                        if current_sig and last_emit_ts and current_sig != IDLE_SIG:
+                            # Close the dwell at the moment the machine went
+                            # away, not at the moment it came back — otherwise
+                            # the sleep itself is billed as work.
+                            # _last_iter_time was already advanced to now_t
+                            # above, so the last tick before the gap is
+                            # now_t - iter_gap.
+                            pre_suspend_ts = (now_t - iter_gap) if _suspended else now_t
+                            try:
+                                _emit_current_dwell(min(pre_suspend_ts, now_t))
+                                log(f"[TRACKING] Flushed pre-suspend dwell")
+                            except Exception as e:
+                                log(f"[TRACKING] Failed to flush dwell: {e}")
+
+                        _clear_dwell()
                         
                         time.sleep(10)
                         continue
@@ -3291,24 +3880,44 @@ def run_agent():
                                     log(f"[TRACKING] notif on_idle_start error: {e}", "warning")
                                     report_error_to_backend("notification", str(e), traceback.format_exc(), 
                                                           {"event": "on_idle_start"})
-                            if current_sig and dwell_start:
-                                now = time.time()
-                                if force_idle:
-                                    effective_end = now
-                                else:
-                                    effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
-                                dwell = effective_end - dwell_start
-                                if dwell >= MIN_DWELL_SECONDS:
-                                    write_event(conn, cur, os_user, hostname, current_sig)
-                                else:
-                                    log(f"[SKIP] dwell too short ({int(dwell)}s) before idle for {current_sig[0]}")
-                            current_sig = IDLE_SIG
+                            now = time.time()
+                            # The user stopped working when the input stopped,
+                            # not when the idle timer finally noticed. Close the
+                            # work dwell there and open the idle dwell there.
                             if force_idle:
-                                dwell_start = time.time()
+                                effective_end = now
                             else:
-                                dwell_start = time.time() - min(idle, MOUSE_IDLE_PAUSE_S)
-                            last_flush_time = None
-                            _idle_entered_at = time.time()  # wall-clock cap starts here
+                                effective_end = now - max(0.0, idle - MOUSE_IDLE_PAUSE_S)
+                            if current_sig and last_emit_ts:
+                                _emit_current_dwell(max(effective_end, last_emit_ts))
+                            idle_start = now if force_idle else (now - min(idle, MOUSE_IDLE_PAUSE_S))
+                            _start_new_dwell(IDLE_SIG, idle_start)
+                            _idle_entered_at = time.time()
+                            record_idle_enter()
+
+                            # Was this the user stepping away, or the loop
+                            # freezing / the machine sleeping? The second kind
+                            # is not a real absence, and recording it puts a
+                            # multi-hour Idle block in someone's day that they
+                            # then have to explain. Drop it.
+                            if _TRACKING_HEALTH:
+                                verdict = classify_idle(idle, MOUSE_IDLE_PAUSE_S)
+                                if verdict.kind == IdleKind.UNINTENTIONAL:
+                                    log(f"[IDLE] ⚠️ Unintentional ({verdict.reason}) — skipping")
+                                    _clear_dwell()
+                                    _idle_entered_at = 0.0
+                                    record_idle_exit()
+                                    # Sleep before re-checking. Without it the
+                                    # `continue` below skips the poll sleep and,
+                                    # because the dwell was just cleared, the
+                                    # loop re-enters this branch every tick — a
+                                    # busy-loop that spams the log and pins a
+                                    # core through a long AFK. Same fix as
+                                    # windows_agent 6061b952.
+                                    time.sleep(POLL_SECONDS)
+                                    _last_detect_heartbeat = heartbeat_touch()
+                                    consecutive_errors = 0
+                                    continue
                             if not force_idle:
                                 log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         
@@ -3331,16 +3940,9 @@ def run_agent():
                                         "hostname": platform.node(),
                                     },
                                 )
-                                if dwell_start:
-                                    dwell = time.time() - dwell_start
-                                    if dwell >= MIN_DWELL_SECONDS:
-                                        write_event(
-                                            conn, cur, os_user, hostname,
-                                            IDLE_SIG, ts_override=dwell_start
-                                        )
-                                current_sig = None
-                                dwell_start = None
-                                last_flush_time = None
+                                if last_emit_ts:
+                                    _emit_current_dwell(time.time())
+                                _clear_dwell()
                                 _idle_entered_at = 0.0
                                 continue
 
@@ -3355,11 +3957,13 @@ def run_agent():
                     # ── MEETING: idle mouse but in a meeting → flush periodically, don't go idle ──
                     elif in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
                         now = time.time()
-                        if dwell_start and (now - (last_flush_time or dwell_start)) >= MEETING_FLUSH_INTERVAL:
-                            flush_from = last_flush_time or dwell_start
-                            chunk_seconds = now - flush_from
-                            write_event(conn, cur, os_user, hostname, current_sig, ts_override=flush_from)
-                            last_flush_time = now
+                        # A meeting is the one place the user legitimately sits
+                        # still for an hour. The heartbeat carries it: no
+                        # special flush interval, same cadence as everything
+                        # else, so a meeting can never become one giant event.
+                        if last_emit_ts and (now - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
+                            chunk_seconds = now - last_emit_ts
+                            _emit_current_dwell(now)
                             log(f"[MEETING] Flushed {int(chunk_seconds)}s meeting chunk for {current_sig[0]} "
                                 f"(total dwell {int(now - dwell_start)}s, mouse idle {int(idle)}s)")
                         
@@ -3383,14 +3987,11 @@ def run_agent():
                                     report_error_to_backend("notification", str(e), traceback.format_exc(),
                                                           {"event": "on_idle_end"})
                             dwell = time.time() - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig, ts_override=dwell_start)
+                            record_idle_exit()
+                            if last_emit_ts:
+                                _emit_current_dwell(time.time())
                                 log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
-                            else:
-                                log(f"[IDLE] Exited idle; too short ({int(dwell)}s) → not recorded.")
-                            current_sig = None
-                            dwell_start = None
-                            last_flush_time = None
+                            _clear_dwell()
                             _idle_entered_at = 0.0  # clear on idle exit
 
 
@@ -3410,13 +4011,9 @@ def run_agent():
                     if bundle_id in EXCLUDE_BUNDLES:
                         if PRINT_EVERY_POLL:
                             log(f"[POLL] Excluded: {bundle_id}")
-                        if current_sig and dwell_start:
-                            dwell = time.time() - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig)
-                        current_sig = None
-                        dwell_start = None
-                        last_flush_time = None
+                        if current_sig and last_emit_ts:
+                            _emit_current_dwell(time.time())
+                        _clear_dwell()
                         time.sleep(POLL_SECONDS)
                         consecutive_errors = 0
                         continue
@@ -3453,16 +4050,20 @@ def run_agent():
 
                     sig = (app_name, bundle_id, title, url, fpath)
 
+                    now_loop = time.time()
+
                     if sig != current_sig:
-                        if current_sig and dwell_start:
-                            dwell = time.time() - dwell_start
-                            if dwell >= MIN_DWELL_SECONDS:
-                                write_event(conn, cur, os_user, hostname, current_sig)
-                            else:
-                                log(f"[SKIP] dwell too short ({int(dwell)}s) for {current_sig[0]}")
-                        current_sig = sig
-                        dwell_start = time.time()
-                        last_flush_time = None  # Reset flush tracker on new sig
+                        if current_sig and last_emit_ts:
+                            _emit_current_dwell(now_loop)
+                        _start_new_dwell(sig, now_loop)
+                        record_window_change()
+
+                        # Snapshot inference for the NEW window so the menu bar
+                        # shows the right client within a poll, instead of
+                        # waiting up to HEARTBEAT_INTERVAL_S for the next emit.
+                        _compute_window_inference_snapshot(
+                            app_name, bundle_id, title, url, fpath
+                        )
 
                                                 # === AI CLIENT SWITCHER: Check new window ===
                         if ai_switcher:
@@ -3494,8 +4095,14 @@ def run_agent():
                             except Exception as e:
                                 log(f"[TRACKING] client detection error: {e}", "warning")
                     else:
+                        # Same window as last poll. Emit a heartbeat once the
+                        # interval is up, so long focused work reaches the
+                        # server as it happens rather than being withheld
+                        # until the user finally looks away.
+                        if last_emit_ts and (now_loop - last_emit_ts) >= HEARTBEAT_INTERVAL_S:
+                            _emit_current_dwell(now_loop)
                         if PRINT_EVERY_POLL:
-                            log(f"[POLL] dwelling {int(time.time()-dwell_start)}s • {app_name}")
+                            log(f"[POLL] dwelling {int(now_loop - dwell_start)}s • {app_name}")
 
                     time.sleep(POLL_SECONDS)
                     consecutive_errors = 0
@@ -3531,10 +4138,8 @@ def run_agent():
 
         except KeyboardInterrupt:
             log("=== Stopping (Ctrl+C) ===")
-            if current_sig and dwell_start:
-                dwell = time.time() - dwell_start
-                if dwell >= MIN_DWELL_SECONDS:
-                    write_event(conn, cur, os_user, hostname, current_sig)
+            if current_sig and last_emit_ts:
+                _emit_current_dwell(time.time())
         except Exception as e:
             log_error(f"[TRACKING] ❌ Fatal error: {e}")
             import traceback
@@ -3553,6 +4158,16 @@ def run_agent():
                 pass
             if notif_worker:
                 notif_worker.stop()
+            if finder_watcher:
+                try:
+                    finder_watcher.stop()
+                except Exception:
+                    pass
+            if meeting_detector:
+                try:
+                    meeting_detector.stop()
+                except Exception:
+                    pass
             remove_pid()
 
     # === START TRACKING THREAD ===

@@ -1,3 +1,29 @@
 pyobjc==10.3
+
+# CA bundle. main.py imports this at module scope — unguarded — and points
+# SSL_CERT_FILE at it before any HTTPS call, so its absence is fatal at
+# import: a binary built without it dies with "No module named 'certifi'"
+# before a line of the agent runs.
+certifi>=2023.7.22
 rumps>=0.4.0
 pillow>=10.0.0
+
+# Dialog UI. NOT optional, despite the try/except around the import in
+# timetracker_gui.py: four classes there subclass ctk.* at module scope, so
+# without this the module raises NameError on import and main.py — which
+# imports it at module level — never starts. The shipped 1.7.22 bundles
+# customtkinter 6.0.0, so the real build environment has always had it;
+# this file just never said so, and a clean build from it produced a binary
+# that died instantly on launch.
+customtkinter>=5.2.0
+
+# Global hotkey (⌃⌥T quick switcher). Guarded, so its absence costs only
+# that shortcut — but the feature is meant to exist, and the build spec
+# already lists pynput.keyboard._darwin as a hidden import.
+pynput>=1.7.6
+
+# Process table access. The Mac meeting probes (camera via lsof +
+# VDCAssistant, audio via coreaudiod) both cross-reference the running
+# process list to work out WHICH app owns the device; without psutil they
+# return nothing and meeting detection falls back to window titles alone.
+psutil>=5.9.0

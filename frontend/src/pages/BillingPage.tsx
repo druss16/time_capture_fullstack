@@ -1,9 +1,20 @@
 /**
  * BillingPage.tsx - Two sections behind plan/role gating.
- *  · section="timesheet"  →  My Timesheet · Approvals · History   (route /timesheet)
- *  · section="billing"    →  Set Fees · Client Billing · Invoices (route /billing)
- * Professional plan: Timesheet section. Executive plan: Billing section + History.
+ *  · section="timesheet"  →  My Week · Approvals · History   (route /timesheet)
+ *  · section="fees"       →  Set Fees                        (route /fees)
+ * Professional plan: Timesheet section. Executive plan: Fees + History.
  * No plan: Show subscribe prompt.
+ *
+ * The old "Billing" section carried three tabs and the name promised something
+ * the product deliberately does not do — firms record time here and invoice out
+ * of their own system. Client Billing went because its one verb, "Create
+ * Invoice", navigated to a route that has never existed, and what remained was
+ * a plainer copy of the client panel Reports already leads with. Invoices moved
+ * to Settings → Invoices, next to the QuickBooks connection that fills it: an
+ * invoice is an INPUT here (it anchors "what you charged last year" on this
+ * page, and realization in Analytics), not something this product sends. What
+ * is left is the one tab that was doing work, so the section is now a single
+ * top-level item and the sidebar disappears below two tabs.
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -11,17 +22,13 @@ import { safeFetchJson, API_BASE } from '@/lib/api';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 import WeekCoverage, { type Submission } from '@/components/WeekCoverage';
 import ApprovalQueue from '@/components/ApprovalQueue';
-import ClientSummary from '@/components/ClientSummary';
 import FeeBasis from '@/components/FeeBasis';
 import TimesheetHistory from '@/components/TimesheetHistory';
-import IntegrationInvoicePanel from '@/components/IntegrationInvoicePanel';
-import InvoiceManager from '@/components/InvoiceManager';
 import {
   Clock,
   CheckSquare,
   DollarSign,
   FileText,
-  Receipt,
   Lock,
   Sparkles,
   AlertTriangle,
@@ -32,7 +39,7 @@ import { useSearchParams } from 'react-router-dom';
 
 type UserRole = 'owner' | 'admin' | 'manager' | 'member';
 type PlanType = 'professional' | 'executive' | 'none';
-type Section = 'timesheet' | 'billing';
+type Section = 'timesheet' | 'fees';
 
 interface Tab {
   id: string;
@@ -105,9 +112,9 @@ const SECTIONS: Record<Section, SectionConfig> = {
       },
     ],
   },
-  billing: {
-    eyebrow: 'Billing',
-    title: 'Clients & Invoices',
+  fees: {
+    eyebrow: 'Fees',
+    title: 'What to charge',
     tabs: [
       {
         id: 'fees',
@@ -115,22 +122,6 @@ const SECTIONS: Record<Section, SectionConfig> = {
         description: 'Decide what to charge, by client',
         requiredRoles: ['owner', 'admin', 'manager'],
         icon: DollarSign,
-        requiredPlan: EXECUTIVE_PLANS,
-      },
-      {
-        id: 'billing',
-        label: 'Client Billing',
-        description: 'Prepare invoices by client',
-        requiredRoles: ['owner', 'admin'],
-        icon: DollarSign,
-        requiredPlan: EXECUTIVE_PLANS,
-      },
-      {
-        id: 'invoices',
-        label: 'Invoices',
-        description: 'Manage imported & billed invoices',
-        requiredRoles: ['owner', 'admin'],
-        icon: Receipt,
         requiredPlan: EXECUTIVE_PLANS,
       },
     ],
@@ -213,7 +204,6 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
   const [activeTab, setActiveTab] = useState<string>(
     tabInSection(searchParams.get('tab')) ? (searchParams.get('tab') as string) : defaultTab
   );
-  const [invoiceFilter, setInvoiceFilter] = useState<string>(searchParams.get('filter') || '');
   const [userInfo, setUserInfo] = useState<WhoamiResponse | null>(null);
   const [orgPlan, setOrgPlan] = useState<PlanType>('none');
   const [loading, setLoading] = useState(true);
@@ -266,6 +256,7 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
   }, []);
 
   const userRole = userInfo?.role || 'member';
+  const showSidebar = sectionTabs.length > 1;
   const hasNoPlan = orgPlan === 'none';
 
   const visibleTabs = useMemo(
@@ -279,7 +270,7 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
     return !tab.requiredPlan.includes(orgPlan);
   };
 
-  // A user with no role access to this whole section (e.g. a member on /billing)
+  // A user with no role access to this whole section (e.g. a member on /fees)
   // is bounced to their timesheet rather than shown an empty sidebar.
   useEffect(() => {
     if (loading || hasNoPlan) return;
@@ -299,23 +290,19 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
 
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    const filterParam = searchParams.get('filter') || '';
     if (tabInSection(tabParam) && tabParam !== activeTab) setActiveTab(tabParam as string);
-    setInvoiceFilter(filterParam);
   }, [searchParams]);
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId);
-    setInvoiceFilter('');
     setSearchParams({ tab: tabId });
   };
 
   const getLockedFeatureName = (tabId: string): string => {
     switch (tabId) {
-      case 'billing':       return 'Client Billing';
-      case 'invoices':      return 'Invoice Management';
-      case 'history':       return 'Timesheet History';
-      default:              return 'This Feature';
+      case 'fees':    return 'Set Fees';
+      case 'history': return 'Timesheet History';
+      default:        return 'This Feature';
     }
   };
 
@@ -330,86 +317,90 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
   return (
     <div className="flex min-h-[calc(100vh-56px)]">
 
-      {/* ── Sidebar ── */}
-      <aside className="w-56 bg-white border-r border-border/50 flex-shrink-0 flex flex-col">
-        <div className="px-5 py-4 border-b border-border/40">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 mb-0.5">{sectionConfig.eyebrow}</p>
-          <p className="text-base font-extrabold text-slate-900 tracking-tight">{sectionConfig.title}</p>
-        </div>
-
-        <nav className="flex-1 py-3 px-2 space-y-0.5">
-          {loading ? (
-            <SidebarSkeleton />
-          ) : (
-            visibleTabs.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              const locked = isTabLocked(tab);
-
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => { if (!locked) handleTabChange(tab.id); }}
-                  className={cn(
-                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 group relative',
-                    locked
-                      ? 'text-slate-400 cursor-not-allowed'
-                      : isActive
-                        ? 'bg-primary/8 text-primary font-semibold'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
-                  )}
-                >
-                  {isActive && !locked && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
-                  )}
-                  <span className={cn(
-                    'shrink-0 transition-colors',
-                    locked ? 'text-slate-400' : isActive ? 'text-primary' : 'text-slate-400 group-hover:text-slate-600'
-                  )}>
-                    <Icon className="w-4 h-4" />
-                  </span>
-                  <div className="flex-1 text-left min-w-0">
-                    <p className="truncate">{tab.label}</p>
-                    <p className={cn(
-                      'text-[10px] font-medium truncate',
-                      locked ? 'text-slate-400' : isActive ? 'text-primary/60' : 'text-slate-400'
-                    )}>
-                      {locked
-                        ? (hasNoPlan ? 'Requires subscription' : 'Executive plan')
-                        : tab.description}
-                    </p>
-                  </div>
-                  {locked && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
-                </button>
-              );
-            })
-          )}
-        </nav>
-
-        {/* Plan badge */}
-        {!loading && (
-          <div className="px-4 py-3 border-t border-border/40">
-            <div className={cn(
-              'text-xs font-semibold px-2.5 py-1.5 rounded-lg text-center',
-              orgPlan === 'executive'    ? 'bg-primary/8 text-primary'
-              : orgPlan === 'professional' ? 'bg-amber-50 text-amber-600'
-              : 'bg-red-50 text-red-600'
-            )}>
-              {getPlanLabel()}
-            </div>
-            {orgPlan === 'professional' && (
-              <a href="/account/billing" className="block text-center text-[11px] text-slate-400 hover:text-primary mt-1.5 transition-colors">
-                Upgrade for more features →
-              </a>
-            )}
-            {hasNoPlan && (
-              <a href="/account/billing" className="block text-center text-[11px] text-red-400 hover:text-red-600 mt-1.5 transition-colors">
-                Subscribe now →
-              </a>
-            )}
+      {/* One tab left in this section means the sidebar would be a list of
+          one — the page title alone. The tab content carries its own
+          header, so drop the rail and give it the full width. */}
+      {showSidebar && (
+        <aside className="w-56 bg-white border-r border-border/50 flex-shrink-0 flex flex-col">
+          <div className="px-5 py-4 border-b border-border/40">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 mb-0.5">{sectionConfig.eyebrow}</p>
+            <p className="text-base font-extrabold text-slate-900 tracking-tight">{sectionConfig.title}</p>
           </div>
-        )}
-      </aside>
+
+          <nav className="flex-1 py-3 px-2 space-y-0.5">
+            {loading ? (
+              <SidebarSkeleton />
+            ) : (
+              visibleTabs.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                const locked = isTabLocked(tab);
+
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => { if (!locked) handleTabChange(tab.id); }}
+                    className={cn(
+                      'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150 group relative',
+                      locked
+                        ? 'text-slate-400 cursor-not-allowed'
+                        : isActive
+                          ? 'bg-primary/8 text-primary font-semibold'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
+                    )}
+                  >
+                    {isActive && !locked && (
+                      <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
+                    )}
+                    <span className={cn(
+                      'shrink-0 transition-colors',
+                      locked ? 'text-slate-400' : isActive ? 'text-primary' : 'text-slate-400 group-hover:text-slate-600'
+                    )}>
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <div className="flex-1 text-left min-w-0">
+                      <p className="truncate">{tab.label}</p>
+                      <p className={cn(
+                        'text-[10px] font-medium truncate',
+                        locked ? 'text-slate-400' : isActive ? 'text-primary/60' : 'text-slate-400'
+                      )}>
+                        {locked
+                          ? (hasNoPlan ? 'Requires subscription' : 'Executive plan')
+                          : tab.description}
+                      </p>
+                    </div>
+                    {locked && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+          </nav>
+
+          {/* Plan badge */}
+          {!loading && (
+            <div className="px-4 py-3 border-t border-border/40">
+              <div className={cn(
+                'text-xs font-semibold px-2.5 py-1.5 rounded-lg text-center',
+                orgPlan === 'executive'    ? 'bg-primary/8 text-primary'
+                : orgPlan === 'professional' ? 'bg-amber-50 text-amber-600'
+                : 'bg-red-50 text-red-600'
+              )}>
+                {getPlanLabel()}
+              </div>
+              {orgPlan === 'professional' && (
+                <a href="/account/billing" className="block text-center text-[11px] text-slate-400 hover:text-primary mt-1.5 transition-colors">
+                  Upgrade for more features →
+                </a>
+              )}
+              {hasNoPlan && (
+                <a href="/account/billing" className="block text-center text-[11px] text-red-400 hover:text-red-600 mt-1.5 transition-colors">
+                  Subscribe now →
+                </a>
+              )}
+            </div>
+          )}
+        </aside>
+      )}
 
       {/* ── Main Content ── */}
       <main className="flex-1 pt-2 px-6 pb-6 bg-slate-50 overflow-auto min-w-0">
@@ -433,20 +424,7 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
                   )}
                   {activeTab === 'approvals' && <ApprovalQueue />}
                   {activeTab === 'fees'      && <FeeBasis />}
-                  {activeTab === 'billing'   && <ClientSummary />}
-                  {activeTab === 'invoices'  && (
-                    <div className="space-y-6">
-                      <InvoiceManager
-                        filter={invoiceFilter}
-                        onFilterClear={() => {
-                          setInvoiceFilter('');
-                          setSearchParams({ tab: 'invoices' });
-                        }}
-                      />
-                      <IntegrationInvoicePanel />
-                    </div>
-                  )}
-                  {activeTab === 'history' && <TimesheetHistory />}
+                  {activeTab === 'history'   && <TimesheetHistory />}
                 </>
               );
             })()}

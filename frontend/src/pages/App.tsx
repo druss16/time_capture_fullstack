@@ -264,7 +264,11 @@ export default function App() {
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
                 <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
-                <Route path="/billing" element={<MaybeProtected><AppLayout><BillingPage section="billing" /></AppLayout></MaybeProtected>} />
+                <Route path="/fees" element={<MaybeProtected><AppLayout><BillingPage section="fees" /></AppLayout></MaybeProtected>} />
+                {/* /billing was Set Fees · Client Billing · Invoices. Only Set Fees
+                    survived, so the section became the item. Bookmarks and any
+                    ?tab= link land on it rather than a 404. */}
+                <Route path="/billing" element={<Navigate to="/fees" replace />} />
                 <Route path="/devices" element={<MaybeProtected><AppLayout><Devices /></AppLayout></MaybeProtected>} />
 
                 {/* Protected — admin/manager */}

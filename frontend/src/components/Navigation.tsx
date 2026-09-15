@@ -7,7 +7,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import {
   Users,
-  Receipt,
+  DollarSign,
   Calendar,
   Clock,
   Monitor,
@@ -71,7 +71,11 @@ export default function Navigation() {
   // Analytics is owner/admin only — see ANALYTICS_ROLES in analytics_v2/permissions.py.
   // The server refuses managers too; this only keeps them from clicking into a 403.
   const canAccessAnalytics = ['owner', 'admin'].includes(userRole || '');
-  const canAccessBilling   = ['owner', 'admin'].includes(userRole || '');
+  // Fees, not Billing: the section lost Client Billing and Invoices, and the
+  // name was promising an invoice run this product does not do. Role gate is
+  // unchanged from when the item read "Billing" — widening it to managers (who
+  // the fee-basis endpoint does allow) is a separate call.
+  const canAccessFees      = ['owner', 'admin'].includes(userRole || '');
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -103,7 +107,7 @@ export default function Navigation() {
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
     { path: '/timesheet', label: 'My Week',      icon: Clock,     show: true                },
-    { path: '/billing',   label: 'Billing',      icon: Receipt,   show: canAccessBilling    },
+    { path: '/fees',      label: 'Fees',         icon: DollarSign, show: canAccessFees      },
     { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
     { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },
   ].filter(item => item.show);

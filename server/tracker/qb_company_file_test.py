@@ -297,6 +297,63 @@ check("a cemetery title DOES take a cemetery file",
       picked_active(["St. Mary's Cemetery Bville_QB2024.QBW"],
                     "St. Mary's Cemetery Bville")
       == "St. Mary's Cemetery Bville_QB2024.QBW")
+# ── Two company files open at once ──────────────────────────────────────────
+#
+# QuickBooks Accountant's "Open Second Company" titles the second window
+# "<Company> (Secondary)". Two windows means two DIFFERENT company files, and
+# extract_qb_company strips the marker (it names the window, not the client) —
+# so the title cannot say which of the two a given block was in.
+#
+# The coverage tie-break below is the wrong instrument for that question and
+# almost never reports a tie. Live on org 21, against a title of "St. Mary's
+# Church": "St. Mary's Church_Clinton" scores 2/3 while "Church of Sacred Heart
+# & St. Mary NY Mills" scores 2/5, so Clinton wins for having FEWER EXTRA
+# WORDS. That is a coin flip wearing a score, and it was pairing both windows
+# of a two-parish session to one file across 63 billable hours a quarter.
+def picked_two(files, active, companies=(), two=True):
+    got = pick([{"picked": files, "recent": []}], set(companies),
+               primary_company=active, two_windows=two)
+    return got[0] if got else None
+
+
+check("two windows + two files answering the title -> abstain",
+      picked_two(["St. Mary's Church_Clinton_QB2024.QBW",
+                  "Church of Sacred Heart & St. Mary NY Mills_QB2024.QBW"],
+                 "St. Mary's Church") is None)
+check("...and it is NOT the tie-break deciding — one file plainly wins on coverage",
+      picked_two(["St. Mary's Church_Clinton_QB2024.QBW",
+                  "Church of Sacred Heart & St. Mary NY Mills_QB2024.QBW"],
+                 "St. Mary's Church", two=False)
+      == "St. Mary's Church_Clinton_QB2024.QBW")
+check("two windows but only ONE file answers the title -> still decided",
+      picked_two(["St. Mary's Church_Clinton_QB2024.QBW",
+                  "St. Patrick's Church Taberg_QB2024.qbw"],
+                 "St. Mary's Church") == "St. Mary's Church_Clinton_QB2024.QBW")
+check("two windows, nothing answers the title -> abstain as before",
+      picked_two(["St. Patrick's Church Taberg_QB2024.qbw"],
+                 "St. Mary's Church") is None)
+
+
+def named_two(files_ages, companies, two=True):
+    got = pick([{"recent": [{"f": f, "age": a} for f, a in files_ages]}],
+               set(companies), two_windows=two)
+    return got[0] if got else None
+
+
+check("the freshness route abstains too when two windows and two matches",
+      named_two([("St. Mary's Church_Clinton_QB2024.QBW", 30),
+                 ("St. Mary's Church Minoa_QB2024.QBW", 90)],
+                ["St. Mary's Church"]) is None)
+check("...while one window keeps the freshest match",
+      named_two([("St. Mary's Church_Clinton_QB2024.QBW", 30),
+                 ("St. Mary's Church Minoa_QB2024.QBW", 90)],
+                ["St. Mary's Church"], two=False)
+      == "St. Mary's Church_Clinton_QB2024.QBW")
+check("two windows, one freshness match -> still decided",
+      named_two([("St. Mary's Church_Clinton_QB2024.QBW", 30),
+                 ("St. Patrick's Church Taberg_QB2024.qbw", 90)],
+                ["St. Mary's Church"]) == "St. Mary's Church_Clinton_QB2024.QBW")
+
 check("a modal with no company falls back to a SINGLE block company",
       picked_active(["St. Mary's Church_Clinton_QB2024.QBW"], None,
                     ["St. Mary's Church"]) == "St. Mary's Church_Clinton_QB2024.QBW")

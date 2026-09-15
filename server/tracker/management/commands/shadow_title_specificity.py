@@ -75,6 +75,7 @@ class Command(BaseCommand):
 
         from tracker.models import Block
         from tracker.services.misfile_evidence import context_for
+        from tracker.utils.db_iter import keyset_iter
 
         org_id = opts['org']
         ctx = context_for(org_id)
@@ -85,13 +86,16 @@ class Command(BaseCommand):
             return self._explain(opts['explain'], ctx)
 
         since = timezone.now().date() - timedelta(days=opts['days'])
-        blocks = (Block.objects
-                  .filter(org_id=org_id, deleted_at__isnull=True, day__gte=since)
-                  .exclude(window_title='')
-                  .exclude(window_title__isnull=True)
-                  .only('id', 'window_title', 'client_id', 'day', 'minutes')
-                  .order_by('id')
-                  .iterator(chunk_size=500))
+        # keyset_iter, not .iterator(): the Neon pooler silently truncates
+        # server-side cursors, and a shadow run that stops early reports
+        # numbers that look fine and are wrong (see utils/db_iter).
+        blocks = keyset_iter(
+            Block.objects
+            .filter(org_id=org_id, deleted_at__isnull=True, day__gte=since)
+            .exclude(window_title='')
+            .exclude(window_title__isnull=True)
+            .only('id', 'window_title', 'client_id', 'day', 'minutes'),
+            chunk_size=1000)
 
         gained, lost, changed = [], [], []
         scanned = 0

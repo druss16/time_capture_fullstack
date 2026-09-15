@@ -95,7 +95,7 @@ class Command(BaseCommand):
         # report differences on rows nobody is shown, and each draft costs
         # neighbour queries.
         flagged = (MismatchFlag.objects
-                   .filter(org_id=org_id, detected_at__day__gte=since)
+                   .filter(org_id=org_id, detected_at__date__gte=since)
                    .values_list('block_id', flat=True))
         # Deliberately NO .only(): draft_for_block reaches for invoiced,
         # qb_time_activity_id, xero_invoice_id, state_changed_by and
@@ -109,7 +109,11 @@ class Command(BaseCommand):
 
         flipped, withdrawn, other = [], [], []
         scanned = 0
-        for b in blocks.iterator(chunk_size=200):
+        # No .iterator(): the Neon pooler silently TRUNCATES server-side
+        # cursors (see utils/db_iter), and a shadow run that quietly stops
+        # early reports numbers that look fine and are wrong. Flagged rows fit
+        # in memory; the wider scan in shadow_title_specificity pages by key.
+        for b in blocks:
             scanned += 1
             old = self._draft(b, ctx, False)
             new = self._draft(b, ctx, True)

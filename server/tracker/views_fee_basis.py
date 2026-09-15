@@ -273,6 +273,12 @@ def fee_basis(request):
             if len(shares) >= 2
             else None
         )
+        # A share this small carries across as 0.0h, and "typical month 0.0h ·
+        # +3.3h" is noise wearing the clothes of an anchor. 16 of org 21's 103
+        # August clients landed here — a minute or two of time in each of two
+        # prior months. No anchor says the same thing honestly.
+        if typical is not None and typical < 0.1:
+            typical = None
         out.append({
             "client_id": cid,
             "name": r["client__name"] or "Unassigned",

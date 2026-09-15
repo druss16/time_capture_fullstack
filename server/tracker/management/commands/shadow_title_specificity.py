@@ -63,14 +63,14 @@ from django.core.management.base import BaseCommand, CommandError
 from tracker.utils import client_name_match as cnm
 
 FLAG_HELP = ('CENTER_ONLY_CANNOT_SUPPRESS', 'NORMALIZE_PLURALS',
-             'ENTITY_CLASS_SEPARATES')
+             'ENTITY_CLASS_SEPARATES', 'FULL_NAME_BEATS_PARTIAL')
 
 
 class Command(BaseCommand):
     help = "Shadow-compare title detection with CENTER_ONLY_CANNOT_SUPPRESS on and off (read-only)."
 
     FLAGS = ('CENTER_ONLY_CANNOT_SUPPRESS', 'NORMALIZE_PLURALS',
-             'ENTITY_CLASS_SEPARATES')
+             'ENTITY_CLASS_SEPARATES', 'FULL_NAME_BEATS_PARTIAL')
 
     def add_arguments(self, parser):
         parser.add_argument('--org', type=int, required=True)

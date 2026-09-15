@@ -40,7 +40,14 @@ jobs:
       - name: Install dependencies
         working-directory: mac_agent
         run: |
-          pip install pyinstaller rumps pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-UserNotifications requests customtkinter certifi pynput
+          # Read requirements.txt, the way the Windows job does. This list
+          # used to be hand-maintained here and had drifted: psutil was
+          # missing, and both Mac meeting probes (camera via lsof on
+          # VDCAssistant, audio via coreaudiod) are gated on it — they return
+          # [] without it, so the detector shipped inert. A hand-copied
+          # dependency list is a second source of truth that silently rots.
+          pip install -r requirements.txt
+          pip install pyinstaller
 
       - name: Build Mac app
         working-directory: mac_agent
@@ -52,10 +59,38 @@ jobs:
             --add-data "notifications.py:." \
             --add-data "agent_sync_integration.py:." \
             --add-data "quick_switcher.py:." \
+            --add-data "ai_client_switcher.py:." \
+            --add-data "routing_rules.py:." \
+            --add-data "tax_software_constants.py:." \
+            --add-data "content_identity.py:." \
+            --add-data "pdf_identity.py:." \
+            --add-data "inference_cache.py:." \
+            --add-data "widget_state_tracker.py:." \
+            --add-data "tracking_health.py:." \
+            --add-data "finder_watcher.py:." \
+            --add-data "meeting_detector.py:." \
+            --add-data "update_checker.py:." \
+            --add-data "inference:inference" \
             --hidden-import=timetracker_gui \
             --hidden-import=notifications \
             --hidden-import=agent_sync_integration \
             --hidden-import=quick_switcher \
+            --hidden-import=ai_client_switcher \
+            --hidden-import=routing_rules \
+            --hidden-import=tax_software_constants \
+            --hidden-import=content_identity \
+            --hidden-import=pdf_identity \
+            --hidden-import=inference_cache \
+            --hidden-import=widget_state_tracker \
+            --hidden-import=tracking_health \
+            --hidden-import=finder_watcher \
+            --hidden-import=meeting_detector \
+            --hidden-import=inference \
+            --hidden-import=inference.collectors \
+            --hidden-import=inference.decay \
+            --hidden-import=inference.engine \
+            --hidden-import=inference.evidence \
+            --hidden-import=psutil \
             --hidden-import=customtkinter \
             --collect-all=customtkinter \
             --hidden-import=Quartz \

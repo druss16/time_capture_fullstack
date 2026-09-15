@@ -6605,6 +6605,51 @@ class ClassificationService:
             decision.recommended_state = 'captured'
             decision.confidence = max(s.strength for s in signals)
 
+        # A sub-2-minute block with no client had NO path to being committed,
+        # and so fell out of the product entirely. The immaterial rules above
+        # cannot reach it: _commit_if_immaterial requires a client_id, and the
+        # auto_confirm_immaterial_noclient branch requires a moderate-or-better
+        # signal. A minute of untraceable activity — a browser tab with no
+        # recognised host, a terminal window — has neither, so it stayed
+        # `captured` with is_categorized False.
+        #
+        # That is invisible in BOTH directions. compute_totals counts only
+        # confirmed blocks, so it is not time; and is_pending_review_block
+        # requires _is_material (>= 2 min), so it is not a question either.
+        # Measured on a live Mac: 56 of 62 captured minutes sat in that gap,
+        # while the dashboard read 6 minutes and Needs You said "nothing —
+        # you're done".
+        #
+        # Same trade PR #109 already made for slivers WITH a client: under two
+        # minutes, filing it costs at most a minute of mis-categorised
+        # non-billable time, and that is cheaper than losing it. Idle is left
+        # alone — it has its own handling and must not be booked as work.
+        if (
+            (block.minutes or 0) < IMMATERIAL_MAX_MINUTES
+            and decision.client_id is None
+            and not decision.needs_review
+            and decision.recommended_state not in ('committed', 'suppressed')
+            and (getattr(block, 'bundle_id', '') or '').lower() != '__idle__'
+        ):
+            decision.recommended_state = 'committed'
+            decision.is_billable = False
+            decision.matched_signals.append(Signal(
+                type='auto_confirm_immaterial_noclient',
+                strength=max((s.strength for s in signals), default=0.0),
+                evidence=(
+                    f'Auto-committed: immaterial sub-{IMMATERIAL_MAX_MINUTES}min '
+                    f'sliver ({block.minutes or 0}m) with no client and no '
+                    f'qualifying signal → non-billable'
+                ),
+                detail={'auto_confirmed': True, 'immaterial': True,
+                        'client_id': None, 'no_signals': not signals},
+            ))
+            logger.info(
+                f"[FINALIZE] Block {getattr(block, 'pk', '?')}: "
+                f"auto-committing immaterial no-client sliver with no "
+                f"qualifying signal → non-billable"
+            )
+
         return decision
 
     def _commit_if_immaterial(self, decision: 'ClassificationDecision', block,

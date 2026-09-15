@@ -150,6 +150,14 @@ class Draft:
     # reading the row is entitled to overrule. Approving IS the second opinion
     # these are asking for.
     caveats: list = field(default_factory=list)
+    # Ranked alternatives for a row that CANNOT have one answer — the booked
+    # client is absent from the title and same-family rivals tie. Never a
+    # recommendation: they are listed so the reviewer picks, which is the whole
+    # point of the verdict. `detect_booked_absent` already computes these and
+    # the tab already knows how to render them; the draft simply never carried
+    # them, so 75 of org 21's 145 flagged rows said "there is no recommendation
+    # to make" while the names sat one function call away.
+    candidates: list = field(default_factory=list)
     summary: str = ''
 
     # What each witness is called in a one-line row.
@@ -226,6 +234,7 @@ class Draft:
             'checked': list(SIGNAL_KINDS),
             'vetoes': self.vetoes,
             'caveats': self.caveats,
+            'candidates': self.candidates,
         }
 
 
@@ -770,7 +779,7 @@ def draft_for_block(block, ctx):
     stale = _stale_flag_draft(block, ctx)
     if stale:
         return stale
-    return draft_from_signals(
+    d = draft_from_signals(
         block_id=block.id,
         org_id=block.org_id,
         booked_id=block.client_id,
@@ -778,6 +787,49 @@ def draft_for_block(block, ctx):
         name_of=ctx.name,
         veto_fn=lambda target_id: _vetoes(block, ctx, target_id),
     )
+    if d.target_client_id is None:
+        _attach_candidates(d, block, ctx)
+    return d
+
+
+def _attach_candidates(d, block, ctx):
+    """Give a no-answer row the names it could be, without picking one.
+
+    A row reaches here having been raised by `detect_booked_absent`: the title
+    does not name the client the block is booked to, and the rivals it does
+    name tie closely enough that choosing between them would be a guess. That
+    is a real verdict and the honest one — but it was being delivered as a
+    blank. The scan computes the ranked rivals for exactly this case, and the
+    review tab already renders candidate buttons; the draft was the only link
+    that dropped them.
+
+    Costs one extra detector call, and only on rows that came back with no
+    target at all.
+    """
+    from tracker.utils.client_name_match import detect_booked_absent
+
+    absent = detect_booked_absent(block.window_title or '', block.client_id,
+                                  ctx.index, ctx.names, firm_name=ctx.firm_name)
+    cands = (absent or {}).get('candidates') or []
+    if not cands:
+        return
+    d.candidates = [{'client_id': c['client_id'],
+                     'client_name': c['client_name']} for c in cands]
+    names = [c['client_name'] for c in cands]
+    d.summary = (
+        f"{d.booked_client_name} is not named in this title. "
+        + (f"It reads as {names[0]}, but not clearly enough to move it there "
+           f"on its own." if len(names) == 1 else
+           f"It could be {_or_list(names)} — they read alike here and "
+           f"nothing in the text separates them.")
+        + " Your pick."
+    )
+
+
+def _or_list(xs):
+    """"A, B or C" — choices, never a ranking."""
+    return (xs[0] if len(xs) <= 1 else
+            f"{', '.join(xs[:-1])} or {xs[-1]}")
 
 
 def _stale_flag_draft(block, ctx):

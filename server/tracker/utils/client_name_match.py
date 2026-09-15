@@ -574,7 +574,18 @@ CENTER_ONLY_CANNOT_SUPPRESS = False  # a client named only inside [Vendor
 # coverage) still abstains. Those are the two abstentions worth keeping and
 # they are pinned as tests.
 FULLY_NAMED = 0.95       # "the title contains this client's entire name"
-FULL_NAME_BEATS_PARTIAL = False
+# ENABLED. Measured on org 21, 30 days, 10,515 blocks / 3,012 distinct titles:
+# 53 CONFIRMS, 0 LOST, 0 CHANGED, 0 RETARGETED, 18 new accusations — of which
+# 12 were the Christ our Hope magnet fixed since (the winner being the
+# BOOKING'S generic form, which the rival loop structurally cannot see), 5 are
+# the St. Peters `peters` vs `peter` tokenisation gap that NORMALIZE_PLURALS
+# owns and this rule does not touch, and 1 is correct: block 70926, "Church of
+# Sacred Heart and St. Mary" booked to First Baptist Church of Syracuse.
+#
+# That last row is the one this whole line of work started from, and it is why
+# this is on. Roll back by setting this to False — no deploy needed beyond the
+# usual, no migration, nothing else depends on it.
+FULL_NAME_BEATS_PARTIAL = True
 
 
 def _is_magnet(winner: int, rival: int, index: dict) -> bool:

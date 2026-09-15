@@ -70,11 +70,15 @@ def detect(title, roster=None, center=True):
     """Detect with the flag forced, since it ships OFF by default."""
     names = roster or ROSTER
     idx = IDX if roster is None else cnm.build_token_index(names)
+    # FULL_NAME_BEATS_PARTIAL ships ON, and would otherwise answer some of
+    # these rows itself — this test is about the Center bracket alone.
     cnm.CENTER_ONLY_CANNOT_SUPPRESS = center
+    cnm.FULL_NAME_BEATS_PARTIAL = False
     try:
         d = cnm.detect_title_client(title, idx, names)
     finally:
         cnm.CENTER_ONLY_CANNOT_SUPPRESS = False
+        cnm.FULL_NAME_BEATS_PARTIAL = True
     return d["client_name"] if d else None
 
 

@@ -65,7 +65,14 @@ DOCS = [
 
 
 def score(plurals, entity):
-    """How many of the five spellings land on the right client."""
+    """How many of the five spellings land on the right client.
+
+    FULL_NAME_BEATS_PARTIAL is pinned off: it ships ON, and leaving it at the
+    module default would let a different rule supply the answers this test is
+    attributing to these two. A test that measures one flag has to hold every
+    other flag still.
+    """
+    cnm.FULL_NAME_BEATS_PARTIAL = False
     cnm.NORMALIZE_PLURALS, cnm.ENTITY_CLASS_SEPARATES = plurals, entity
     # The index MUST be rebuilt: NORMALIZE_PLURALS changes how client names
     # tokenize, and build_token_index runs once per roster.
@@ -156,6 +163,7 @@ def main():
     ]
 
     def run(plurals, entity):
+        cnm.FULL_NAME_BEATS_PARTIAL = False
         cnm.NORMALIZE_PLURALS, cnm.ENTITY_CLASS_SEPARATES = plurals, entity
         idx = cnm.build_token_index(REAL)
         n = sum(1 for t, want in CASES

@@ -117,6 +117,23 @@ After a build, check that list is still only those:
 its own inline `pyinstaller` invocation. Keep that in mind before "fixing"
 a build by editing a spec the release never reads.
 
+`build_and_release.sh` does **not** release, despite the name. It produces a
+signed, notarized `TimeTracker.pkg` locally and stops — no tag, no GitHub
+release, no agent told anything. It is for building and testing a package by
+hand.
+
+Releases are two repos: the code lives in `time_capture_fullstack`, the
+artifacts in `druss16/timetracker-releases`, which is where the server sends
+agents (`GITHUB_REPO` in views.py). Pushing a `v*` tag on the code repo runs
+release.yml, which publishes the Mac `.pkg`, the Windows Setup `.exe`, the
+Windows zip and the Intune package to the releases repo together.
+
+**Never publish the `.pkg` on its own.** `agent_version_check` resolves every
+agent against the same `releases/latest` tag and only picks the download URL
+by platform, so a Mac-only release announces the new version to Windows
+agents too — and they then fetch `TimeTracker-Windows-Setup.exe` from a
+release that does not contain one. 404, and Windows auto-update stops.
+
 A `v*` tag builds **both** agents and publishes **one** release. You cannot
 ship a Mac-only version bump: the server's `agent_version_check` has a single
 shared version line (`_fetch_latest_version` reads the GitHub latest tag, and

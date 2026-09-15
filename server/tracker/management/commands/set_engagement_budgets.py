@@ -46,6 +46,8 @@ from decimal import Decimal, InvalidOperation
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
+from tracker.services.fee_schedule import record_fee
+
 GREEN = "\033[92m"; RED = "\033[91m"; CYAN = "\033[96m"
 BOLD = "\033[1m"; DIM = "\033[2m"; RESET = "\033[0m"
 
@@ -158,7 +160,7 @@ class Command(BaseCommand):
             print(f"  {DIM}nothing will be written — re-run with --apply{RESET}")
         print()
 
-        touched = skipped = 0
+        touched = skipped = held = 0
         problems: list[str] = []
 
         for r in rows:
@@ -184,10 +186,21 @@ class Command(BaseCommand):
             if not opts["all_periods"]:
                 qs = qs.filter(status="open")
             engagements = list(qs.order_by("period_start"))
+
+            # The price is the firm's answer either way, so it is recorded
+            # before anything is applied. A row with no engagement to land on
+            # is not a failure — it is a schedule that arrived before the work,
+            # which is what happens every time a firm hands over its fees
+            # during onboarding. derive_budget reads this before it estimates,
+            # so the first period that opens gets the fee and nobody re-types
+            # 168 rows.
+            if opts["apply"]:
+                record_fee(org, client.id, etype, hours,
+                           fee=r.get("monthly_fee"), set_in="fee schedule CSV")
             if not engagements:
-                problems.append(f"line {line}: {client.name} has no "
-                                f"{'open ' if not opts['all_periods'] else ''}"
-                                f"{etype} engagements")
+                held += 1
+                print(f"  {client.name[:30]:32} {etype:12} {'—':9} "
+                      f"{'':>7}   {CYAN}held for the first period of this job{RESET}")
                 continue
 
             for e in engagements:
@@ -214,6 +227,11 @@ class Command(BaseCommand):
         print()
         print(f"  {BOLD}{touched} engagement(s) {'updated' if opts['apply'] else 'would change'}{RESET}"
               f", {skipped} already correct")
+        if held:
+            print(f"  {BOLD}{held} fee(s) held{RESET} for jobs with no open period yet"
+                  f" — they apply to the first one that opens")
+        if not opts["apply"] and held:
+            print(f"  {DIM}(held fees are only written with --apply){RESET}")
         if problems:
             print(f"\n  {RED}{len(problems)} row(s) could not be applied:{RESET}")
             for p in problems[:40]:

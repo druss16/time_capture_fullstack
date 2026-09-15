@@ -211,3 +211,82 @@ class Engagement(models.Model):
 
     def display_name(self) -> str:
         return self.name or str(self)
+
+
+class FeeScheduleEntry(models.Model):
+    """What the firm charges for a job, held apart from any one period of it.
+
+    Two problems, one cause: a fee was only ever written onto the engagements
+    that happened to be open when someone typed it.
+
+      · A schedule that arrives during onboarding has nothing to land on.
+        Engagements are derived from captured time, so on day one there are no
+        jobs, and 168 rows of a firm's own pricing reported as "no open
+        engagements" and evaporated. That file is the hardest thing to get back
+        out of a firm once onboarding is over.
+
+      · A fee typed today did not survive the calendar. Next month's engagement
+        is a new row with no budget, so `derive_budget` handed it an estimate
+        off an under-captured month — the exact number a person had already
+        corrected. org 21 has "1819 Lemoyne Ave, LLC" bookkeeping priced at 8.0h
+        on 2026-07 and nothing carrying it forward.
+
+    So the fee lives on the ARRANGEMENT — this client, this kind of work — and
+    `derive_budget` consults it before it estimates anything. New period, same
+    fee, with no one re-entering it; and a schedule handed over before the first
+    timesheet simply waits until the job it describes exists.
+
+    Hours, not money, is what's stored: an engagement budget is hours, and
+    keeping the conversion in one direction means a later change to the firm's
+    rate cannot silently re-price history. `fee_quoted` keeps what was actually
+    said, for the row that has to explain itself.
+    """
+
+    org = models.ForeignKey(
+        "Organization", on_delete=models.CASCADE, related_name="fee_schedule",
+    )
+    client = models.ForeignKey(
+        "Client", on_delete=models.CASCADE, related_name="fee_schedule",
+    )
+    engagement_type = models.CharField(
+        max_length=20, choices=Engagement.TYPE_CHOICES,
+    )
+
+    budget_hours = models.DecimalField(max_digits=8, decimal_places=2)
+    fee_quoted = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="The fee as the firm stated it, when they gave a fee rather "
+                  "than hours. Display only — budget_hours is what applies.",
+    )
+
+    set_by = models.ForeignKey(
+        "auth.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="fee_schedule_entries",
+    )
+    set_in = models.CharField(
+        max_length=40, blank=True, default="",
+        help_text='Where it came from: "Fees", "Settings", "fee schedule CSV".',
+    )
+
+    # Answers "is this schedule doing anything?" without a join: a row that has
+    # never applied is either waiting for a job or naming one that never existed.
+    applied_count = models.IntegerField(default=0)
+    last_applied_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # One price per client per kind of work. A firm that charges two prices
+        # for the same recurring job is describing two jobs.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["org", "client", "engagement_type"],
+                name="uniq_fee_schedule_client_type",
+            ),
+        ]
+        indexes = [models.Index(fields=["org", "client", "engagement_type"])]
+        verbose_name_plural = "fee schedule entries"
+
+    def __str__(self):
+        return f"{self.client.name} — {self.get_engagement_type_display()}: {self.budget_hours}h"

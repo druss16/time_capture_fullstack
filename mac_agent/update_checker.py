@@ -282,6 +282,20 @@ def _already_nagged(version: str) -> bool:
                 if data.get("version") != version:
                     return False
 
+                # The download finished but we are STILL on the old version,
+                # so the install never happened — a downloaded-but-uninstalled
+                # update would otherwise sit there forever, the nag file
+                # insisting the job was done. Retry it.
+                if data.get("download_ok"):
+                    try:
+                        from version import APP_VERSION
+                        if APP_VERSION != version:
+                            _log(f"[UPDATE] Nag says installed but still on "
+                                 f"{APP_VERSION} — retrying")
+                            return False
+                    except Exception:
+                        pass
+
                 # Stale nag check - retry after 24 hours regardless
                 nag_ts = data.get("ts", 0)
                 if time.time() - nag_ts > 86400:  # 24 hours

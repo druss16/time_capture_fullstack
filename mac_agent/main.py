@@ -57,6 +57,31 @@ from Quartz import (
 
 from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
 
+# Progress-based heartbeat + idle classification, shared with windows_agent.
+# The watchdog's own heartbeat says the thread is alive; progress_tick() says
+# it is actually getting somewhere. classify_idle() then separates a user who
+# deliberately stopped from a loop that froze or a machine that slept — the
+# second kind is not a real absence and should not be billed as one.
+try:
+    from tracking_health import (
+        progress_tick,
+        record_window_change,
+        record_idle_enter,
+        record_idle_exit,
+        record_wake_event,
+        classify_idle,
+        IdleKind,
+    )
+    _TRACKING_HEALTH = True
+except Exception as _th_err:  # pragma: no cover - import guard
+    _TRACKING_HEALTH = False
+    progress_tick = lambda: 0
+    record_window_change = record_idle_enter = record_idle_exit = \
+        record_wake_event = lambda: None
+    classify_idle = None
+    IdleKind = None
+    print(f"[HEALTH] tracking_health unavailable: {_th_err}", flush=True)
+
 import certifi
 import ssl
 
@@ -483,6 +508,38 @@ MIN_DWELL_SECONDS = int(_get("min_dwell_seconds", _get("AGENT_MIN_DWELL_SECONDS"
 # The server has required both stamps since v1.3.38 and returns 400 for an
 # event carrying only ts_utc — there is no compatibility path.
 HEARTBEAT_INTERVAL_S = int(_get("heartbeat_interval_seconds", 60))
+
+# Meeting detection. The detector was written cross-platform in
+# windows_agent and carries its own MacMeetingProbe (camera via lsof on
+# VDCAssistant, audio via coreaudiod, both cross-referenced against the
+# process table). The Mac agent had only is_in_meeting() — a title and URL
+# test that answers "does this window look like a meeting", never "a meeting
+# just started" — so meetings produced no blocks of their own.
+try:
+    from meeting_detector import MeetingDetector, MeetingState
+    MEETING_DETECTOR_AVAILABLE = True
+except Exception as _md_err:  # pragma: no cover - import guard
+    MEETING_DETECTOR_AVAILABLE = False
+    MeetingDetector = None
+    MeetingState = None
+    print(f"[MEETING] Module not available: {_md_err}", flush=True)
+
+
+def _meeting_sig(meeting_app: str, title: str = None):
+    """Build a window signature for a Meeting event.
+
+    Matches the (app_name, bundle_id, window_title, url, file_path) tuple
+    write_event expects. bundle_id uses the 'meeting:' prefix so the backend
+    compactor recognises it as a meeting block.
+    """
+    return (
+        "Meeting",
+        f"meeting:{meeting_app}",
+        title or f"{meeting_app.title()} meeting",
+        None,
+        None,
+    )
+
 
 # Hard ceiling on a single emitted event's duration. If the tracking loop
 # stalls (sleep, network hang, a hung osascript) and recovers, we still want
@@ -3550,6 +3607,42 @@ def run_agent():
     except Exception as e:
         log(f"[FINDER] Init failed: {e}")
 
+    # === MEETING DETECTOR ===
+    meeting_detector = None
+    if MEETING_DETECTOR_AVAILABLE:
+        try:
+            def _get_fg_title():
+                """Foreground window title, for browser-hosted meetings."""
+                try:
+                    front = get_frontmost_app()
+                    if front:
+                        _app, _bundle, pid, fallback_title = front
+                        return get_window_title_via_ax(pid) or fallback_title
+                except Exception:
+                    pass
+                return None
+
+            def _on_meeting_start(state):
+                log(f"[MEETING] Started: {state.app} — {state.title or '(no title)'}")
+
+            def _on_meeting_end(state):
+                dur = int(state.ended_at - state.started_at) if state.started_at else 0
+                log(f"[MEETING] Ended: {state.app} ({dur}s)")
+
+            meeting_detector = MeetingDetector(
+                on_meeting_start=_on_meeting_start,
+                on_meeting_end=_on_meeting_end,
+                context_bus=_CONTEXT,
+                get_foreground_title=_get_fg_title,
+                enabled=True,
+            )
+            meeting_detector.start()
+            log("[MEETING] ✅ Detector initialized")
+        except Exception as e:
+            log(f"[MEETING] Failed to initialize: {e}")
+    else:
+        log("[MEETING] Module not available — meeting capture disabled")
+
     _tracking_stop_event = threading.Event()
 
     # Heartbeat timestamp — updated at top of every loop iteration.
@@ -3642,6 +3735,35 @@ def run_agent():
                     # wake), this timestamp goes stale and mac_watchdog fires
                     # os._exit(1) after WATCHDOG_FROZEN_THRESHOLD (90s).
                     _last_detect_heartbeat = heartbeat_touch()
+                    progress_tick()
+
+                    # ── Drain meeting detector events ──
+                    # The detector runs on its own thread; sqlite belongs to
+                    # this one, so it queues and we write. Start and end are
+                    # 1-second marker events — the compactor turns the pair
+                    # into the meeting block.
+                    if meeting_detector:
+                        for kind, state in meeting_detector.drain_events():
+                            try:
+                                if kind == "start":
+                                    sig = _meeting_sig(state.app, state.title)
+                                    write_event(
+                                        conn, cur, os_user, hostname, sig,
+                                        start_ts=state.started_at,
+                                        end_ts=state.started_at + 1.0,
+                                    )
+                                    log(f"[MEETING] START event: {sig[0]} / {sig[2]}")
+                                elif kind == "end":
+                                    sig = ("Meeting-End", f"meeting:{state.app}",
+                                           state.title or "", None, None)
+                                    write_event(
+                                        conn, cur, os_user, hostname, sig,
+                                        start_ts=state.ended_at,
+                                        end_ts=state.ended_at + 1.0,
+                                    )
+                                    log("[MEETING] END event written")
+                            except Exception as e:
+                                log(f"[MEETING] Failed to write {kind} event: {e}")
 
                     # === SUBSCRIPTION CHECK ===
                     if not _subscription_active:
@@ -3676,6 +3798,7 @@ def run_agent():
                     if _wake_event.is_set() or _suspended:
                         _wake_event.clear()
                         
+                        record_wake_event()
                         if _suspended:
                             log(f"[TRACKING] ⏰ Thread was suspended for {int(iter_gap)}s (sleep or Power Nap)")
                         else:
@@ -3747,7 +3870,32 @@ def run_agent():
                                 _emit_current_dwell(max(effective_end, last_emit_ts))
                             idle_start = now if force_idle else (now - min(idle, MOUSE_IDLE_PAUSE_S))
                             _start_new_dwell(IDLE_SIG, idle_start)
-                            _idle_entered_at = time.time()  # wall-clock cap starts here
+                            _idle_entered_at = time.time()
+                            record_idle_enter()
+
+                            # Was this the user stepping away, or the loop
+                            # freezing / the machine sleeping? The second kind
+                            # is not a real absence, and recording it puts a
+                            # multi-hour Idle block in someone's day that they
+                            # then have to explain. Drop it.
+                            if _TRACKING_HEALTH:
+                                verdict = classify_idle(idle, MOUSE_IDLE_PAUSE_S)
+                                if verdict.kind == IdleKind.UNINTENTIONAL:
+                                    log(f"[IDLE] ⚠️ Unintentional ({verdict.reason}) — skipping")
+                                    _clear_dwell()
+                                    _idle_entered_at = 0.0
+                                    record_idle_exit()
+                                    # Sleep before re-checking. Without it the
+                                    # `continue` below skips the poll sleep and,
+                                    # because the dwell was just cleared, the
+                                    # loop re-enters this branch every tick — a
+                                    # busy-loop that spams the log and pins a
+                                    # core through a long AFK. Same fix as
+                                    # windows_agent 6061b952.
+                                    time.sleep(POLL_SECONDS)
+                                    _last_detect_heartbeat = heartbeat_touch()
+                                    consecutive_errors = 0
+                                    continue
                             if not force_idle:
                                 log(f"[IDLE] Entered idle (mouse idle {int(idle)}s ≥ {MOUSE_IDLE_PAUSE_S}s)")
                         
@@ -3817,6 +3965,7 @@ def run_agent():
                                     report_error_to_backend("notification", str(e), traceback.format_exc(),
                                                           {"event": "on_idle_end"})
                             dwell = time.time() - dwell_start
+                            record_idle_exit()
                             if last_emit_ts:
                                 _emit_current_dwell(time.time())
                                 log(f"[IDLE] Exited idle; recorded {int(dwell)}s idle dwell.")
@@ -3885,6 +4034,7 @@ def run_agent():
                         if current_sig and last_emit_ts:
                             _emit_current_dwell(now_loop)
                         _start_new_dwell(sig, now_loop)
+                        record_window_change()
 
                         # Snapshot inference for the NEW window so the menu bar
                         # shows the right client within a poll, instead of
@@ -3989,6 +4139,11 @@ def run_agent():
             if finder_watcher:
                 try:
                     finder_watcher.stop()
+                except Exception:
+                    pass
+            if meeting_detector:
+                try:
+                    meeting_detector.stop()
                 except Exception:
                     pass
             remove_pid()

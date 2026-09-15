@@ -1438,10 +1438,11 @@ function DecisionCard({
             reading this card. Removing the control left the row saying "looks
             like St. Francis Xavier Church" beside two buttons that both mean
             "no", with the only way to act buried under `details`.
-            So it stays, demoted from filled to outlined: still the recommended
-            destination, no longer dressed as the safe default. The invoiced
-            veto needs no UI guard — the endpoint dry-runs first and reports
-            what it refused. */}
+            So it stays, and it stays FILLED: the red line above already names
+            the veto and its reason in words, which is a better warning than a
+            border, and a control somebody is meant to press should look
+            pressable. The invoiced veto needs no UI guard — the endpoint
+            dry-runs first and reports what it refused. */}
         {/* One tap per candidate. Equal weight on purpose: the moment one of
             them looks like the default, the tie has been resolved by styling
             instead of by the reviewer. */}
@@ -1464,9 +1465,13 @@ function DecisionCard({
             title={blocked ? `${draft?.vetoes[0]} Moving it is your call to make.`
                            : `File this block under ${targetName}`}
             style={{
-              background: blocked ? "transparent" : T.green,
+              // Filled whether or not a veto fired. The outlined variant said
+              // "held back", but the red sentence above already says that, in
+              // words, with the reason — and a control the reviewer is meant
+              // to use should look like one. The veto stays in the tooltip.
+              background: T.green,
               border: `1px solid ${T.green}`,
-              color: blocked ? T.green : "#06281c",
+              color: "#06281c",
               padding: "9px 16px", fontSize: 13, borderRadius: 7, fontWeight: 600,
               cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
             }}>

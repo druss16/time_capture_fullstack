@@ -73,7 +73,7 @@ class Command(BaseCommand):
             if not b:
                 raise CommandError(f"block {opts['explain']} not found")
             w("")
-            w(f"block {b.id} · {b.date} · booked {ctx.names.get(b.client_id, '—')}")
+            w(f"block {b.id} · {b.day} · booked {ctx.names.get(b.client_id, '—')}")
             w(f"  title: {b.window_title}")
             w("")
             w("  signals:")
@@ -95,13 +95,16 @@ class Command(BaseCommand):
         # report differences on rows nobody is shown, and each draft costs
         # neighbour queries.
         flagged = (MismatchFlag.objects
-                   .filter(org_id=org_id, detected_at__date__gte=since)
+                   .filter(org_id=org_id, detected_at__day__gte=since)
                    .values_list('block_id', flat=True))
+        # Deliberately NO .only(): draft_for_block reaches for invoiced,
+        # qb_time_activity_id, xero_invoice_id, state_changed_by and
+        # categorized_by inside the veto check, and a deferred field there is
+        # one refresh_from_db per row — the N+1 that SIGKILLed a worker in
+        # PR #439. Flagged rows are few; load them whole.
         blocks = (Block.objects
                   .filter(id__in=list(flagged), org_id=org_id,
                           deleted_at__isnull=True, client_id__isnull=False)
-                  .only('id', 'window_title', 'client_id', 'org_id', 'date',
-                        'minutes', 'app_name', 'file_path', 'start', 'user_id')
                   .order_by('id'))
 
         flipped, withdrawn, other = [], [], []
@@ -113,7 +116,7 @@ class Command(BaseCommand):
             if (old.target_client_id == new.target_client_id
                     and old.verdict == new.verdict):
                 continue
-            row = (b.id, b.date, (b.window_title or '')[:100],
+            row = (b.id, b.day, (b.window_title or '')[:100],
                    ctx.names.get(b.client_id, '—'),
                    old.target_client_name or None, old.verdict,
                    new.target_client_name or None, new.verdict)

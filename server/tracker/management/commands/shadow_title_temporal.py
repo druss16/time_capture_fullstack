@@ -58,14 +58,7 @@ class Command(BaseCommand):
             me.TITLE_OUTRANKS_TEMPORAL = before
 
     def handle(self, *args, **opts):
-        from datetime import timedelta
-
-        from django.utils import timezone
-
         from tracker.models import Block
-        from tracker.services.mismatch_scan import scan_buckets
-        from tracker.utils.db_iter import keyset_iter
-        from tracker.views_mavops import _confirmed_correct_block_ids
 
         org_id = opts['org']
         ctx = me.context_for(org_id)
@@ -92,48 +85,11 @@ class Command(BaseCommand):
             w("")
             return
 
-        # THE POPULATION IS DERIVED, NOT STORED.
-        #
-        # This looked for rows in MismatchFlag, which was wrong twice over:
-        # first it counted resolved flags (96% of them, reported as "stale"),
-        # and once that was corrected org 21 had ZERO open flags in 120 days
-        # while its Mismatches tab was plainly showing rows. The tab does not
-        # read that table. It re-derives every row live through
-        # `mismatch_scan.scan_buckets` over committed blocks, and only THEN
-        # asks misfile_evidence for drafts (views_mavops mismatches endpoint).
-        #
-        # So the shadow has to scan the way the screen scans, or it measures a
-        # population nobody is ever shown. Mirrored from that endpoint,
-        # including keyset_iter (Neon's pooler drops named cursors) and the
-        # skip-list of rows a human already declared correct.
-        cutoff = timezone.now() - timedelta(days=opts['days'])
-        scan_qs = (Block.objects
-                   .filter(org_id=org_id, deleted_at__isnull=True,
-                           client_id__isnull=False,
-                           classification_state='committed',
-                           start__gte=cutoff)
-                   .exclude(window_title__isnull=True)
-                   .exclude(window_title=''))
-        result = scan_buckets(
-            keyset_iter(scan_qs, 1000, descending=True),
-            {org_id: ctx.names}, {org_id: ctx.index}, {org_id: ctx.firm_name},
-            skip_block_ids=_confirmed_correct_block_ids(org_id),
-        )
-        flagged_ids = [row['block_id']
-                       for bucket in ('client', 'internal', 'unsure')
-                       for row in result['flagged'].get(bucket, [])]
-        w(f"  scanned {result['scanned']:,} committed blocks -> "
-          f"{len(flagged_ids):,} flagged rows to draft")
-
-        # Deliberately NO .only(): draft_for_block reaches for invoiced,
-        # qb_time_activity_id, xero_invoice_id, state_changed_by and
-        # categorized_by inside the veto check, and a deferred field there is
-        # one refresh_from_db per row — the N+1 that SIGKILLed a worker in
-        # PR #439. Flagged rows are few; load them whole.
-        blocks = (Block.objects
-                  .filter(id__in=flagged_ids, org_id=org_id,
-                          deleted_at__isnull=True, client_id__isnull=False)
-                  .order_by('id'))
+        # One derivation, shared with shadow_needs_human — see
+        # misfile_evidence.flagged_blocks_for_org for why this must not be a
+        # MismatchFlag query.
+        blocks, scanned_blocks = me.flagged_blocks_for_org(org_id, opts['days'])
+        w(f"  scanned {scanned_blocks:,} committed blocks")
 
         flipped, withdrawn, other = [], [], []
         scanned = 0

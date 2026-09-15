@@ -150,6 +150,28 @@ if _ok:
     check("a root that dissolves doesn't take the real question with it",
           len(_two_parishes) >= 2 and 330 not in _two_parishes)
 
+    print("Look-alike clients — the row has to say WHERE it read the name:")
+    JORDAN = [390, 391]     # Church-Jordan vs Jordan Cemetery
+    _dialog = L.named_by(
+        JORDAN,
+        'Save Print Output As',
+        "\\\\tlwall-dc-01\\Company Data\\Client File Notes\\St Patrick's "
+        "Jordan\\2026-2027\\St Patricks P&L Budget Overview FINAL 09-14-26.xlsx")
+    check("a dialog title defers to the folder that carries the name",
+          _dialog == {'source': 'folder', 'text': "St Patrick's Jordan"})
+    check("a title that names the group speaks for itself",
+          (L.named_by(JORDAN, "St Patrick's Jordan" + QB) or {}).get('source') == 'title')
+    check("...and the app chrome is not part of what it said",
+          (L.named_by(JORDAN, "St Patrick's Jordan" + QB) or {})
+          .get('text') == "St Patrick's Jordan")
+    check("a file that carries the name more fully than its folder wins",
+          L.named_by(JORDAN, 'Save Print Output As',
+                     "\\\\srv\\Clients\\2026\\St Patricks Jordan Budget.xlsx")
+          == {'source': 'file', 'text': 'St Patricks Jordan Budget.xlsx'})
+    check("nothing named them -> no reason to show",
+          L.named_by(JORDAN, 'Find and Replace') is None)
+    check("an empty family names nobody", L.named_by([], 'anything') is None)
+
     print("Look-alike clients — ONE everyday word names nobody:")
     check("'estate' alone doesn't make an estate client a candidate",
           274 not in L.candidates_for(W('Gift and estate planning')))
@@ -252,6 +274,20 @@ if _ok:
     check("a five-candidate signal narrows to the real question",
           set(_after) == {790, 791})
     check("...and the block's own client survives the narrowing", 790 in _after)
+
+    unattributed = FakeBlock(23, 20, 0, [388, 409, 790, 791, 300],
+                             title='St Mary Baldwinsville Notes')
+    unattributed.client_id, unattributed.file_path, unattributed.url = None, '', ''
+    _cf.for_org = _StubRoster.for_org
+    try:
+        narrow_to_live_family([unattributed], 21)
+        _ids = (_signal(unattributed).get('detail') or {}).get('candidate_client_ids', [])
+        _ok = None not in _ids
+    except Exception:
+        _ok = False
+    finally:
+        _cf.for_org = _real_for_org
+    check("a block with NO client doesn't put None in the candidate list", _ok)
 
     tight = FakeBlock(22, 20, 0, [388, 790], title="St. Mary's Church")
     tight.client_id, tight.file_path, tight.url = 790, '', ''

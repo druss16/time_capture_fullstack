@@ -4885,6 +4885,10 @@ def today_time(request):
             ).only(
                 'id', 'user_id', 'window_title', 'title', 'minutes', 'start',
                 'end', 'category_hours', 'proposed_signals',
+                # narrow_to_live_family re-reads the block's text, and a
+                # DEFERRED field there costs one refresh_from_db PER BLOCK —
+                # the N+1 that SIGKILLed a prod worker. Fetch them up front.
+                'client_id', 'file_path', 'url',
             )[:300]
             # Gated by Stage 11 and still unanswered — the same predicate
             # Confirm-all uses to leave these alone, so the row asking the

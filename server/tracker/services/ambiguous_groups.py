@@ -82,29 +82,43 @@ def narrow_to_live_family(blocks, org_id):
             continue
         detail = sig.get('detail') or {}
         stored = [int(c) for c in detail.get('candidate_client_ids', [])]
-        if len(stored) < 3:
-            continue          # already as tight as it gets
-        words = client_families.text_words(
-            block.window_title or block.title or '',
-            getattr(block, 'file_path', '') or '',
-            getattr(block, 'url', '') or '')
-        live = [c for c in roster.family_for(words) if c in stored]
-        if len(live) < 2:
-            continue
-        if block.client_id not in live:
-            # The block is booked to a client the title does not actually point
-            # at — a mismatch, and exactly the case worth asking about. Keeping
-            # it as an option (rather than refusing to narrow at all, which left
-            # a real "*St Marys Baldwinsville" row showing fourteen buttons)
-            # gives the honest choice: the two the title names, plus where it
-            # sits today.
-            live = live + [block.client_id]
-        detail['candidate_client_ids'] = live
-        # Relabel against the NARROWED set: a button should say what makes that
-        # client unique among the ones still on screen, not among fourteen.
-        detail['candidate_labels'] = {
-            str(c): roster.short_name(c, words, live) for c in live
-        }
+        title = block.window_title or block.title or ''
+        file_path = getattr(block, 'file_path', '') or ''
+        url = getattr(block, 'url', '') or ''
+        words = client_families.text_words(title, file_path, url)
+        final = stored
+
+        if len(stored) >= 3:          # below that it is already as tight as it gets
+            live = [c for c in roster.family_for(words) if c in stored]
+            if len(live) >= 2:
+                # `and block.client_id` is load-bearing: a block with NO client
+                # is gated too, and appending None here put None in the
+                # candidate list, where short_name raised KeyError(None). Daily
+                # Review catches that and returns an EMPTY lane, so one
+                # unattributed block with three candidates silently deleted
+                # every look-alike question on the page.
+                if block.client_id and block.client_id not in live:
+                    # The block is booked to a client the title does not
+                    # actually point at — a mismatch, and exactly the case
+                    # worth asking about. Keeping it as an option (rather than
+                    # refusing to narrow at all, which left a real "*St Marys
+                    # Baldwinsville" row showing fourteen buttons) gives the
+                    # honest choice: the two the title names, plus where it
+                    # sits today.
+                    live = live + [block.client_id]
+                final = live
+                detail['candidate_client_ids'] = live
+                # Relabel against the NARROWED set: a button should say what
+                # makes that client unique among the ones still on screen, not
+                # among fourteen.
+                detail['candidate_labels'] = {
+                    str(c): roster.short_name(c, words, live) for c in live
+                }
+
+        # Where the name was read, against the FINAL candidate list. Recomputed
+        # rather than trusted, so signals written before the row started
+        # explaining itself get the explanation too.
+        detail['named_by'] = roster.named_by(final, title, file_path, url)
         sig['detail'] = detail
     return blocks
 
@@ -187,10 +201,23 @@ def _render(run, candidate_ids, client_names, recent_client_ids):
     order.sort(key=lambda cid: (recent_rank.get(cid, len(recent_rank)),
                                 classifier_rank[cid]))
 
-    representative = max(blocks, key=lambda b: b.minutes or 0)
+    # The row shows ONE title, so it has to explain THAT one. A sitting holds
+    # the Excel window and the "Save Print Output As" dialog it opened; taking
+    # the title from the longest block and the reason from the first printed
+    # "the title names the group" under a title that names nobody.
+    representative, rep_signal = max(run, key=lambda pair: pair[0].minutes or 0)
+    named_by = (rep_signal.get('detail') or {}).get('named_by')
+    if not named_by:
+        named_by = next(
+            ((s.get('detail') or {}).get('named_by') for _, s in run
+             if (s.get('detail') or {}).get('named_by')), None)
     return {
         'block_ids':    [b.id for b in blocks],
         'window_title': representative.window_title or representative.title or '',
+        # {'source': 'title'|'folder'|'file'|'address', 'text': str} — what the
+        # row shows as its reason for asking. None on signals written before
+        # this existed, and the row falls back to the old wording.
+        'named_by':     named_by,
         'minutes':      sum(b.minutes or 0 for b in blocks),
         'block_count':  len(blocks),
         'start':        min(b.start for b in blocks).isoformat(),

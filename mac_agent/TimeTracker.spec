@@ -107,5 +107,11 @@ app = BUNDLE(
     coll,
     name='TimeTracker.app',
     icon='timetracker.icns',
-    bundle_identifier='com.mavops.timetracker',
+    # MUST stay 'TimeTracker' — it is what the installed 1.7.22 declares.
+    # TCC keys Accessibility on the bundle identifier, so changing this to
+    # something tidier and reverse-DNS would present as a NEW application to
+    # macOS: every existing Mac user silently loses Accessibility, window
+    # titles start arriving empty, and attribution quietly falls back to file
+    # paths and URLs alone. Continuity beats correct form here.
+    bundle_identifier='TimeTracker',
 )

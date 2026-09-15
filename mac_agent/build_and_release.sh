@@ -77,6 +77,19 @@ source .venv/bin/activate
 pip install --upgrade pip wheel -q
 pip install -r requirements.txt pyinstaller -q
 
+# The version has to be written BEFORE PyInstaller runs: version.py is
+# imported by main.py and frozen into the binary. APP_VERSION rides on every
+# event payload as agent_version (fleet visibility) and is what
+# update_checker compares against the server, so a build left at "dev" both
+# reports nothing useful and never recognises itself as up to date.
+echo ""
+echo "🏷  Stamping version.py → ${VERSION}"
+cat > version.py <<VERSIONPY
+# mac_agent/version.py
+# Auto-generated during build - DO NOT EDIT MANUALLY
+APP_VERSION = "${VERSION}"
+VERSIONPY
+
 echo ""
 echo "🔨 Building ${APP_NAME}.app with PyInstaller..."
 # TimeTracker.spec ends in a BUNDLE step, so this produces a real .app with
@@ -89,6 +102,27 @@ test -d "dist/${APP_NAME}.app" || {
     echo "❌ Expected dist/${APP_NAME}.app — PyInstaller did not produce a bundle"
     exit 1
 }
+
+# ============================================================
+# STEP 2.4: Stamp the version into the bundle
+# ============================================================
+# Before signing, never after: editing Info.plist breaks the seal over it.
+# The spec cannot carry the version because it is a build argument.
+echo ""
+echo "🏷  Stamping Info.plist → ${VERSION}"
+plutil -replace CFBundleShortVersionString -string "${VERSION}" "dist/${APP_NAME}.app/Contents/Info.plist"
+plutil -replace CFBundleVersion            -string "${VERSION}" "dist/${APP_NAME}.app/Contents/Info.plist"
+
+# The identifier must not drift: TCC keys Accessibility on it, so a change
+# makes macOS treat this as a new app and every user silently loses the
+# permission that lets the agent read window titles.
+ACTUAL_ID="$(plutil -extract CFBundleIdentifier raw "dist/${APP_NAME}.app/Contents/Info.plist")"
+if [[ "$ACTUAL_ID" != "TimeTracker" ]]; then
+    echo "❌ Bundle identifier is '${ACTUAL_ID}', expected 'TimeTracker'."
+    echo "   Shipping this would reset Accessibility for every existing Mac user."
+    echo "   Fix bundle_identifier in TimeTracker.spec."
+    exit 1
+fi
 
 # ============================================================
 # STEP 2.5: Sign the app with hardened runtime

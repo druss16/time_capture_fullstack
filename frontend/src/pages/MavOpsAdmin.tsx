@@ -945,6 +945,9 @@ interface RowEvidence {
   checked: string[];
   vetoes: string[];
   caveats: string[];
+  // Ranked alternatives for a row that CANNOT have one answer. Choices, never
+  // a recommendation — see the candidate buttons in DecisionCard.
+  candidates?: { client_id: number; client_name: string }[];
 }
 
 interface MismatchBucket {
@@ -1285,6 +1288,17 @@ function DecisionCard({
   const targetId = draft?.target_client_id ?? row.looks_like_client_id ?? null;
   const targetName = draft?.target_client_name || row.looks_like_client_name || "";
 
+  // Rows the detector CANNOT answer: the booked client is absent from the
+  // title and the rivals it does name tie. They arrive with ranked candidates
+  // — from the draft once it carries them, or from the scan row, which has
+  // always had them. The card used to ignore both and print "there is no
+  // recommendation to make here" over a row whose two possible answers were
+  // sitting in its own props. 75 of org 21's 145 flagged rows read that way.
+  const choices = (draft?.candidates?.length ? draft.candidates
+                   : (row.candidates || []).map(c => ({
+                       client_id: c.client_id, client_name: c.client_name })));
+  const offerChoices = !targetId && choices.length > 0;
+
   const found = draft?.evidence || [];
   // Independent evidence, split by WHICH SIDE it supports. Filtering only on
   // `independent` said "2 other things agree" and then listed a witness that
@@ -1352,8 +1366,17 @@ function DecisionCard({
         )}
 
         {draft && draft.verdict === "needs_human" && (
-          <>Nothing outside the window title points anywhere, and the title doesn't
-            name one client clearly. There is no recommendation to make here.</>
+          offerChoices ? (
+            <>
+              <b style={{ color: T.text }}>{row.booked_client_name}</b> is not
+              named in this title, and the clients that ARE read alike here —
+              nothing in the text separates them. No machine should choose
+              between them, so they are listed below rather than ranked.
+            </>
+          ) : (
+            <>Nothing outside the window title points anywhere, and the title doesn't
+              name one client clearly. There is no recommendation to make here.</>
+          )
         )}
 
         {draft && draft.verdict === "reassign" && (
@@ -1419,6 +1442,22 @@ function DecisionCard({
             destination, no longer dressed as the safe default. The invoiced
             veto needs no UI guard — the endpoint dry-runs first and reports
             what it refused. */}
+        {/* One tap per candidate. Equal weight on purpose: the moment one of
+            them looks like the default, the tie has been resolved by styling
+            instead of by the reviewer. */}
+        {offerChoices && choices.map(c => (
+          <button key={c.client_id} disabled={busy}
+            onClick={() => onMove([row.block_id], c.client_id, c.client_name)}
+            title={`File this block under ${c.client_name}`}
+            style={{
+              background: "transparent", border: `1px solid ${T.teal}`,
+              color: T.teal, padding: "9px 16px", fontSize: 13,
+              borderRadius: 7, fontWeight: 600,
+              cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
+            }}>
+            {c.client_name}
+          </button>
+        ))}
         {targetId && (
           <button disabled={busy}
             onClick={() => onMove([row.block_id], targetId, targetName)}

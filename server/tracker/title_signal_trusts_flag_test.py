@@ -183,6 +183,44 @@ def main():
           (signal("Cutting Edge Decks year end", None, True) or 0).supports
           == (signal("Cutting Edge Decks year end", None, False) or 1).supports)
 
+    print("\nA row with no single answer carries the names it could be:")
+    # Two parishes both named in full, neither of them the booked client:
+    # detect_booked_absent says "this booking is wrong" and lists the rivals
+    # rather than choosing, because nothing in the text separates them. That is
+    # the honest verdict — but it was delivered as a blank while the ranked
+    # names sat one function call away.
+    #
+    # (A bare "St. Mary" does NOT reach here: ABSENT_RIVAL_COVERAGE wants
+    # somebody else's WHOLE name present, and "St. Mary" leaves out "Church".
+    # Checked, rather than assumed, by the first assertion below.)
+    T_BARE = "Holy Family and Holy Cross"
+    absent = cnm.detect_booked_absent(T_BARE, DECKS, ctx.index, NAMES,
+                                      firm_name=ctx.firm_name)
+    check("the detector really does produce candidates here",
+          bool(absent) and len(absent['candidates']) >= 2)
+
+    d = ma.Draft(block_id=1, org_id=21, booked_client_id=DECKS,
+                 booked_client_name=NAMES[DECKS])
+    ma._attach_candidates(d, Blk(T_BARE, DECKS), ctx)
+    check("the draft now carries them", len(d.candidates) >= 2)
+    check("…as {client_id, client_name} the UI can render",
+          all(set(c) == {'client_id', 'client_name'} for c in d.candidates))
+    check("…and it still names NO target — these are choices, not a pick",
+          d.target_client_id is None)
+    check("the summary lists them with 'or', not a ranking",
+          ' or ' in d.summary)
+    check("…and says whose call it is", 'Your pick' in d.summary)
+    check("they survive serialisation to the UI",
+          len(d.as_dict()['candidates']) == len(d.candidates))
+
+    print("\n…and a row that genuinely names nobody stays blank:")
+    d2 = ma.Draft(block_id=2, org_id=21, booked_client_id=DECKS,
+                  booked_client_name=NAMES[DECKS])
+    before = d2.summary
+    ma._attach_candidates(d2, Blk("Payroll register 2026", DECKS), ctx)
+    check("no candidates invented", d2.candidates == [])
+    check("…and the summary is untouched", d2.summary == before)
+
     print()
     if FAILED:
         print(f'{len(FAILED)} FAILED:')

@@ -62,7 +62,10 @@ class Command(BaseCommand):
 
         from django.utils import timezone
 
-        from tracker.models import Block, MismatchFlag
+        from tracker.models import Block
+        from tracker.services.mismatch_scan import scan_buckets
+        from tracker.utils.db_iter import keyset_iter
+        from tracker.views_mavops import _confirmed_correct_block_ids
 
         org_id = opts['org']
         ctx = me.context_for(org_id)
@@ -89,28 +92,46 @@ class Command(BaseCommand):
             w("")
             return
 
-        since = timezone.now().date() - timedelta(days=opts['days'])
-        # Only FLAGGED blocks are ever drafted, so they are the only population
-        # whose behaviour can change. Drafting every block in the window would
-        # report differences on rows nobody is shown, and each draft costs
-        # neighbour queries.
-        # resolved_at__isnull=True matters more than it looks. Without it this
-        # swept up every flag ever raised in the window, resolved ones
-        # included, and 265 of org 21's 275 came back STALE — not because the
-        # queue is full of zombies but because most of them had already been
-        # dealt with. A shadow run must look at the rows the agent actually
-        # drafts for, which is the OPEN queue.
-        flagged = (MismatchFlag.objects
-                   .filter(org_id=org_id, detected_at__date__gte=since,
-                           resolved_at__isnull=True)
-                   .values_list('block_id', flat=True))
+        # THE POPULATION IS DERIVED, NOT STORED.
+        #
+        # This looked for rows in MismatchFlag, which was wrong twice over:
+        # first it counted resolved flags (96% of them, reported as "stale"),
+        # and once that was corrected org 21 had ZERO open flags in 120 days
+        # while its Mismatches tab was plainly showing rows. The tab does not
+        # read that table. It re-derives every row live through
+        # `mismatch_scan.scan_buckets` over committed blocks, and only THEN
+        # asks misfile_evidence for drafts (views_mavops mismatches endpoint).
+        #
+        # So the shadow has to scan the way the screen scans, or it measures a
+        # population nobody is ever shown. Mirrored from that endpoint,
+        # including keyset_iter (Neon's pooler drops named cursors) and the
+        # skip-list of rows a human already declared correct.
+        cutoff = timezone.now() - timedelta(days=opts['days'])
+        scan_qs = (Block.objects
+                   .filter(org_id=org_id, deleted_at__isnull=True,
+                           client_id__isnull=False,
+                           classification_state='committed',
+                           start__gte=cutoff)
+                   .exclude(window_title__isnull=True)
+                   .exclude(window_title=''))
+        result = scan_buckets(
+            keyset_iter(scan_qs, 1000, descending=True),
+            {org_id: ctx.names}, {org_id: ctx.index}, {org_id: ctx.firm_name},
+            skip_block_ids=_confirmed_correct_block_ids(org_id),
+        )
+        flagged_ids = [row['block_id']
+                       for bucket in ('client', 'internal', 'unsure')
+                       for row in result['flagged'].get(bucket, [])]
+        w(f"  scanned {result['scanned']:,} committed blocks -> "
+          f"{len(flagged_ids):,} flagged rows to draft")
+
         # Deliberately NO .only(): draft_for_block reaches for invoiced,
         # qb_time_activity_id, xero_invoice_id, state_changed_by and
         # categorized_by inside the veto check, and a deferred field there is
         # one refresh_from_db per row — the N+1 that SIGKILLed a worker in
         # PR #439. Flagged rows are few; load them whole.
         blocks = (Block.objects
-                  .filter(id__in=list(flagged), org_id=org_id,
+                  .filter(id__in=flagged_ids, org_id=org_id,
                           deleted_at__isnull=True, client_id__isnull=False)
                   .order_by('id'))
 
@@ -225,13 +246,15 @@ class Command(BaseCommand):
             w("")
 
         if not (flipped or withdrawn or other):
-            if live == 0:
+            if scanned == 0:
+                w("Nothing to measure: the scan flagged no rows at all in "
+                  "this window. Widen --days.")
+            elif live == 0:
                 w(f"No change, and no row could have changed: all {scanned:,} "
                   f"flagged blocks are STALE — the detector no longer flags "
                   f"them, so draft_for_block returns 'already fixed' before "
                   f"any signal is weighed. This window says nothing about the "
-                  f"rule either way. Widen --days, or clear the stale queue "
-                  f"first (tasks.scan_org_mismatches closes them).")
+                  f"rule either way.")
             elif pop['disagree'] == 0 and pop['title'] == 0:
                 w("No change, and the reason is that the title signal never "
                   "fired on any of these rows — there was nothing to outvote. "

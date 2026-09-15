@@ -1,9 +1,41 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.mavops.activityagent</string>
-<key>ProgramArguments</key><array><string>/usr/bin/env</string><string>python3</string><string>/Users/USERNAME/path/to/mac_agent/main.py</string></array>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>StandardOutPath</key><string>/tmp/mavops-agent.out</string>
-<key>StandardErrorPath</key><string>/tmp/mavops-agent.err</string>
-</dict></plist>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Launches the app the Makefile stages into this same pkgroot.
+
+  This used to point at /Users/USERNAME/path/to/mac_agent/main.py — a
+  placeholder that was never filled in. Installed copies of it sit in
+  /Library/LaunchAgents failing with exit status 2 (file not found) on
+  every login, which is why `launchctl list` shows this label with a
+  status and no PID on machines that took the .pkg.
+
+  It must name a real executable inside the .app bundle: the agent calls
+  +[UNUserNotificationCenter currentNotificationCenter] at startup, which
+  throws an uncatchable Objective-C exception for a process with no bundle.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mavops.activityagent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/TimeTrackerAgent.app/Contents/MacOS/TimeTrackerAgent</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/mavops-agent.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/mavops-agent.err</string>
+</dict>
+</plist>

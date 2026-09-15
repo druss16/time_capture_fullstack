@@ -110,6 +110,43 @@ After a build, check that list is still only those:
 
     grep '^missing module named' build/TimeTracker*/warn-TimeTracker*.txt
 
+## The two packaging paths
+
+There are two, and they build different products. Keep them apart.
+
+| | `make ship` | `./build_and_release.sh` |
+|---|---|---|
+| App | `TimeTrackerAgent.app` | `TimeTracker.app` |
+| Staging root | `pkgroot/` | `pkgroot_timetracker/` |
+| Scripts | `scripts/` | `pkg_scripts/` |
+| LaunchAgent | `com.mavops.activityagent` | `com.mavops.timetracker` |
+| Built via | `TimeTrackerAgent.spec` + C launcher | `TimeTracker.spec` (BUNDLE step) |
+
+Separate staging roots matter: `pkgbuild --root` packages *everything*
+underneath it, so two apps in one root ship in one `.pkg`.
+
+**Both must produce an `.app`.** Not a preference — see the abort described
+below. `build_and_release.sh` used to `--onefile` a bare binary into
+`pkgroot/usr/local/bin/TimeTrackerAgent`, a path nothing else in the repo
+references: not the install scripts (they use `/usr/local/mavops`), not the
+LaunchAgent, not the Makefile. It could never have run, and nothing would
+have launched it if it could.
+
+The LaunchAgent plist in `pkgroot/` was also a placeholder pointing at
+`/Users/USERNAME/path/to/mac_agent/main.py`. Installed copies of it fail on
+every login; `launchctl list` shows the label with exit status 2 and no PID.
+After installing, check the agent is actually up rather than trusting the
+installer's success:
+
+    launchctl list | grep com.mavops
+
+A PID in the first column means running. A number in the second column with
+no PID is the exit status of a job that failed.
+
+Still outstanding: `launchd/install.sh` installs a bare binary to
+`~/.timetracker/bin/`, and `scripts/postinstall` chowns one at
+`/usr/local/mavops/`. Both have the same problem and neither was touched here.
+
 ## Testing a build end to end
 
 `test_event_contract.py` checks the payload shape without a server. To check

@@ -4,6 +4,19 @@
 # Usage: ./build_and_release.sh [version]
 # Example: ./build_and_release.sh 1.0.1
 #
+# SHIPS AN .app, NOT A BARE BINARY.
+# This is not a packaging preference. The agent's notification manager calls
+# +[UNUserNotificationCenter currentNotificationCenter], which throws
+# NSInternalInconsistencyException ("bundleProxyForCurrentProcess is nil")
+# when the process has no bundle. That is an Objective-C exception, so no
+# Python try/except catches it: the process aborts with SIGABRT partway
+# through startup, right after its first sync. A --onefile binary installed
+# to /usr/local/bin could never have run.
+#
+# This script stages into its own root (PKGROOT below) rather than the
+# shared ./pkgroot, which the Makefile owns and fills with TimeTrackerAgent.app.
+# Two apps in one root would both end up in the same .pkg.
+#
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -17,6 +30,14 @@ APPLE_ID="druss16@gmail.com"  # UPDATE THIS to your Apple ID email
 TEAM_ID="P3KX4CDFN4"
 # Keychain profile for notarization (set up once with: xcrun notarytool store-credentials)
 NOTARY_PROFILE="timetracker-notary"
+
+# Staging root for THIS script. Kept separate from ./pkgroot (the Makefile's,
+# which stages TimeTrackerAgent.app) so the two packaging paths cannot mix
+# payloads. Rebuilt from scratch on every run — never edit it by hand.
+PKGROOT="pkgroot_timetracker"
+PKG_SCRIPTS="pkg_scripts"
+LAUNCH_LABEL="com.mavops.timetracker"
+APP_SIGN_ID="Developer ID Application: Dan Russell (P3KX4CDFN4)"
 
 # ============================================================
 # VERSION
@@ -44,7 +65,7 @@ echo "============================================================"
 # ============================================================
 echo ""
 echo "🧹 Cleaning previous builds..."
-rm -rf build dist dist_out *.pkg 2>/dev/null || true
+rm -rf build dist dist_out "${PKGROOT}" *.pkg 2>/dev/null || true
 
 # ============================================================
 # STEP 2: Set up virtual environment and build
@@ -57,39 +78,92 @@ pip install --upgrade pip wheel -q
 pip install -r requirements.txt pyinstaller -q
 
 echo ""
-echo "🔨 Building with PyInstaller..."
-pyinstaller \
-    --onefile \
-    --name TimeTrackerAgent \
-    --clean \
-    --noconfirm \
-    main.py
+echo "🔨 Building ${APP_NAME}.app with PyInstaller..."
+# TimeTracker.spec ends in a BUNDLE step, so this produces a real .app with
+# an Info.plist and a bundle identifier — which is the whole point. It also
+# names every agent module in datas/hiddenimports; see the Building section
+# of PARITY.md for why that list has to be maintained by hand.
+pyinstaller --clean --noconfirm --distpath dist --workpath build TimeTracker.spec
+
+test -d "dist/${APP_NAME}.app" || {
+    echo "❌ Expected dist/${APP_NAME}.app — PyInstaller did not produce a bundle"
+    exit 1
+}
 
 # ============================================================
-# STEP 2.5: Sign the binary with hardened runtime
+# STEP 2.5: Sign the app with hardened runtime
 # ============================================================
 echo ""
-echo "🔐 Signing binary with hardened runtime..."
-codesign --force --options runtime --timestamp \
-    --sign "Developer ID Application: Dan Russell (P3KX4CDFN4)" \
-    dist/TimeTrackerAgent
+echo "🔐 Signing nested Mach-O binaries..."
+# Nested code must be signed before the bundle that contains it, or the
+# outer signature seals over unsigned content and notarization rejects it.
+find "dist/${APP_NAME}.app/Contents" -type f -print0 | while IFS= read -r -d '' f; do
+    if file -b "$f" | grep -q "Mach-O"; then
+        codesign --force --options runtime --timestamp --sign "${APP_SIGN_ID}" "$f" 2>/dev/null || true
+    fi
+done
 
-# Verify binary signature
-codesign --verify --verbose dist/TimeTrackerAgent
+echo "🔐 Signing ${APP_NAME}.app..."
+codesign --force --options runtime --timestamp \
+    --sign "${APP_SIGN_ID}" \
+    "dist/${APP_NAME}.app"
+
+codesign --verify --strict --verbose=2 "dist/${APP_NAME}.app"
 
 # ============================================================
-# STEP 3: Prepare pkgroot structure
+# STEP 3: Prepare package root
 # ============================================================
 echo ""
 echo "📁 Preparing package structure..."
 
-# Clear and recreate pkgroot/usr/local/bin
-rm -rf pkgroot/usr/local/bin
-mkdir -p pkgroot/usr/local/bin
+rm -rf "${PKGROOT}"
+mkdir -p "${PKGROOT}/Applications" "${PKGROOT}/Library/LaunchAgents"
 
-# Copy the built binary
-cp dist/TimeTrackerAgent pkgroot/usr/local/bin/
-chmod +x pkgroot/usr/local/bin/TimeTrackerAgent
+# ditto, not cp -R: it is the tool that understands bundles, preserving
+# extended attributes and resource forks so the code signature survives the
+# copy intact. (The ._ AppleDouble entries visible in `lsbom` afterwards are
+# pkgbuild's own encoding of those xattrs, not an artifact of the copy —
+# the installer merges them back. cp -R also preserves the signature here;
+# ditto is simply the tool Apple documents for moving a signed bundle.)
+ditto "dist/${APP_NAME}.app" "${PKGROOT}/Applications/${APP_NAME}.app"
+
+# LaunchAgent pointing at the app's executable INSIDE the bundle. Running the
+# inner executable directly still gives the process a main bundle, because
+# NSBundle derives it from the executable's path — which is what the working
+# install on a real machine does.
+cat > "${PKGROOT}/Library/LaunchAgents/${LAUNCH_LABEL}.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LAUNCH_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/${APP_NAME}.app/Contents/MacOS/${APP_NAME}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/timetracker.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/timetracker.stderr.log</string>
+</dict>
+</plist>
+PLIST
+
+echo "   staged:"
+find "${PKGROOT}" -maxdepth 3 -mindepth 2 | sed 's|^|     |'
 
 # ============================================================
 # STEP 4: Build component package
@@ -97,7 +171,8 @@ chmod +x pkgroot/usr/local/bin/TimeTrackerAgent
 echo ""
 echo "📦 Building component package..."
 pkgbuild \
-    --root pkgroot \
+    --root "${PKGROOT}" \
+    --scripts "${PKG_SCRIPTS}" \
     --identifier "${BUNDLE_ID}" \
     --version "${VERSION}" \
     --install-location / \
@@ -172,6 +247,12 @@ echo "============================================================"
 echo ""
 echo "Package location: $(pwd)/${APP_NAME}.pkg"
 echo "Size: $(du -h ${APP_NAME}.pkg | cut -f1)"
+echo ""
+echo "After installing, confirm the agent is actually RUNNING — the"
+echo "installer reports success for a package whose agent cannot start:"
+echo "  launchctl list | grep ${LAUNCH_LABEL}"
+echo "A PID in the first column means it is up. A number in the second with"
+echo "no PID is the exit status of a job that failed (2 = file not found)."
 echo ""
 echo "Next steps:"
 echo "  1. Test locally: sudo installer -pkg ${APP_NAME}.pkg -target /"

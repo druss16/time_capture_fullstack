@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# Load the LaunchAgent for the logged-in user.
+#
+# The agent is /Applications/TimeTracker.app, not a bare binary: it calls
+# +[UNUserNotificationCenter currentNotificationCenter] during startup, which
+# throws an uncatchable Objective-C exception when the process has no bundle.
+#
+set -euo pipefail
+LOG="/var/tmp/mavops-timetracker-postinstall.log"
+exec >>"$LOG" 2>&1
+echo "== postinstall $(date)"
+
+LABEL="com.mavops.timetracker"
+PLIST="/Library/LaunchAgents/$LABEL.plist"
+APP="/Applications/TimeTracker.app"
+EXEC="$APP/Contents/MacOS/TimeTracker"
+
+# The install is worthless without these two, so say so loudly rather than
+# reporting success over a package that cannot start.
+if [[ ! -d "$APP" ]]; then
+  echo "ERROR: $APP is missing from the payload"
+  exit 1
+fi
+if [[ ! -x "$EXEC" ]]; then
+  echo "ERROR: $EXEC is missing or not executable"
+  exit 1
+fi
+
+[[ -f "$PLIST" ]] && { chown root:wheel "$PLIST" || true; chmod 644 "$PLIST" || true; }
+
+# Clear quarantine so the first launch does not prompt.
+/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null || true)"
+if [[ -z "${CONSOLE_USER:-}" || "$CONSOLE_USER" == "root" ]]; then
+  echo "No console user; the LaunchAgent will load at next login."
+  echo "postinstall ok"
+  exit 0
+fi
+
+GUI_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")"
+if [[ -z "$GUI_UID" ]]; then
+  echo "Could not resolve UID for $CONSOLE_USER; leaving it for next login."
+  echo "postinstall ok"
+  exit 0
+fi
+
+USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+if [[ -n "${USER_HOME:-}" ]]; then
+  mkdir -p "$USER_HOME/Library/Logs/TimeTracker" || true
+  chown -R "$CONSOLE_USER" "$USER_HOME/Library/Logs/TimeTracker" || true
+fi
+
+attempt_bootstrap() {
+  /bin/launchctl bootout   "gui/$GUI_UID" "$PLIST" 2>/dev/null || true
+  /bin/launchctl bootstrap "gui/$GUI_UID" "$PLIST"
+  /bin/launchctl enable    "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+  /bin/launchctl kickstart -k "gui/$GUI_UID/$LABEL" 2>/dev/null || true
+}
+if ! attempt_bootstrap; then
+  echo "First bootstrap failed; retrying in 2s…"
+  sleep 2
+  attempt_bootstrap || echo "WARNING: bootstrap failed; agent will load at next login."
+fi
+
+/bin/launchctl print "gui/$GUI_UID/$LABEL" 2>/dev/null | grep -E 'program|state = ' || true
+
+# Accessibility is what lets the agent read window titles. Without it the
+# agent runs and still attributes by file path and URL, but every window
+# title arrives empty. macOS 13+ requires MDM to grant it.
+cat <<'NOTE'
+NOTE: grant Accessibility to TimeTracker under
+  System Settings > Privacy & Security > Accessibility
+or deploy a PPPC profile via MDM. Without it, window titles are unavailable.
+NOTE
+
+echo "postinstall ok"
+exit 0

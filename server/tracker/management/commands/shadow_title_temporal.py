@@ -94,8 +94,15 @@ class Command(BaseCommand):
         # whose behaviour can change. Drafting every block in the window would
         # report differences on rows nobody is shown, and each draft costs
         # neighbour queries.
+        # resolved_at__isnull=True matters more than it looks. Without it this
+        # swept up every flag ever raised in the window, resolved ones
+        # included, and 265 of org 21's 275 came back STALE — not because the
+        # queue is full of zombies but because most of them had already been
+        # dealt with. A shadow run must look at the rows the agent actually
+        # drafts for, which is the OPEN queue.
         flagged = (MismatchFlag.objects
-                   .filter(org_id=org_id, detected_at__date__gte=since)
+                   .filter(org_id=org_id, detected_at__date__gte=since,
+                           resolved_at__isnull=True)
                    .values_list('block_id', flat=True))
         # Deliberately NO .only(): draft_for_block reaches for invoiced,
         # qb_time_activity_id, xero_invoice_id, state_changed_by and
@@ -153,7 +160,13 @@ class Command(BaseCommand):
                 pop['temporal'] += 1
             if t and temporal:
                 pop['both'] += 1
-                if any(x.supports != t.supports for x in temporal):
+                # Only a temporal signal backing a different RIVAL can change
+                # the target. One backing the BOOKED client never competed for
+                # it — draft_from_signals keeps those in booked_sigs, outside
+                # `rivals` entirely — so counting it as a disagreement invented
+                # a contradiction with the zero diff that was not there.
+                if any(x.supports not in (t.supports, b.client_id)
+                       for x in temporal):
                     pop['disagree'] += 1
             if not t and not temporal:
                 pop['neither'] += 1
@@ -188,7 +201,7 @@ class Command(BaseCommand):
           f"({pop['title_is_booked']} of them name the client it is already on)")
         w(f"    temporal evidence present {pop['temporal']:>6}")
         w(f"    both present              {pop['both']:>6}")
-        w(f"    …and they DISAGREE        {pop['disagree']:>6}   "
+        w(f"    …backing a different RIVAL{pop['disagree']:>6}   "
           f"<- the only rows this rule can change")
         w(f"    neither                   {pop['neither']:>6}")
         w("")
@@ -226,9 +239,10 @@ class Command(BaseCommand):
                   "rule: run shadow_title_specificity --explain on one of "
                   "these blocks to see which gate is silencing it.")
             elif pop['disagree'] == 0:
-                w("No change, and the reason is that where the title spoke, "
-                  "the clock never contradicted it. The rule is correct and "
-                  "idle on this window.")
+                w("No change, and the reason is that on every row where the "
+                  "title spoke, the clock either agreed with it or backed the "
+                  "client the block is already on — which never competed for "
+                  "the target anyway. The rule is correct and idle here.")
             else:
                 w(f"No change, but {pop['disagree']} rows DID have the title "
                   f"and the clock disagreeing. That combination should have "

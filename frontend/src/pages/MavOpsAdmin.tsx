@@ -1396,7 +1396,11 @@ function DecisionCard({
             )}
             {blocked && (
               <div style={{ color: T.red, marginTop: 8 }}>
-                Held back: {draft.vetoes[0]}
+                The agent is held back: {draft.vetoes[0]}{" "}
+                <span style={{ color: T.textMuted }}>
+                  That stops it acting unattended. It does not stop you — you are the
+                  second opinion it is waiting for.
+                </span>
               </div>
             )}
           </>
@@ -1404,17 +1408,68 @@ function DecisionCard({
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" as const, alignItems: "center" }}>
-        {targetId && !blocked && (
+        {/* A veto used to delete this button. It shouldn't: every veto is a
+            reason the AGENT must not act unattended — the time is already
+            billed, a person's judgement is on it, the names are same-family —
+            and the answer to all three is a human deciding, which is who is
+            reading this card. Removing the control left the row saying "looks
+            like St. Francis Xavier Church" beside two buttons that both mean
+            "no", with the only way to act buried under `details`.
+            So it stays, demoted from filled to outlined: still the recommended
+            destination, no longer dressed as the safe default. The invoiced
+            veto needs no UI guard — the endpoint dry-runs first and reports
+            what it refused. */}
+        {targetId && (
           <button disabled={busy}
             onClick={() => onMove([row.block_id], targetId, targetName)}
+            title={blocked ? `${draft?.vetoes[0]} Moving it is your call to make.`
+                           : `File this block under ${targetName}`}
             style={{
-              background: T.green, border: `1px solid ${T.green}`, color: "#06281c",
+              background: blocked ? "transparent" : T.green,
+              border: `1px solid ${T.green}`,
+              color: blocked ? T.green : "#06281c",
               padding: "9px 16px", fontSize: 13, borderRadius: 7, fontWeight: 600,
               cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
             }}>
             Move to {targetName}
           </button>
         )}
+
+        {/* The other destination. This lived at the bottom of the collapsed
+            `details` panel, under the raw signal weights, in 11.5px mono —
+            findable only by someone who already knew it was there. On a vetoed
+            row it is the ONLY way to act, so it belongs in the action bar. The
+            confirm button appears only once a client is chosen, so the quiet
+            case stays quiet. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: T.textMuted, fontSize: 12 }}>
+            {targetId ? "or file under" : "file under"}
+          </span>
+          <select value={pick} disabled={busy}
+            onChange={e => setPick(e.target.value ? Number(e.target.value) : "")}
+            style={{
+              background: T.bg, border: `1px solid ${T.border}`, color: T.text,
+              padding: "8px 8px", fontSize: 12.5, borderRadius: 7, maxWidth: 240,
+            }}>
+            <option value="">a different client…</option>
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {pick !== "" && (
+            <button disabled={busy}
+              onClick={() => {
+                const c = clients.find(x => x.id === pick);
+                if (c) { onMove([row.block_id], c.id, c.name); setPick(""); }
+              }}
+              style={{
+                background: "transparent", border: `1px solid ${T.green}`, color: T.green,
+                padding: "8px 14px", fontSize: 13, borderRadius: 7, fontWeight: 600,
+                cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1,
+              }}>
+              move
+            </button>
+          )}
+        </span>
+
         <button disabled={busy} onClick={() => onCorrect([row.block_id])}
           style={{
             background: "transparent", border: `1px solid ${T.border}`, color: T.textSub,
@@ -1466,30 +1521,6 @@ function DecisionCard({
           {(draft?.caveats || []).map((c, i) => (
             <div key={`c${i}`} style={{ color: T.yellow }}>{c}</div>
           ))}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" as const }}>
-            <span>move somewhere else:</span>
-            <select value={pick} disabled={busy}
-              onChange={e => setPick(e.target.value ? Number(e.target.value) : "")}
-              style={{
-                background: T.bg, border: `1px solid ${T.border}`, color: T.text,
-                padding: "5px 8px", fontSize: 11.5, borderRadius: 4, ...mono, maxWidth: 260,
-              }}>
-              <option value="">pick a client…</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <button disabled={!pick || busy}
-              onClick={() => {
-                const c = clients.find(x => x.id === pick);
-                if (c) { onMove([row.block_id], c.id, c.name); setPick(""); }
-              }}
-              style={{
-                background: "transparent", border: `1px solid ${T.border}`, color: T.textSub,
-                padding: "5px 12px", fontSize: 11.5, borderRadius: 4, ...mono,
-                cursor: pick && !busy ? "pointer" : "default", opacity: pick && !busy ? 1 : 0.45,
-              }}>
-              move
-            </button>
-          </div>
         </div>
       )}
     </div>

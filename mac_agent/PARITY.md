@@ -110,6 +110,31 @@ After a build, check that list is still only those:
 
     grep '^missing module named' build/TimeTracker*/warn-TimeTracker*.txt
 
+## What actually ships, and what a tag does
+
+`.github/workflows/release.yml` is the shipping path — **not**
+`build_and_release.sh` and **not** `TimeTracker.spec`. Its mac job carries
+its own inline `pyinstaller` invocation. Keep that in mind before "fixing"
+a build by editing a spec the release never reads.
+
+A `v*` tag builds **both** agents and publishes **one** release. You cannot
+ship a Mac-only version bump: the server's `agent_version_check` has a single
+shared version line (`_fetch_latest_version` reads the GitHub latest tag, and
+`platform` only selects which download URL comes back), so every Windows
+agent reads the same number. Tagging without a Windows artifact in that
+release sends them after an `.exe` that is not there.
+
+The bundle identifier must stay `TimeTracker`. TCC keys Accessibility on it,
+so changing it presents as a new application and every existing Mac user
+silently loses the permission that lets the agent read window titles — the
+agent keeps running and just stops seeing them. It is now passed explicitly
+(`--osx-bundle-identifier` in CI, `bundle_identifier` in the spec, and a
+hard guard in `build_and_release.sh`) rather than relying on PyInstaller
+happening to default to the app name.
+
+Careful running the CI build command locally: `pyinstaller --name TimeTracker
+… main.py` **overwrites `TimeTracker.spec`**. Check `git status` afterwards.
+
 ## The two packaging paths
 
 There are two, and they build different products. Keep them apart.

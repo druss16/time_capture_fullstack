@@ -54,6 +54,7 @@ jobs:
         run: |
           pyinstaller --onedir --windowed --name "TimeTracker" \
             --icon timetracker.icns \
+            --osx-bundle-identifier TimeTracker \
             --add-data "version.py:." \
             --add-data "timetracker_gui.py:." \
             --add-data "notifications.py:." \

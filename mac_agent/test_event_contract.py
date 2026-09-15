@@ -280,6 +280,25 @@ def test_an_exact_multiple_does_not_emit_an_empty_tail():
     assert all(_span(e) > 0 for e in events), "emitted a zero-length chunk"
 
 
+def test_a_blank_bundle_id_is_not_excluded():
+    """An empty bundle_id must not read as "on the exclude list".
+
+    "".split(",") is [""], so an unset AGENT_EXCLUDE_BUNDLES used to put the
+    empty string in EXCLUDE_BUNDLES. The tracking loop excludes a window when
+    `bundle_id in EXCLUDE_BUNDLES`, and the SystemEvents detection path
+    returns an empty bundle_id — so those windows were excluded, the open
+    dwell was emitted and CLEARED, and everything until the next app switch
+    was dropped. 43% of a real work session went that way.
+    """
+    assert "" not in main.EXCLUDE_BUNDLES, (
+        f"empty string is in EXCLUDE_BUNDLES {main.EXCLUDE_BUNDLES!r} — "
+        "every window with a blank bundle_id will be skipped"
+    )
+    assert all(b and b.strip() for b in main.EXCLUDE_BUNDLES), (
+        f"EXCLUDE_BUNDLES holds a blank entry: {main.EXCLUDE_BUNDLES!r}"
+    )
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

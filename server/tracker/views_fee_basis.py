@@ -19,6 +19,18 @@ them compared with the invoice-prep view:
     budgeted at, and what the standing arrangement says. Those three anchors
     live in three different tables and nothing had ever put them side by side.
 
+  · An anchor has to be measured the same way as the number beside it. A budget
+    derived from a month when the agent saw 42% of the week, compared against a
+    month when it saw more, reads as an overrun the firm never had — that is why
+    set_engagement_budgets exists and why only a `manual` budget (the firm's own
+    fee schedule, which the automatic ladder refuses to overwrite) is shown as a
+    budget here. Everything else gets a SAME-BASIS anchor instead: this client's
+    own typical period, carried across as a share of the firm's month rather
+    than as raw hours, because coverage itself keeps moving (org 21 went from
+    171.7h captured in May to 888.1h in August). A share cancels that drift —
+    it lands on the numerator and the denominator alike — and answers what the
+    partner is actually asking: is this month unusual for them?
+
   · The mix is the argument. A fee conversation turns on what the work *was* —
     a return versus a month of cleanup nobody scoped — so the breakdown by work
     type travels with the total instead of hiding behind a drill-down.
@@ -41,6 +53,40 @@ TOP_WORK_TYPES = 4
 
 def _hours(minutes) -> float:
     return round(float(minutes or 0) / 60.0, 2)
+
+
+def _prior_windows(start_d: date, end_d: date, n: int = 3):
+    """The n windows immediately before this one, most recent first.
+
+    Whole calendar months step by month so February is compared with January
+    rather than with 28 days ending mid-January; anything else steps by its own
+    length.
+    """
+    windows = []
+    is_whole_month = (
+        start_d.day == 1
+        and end_d == (start_d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    )
+    if is_whole_month:
+        month_end = start_d - timedelta(days=1)
+        for _ in range(n):
+            windows.append((month_end.replace(day=1), month_end))
+            month_end = month_end.replace(day=1) - timedelta(days=1)
+        return windows
+    span = (end_d - start_d).days + 1
+    w_end = start_d - timedelta(days=1)
+    for _ in range(n):
+        windows.append((w_end - timedelta(days=span - 1), w_end))
+        w_end = w_end - timedelta(days=span)
+    return windows
+
+
+def _median(values):
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return round((ordered[mid - 1] + ordered[mid]) / 2, 2)
 
 
 def _period_defaults(request):
@@ -150,12 +196,48 @@ def fee_basis(request):
             org=org, client_id__in=client_ids,
             period_start__lte=end_d, period_end__gte=start_d,
         ):
-            slot = budgets.setdefault(e.client_id, {"hours": ZERO, "amount": ZERO})
+            slot = budgets.setdefault(
+                e.client_id, {"hours": ZERO, "amount": ZERO, "sources": set()}
+            )
             slot["hours"] += e.budget_hours or ZERO
             slot["amount"] += e.budget_amount or ZERO
+            if e.budget_hours:
+                slot["sources"].add(e.budget_source or "none")
     except Exception:
         # Engagements are optional; their absence must not blank the screen.
         budgets = {}
+
+    # ── The same-basis anchor: what this client's own recent periods looked
+    # like, as a SHARE of the firm's month rather than as raw hours.
+    #
+    # Raw hours would repeat the mistake the budgets make. org 21 captured
+    # 171.7h in May, 604.8h in June (three agents became nine), 888.1h in
+    # August — so every client "grew" against their own history and the anchor
+    # would cry overrun on all of them. A share cancels that: coverage moves
+    # the numerator and the denominator together. Measured against the firm's
+    # month, the median client now lands at 1.01x their own typical, and the
+    # ones that are genuinely unusual still stand out.
+    #
+    # Two prior periods minimum — one month is an anecdote, and a client whose
+    # only other month was their onboarding is worse than no anchor at all.
+    firm_now_minutes = sum(r["total_minutes"] or 0 for r in rows)
+    shares_by_client = {}
+    for w_start, w_end in _prior_windows(start_d, end_d):
+        window = Block.objects.filter(
+            org=org, client_id__isnull=False, day__gte=w_start, day__lte=w_end
+        )
+        firm_minutes = window.aggregate(m=Sum("minutes"))["m"] or 0
+        if firm_minutes <= 0:
+            continue
+        for r in (
+            window.filter(client_id__in=client_ids)
+            .values("client_id")
+            .annotate(minutes=Sum("minutes"))
+        ):
+            if r["minutes"]:
+                shares_by_client.setdefault(r["client_id"], []).append(
+                    float(r["minutes"]) / float(firm_minutes)
+                )
 
     # ── Compose ───────────────────────────────────────────────────────────
     out = []
@@ -179,6 +261,18 @@ def fee_basis(request):
             }
 
         budget = budgets.get(cid)
+        # Only the firm's own fee schedule is quoted as a budget. The derived
+        # ladder (prior_year off an under-captured month, or the median of
+        # equally under-captured peers) is measured differently from the hours
+        # it would be compared against, so it is carried for diagnostics and
+        # never rendered as an overrun.
+        budget_sources = sorted(budget["sources"]) if budget else []
+        shares = shares_by_client.get(cid, [])
+        typical = (
+            round(_median(shares) * _hours(firm_now_minutes), 2)
+            if len(shares) >= 2
+            else None
+        )
         out.append({
             "client_id": cid,
             "name": r["client__name"] or "Unassigned",
@@ -192,6 +286,10 @@ def fee_basis(request):
             "arrangement": arrangement,
             "budget_hours": float(budget["hours"]) if budget and budget["hours"] else None,
             "budget_amount": float(budget["amount"]) if budget and budget["amount"] else None,
+            "budget_is_fee": budget_sources == ["manual"],
+            "budget_sources": budget_sources,
+            "typical_hours": typical,
+            "typical_periods": len(shares),
             "prior_year_billed": float(prior_year[cid]) if cid in prior_year else None,
             "last_invoice": last_invoice.get(cid),
         })

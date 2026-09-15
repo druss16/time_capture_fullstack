@@ -8,6 +8,15 @@
  * anchors a fee actually gets set against: last year's invoice, the engagement
  * budget, the standing arrangement.
  *
+ * An anchor is only shown when it was measured the same way as the number it
+ * sits beside. "Budget" appears for a budget the firm typed in from its own fee
+ * schedule; a budget the ladder derived from a month when the agent saw 42% of
+ * the week is not shown, because comparing it against a better-captured month
+ * reports an overrun nobody had. Those rows get the client's own typical period
+ * instead, carried across as a share of the firm's month so that growing
+ * coverage does not read as growing work — which answers what the partner is
+ * really asking: is this month unusual for them?
+ *
  * It counts every captured block, including time nobody has reviewed. On a
  * screen whose job is to stop a firm underbilling, hiding hours is the one
  * unrecoverable mistake — a fee set from a number that was quietly 90% short
@@ -33,6 +42,12 @@ type FeeClient = {
   arrangement: { type: string; amount: number | null; period: string | null };
   budget_hours: number | null;
   budget_amount: number | null;
+  /** True only when every budget behind this row came from the firm's own fee
+   *  schedule (budget_source 'manual'), the one kind worth quoting back. */
+  budget_is_fee?: boolean;
+  /** What this client's usual share of the firm's period comes to in this
+   *  one's hours. Null until they have two prior periods to take a share of. */
+  typical_hours?: number | null;
   prior_year_billed: number | null;
   last_invoice: { date: string; amount: number } | null;
 };
@@ -46,6 +61,13 @@ type Payload = {
 
 const money = (n: number) =>
   n >= 1000 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(0)}`;
+
+function isWholeMonth(startIso: string, endIso: string) {
+  const start = new Date(startIso + 'T00:00:00');
+  const end = new Date(endIso + 'T00:00:00');
+  const lastOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  return start.getDate() === 1 && end.getTime() === lastOfMonth.getTime();
+}
 
 const monthLabel = (iso: string) =>
   new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -124,6 +146,9 @@ export default function FeeBasis() {
   if (!data) return null;
 
   const { totals } = data;
+  // The stepper only ever produces whole months, but the endpoint accepts any
+  // range, so the label follows the data rather than assuming.
+  const periodIsMonth = isWholeMonth(data.period.start, data.period.end);
 
   return (
     <div className="space-y-4">
@@ -197,8 +222,13 @@ export default function FeeBasis() {
         <div className="divide-y divide-border/60">
           {data.clients.map((c) => {
             const delta = priorYearDelta(c);
-            const overBudget =
-              c.budget_hours != null && c.budget_hours > 0 && c.hours > c.budget_hours;
+            const feeBudget =
+              c.budget_is_fee && c.budget_hours != null && c.budget_hours > 0
+                ? c.budget_hours
+                : null;
+            const overBudget = feeBudget != null && c.hours > feeBudget;
+            const typical = feeBudget == null ? c.typical_hours ?? null : null;
+            const typicalDelta = typical != null ? c.hours - typical : 0;
             return (
               <div key={c.client_id} className="px-5 py-4">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -248,7 +278,7 @@ export default function FeeBasis() {
 
                 {/* The anchors. Absent ones are simply not shown — an empty
                     row of dashes reads as broken rather than as "no history". */}
-                {(delta || c.budget_hours || c.prior_year_billed || c.last_invoice) && (
+                {(delta || feeBudget || typical || c.prior_year_billed || c.last_invoice) && (
                   <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
                     {c.prior_year_billed != null && (
                       <span className="text-muted-foreground">
@@ -259,11 +289,24 @@ export default function FeeBasis() {
                       </span>
                     )}
                     {delta && <span className={cn('font-medium', delta.tone)}>{delta.label}</span>}
-                    {c.budget_hours != null && (
+                    {feeBudget != null && (
                       <span className={cn(overBudget ? 'font-medium text-amber-700' : 'text-muted-foreground')}>
                         Budget{' '}
-                        <span className="font-mono tabular-nums">{c.budget_hours.toFixed(1)}h</span>
-                        {overBudget && ` · over by ${(c.hours - c.budget_hours).toFixed(1)}h`}
+                        <span className="font-mono tabular-nums">{feeBudget.toFixed(1)}h</span>
+                        {overBudget && ` · over by ${(c.hours - feeBudget).toFixed(1)}h`}
+                      </span>
+                    )}
+                    {typical != null && (
+                      <span className="text-muted-foreground">
+                        {periodIsMonth ? 'Typical month' : 'Typical period'}{' '}
+                        <span className="font-mono tabular-nums text-foreground/80">
+                          {typical.toFixed(1)}h
+                        </span>
+                        {Math.abs(typicalDelta) >= 0.1 && (
+                          <span className="font-mono tabular-nums">
+                            {` · ${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)}h`}
+                          </span>
+                        )}
                       </span>
                     )}
                     {c.last_invoice && (
@@ -282,7 +325,10 @@ export default function FeeBasis() {
       <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
         These figures are a reference, not an invoice. Value shown is time at standard rates —
         what the work would come to before any judgement about scope, relationship, or what was
-        actually agreed.
+        actually agreed. “Typical {periodIsMonth ? 'month' : 'period'}” is this client's usual
+        share of the firm's work, at this {periodIsMonth ? 'month' : 'period'}'s size, so a
+        {' '}{periodIsMonth ? 'month' : 'period'} where more of the firm was captured does not
+        read as a client doing more. “Budget” appears only where the firm entered a fee itself.
       </p>
     </div>
   );

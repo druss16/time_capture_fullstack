@@ -150,6 +150,28 @@ if _ok:
     check("a root that dissolves doesn't take the real question with it",
           len(_two_parishes) >= 2 and 330 not in _two_parishes)
 
+    print("Look-alike clients — the row has to say WHERE it read the name:")
+    JORDAN = [390, 391]     # Church-Jordan vs Jordan Cemetery
+    _dialog = L.named_by(
+        JORDAN,
+        'Save Print Output As',
+        "\\\\tlwall-dc-01\\Company Data\\Client File Notes\\St Patrick's "
+        "Jordan\\2026-2027\\St Patricks P&L Budget Overview FINAL 09-14-26.xlsx")
+    check("a dialog title defers to the folder that carries the name",
+          _dialog == {'source': 'folder', 'text': "St Patrick's Jordan"})
+    check("a title that names the group speaks for itself",
+          (L.named_by(JORDAN, "St Patrick's Jordan" + QB) or {}).get('source') == 'title')
+    check("...and the app chrome is not part of what it said",
+          (L.named_by(JORDAN, "St Patrick's Jordan" + QB) or {})
+          .get('text') == "St Patrick's Jordan")
+    check("a file that carries the name more fully than its folder wins",
+          L.named_by(JORDAN, 'Save Print Output As',
+                     "\\\\srv\\Clients\\2026\\St Patricks Jordan Budget.xlsx")
+          == {'source': 'file', 'text': 'St Patricks Jordan Budget.xlsx'})
+    check("nothing named them -> no reason to show",
+          L.named_by(JORDAN, 'Find and Replace') is None)
+    check("an empty family names nobody", L.named_by([], 'anything') is None)
+
     print("Look-alike clients — ONE everyday word names nobody:")
     check("'estate' alone doesn't make an estate client a candidate",
           274 not in L.candidates_for(W('Gift and estate planning')))
@@ -223,6 +245,32 @@ if _ok:
           len(narrowed) == 1
           and {c['client_id'] for c in narrowed[0]['candidates']} == {388, 790})
 
+    print("Ambiguous groups — a dialog is not a headline:")
+    from tracker.services.ambiguous_groups import _headline
+
+    _dialog_block = FakeBlock(30, 5, 0, [390, 391], title='Save Print Output As')
+    _dialog_block.file_path = (
+        "\\\\srv\\Client File Notes\\St Patrick's Jordan\\2026-2027\\"
+        "St Patricks P&L Budget.xlsx")
+    check("the document replaces a title that names nobody",
+          _headline(_dialog_block, {'source': 'folder', 'text': "St Patrick's Jordan"})
+          == 'St Patricks P&L Budget.xlsx')
+    _named_block = FakeBlock(31, 5, 0, [390, 391], title="St Patrick's Jordan - Excel")
+    _named_block.file_path = "\\\\srv\\whatever\\x.xlsx"
+    check("a title that DOES name the group is left alone",
+          _headline(_named_block, {'source': 'title', 'text': "St Patrick's Jordan"})
+          == "St Patrick's Jordan - Excel")
+    _no_path = FakeBlock(32, 5, 0, [390, 391], title='Save Print Output As')
+    _no_path.file_path = ''
+    check("no path to fall back on keeps the title",
+          _headline(_no_path, {'source': 'address', 'text': 'x'})
+          == 'Save Print Output As')
+    _folder_only = FakeBlock(33, 5, 0, [390, 391], title='Save Print Output As')
+    _folder_only.file_path = "\\\\srv\\Clients\\St Patrick's Jordan"
+    check("the headline never repeats what the reason line quotes",
+          _headline(_folder_only, {'source': 'folder', 'text': "St Patrick's Jordan"})
+          == 'Save Print Output As')
+
     print("Ambiguous groups — only gated blocks appear:")
     plain = FakeBlock(9, 30, 0, [388, 790])
     plain.proposed_signals = [{'type': 'agent_inference', 'detail': {}}]
@@ -252,6 +300,20 @@ if _ok:
     check("a five-candidate signal narrows to the real question",
           set(_after) == {790, 791})
     check("...and the block's own client survives the narrowing", 790 in _after)
+
+    unattributed = FakeBlock(23, 20, 0, [388, 409, 790, 791, 300],
+                             title='St Mary Baldwinsville Notes')
+    unattributed.client_id, unattributed.file_path, unattributed.url = None, '', ''
+    _cf.for_org = _StubRoster.for_org
+    try:
+        narrow_to_live_family([unattributed], 21)
+        _ids = (_signal(unattributed).get('detail') or {}).get('candidate_client_ids', [])
+        _ok = None not in _ids
+    except Exception:
+        _ok = False
+    finally:
+        _cf.for_org = _real_for_org
+    check("a block with NO client doesn't put None in the candidate list", _ok)
 
     tight = FakeBlock(22, 20, 0, [388, 790], title="St. Mary's Church")
     tight.client_id, tight.file_path, tight.url = 790, '', ''

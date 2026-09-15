@@ -717,6 +717,15 @@ class ClassificationService:
                     'candidate_labels': {
                         str(c): lookalikes.short_name(c, words, ranked) for c in ranked
                     },
+                    # Where the name was read, so the row can say why it is
+                    # asking. The title on screen is often a dialog ("Save
+                    # Print Output As") and the name came from a folder.
+                    'named_by': lookalikes.named_by(
+                        ranked,
+                        getattr(block, 'window_title', '') or getattr(block, 'title', '') or '',
+                        getattr(block, 'file_path', '') or '',
+                        getattr(block, 'url', '') or '',
+                    ),
                 },
             ))
             logger.info(

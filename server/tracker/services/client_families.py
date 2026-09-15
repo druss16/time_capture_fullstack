@@ -137,6 +137,9 @@ _APP_CHROME = re.compile(
 )
 
 
+_PATH_SPLIT = re.compile(r'[\\/]+')
+
+
 def strip_app_chrome(title):
     """Drop trailing application chrome, repeatedly (" .xlsx - Read-Only - Excel")."""
     out = ClassificationService._strip_qb_screen_bracket(title or '')
@@ -312,6 +315,53 @@ class ClientLookalikes:
             if best is None or key < best[0]:
                 best = (key, family)
         return self.rank(best[1], words) if best else []
+
+    def named_by(self, family, title='', file_path='', url=''):
+        """Which piece of text named this group, and what exactly it said.
+
+        The row that asks the question shows the WINDOW TITLE, and for a
+        QuickBooks or Excel dialog that title is "Save Print Output As" — it
+        names nobody. The name was three folders up the path:
+
+            \\\\tlwall-dc-01\\Company Data\\Client File Notes\\
+            St Patrick's Jordan\\2026-2027\\St Patricks P&L Budget.xlsx
+
+        Printing "the file name doesn't say which one" under a title like that
+        is not an explanation, it is a non sequitur — the file name is not on
+        screen and the deciding text is a folder. So the answer has to carry
+        WHERE the name was read and WHAT it said, and the row can then tell the
+        truth: the folder "St Patrick's Jordan" doesn't say church or cemetery.
+
+        Returns {'source': 'title'|'folder'|'file'|'address', 'text': str} for
+        whichever piece covers the most of the group's shared name, or None
+        when nothing does.
+        """
+        shared = None
+        for cid in family:
+            words = self._words.get(cid, set())
+            shared = set(words) if shared is None else (shared & words)
+        if not shared:
+            return None
+
+        best = None                       # (covered, source, text)
+
+        def consider(source, text):
+            nonlocal best
+            text = (text or '').strip()
+            if not text:
+                return
+            covered = len(shared & text_words(text))
+            # Strictly greater, so an earlier (more visible) source wins a tie.
+            if covered and (best is None or covered > best[0]):
+                best = (covered, source, text)
+
+        consider('title', strip_app_chrome(title))
+        segments = [s for s in _PATH_SPLIT.split(file_path or '') if s]
+        for i, segment in enumerate(segments):
+            consider('file' if i == len(segments) - 1 else 'folder', segment)
+        consider('address', url)
+
+        return {'source': best[1], 'text': best[2]} if best else None
 
     def resolve(self, words):
         """The one client this text names, or None when it can't tell.

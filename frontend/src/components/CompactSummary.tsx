@@ -907,6 +907,41 @@ const PILL_PICK = "inline-flex items-center gap-1 rounded-full border border-amb
 
 const MAX_VISIBLE_CANDIDATES = 5;
 
+/** Why this row is asking, in the user's terms.
+ *
+ *  The old line was a fixed "The file name doesn't say which one", printed
+ *  under whatever the window title happened to be. Over a QuickBooks dialog
+ *  titled "Save Print Output As" that reads as a non sequitur: there is no
+ *  file name on screen, and the client name was actually read from a FOLDER
+ *  ("…\Client File Notes\St Patrick's Jordan\…") that the row never shows. So
+ *  the row now names the place it read from, and quotes it when the text isn't
+ *  already on screen above.
+ */
+function askReason(g: AmbiguousGroup): string {
+  const by = g.named_by;
+  if (!by?.text) return "The file name doesn’t say which one";
+  switch (by.source) {
+    case "folder":
+      return `The folder “${by.text}” doesn’t say which one`;
+    case "address":
+      return "The page address doesn’t say which one";
+    case "file":
+      // Suppress the quote when the title already IS the file name.
+      return by.text === g.window_title
+        ? "The file name doesn’t say which one"
+        : `The file “${by.text}” doesn’t say which one`;
+    default:
+      // The title is on screen directly above, so don't repeat it — just name
+      // it correctly. A window title carrying an extension IS a file name
+      // ("St Marys Baldwinsville Invoices 9.10.26.pdf"); a QuickBooks company
+      // name or an email subject is not, and calling it one was the whole
+      // complaint.
+      return /\.[a-z0-9]{2,5}\b/i.test(by.text)
+        ? "The file name doesn’t say which one"
+        : "The title doesn’t say which one";
+  }
+}
+
 function AmbiguousGroupRow({ g, busy, onPickClient, onPickOther }: {
   g: AmbiguousGroup;
   busy: boolean;
@@ -922,12 +957,17 @@ function AmbiguousGroupRow({ g, busy, onPickClient, onPickOther }: {
     <div className={ROW}>
       <span className={CHIP_AMBER}>{fmtMin(g.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[12.5px] text-foreground">{g.window_title || "(untitled)"}</div>
+        <div
+          className="truncate font-mono text-[12.5px] text-foreground"
+          title={g.captured_title ? `On screen: ${g.captured_title}` : g.window_title}
+        >
+          {g.window_title || "(untitled)"}
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
           <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-semibold text-muted-foreground">
             {g.block_count === 1 ? "1 block" : `${g.block_count} blocks`} · {span}
           </span>
-          <span className="text-muted-foreground">The file name doesn’t say which one</span>
+          <span className="text-muted-foreground">{askReason(g)}</span>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {visible.map((c) => (

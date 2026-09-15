@@ -1930,19 +1930,43 @@ if RUMPS_AVAILABLE:
                 while bundle_path and not bundle_path.endswith('.app'):
                     bundle_path = os.path.dirname(bundle_path)
                 
-                if bundle_path.endswith('.app'):
-                    print(f"[GUI] Relaunching {bundle_path}")
-                    subprocess.Popen(['open', '-n', bundle_path])
-                else:
-                    # Fallback: try /Applications
-                    subprocess.Popen(['open', '-n', '/Applications/TimeTracker.app'])
+                # Hand the restart to launchd. Two things went wrong with
+                # `open -n` + quit: it starts a SECOND copy while this one is
+                # still alive (the new instance can bail on the running one's
+                # pid file), and the LaunchAgent is KeepAlive
+                # SuccessfulExit=false — so quitting CLEANLY is explicitly not
+                # restarted. Re-linking therefore stopped tracking until the
+                # next login, with launchctl reporting a tidy exit 0.
+                # kickstart -k gives the kill and the restart to the
+                # supervisor: one instance, and it always comes back.
+                restarted = False
+                try:
+                    r = subprocess.run(
+                        ['launchctl', 'kickstart', '-k',
+                         f'gui/{os.getuid()}/com.mavops.timetracker'],
+                        capture_output=True, timeout=10,
+                    )
+                    restarted = (r.returncode == 0)
+                    print(f"[GUI] launchctl kickstart rc={r.returncode}")
+                except Exception as e:
+                    print(f"[GUI] launchctl kickstart failed: {e}")
+
+                if restarted:
+                    return  # kickstart is killing us; nothing further to do
+
+                # Not under launchd (dev run, or the job is not loaded).
+                # Relaunch by hand, then exit NON-ZERO so a supervisor that
+                # does watch us treats it as a crash worth restarting.
+                target = bundle_path if bundle_path.endswith('.app') \
+                    else '/Applications/TimeTracker.app'
+                print(f"[GUI] Relaunching {target}")
+                subprocess.Popen(['open', '-n', target])
+                time.sleep(1.0)
+                os._exit(1)
             else:
                 # Running from python main.py (dev mode)
                 print("[GUI] Dev mode: please restart manually")
-                # Could do: subprocess.Popen([sys.executable] + sys.argv)
-            
-            # Quit current instance
-            rumps.quit_application()
+                rumps.quit_application()
 
 
 # ============================================================

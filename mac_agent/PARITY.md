@@ -70,6 +70,45 @@ directly over AppleScript rather than scraping the address bar.
 **`morning_review.py`** — present in `windows_agent/` but imported by
 nothing there. Dead on both sides; porting it would only spread it.
 
+## Building
+
+`build_and_release.sh` is what ships. It does NOT use a spec file — it runs
+
+    pyinstaller --onefile --name TimeTrackerAgent --clean --noconfirm main.py
+
+and relies entirely on PyInstaller's import analysis, which does find every
+module this agent imports, including the ones reached from inside functions.
+`TimeTracker.spec` and `TimeTrackerAgent.spec` exist and are kept correct,
+but only the Makefile's `pyi` target uses one.
+
+What analysis cannot do is install a dependency nobody declared.
+`requirements.txt` did not describe the environment the shipping build
+actually needs, and a clean build from it produced a binary that died on
+launch:
+
+  * `certifi` — imported at module scope in `main.py`, unguarded, to point
+    `SSL_CERT_FILE` before any HTTPS call. Missing it is fatal at import.
+  * `customtkinter` — its import in `timetracker_gui.py` is wrapped in
+    `try/except ImportError`, which looks optional, but four classes below
+    subclass `ctk.*` at module scope. Missing it raised `NameError: name
+    'ctk' is not defined` while the module was still importing. The shipped
+    1.7.22 bundles customtkinter 6.0.0, so the real build machine always had
+    it; the file simply never said so. There is now a shim so the module
+    degrades instead of exploding, and the dependency is declared.
+  * `pynput` — genuinely optional (the ⌃⌥T hotkey), but intended.
+  * `psutil` — both Mac meeting probes are gated on it.
+
+Three modules show up in PyInstaller's warn file as missing and that is
+correct: `qb_company_tracker` (Windows-only, and every collector in
+`collect_all_evidence` is individually exception-wrapped, so it degrades to
+producing no evidence), `mac_agent` (an import fallback that cannot resolve
+inside a bundle and never needs to), and `pdf_identity` (dormant on both
+platforms — nothing imports it).
+
+After a build, check that list is still only those three:
+
+    grep '^missing module named' build/TimeTrackerAgent/warn-TimeTrackerAgent.txt
+
 ## Things that bite
 
 - **`TimeTracker.spec` does not discover modules for you.** Anything new

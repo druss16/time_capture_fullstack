@@ -39,6 +39,47 @@ except ImportError:
     import tkinter as tk
     from tkinter import ttk, messagebox
 
+    # This module defines StyledFrame/StyledButton/StyledEntry/Badge by
+    # SUBCLASSING ctk.* at module scope. Without these stand-ins the class
+    # statements below raise NameError while the module is still importing,
+    # and main.py — which imports this at module level — never starts. A
+    # binary built from a requirements.txt that omitted customtkinter died
+    # instantly on launch with "name 'ctk' is not defined", which is a
+    # confusing way to learn a dependency is missing.
+    #
+    # These make the failure honest instead: the module imports, the agent
+    # runs and tracks time, and only the styled dialogs are unavailable —
+    # which is what the try/except was reaching for. customtkinter IS a real
+    # dependency and is declared in requirements.txt; this is the net under
+    # a build that forgets it.
+    class _MissingCTK:
+        """Stands in for a customtkinter widget class that isn't installed."""
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "customtkinter is not installed — the styled dialogs are "
+                "unavailable. Install it (see requirements.txt); the agent "
+                "itself tracks time without it."
+            )
+
+    class _CTKShim:
+        CTkFrame = CTkButton = CTkEntry = CTkLabel = _MissingCTK
+        CTk = CTkToplevel = CTkScrollableFrame = CTkTextbox = _MissingCTK
+
+        @staticmethod
+        def CTkFont(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def set_appearance_mode(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def set_default_color_theme(*args, **kwargs):
+            return None
+
+    ctk = _CTKShim()
+
 # macOS native menu bar
 # CRITICAL: Only import rumps/AppKit in the main process.
 # Subprocesses (spawn) re-import this module, and rumps/AppKit init

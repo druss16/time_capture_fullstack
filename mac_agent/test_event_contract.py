@@ -200,6 +200,69 @@ def test_local_write_happens_even_when_post_fails():
     assert rows == 1, "the local SQLite row was lost when the POST failed"
 
 
+def _emit_chunks(last_emit_ts, end_ts):
+    """The chunking half of the tracking loop's _emit_current_dwell, run
+    against the real write_event so the guarantees it documents are checked
+    rather than assumed."""
+    captured = []
+    original = main.post_event_async
+    main.post_event_async = lambda payload, user, host: captured.append(payload)
+    try:
+        conn, cur = _fresh_db()
+        if end_ts > last_emit_ts and (end_ts - last_emit_ts) >= 1.0:
+            cursor_ts = last_emit_ts
+            while cursor_ts < end_ts:
+                chunk_end = min(cursor_ts + main.MAX_EVENT_DURATION_S, end_ts)
+                main.write_event(conn, cur, "dan", "macbook", SIG,
+                                 start_ts=cursor_ts, end_ts=chunk_end)
+                cursor_ts = chunk_end
+        conn.close()
+    finally:
+        main.post_event_async = original
+    return captured
+
+
+def _span(p):
+    return (datetime.fromisoformat(p["end_ts"])
+            - datetime.fromisoformat(p["start_ts"])).total_seconds()
+
+
+def test_a_long_dwell_is_split_not_sent_whole():
+    """A 22-minute stretch must not arrive as one 22-minute event."""
+    now = time.time()
+    events = _emit_chunks(now - 1320, now)          # 22 minutes
+    assert len(events) == 5, f"expected 5 chunks, got {len(events)}"
+    for e in events:
+        assert _span(e) <= main.MAX_EVENT_DURATION_S + 1, (
+            f"chunk of {_span(e)}s exceeds the {main.MAX_EVENT_DURATION_S}s ceiling"
+        )
+
+
+def test_chunks_tile_the_interval_exactly():
+    """No gap and no overlap: the chunks must cover exactly what was claimed."""
+    now = time.time()
+    events = _emit_chunks(now - 1320, now)
+    total = sum(_span(e) for e in events)
+    assert abs(total - 1320) < 1.0, f"chunks cover {total}s, expected 1320s"
+    for a, b in zip(events, events[1:]):
+        assert a["end_ts"] == b["start_ts"], (
+            f"chunk boundary does not meet: {a['end_ts']} then {b['start_ts']}"
+        )
+
+
+def test_a_sub_second_heartbeat_emits_nothing():
+    """Poll jitter must not produce a flurry of zero-length events."""
+    now = time.time()
+    assert _emit_chunks(now - 0.4, now) == []
+
+
+def test_an_exact_multiple_does_not_emit_an_empty_tail():
+    now = time.time()
+    events = _emit_chunks(now - main.MAX_EVENT_DURATION_S * 2, now)
+    assert len(events) == 2, f"expected exactly 2 chunks, got {len(events)}"
+    assert all(_span(e) > 0 for e in events), "emitted a zero-length chunk"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

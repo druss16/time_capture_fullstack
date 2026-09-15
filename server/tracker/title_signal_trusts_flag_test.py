@@ -85,6 +85,7 @@ def check(label, cond):
 # Padded so token distinctiveness behaves like a real roster's — IDF weights
 # are log((n+1)/df) and go degenerate on a handful of clients.
 NAMES = {i: n for i, n in enumerate([
+    "Internal - Accounting", "Internal - Tax",
     "St. Mary's Church", "St. Mary's Cemetery", "Hamilton Brothers Excavating",
     "Cutting Edge Decks, Inc", "St Francis of Assisi",
     "Holy Cross Church", "St Joseph Church", "Our Lady of Lourdes",
@@ -93,7 +94,7 @@ NAMES = {i: n for i, n in enumerate([
     "Transfiguration Parish", "St Rose Church", "Good Shepherd Parish",
     "St Cecilia Church", "Holy Family Parish", "St Lucy Church",
 ])}
-MARY, CEMETERY, HAMILTON, DECKS, SFA = 0, 1, 2, 3, 4
+MARY, CEMETERY, HAMILTON, DECKS, SFA = 2, 3, 4, 5, 6
 
 
 class Ctx:
@@ -152,6 +153,23 @@ def main():
     s2 = signal("Hamilton Brothers Excavating 2026 invoices", DECKS, True)
     check("the rival is named", bool(s2) and s2.supports == HAMILTON)
     check("…and outweighs an acronym", bool(s2) and s2.weight > 0.55)
+
+    print("\nAn INTERNAL target is refused, exactly as the reading detector does:")
+    # The firm is "TL Wall Accounting and Tax Corp" and the roster carries
+    # "Internal - Accounting". One shared word, and every title containing the
+    # firm's own name — a QuickBooks banner, a WordPress tab — pointed there.
+    T_FIRM = "T.L. Wall Accounting & Tax Corp.  - QuickBooks Accountant Desktop Plus 2024"
+    raw = cnm.detect_mismatch(T_FIRM, DECKS, ctx.index, NAMES,
+                              firm_name=ctx.firm_name)
+    if raw and cnm.is_internal_client(raw['looks_like_client_name'], ctx.firm_name):
+        check("detect_mismatch would have named an internal client", True)
+        check("…and the signal refuses it", signal(T_FIRM, DECKS, True) is None)
+    else:
+        # The roster here may not reproduce it; the guard is asserted directly.
+        check("an internal client is never a title-signal target",
+              all(signal(f"{n} work", DECKS, True) is None
+                  for n in NAMES.values()
+                  if cnm.is_internal_client(n, ctx.firm_name)))
 
     print("\nIt must not invent anything the detector did not say:")
     check("a title naming nobody stays silent",

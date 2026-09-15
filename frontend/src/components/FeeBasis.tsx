@@ -17,6 +17,13 @@
  * coverage does not read as growing work — which answers what the partner is
  * really asking: is this month unusual for them?
  *
+ * And the number can be set here. It could not before: this page showed the
+ * evidence while the only place to record a decision was Settings → Economics
+ * → Engagement budgets, two clicks away and showing none of it. Same endpoint,
+ * same client x job-type grain as that tab and as the CSV importer — all three
+ * must agree about what a fee belongs to — so a fee typed here is the same
+ * `manual` budget, and the nightly derivation pass will not undo it.
+ *
  * It counts every captured block, including time nobody has reviewed. On a
  * screen whose job is to stop a firm underbilling, hiding hours is the one
  * unrecoverable mistake — a fee set from a number that was quietly 90% short
@@ -24,7 +31,10 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
-import { RefreshCw, Users, ChevronLeft, ChevronRight, Info } from 'lucide-react';
+import {
+  RefreshCw, Users, ChevronLeft, ChevronRight, Info,
+  Check, Loader2, Tag, X,
+} from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 type Work = { name: string; hours: number };
@@ -52,6 +62,20 @@ type FeeClient = {
   last_invoice: { date: string; amount: number } | null;
 };
 
+/** One client x job type with an open engagement — the grain a fee belongs to.
+ *  Straight from /engagements/budget-setup/, the same feed the Economics tab
+ *  reads, so the two screens cannot drift apart. */
+type Job = {
+  client_id: number;
+  client_name: string;
+  engagement_type: string;
+  open_periods: number;
+  typical_hours: number;
+  budget_hours: number | null;
+  budget_fee: number | null;
+  budget_source: string;
+};
+
 type Payload = {
   period: { start: string; end: string };
   totals: { clients: number; hours: number; value: number; unapproved_hours: number };
@@ -61,6 +85,9 @@ type Payload = {
 
 const money = (n: number) =>
   n >= 1000 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(0)}`;
+
+const jobLabel = (t: string) =>
+  t.replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase());
 
 function isWholeMonth(startIso: string, endIso: string) {
   const start = new Date(startIso + 'T00:00:00');
@@ -97,6 +124,72 @@ export default function FeeBasis() {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+
+  // ── Setting the fee ────────────────────────────────────────────────────
+  // Jobs are fetched once, on the first row anyone opens. The list is small
+  // (one row per client x job type) but it is beside the point on a page most
+  // partners will only read, so it does not load with the period.
+  const [jobs, setJobs] = useState<Job[] | null>(null);
+  const [jobsErr, setJobsErr] = useState<string | null>(null);
+  const [openClient, setOpenClient] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const loadJobs = useCallback(async () => {
+    setJobsErr(null);
+    try {
+      const d = await safeFetchJson<{ rows: Job[] }>(`${API_BASE}/engagements/budget-setup/`);
+      setJobs(d.rows || []);
+    } catch (e: any) {
+      setJobsErr(e?.message || "Couldn't load this client's jobs");
+      setJobs([]);
+    }
+  }, []);
+
+  const toggleClient = (clientId: number) => {
+    setSaved(null);
+    // Clear the error with the row: a complaint about what was typed for one
+    // client, still sitting under the next client's job, is worse than no
+    // message at all.
+    setJobsErr(null);
+    setOpenClient((cur) => (cur === clientId ? null : clientId));
+    if (jobs === null) void loadJobs();
+  };
+
+  const saveFee = async (job: Job) => {
+    const key = `${job.client_id}:${job.engagement_type}`;
+    const raw = (draft[key] ?? '').trim();
+    if (!raw) return;
+    const fee = Number(raw.replace(/[$,\s]/g, ''));
+    if (!Number.isFinite(fee) || fee <= 0) {
+      setJobsErr('Enter the fee as a number greater than zero.');
+      return;
+    }
+    setSaving(key);
+    setJobsErr(null);
+    try {
+      await safeFetchJson(`${API_BASE}/engagements/budget-group/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: job.client_id,
+          engagement_type: job.engagement_type,
+          monthly_fee: fee,
+          set_in: 'Fees',
+        }),
+      });
+      setDraft((d) => { const next = { ...d }; delete next[key]; return next; });
+      setSaved(key);
+      // Both feeds move: the job row shows the new fee, and the client's row
+      // above it swaps its "typical" anchor for the budget that now exists.
+      await Promise.all([loadJobs(), load(range)]);
+    } catch (e: any) {
+      setJobsErr(e?.message || 'Could not save that fee');
+    } finally {
+      setSaving(null);
+    }
+  };
 
   const load = useCallback(async (r: { start: string; end: string } | null) => {
     setLoading(true);
@@ -229,6 +322,8 @@ export default function FeeBasis() {
             const overBudget = feeBudget != null && c.hours > feeBudget;
             const typical = feeBudget == null ? c.typical_hours ?? null : null;
             const typicalDelta = typical != null ? c.hours - typical : 0;
+            const isOpen = openClient === c.client_id;
+            const clientJobs = (jobs || []).filter((j) => j.client_id === c.client_id);
             return (
               <div key={c.client_id} className="px-5 py-4">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -274,6 +369,20 @@ export default function FeeBasis() {
                       </span>
                     </span>
                   ))}
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => toggleClient(c.client_id)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1',
+                      'text-[11.5px] font-semibold transition-colors',
+                      isOpen
+                        ? 'border-primary/30 bg-primary/8 text-primary'
+                        : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                    )}
+                  >
+                    {isOpen ? <X className="h-3 w-3" /> : <Tag className="h-3 w-3" />}
+                    {isOpen ? 'Close' : feeBudget != null ? 'Change fee' : 'Set fee'}
+                  </button>
                 </div>
 
                 {/* The anchors. Absent ones are simply not shown — an empty
@@ -313,6 +422,91 @@ export default function FeeBasis() {
                       <span className="text-muted-foreground/70">
                         Last invoiced {c.last_invoice.date}
                       </span>
+                    )}
+                  </div>
+                )}
+
+                {isOpen && (
+                  <div className="mt-3 rounded-xl border border-border/70 bg-muted/30 p-3">
+                    {jobs === null ? (
+                      <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading this client's jobs…
+                      </p>
+                    ) : clientJobs.length === 0 ? (
+                      // No recurring job means nothing to attach a fee to. Saying
+                      // so beats an empty box that looks broken.
+                      <p className="text-[12.5px] text-muted-foreground">
+                        No recurring job on file for {c.name}, so there is nothing to price
+                        yet. Recurring work appears here once it has been through a period.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {clientJobs.map((j) => {
+                          const key = `${j.client_id}:${j.engagement_type}`;
+                          const isSaving = saving === key;
+                          const justSaved = saved === key;
+                          const current = j.budget_source === 'manual' ? j.budget_fee : null;
+                          return (
+                            <div key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                              <span className="min-w-[8.5rem] text-[12.5px] font-semibold text-foreground">
+                                {jobLabel(j.engagement_type)}
+                              </span>
+                              <span className="text-[11.5px] text-muted-foreground">
+                                usually{' '}
+                                <span className="font-mono tabular-nums text-foreground/80">
+                                  {j.typical_hours.toFixed(1)}h
+                                </span>
+                                {' · '}{j.open_periods} open {j.open_periods === 1 ? 'period' : 'periods'}
+                              </span>
+                              <span className="flex-1" />
+                              {current != null && !justSaved && (
+                                <span className="text-[11.5px] text-muted-foreground">
+                                  now <span className="font-mono tabular-nums">{money(current)}</span>
+                                </span>
+                              )}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[12.5px] text-muted-foreground">$</span>
+                                <input
+                                  value={draft[key] ?? ''}
+                                  onChange={(e) =>
+                                    setDraft((d) => ({ ...d, [key]: e.target.value }))
+                                  }
+                                  onKeyDown={(e) => { if (e.key === 'Enter') void saveFee(j); }}
+                                  inputMode="decimal"
+                                  placeholder={current != null ? String(Math.round(current)) : 'fee'}
+                                  className="w-24 rounded-lg border border-border bg-card px-2 py-1 font-mono text-[12.5px] tabular-nums outline-none focus:border-primary/50"
+                                />
+                                <span className="text-[11.5px] text-muted-foreground">per period</span>
+                                <button
+                                  onClick={() => void saveFee(j)}
+                                  disabled={isSaving || !(draft[key] ?? '').trim()}
+                                  className={cn(
+                                    'inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition-all',
+                                    (draft[key] ?? '').trim() && !isSaving
+                                      ? 'bg-primary text-primary-foreground hover:opacity-90'
+                                      : 'cursor-not-allowed bg-muted text-muted-foreground'
+                                  )}
+                                >
+                                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin" />
+                                    : justSaved ? <Check className="h-3 w-3" /> : null}
+                                  {isSaving ? 'Saving' : justSaved ? 'Saved' : 'Save'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <p className="pt-1 text-[11.5px] text-muted-foreground">
+                          A fee saves across every open period of that job and will not be
+                          overwritten by the nightly estimate. Pricing the whole firm at once?
+                          Upload the schedule in{' '}
+                          <a href="/settings?tab=economics" className="font-medium text-primary hover:underline">
+                            Settings → Economics
+                          </a>.
+                        </p>
+                      </div>
+                    )}
+                    {jobsErr && (
+                      <p className="mt-2 text-[12px] font-medium text-amber-700">{jobsErr}</p>
                     )}
                   </div>
                 )}

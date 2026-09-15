@@ -14,6 +14,10 @@ Usage:
     # Import task types (service codes)
     python manage.py provision_firm --org smith-associates --task-types task_types.csv
 
+    # Import the firm's fee schedule (see the note on _import_fees: collect it
+    # during onboarding, expect most rows to land after the first period)
+    python manage.py provision_firm --org smith-associates --fees fees.csv
+
     # Import everything at once
     python manage.py provision_firm --org smith-associates --team team.csv --clients clients.csv --task-types task_types.csv
 
@@ -39,6 +43,7 @@ CSV Formats:
     clients.csv:            client_name, billing_rate, assigned_team (comma-separated emails)
     task_types.csv:         name, code, is_billable, default_rate
     category_mappings.csv:  category, task_type_code
+    fees.csv:               client, engagement_type, budget_hours, monthly_fee
 """
 
 import csv
@@ -81,6 +86,12 @@ class Command(BaseCommand):
         parser.add_argument(
             '--task-types', type=str, default=None,
             help='Path to task types CSV (name, code, is_billable, default_rate)'
+        )
+        parser.add_argument(
+            '--fees', type=str, default=None,
+            help="Path to the firm's fee schedule CSV (client, engagement_type, "
+                 "budget_hours, monthly_fee). Same file the Settings -> Economics "
+                 "upload takes."
         )
         parser.add_argument(
             '--seed-category-mappings', action='store_true',
@@ -127,6 +138,7 @@ class Command(BaseCommand):
         team_csv = options['team']
         clients_csv = options['clients']
         task_types_csv = options['task_types']
+        fees_csv = options['fees']
         seed_category_mappings = options['seed_category_mappings']
         category_mappings_csv = options['category_mappings']
         suggest_mappings = options['suggest_mappings']
@@ -138,10 +150,11 @@ class Command(BaseCommand):
         generate_token = options['generate_token']
 
         if not team_csv and not clients_csv and not task_types_csv \
-                and not seed_category_mappings and not category_mappings_csv \
+                and not fees_csv and not seed_category_mappings \
+                and not category_mappings_csv \
                 and not suggest_mappings and not send_invites:
             raise CommandError(
-                'Provide at least one of --team, --clients, --task-types, '
+                'Provide at least one of --team, --clients, --task-types, --fees, '
                 '--seed-category-mappings, --category-mappings, --suggest-mappings, '
                 'or --send-invites'
             )
@@ -198,6 +211,10 @@ class Command(BaseCommand):
         # ─── Process task types CSV ───
         if task_types_csv:
             self._import_task_types(org, task_types_csv, dry_run, update)
+
+        # ─── Process the fee schedule ───
+        if fees_csv:
+            self._import_fees(org, fees_csv, dry_run)
 
         # ─── Process category -> TaskType mappings (Layer 1 -> Layer 2 bridge) ───
         if seed_category_mappings or category_mappings_csv:
@@ -1153,3 +1170,39 @@ Confidence guidance:
             return Decimal(val.strip().replace('$', '').replace(',', ''))
         except (InvalidOperation, ValueError):
             return None
+
+    def _import_fees(self, org, csv_path, dry_run):
+        """Hand the fee schedule to the importer that already owns this format.
+
+        Deliberately not a second parser. `set_engagement_budgets`, the upload
+        button on Settings -> Economics and this all have to agree about what a
+        fee belongs to, and the way to guarantee that is to let one of them do
+        the work.
+
+        Why it belongs in provisioning even though it usually cannot apply yet:
+        a fee attaches to a JOB, and jobs are derived from captured time, so on
+        day one most rows have nothing to attach to. The schedule is still the
+        thing to collect now — it is the hardest item to get back from a firm
+        once onboarding is over, and without it every budget is derived from an
+        under-captured month and Set Fees shows no fee at all. So take the file
+        during intake, run this, and run it again after the first period.
+        """
+        from django.core.management import call_command
+
+        self.stdout.write(f'\n{"─" * 60}')
+        self.stdout.write('  FEE SCHEDULE')
+        self.stdout.write(f'{"─" * 60}')
+        self.stdout.write(
+            '  Fees attach to recurring jobs, and jobs come from captured time.\n'
+            '  Before the firm has worked a period, expect most rows to report\n'
+            '  "no open engagements" — that is the schedule arriving early, not\n'
+            '  a broken file. Re-run after their first week:\n'
+            f'    manage.py set_engagement_budgets --org {org.id} --csv {csv_path} --apply\n'
+        )
+        try:
+            call_command('set_engagement_budgets', org=org.id, csv=csv_path,
+                         apply=not dry_run)
+        except Exception as e:                       # noqa: BLE001
+            # One bad fee file must not abandon a provisioning run halfway —
+            # the team and clients above it are already in.
+            self.stdout.write(self.style.ERROR(f'  Fee schedule failed: {e}'))

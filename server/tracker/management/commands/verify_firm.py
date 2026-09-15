@@ -399,8 +399,9 @@ class Command(BaseCommand):
             if state != OK:
                 out.append((WARN, 'fee schedule',
                             f'{len(pairs) - len(manual)} of {len(pairs)} jobs have no fee '
-                            f'from the firm, so Set Fees shows them no budget. Send the '
-                            f'firm a template and import what comes back: '
+                            f'from the firm, so Set Fees shows them no budget. The firm '
+                            f'can price a client from the Fees page or upload a schedule '
+                            f'in Settings -> Economics; to do it here, '
                             f'manage.py set_engagement_budgets --org {org.id} --template '
                             f'> fees.csv, then --csv fees.csv (dry run) and --apply'))
         return out

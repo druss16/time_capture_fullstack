@@ -291,6 +291,10 @@ def set_engagement_budget_group(request):
     the same conversion the CSV importer uses. Writes budget_source='manual',
     which derive_budget refuses to overwrite — so the nightly derivation pass
     never undoes what a person typed.
+
+    `set_in` names the screen the number was typed on, because this is now
+    called from two of them and "set in Settings by wayne" would be a small lie
+    on the row that shows it.
     """
     org = get_user_org(request.user)
     if not org:
@@ -304,6 +308,7 @@ def set_engagement_budget_group(request):
         return Response({"error": "client_id and engagement_type are required"},
                         status=400)
 
+    set_in = (request.data.get("set_in") or "Settings").strip()[:40] or "Settings"
     rate = float(getattr(org, "billing_rate_default", 0) or 0)
     hours = request.data.get("budget_hours")
     fee = request.data.get("monthly_fee")
@@ -334,7 +339,7 @@ def set_engagement_budget_group(request):
         e.budget_hours = Decimal(str(round(hours, 2)))
         e.budget_amount = Decimal(str(round(hours * rate, 2))) if rate else None
         e.budget_source = "manual"
-        e.budget_basis = f"set in Settings by {request.user.username}"
+        e.budget_basis = f"set in {set_in} by {request.user.username}"
         e.budget_set_at = timezone.now()
         e.save(update_fields=["budget_hours", "budget_amount", "budget_source",
                               "budget_basis", "budget_set_at", "updated_at"])

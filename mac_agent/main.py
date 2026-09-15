@@ -260,6 +260,56 @@ def _compute_inference_for_event(app_name, bundle_id, title, url, fpath, when=No
         return {}
 
 
+def _sync_ticker_to_inference():
+    """Push the inference engine's verdict to the menu bar and local cache.
+
+    The v1.4.0 architecture gutted AIClientSwitcher: on_window_change is a
+    documented NO-OP and the inference engine decides everything per event.
+    Windows kept its tray in step by reading the inference cache through
+    widget_state_tracker. The Mac menu bar had no equivalent — it only ever
+    updated from _apply_client_switch, which the switcher no longer calls —
+    so the ticker read "None" forever while the EVENTS were being attributed
+    correctly. The data was right and only the display was dead, which is the
+    worst way to be wrong: it silently tells the user nothing is being
+    tracked.
+
+    Display only. No backend write: the event payload already carries the
+    client, and posting on every window change would be a request per focus
+    change for something the server already knows.
+    """
+    if not _INFERENCE_AVAILABLE:
+        return
+    try:
+        from inference_cache import get_current_inference
+        inf = get_current_inference()
+    except Exception as e:
+        log(f"[TICKER] inference read failed: {e}", "warning")
+        return
+
+    cid = (inf or {}).get("client_id")
+    cname = (inf or {}).get("client_name")
+
+    prev_id, _ = _get_cached_client()
+    if cid == prev_id:
+        return
+
+    _set_cached_client(cid, cname)
+    if notif_manager:
+        try:
+            notif_manager.set_current_client(cid, cname)
+        except Exception:
+            pass
+    if gui_menu_bar and hasattr(gui_menu_bar, "state"):
+        try:
+            gui_menu_bar.state.set_client(cid, cname)
+            app = getattr(gui_menu_bar, "app", None)
+            if app is not None:
+                app.title = f"⏱ {cname}" if cname else "⏱ None"
+        except Exception as e:
+            log(f"[TICKER] menu bar update failed: {e}", "warning")
+    log(f"[TICKER] → {cname or 'None'} (client_id={cid})")
+
+
 def _compute_window_inference_snapshot(app_name, bundle_id, title, url, fpath):
     """Inference at window-change time, so the menu bar reflects the new
     window within a poll instead of waiting for the next heartbeat (~60s).
@@ -549,7 +599,18 @@ MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 PRINT_EVERY_POLL  = bool(_get("print_every", os.getenv("AGENT_PRINT_EVERY") == "1"))
 DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"))
-EXCLUDE_BUNDLES   = set(_get("exclude_bundles", os.getenv("AGENT_EXCLUDE_BUNDLES", "").split(",")) or [])
+# Filter blanks. "".split(",") is [""], so an unset AGENT_EXCLUDE_BUNDLES put
+# the EMPTY STRING in this set — and the tracking loop excludes a window when
+# `bundle_id in EXCLUDE_BUNDLES`. The SystemEvents detection path returns an
+# empty bundle_id, so those windows were treated as excluded: the loop emitted
+# the open dwell, CLEARED it, and skipped. Every second from there until the
+# next app switch was silently dropped. Measured on a real machine: 5.4
+# minutes captured out of 9.5 minutes of work, 43% gone before anything
+# reached the server.
+EXCLUDE_BUNDLES   = {
+    b.strip() for b in (_get("exclude_bundles", os.getenv("AGENT_EXCLUDE_BUNDLES", "").split(",")) or [])
+    if b and b.strip()
+}
 DB_PATH           = _get("db_path", os.getenv("MAC_AGENT_DB")) or DB_PATH_DEFAULT
 CONTEXT_PORT      = int(_get("context_port", os.getenv("AGENT_CONTEXT_PORT")) or 7321)
 CONTROL_POLL_S    = int(_get("agent_control_poll_seconds", 10))
@@ -4064,6 +4125,8 @@ def run_agent():
                         _compute_window_inference_snapshot(
                             app_name, bundle_id, title, url, fpath
                         )
+                        # The snapshot just refreshed the cache; show it.
+                        _sync_ticker_to_inference()
 
                                                 # === AI CLIENT SWITCHER: Check new window ===
                         if ai_switcher:

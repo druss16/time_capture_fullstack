@@ -152,6 +152,46 @@ def main():
           detect("St Patrick Chadwicks_P&L MTD_JUNE26.pdf") != 4)
     check("…while block 70787 still resolves", detect(LIVE) == 105)
 
+    print("\nTHE COMPARISON THE RIVAL LOOP CANNOT MAKE:")
+    # detect_mismatch excludes the booked client from the candidates by design.
+    # So when the winner is the BOOKING'S own generic form, no rival comparison
+    # can reveal it — 12 of 18 accusations in the second production run were
+    # that single pair, "Christ our Hope Church" against a block booked to
+    # "Christ our Hope Church-Boonville".
+    BOOK = {**PAD, 1: "Christ our Hope Church-Boonville",
+            2: "Christ our Hope Church", 9: "Hope Valley Outlook Services"}
+    bidx = cnm.build_token_index(BOOK)
+    check("the winner is a magnet against the BOOKING",
+          cnm._is_magnet(2, 1, bidx))
+    check("…and rank_rivals is given the booking to check it against",
+          "booked_cid" in cnm.rank_rivals.__code__.co_varnames)
+    def mismatch(title, booked, flag=True):
+        cnm.FULL_NAME_BEATS_PARTIAL = flag
+        try:
+            return cnm.detect_mismatch(title, booked, bidx, BOOK)
+        finally:
+            cnm.FULL_NAME_BEATS_PARTIAL = False
+
+    # The property that matters: for a winner that is the BOOKING'S generic
+    # form, this rule must change nothing at all. Whatever the detector did
+    # before — accuse, or stay silent — it must still do. The rule may only
+    # ever add answers where the winner is genuinely distinct from the booking.
+    for t in ("Office - Christ Our Hope - Office - Outlook",
+              "Christ our Hope Church  - QuickBooks",
+              "Christ Our Hope Reports July 26 - Message (HTML)"):
+        a = mismatch(t, 1, flag=False)
+        b = mismatch(t, 1, flag=True)
+        check(f"inert on {t[:34]!r}",
+              (a or {}).get("looks_like_client_id")
+              == (b or {}).get("looks_like_client_id"))
+
+    # HONEST LIMIT. Every roster shape tried here has the runner-up magnet
+    # guard or the ambiguity gate suppressing first, so no offline case isolates
+    # this guard as the deciding factor end to end. What is verified is that it
+    # identifies the pair and that the rule is refused for it; whether that
+    # clears the 12 production rows is a question only the 30-day shadow run
+    # against org 21's real 331-client roster can answer.
+
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED:")

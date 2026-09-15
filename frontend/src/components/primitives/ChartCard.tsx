@@ -48,10 +48,18 @@ function colorFor(card: ChartCardPayload, key: string, explicit?: string): strin
 
 interface Props {
   card: ChartCardPayload;
+  /**
+   * Called when the viewer picks a different bucketing. Unlike the measure
+   * toggle this cannot be answered client-side — a different grain is a
+   * different query — so it is handed up to whoever owns the URL.
+   */
+  onGrainChange?: ((grain: string) => void) | undefined;
 }
 
-export default function ChartCard({ card }: Props) {
+export default function ChartCard({ card, onGrainChange }: Props) {
   const views = card.toggle_views ?? [];
+  const grains = card.grain_options ?? [];
+  const activeGrain = card.grain ?? "auto";
   const [activeKey, setActiveKey] = useState(views[0]?.key ?? "");
   // Falls back to the first view if a previously-selected one has gone — which
   // happens for real: the backend drops the cost views for a viewer who may
@@ -84,6 +92,37 @@ export default function ChartCard({ card }: Props) {
               <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
             )}
           </div>
+          {(views.length > 1 || (grains.length > 1 && onGrainChange)) && (
+          <div className="flex flex-wrap items-center gap-2">
+          {/* Bucketing first, and deliberately quieter than the measure
+              toggle: it changes the x-axis, not the subject of the chart.
+              Outlined rather than sitting in a filled tray so two segmented
+              controls side by side don't read as one eight-button row. */}
+          {grains.length > 1 && onGrainChange && (
+            <div
+              role="tablist"
+              aria-label="Bucket"
+              className="flex flex-wrap gap-0.5 rounded-xl border border-[rgba(15,42,60,0.12)] p-0.5 print:hidden"
+            >
+              {grains.map(g => (
+                <button
+                  key={g.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeGrain === g.key}
+                  onClick={() => onGrainChange(g.key)}
+                  className={cn(
+                    "rounded-[10px] px-2.5 py-1 text-xs font-medium transition-colors",
+                    activeGrain === g.key
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
+                  )}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          )}
           {views.length > 1 && (
             <div
               role="tablist"
@@ -108,6 +147,8 @@ export default function ChartCard({ card }: Props) {
                 </button>
               ))}
             </div>
+          )}
+          </div>
           )}
         </div>
         {card.hero && (

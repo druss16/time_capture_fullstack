@@ -70,6 +70,7 @@ export default function DashboardV2() {
       lens: next.lens ?? body.lens,
       time: next.time ?? body.time,
       compare: next.compare !== undefined ? next.compare : body.compare,
+      grain: next.grain !== undefined ? next.grain : body.grain,
     };
     const search = serializeUrlState(merged);
     navigate({ pathname: "/analytics", search: search ? `?${search}` : "" });
@@ -87,6 +88,12 @@ export default function DashboardV2() {
       });
     },
     [push, body.scope.filters],
+  );
+
+  /** Bucketing lives in the URL like every other control, so a link keeps it. */
+  const handleGrainChange = useCallback(
+    (grain: string) => push({ grain }),
+    [push],
   );
 
   /** Table rows carry a descriptor instead; build the scope from the row. */
@@ -151,6 +158,7 @@ export default function DashboardV2() {
               body={body}
               data={data}
               onDrilldown={handleDrilldown}
+              onGrainChange={handleGrainChange}
               rowHandler={rowHandler}
             />
           </div>
@@ -163,11 +171,12 @@ export default function DashboardV2() {
 // ─── Sections ────────────────────────────────────────────────────────────────
 
 function SectionRenderer({
-  body, data, onDrilldown, rowHandler,
+  body, data, onDrilldown, onGrainChange, rowHandler,
 }: {
   body: AnalyticsQueryBody;
   data: NonNullable<ReturnType<typeof useAnalyticsQuery>["data"]>;
   onDrilldown: (d: { scope: Scope; lens: LensKey }) => void;
+  onGrainChange: (grain: string) => void;
   rowHandler: (t: DataTablePayload) => ((row: Record<string, any>) => void) | undefined;
 }) {
   // Realization and invoice trends have no numerator without invoices. A 0%
@@ -181,7 +190,13 @@ function SectionRenderer({
       case "kpi_tile":
         return <KPITile key={child.id} tile={child as KPITilePayload} onDrilldown={onDrilldown} />;
       case "chart_card":
-        return <ChartCard key={child.id} card={child} />;
+        return (
+          <ChartCard
+            key={child.id}
+            card={child}
+            onGrainChange={g => onGrainChange(g)}
+          />
+        );
       case "data_table":
         return <DataTable key={child.id} table={child} onRowClick={rowHandler(child)} />;
       case "insight_card":

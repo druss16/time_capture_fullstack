@@ -29,6 +29,18 @@ USAGE
 
 READING THE RESULT
 ------------------
+THE QUEUE comes first, because it is what decides. `detect_mismatch` is the
+detector that RAISES a row into the Mismatches tab, and it shares rank_rivals
+with the reading detector, so the flag can add accusations people have to work.
+
+  NEW FLAGS      rows that become an accusation. Read every one.
+  DROPPED FLAGS  accusations that disappear.
+  RETARGETED     now accuse a different client. Read every one.
+
+THE READING is `detect_title_client` — what the evidence cards explain with. It
+is the quieter half: a wrong answer here misleads a reviewer, but does not by
+itself put a row in front of anybody.
+
   CONFIRMS   silent before, now names THE CLIENT IT IS ALREADY BOOKED TO.
              These can only help: the worst case is the detector agreeing with
              a booking nobody was going to question.
@@ -73,6 +85,18 @@ class Command(BaseCommand):
         finally:
             cnm.CENTER_ONLY_CANNOT_SUPPRESS = before
 
+    def _mismatch(self, title, booked_cid, ctx, flag):
+        """The detector that actually raises a row into the queue."""
+        if not booked_cid or booked_cid not in ctx.names:
+            return None
+        before = cnm.CENTER_ONLY_CANNOT_SUPPRESS
+        cnm.CENTER_ONLY_CANNOT_SUPPRESS = flag
+        try:
+            return cnm.detect_mismatch(title, booked_cid, ctx.index, ctx.names,
+                                       firm_name=ctx.firm_name)
+        finally:
+            cnm.CENTER_ONLY_CANNOT_SUPPRESS = before
+
     def handle(self, *args, **opts):
         from datetime import timedelta
 
@@ -103,10 +127,19 @@ class Command(BaseCommand):
             chunk_size=1000)
 
         confirms, accuses, lost, changed = [], [], [], []
+        # detect_title_client is only half the story, and the quieter half.
+        # `detect_mismatch` is what RAISES a row into the Mismatches queue, and
+        # it runs through the same rank_rivals, so the flag can add or remove
+        # accusations a person actually has to work. Measuring only the first
+        # one answered "does the detector see more?" when the question that
+        # decides the flip is "does the QUEUE get bigger, and is it right?".
+        new_flags, dropped_flags, retargeted = [], [], []
         scanned = 0
         # Titles repeat constantly (the same document alt-tabbed all morning),
         # and the detector is pure, so score each distinct one once.
-        seen = {}
+        # detect_mismatch also depends on the booked client, so its cache is
+        # keyed on the pair.
+        seen, seen_mm = {}, {}
         for b in blocks:
             scanned += 1
             title = b.window_title or ''
@@ -114,6 +147,25 @@ class Command(BaseCommand):
                 old = self._detect(title, ctx, False)
                 new = self._detect(title, ctx, True)
                 seen[title] = (old, new)
+
+            mk = (title, b.client_id)
+            if mk not in seen_mm:
+                seen_mm[mk] = (self._mismatch(title, b.client_id, ctx, False),
+                               self._mismatch(title, b.client_id, ctx, True))
+            mo, mn = seen_mm[mk]
+            mo_id = mo['looks_like_client_id'] if mo else None
+            mn_id = mn['looks_like_client_id'] if mn else None
+            if mo_id != mn_id:
+                mrow = (b.id, b.day, title[:110], ctx.names.get(b.client_id, '—'),
+                        mo['looks_like_client_name'] if mo else None,
+                        mn['looks_like_client_name'] if mn else None)
+                if mo_id is None:
+                    new_flags.append(mrow)
+                elif mn_id is None:
+                    dropped_flags.append(mrow)
+                else:
+                    retargeted.append(mrow)
+
             old, new = seen[title]
             old_id = old['client_id'] if old else None
             new_id = new['client_id'] if new else None
@@ -139,6 +191,15 @@ class Command(BaseCommand):
         w(f"org {org_id} · {opts['days']}d · {scanned:,} blocks "
           f"({len(seen):,} distinct titles) · {len(ctx.names):,} clients")
         w("")
+        w("  THE QUEUE — detect_mismatch, what people actually have to work")
+        w(f"    NEW FLAGS      {len(new_flags):>6}   rows that become an "
+          f"accusation  {'<-- READ EVERY ONE' if new_flags else 'ok'}")
+        w(f"    DROPPED FLAGS  {len(dropped_flags):>6}   accusations that "
+          f"disappear")
+        w(f"    RETARGETED     {len(retargeted):>6}   accuse a different client "
+          f"than before  {'<-- READ EVERY ONE' if retargeted else 'ok'}")
+        w("")
+        w("  THE READING — detect_title_client, what the cards explain with")
         w(f"  CONFIRMS {len(confirms):>6}   now names the client it is already "
           f"booked to — safe")
         w(f"  ACCUSES  {len(accuses):>6}   now names a DIFFERENT client — a NEW "
@@ -149,7 +210,10 @@ class Command(BaseCommand):
           f"{'<-- READ EVERY ONE' if changed else 'ok'}")
         w("")
 
-        for label, rows in (("ACCUSES", accuses), ("CHANGED", changed),
+        for label, rows in (("NEW FLAGS", new_flags),
+                            ("RETARGETED", retargeted),
+                            ("DROPPED FLAGS", dropped_flags),
+                            ("ACCUSES", accuses), ("CHANGED", changed),
                             ("LOST", lost), ("CONFIRMS", confirms)):
             if not rows:
                 continue
@@ -164,6 +228,12 @@ class Command(BaseCommand):
                   f"(raise --samples to see them)")
             w("")
 
+        if new_flags or retargeted:
+            w(f"The QUEUE changes: {len(new_flags)} new accusation(s), "
+              f"{len(retargeted)} retargeted. Those are rows a person has to "
+              f"work, so read them above before flipping anything — this is "
+              f"the number that decides it, not the reading counts below.")
+            w("")
         if not (confirms or accuses or lost or changed):
             w("No effect on this window — the flag is not worth shipping on "
               "this evidence.")
@@ -180,9 +250,11 @@ class Command(BaseCommand):
               "'St. Peters Church' cannot match a document saying "
               "\"St. Peter's\" — peters and peter are different tokens — and "
               "the correct client is then invisible in its own file.")
+        elif new_flags or retargeted:
+            pass          # already said above, and it outranks the rest
         else:
-            w("Clean — every gain confirms an existing booking. Flip "
-              "CENTER_ONLY_CANNOT_SUPPRESS = True in "
+            w("Clean — every gain confirms an existing booking, and the queue "
+              "is unchanged. Flip CENTER_ONLY_CANNOT_SUPPRESS = True in "
               "tracker/utils/client_name_match.py")
 
     # ── one block, in full ──────────────────────────────────────────────────

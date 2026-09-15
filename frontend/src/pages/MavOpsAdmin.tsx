@@ -1540,7 +1540,11 @@ function MismatchesTab({ apiFetch, flash, filterOrg }: MismatchesTabProps) {
     });
   }, []);
   const [loading, setLoading] = useState(false);
-  const [days, setDays] = useState(120);
+  // 30 days, not 120. A misfile is worth finding while the week it belongs to
+  // can still be fixed; four months back it is mostly time that has already
+  // been submitted, approved or billed, which the resolve endpoint refuses
+  // anyway. The wider windows stay one click away for a deliberate audit.
+  const [days, setDays] = useState(30);
   const [showInternal, setShowInternal] = useState(false);
   const [orgClients, setOrgClients] = useState<{ id: number; name: string }[]>([]);
   const [resolveBusy, setResolveBusy] = useState(false);

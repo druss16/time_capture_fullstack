@@ -358,8 +358,21 @@ def _norm_text(s):
 # The signals
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Default OFF pending `manage.py shadow_needs_human --org 21`. See _title_signal.
-TITLE_SIGNAL_TRUSTS_THE_FLAG = False
+# Measured on org 21, 120 days, before enabling: 145 flagged rows, 1 RESCUED,
+# 0 REGRESSED, 0 RETARGETED. The single rescue is the acronym case this exists
+# for — "ATU Audit Report -June 2026 - Excel", booked to Internal, recognised
+# as Amalgamated Transit Union — which is client work that was sitting in the
+# firm's own bucket.
+#
+# One row in four months is a small return, and it is worth being clear that
+# this does NOT empty the needs_human queue: 75 of 145 rows still have no
+# recommendation. Those are raised by detect_booked_absent (the `unsure`
+# bucket), which names no single client by design, so needs_human is the honest
+# verdict for them. What they lack is the candidate list scan_buckets already
+# computes and the draft never sees. That is the next piece of work.
+#
+# Re-measure with `manage.py shadow_needs_human --org 21 --days 120`.
+TITLE_SIGNAL_TRUSTS_THE_FLAG = True
 
 
 def _title_signal(block, ctx):

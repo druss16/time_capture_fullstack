@@ -86,10 +86,10 @@ class Command(BaseCommand):
 
         since = timezone.now().date() - timedelta(days=opts['days'])
         blocks = (Block.objects
-                  .filter(org_id=org_id, deleted_at__isnull=True, date__gte=since)
+                  .filter(org_id=org_id, deleted_at__isnull=True, day__gte=since)
                   .exclude(window_title='')
                   .exclude(window_title__isnull=True)
-                  .only('id', 'window_title', 'client_id', 'date', 'minutes')
+                  .only('id', 'window_title', 'client_id', 'day', 'minutes')
                   .order_by('id')
                   .iterator(chunk_size=500))
 
@@ -110,7 +110,7 @@ class Command(BaseCommand):
             new_id = new['client_id'] if new else None
             if old_id == new_id:
                 continue
-            row = (b.id, b.date, title[:110],
+            row = (b.id, b.day, title[:110],
                    ctx.names.get(b.client_id, '—'),
                    old['client_name'] if old else None,
                    new['client_name'] if new else None)
@@ -163,14 +163,14 @@ class Command(BaseCommand):
         from tracker.models import Block
 
         b = Block.objects.filter(id=block_id).only(
-            'id', 'window_title', 'client_id', 'org_id', 'date').first()
+            'id', 'window_title', 'client_id', 'org_id', 'day').first()
         if not b:
             raise CommandError(f"block {block_id} not found")
 
         title = b.window_title or ''
         w = self.stdout.write
         w("")
-        w(f"block {b.id} · {b.date} · org {b.org_id}")
+        w(f"block {b.id} · {b.day} · org {b.org_id}")
         w(f"  title  : {title}")
         w(f"  booked : {ctx.names.get(b.client_id, '—')}")
         stripped = cnm.strip_app_chrome(title)

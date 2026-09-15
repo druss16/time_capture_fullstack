@@ -199,12 +199,26 @@ def compute_client_cards(org, start_utc, end_utc, *, user_id, can_see_all=False)
         d["client_id"] = b.client_id
 
         billable = _is_billable_block(b)
-        # Immaterial (sub-2min) NON-billable slivers count in the client's ledger
-        # total but get no category row — matches _aggregate's immaterial fold.
-        if not _is_material(b) and not billable:
-            d["total_min"] += minutes
-            d["non_billable_min"] += minutes
-            continue
+        # Immaterial (sub-2min) non-billable slivers used to land in the
+        # client's ledger total and then `continue` — counted, but given no
+        # category row. That was survivable while such a sliver was a garnish
+        # on a client that had material rows of its own: the minutes showed up
+        # in the client's total and the row list still had something in it.
+        #
+        # It stopped being survivable once a whole client could consist of
+        # nothing else. "No client" is exactly that client. Its card came back
+        # with total_hours set and `categories: []`, and the Daily Review lane
+        # drops any client it can build no rows for
+        # (dailyReviewLanes.ts: `if (!rows.length) continue`) — so 1h18m of a
+        # 1h25m day was counted in the header and had no row anywhere beneath
+        # it. "You're all caught up, 100% sorted" over a single 7m client.
+        #
+        # So they take the ordinary path now. The arithmetic is unchanged —
+        # both branches added the same minutes to total_min, and to
+        # non_billable_min, since this branch is only reachable when
+        # `billable` is already False. The difference is purely that the time
+        # now has somewhere to be seen. Utilization is unaffected: that is
+        # _aggregate's immaterial fold, which still stands and is separate.
 
         d["total_min"] += minutes
         d["billable_min" if billable else "non_billable_min"] += minutes

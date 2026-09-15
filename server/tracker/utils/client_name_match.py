@@ -365,6 +365,109 @@ COVERAGE_MARGIN = 0.30   # winner must out-cover the booked client by this
 AMBIGUITY_RATIO = 0.65   # runner-up other-client's ABSOLUTE hit must be < this
                          # fraction of the winner's, else >1 client fingerprinted
 
+# ── Who counts as a second opinion ──────────────────────────────────────────
+#
+# The ambiguity gate above is the right instinct — a title that fingerprints two
+# clients should name neither — but it was weighing a rival that is not a rival.
+#
+# `_named_only_in_center` already refuses a client whose entire case is the QB
+# "[Vendor Center: X]" / "[Customer Center: X]" tag: that names somebody the
+# client does business with, not the client. But it ran ONLY on the winner, and
+# ONLY after the ambiguity gate. So a vendor could never be chosen, yet could
+# still out-shout the client the document was about and veto it:
+#
+#   "ST. FRANCIS XAVIER (Secondary) - QuickBooks … - [Vendor Center: DIOCESE OF
+#    SYRACUSE.]"
+#     St. Francis Xavier Church  abs 6.42
+#     Diocese of Syracuse        abs 6.42   <- entirely from inside the bracket
+#     -> 100% of the winner, gate trips, detection discarded.
+#
+# Same shape as the Edge-banner bug (PR #405): noise never has to WIN to do
+# damage, it only has to look like a second opinion. A suspicious silence means
+# a suppressor, not an absence.
+#
+# So a center-only client is dropped from the ranking entirely — it can neither
+# win nor suppress. Everything else about the gate is untouched: where two real
+# clients are both named, the title still fingerprints neither.
+#
+# NOT DONE, deliberately: same-family specificity ("Sacred Heart Church" losing
+# to "Sacred Heart & St. Mary's Church" the way Stage 3's `[STAGE-3-DOMINATION]`
+# does it). It was built and dropped — on realistic rosters the IDF weighting
+# already puts a strictly-shorter sibling under the 65% gate on its own, and
+# where a sibling DOES tie it ties because it matched the identical token set,
+# which is genuine ambiguity that should abstain. It changed no outcome worth
+# having. classification_service.py's note about deferring it still stands.
+#
+# DEFAULT OFF: demonstrated on constructed rosters, not yet on org 21's real
+# one. Measure first, then flip:
+#   manage.py shadow_title_specificity --org 21 --explain <block_id>
+#   manage.py shadow_title_specificity --org 21 --days 120
+CENTER_ONLY_CANNOT_SUPPRESS = False  # a client named only inside [Vendor
+                                     # Center: X] is not a second opinion
+
+
+def rank_rivals(title, title_tokens, index, cids):
+    """Score `cids` against the title; return (best, second_abs).
+
+    best is (cid, coverage, top_token_weight, abs_hit), or None when the title
+    must not be allowed to name anybody. `second_abs` is the strongest hit among
+    candidates the ambiguity gate is entitled to weigh.
+
+    A bracket-only client may never WIN — that has always been true and is not
+    behind the flag. What the flag changes is whether it may SUPPRESS.
+    """
+    scored = []
+    for cid in cids:
+        cov, topw, abs_hit = score_title_against_client(title_tokens, cid, index)
+        if abs_hit > 0:
+            scored.append((abs_hit, cid, cov, topw))
+    if not scored:
+        return None, 0.0
+    scored.sort(key=lambda r: (-r[0], r[1]))
+
+    has_center = bool(_CENTER_BRACKET_RE.search(title or ""))
+
+    def _center_only(cid):
+        return has_center and _named_only_in_center(title, cid, index)
+
+    if not CENTER_ONLY_CANNOT_SUPPRESS:
+        # Today's behaviour, preserved exactly: rank everything, refuse only if
+        # the WINNER turns out to be bracket-only. (The old code ran that check
+        # after the ambiguity gate; both paths refuse identically, so moving it
+        # earlier changes nothing but the number of re-scores.)
+        best = scored[0]
+        second_abs = scored[1][0] if len(scored) > 1 else 0.0
+        if _center_only(best[1]):
+            return None, 0.0
+        return (best[1], best[2], best[3], best[0]), second_abs
+
+    # Flag on. A bracket-only client is not a candidate at all, so it can
+    # neither win nor stand in front of the client the document is about.
+    # Filtering is lazy — `_named_only_in_center` re-scores, and only the top
+    # few candidates can ever matter.
+    best, rest = None, []
+    for i, row in enumerate(scored):
+        if _center_only(row[1]):
+            continue
+        best, rest = row, scored[i + 1:]
+        break
+    if best is None:
+        return None, 0.0
+
+    best_abs = best[0]
+    second_abs = 0.0
+    for abs_hit, cid, _cov, _topw in rest:
+        # Below the gate's threshold a candidate cannot change the verdict, so
+        # it is taken as the runner-up without paying for the filter. That keeps
+        # the reported `runner_up_abs_hit` honest rather than collapsing it to
+        # zero whenever the strongest rival happened to be filtered out.
+        if abs_hit >= AMBIGUITY_RATIO * best_abs and _center_only(cid):
+            continue
+        second_abs = abs_hit
+        break                # sorted: the first survivor is the strongest
+
+    return (best[1], best[2], best[3], best_abs), second_abs
+
 
 def detect_mismatch(
     title: str,
@@ -433,31 +536,21 @@ def detect_mismatch(
             }
         return None
 
-    # Rank OTHER clients by absolute hit mass; keep top two.
-    best_cid = None
-    best_cov = best_topw = best_abs = 0.0
-    second_abs = 0.0
-    for cid in client_names:
-        if cid == booked_cid:
-            continue
-        cov, topw, abs_hit = score_title_against_client(title_tokens, cid, index)
-        if abs_hit > best_abs:
-            second_abs = best_abs
-            best_abs, best_cid, best_cov, best_topw = abs_hit, cid, cov, topw
-        elif abs_hit > second_abs:
-            second_abs = abs_hit
+    # Rank OTHER clients by absolute hit mass. `rank_rivals` drops the two
+    # kinds of candidate that are not second opinions (a client's own shorter
+    # self, and a name that exists only inside the QB Center bracket) before
+    # the ambiguity gate weighs them — see the note above it.
+    best, second_abs = rank_rivals(
+        title, title_tokens, index,
+        [cid for cid in client_names if cid != booked_cid])
 
-    if best_cid is None or best_abs <= 0:
+    if best is None:
         return _acronym_match()
+    best_cid, best_cov, best_topw, best_abs = best
 
     # Ambiguity gate (mass-based): if another client's absolute fingerprint is
     # nearly as strong, the title doesn't point at ONE client → suppress.
     if second_abs >= AMBIGUITY_RATIO * best_abs:
-        return _acronym_match()
-
-    # A winner whose whole case is the Vendor/Customer Center bracket is naming
-    # somebody the booked client does business with, not a rival for the work.
-    if _named_only_in_center(title, best_cid, index):
         return _acronym_match()
 
     # Strict strength gates.
@@ -656,31 +749,20 @@ def detect_title_client(
     if not title_tokens:
         return None
 
-    best_cid = None
-    best_cov = best_topw = best_abs = 0.0
-    second_abs = 0.0
-    for cid, name in client_names.items():
-        if skip_internal and is_internal_client(name, firm_name):
-            continue
-        cov, topw, abs_hit = score_title_against_client(title_tokens, cid, index)
-        if abs_hit > best_abs:
-            second_abs = best_abs
-            best_abs, best_cid, best_cov, best_topw = abs_hit, cid, cov, topw
-        elif abs_hit > second_abs:
-            second_abs = abs_hit
+    # Same ranking discipline as detect_mismatch, through the same helper, so
+    # the row the UI shows and the target the reconcile button re-derives can
+    # never disagree about who the runner-up was.
+    best, second_abs = rank_rivals(
+        title, title_tokens, index,
+        [cid for cid, name in client_names.items()
+         if not (skip_internal and is_internal_client(name, firm_name))])
 
-    if best_cid is None or best_abs <= 0:
+    if best is None:
         return None
+    best_cid, best_cov, best_topw, best_abs = best
 
     # Ambiguity gate — must fingerprint ONE client clearly.
     if second_abs >= AMBIGUITY_RATIO * best_abs:
-        return None
-
-    # Same refusal as detect_mismatch: a vendor or customer named in the QB
-    # Center bracket is not a reroute target. This path is what the reconcile
-    # button re-derives from, so letting it disagree would mean the fix sends
-    # the block somewhere the detector would never have accused it of.
-    if _named_only_in_center(title, best_cid, index):
         return None
 
     # Strength gates (same bar as detect_mismatch, minus the booked comparison).

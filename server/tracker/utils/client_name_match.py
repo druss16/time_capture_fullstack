@@ -613,7 +613,7 @@ def _is_magnet(winner: int, rival: int, index: dict) -> bool:
     return w_dist <= r_dist
 
 
-def rank_rivals(title, title_tokens, index, cids):
+def rank_rivals(title, title_tokens, index, cids, booked_cid=None):
     """Score `cids` against the title; return (best, second_abs).
 
     best is (cid, coverage, top_token_weight, abs_hit), or None when the title
@@ -677,6 +677,20 @@ def rank_rivals(title, title_tokens, index, cids):
         return None, 0.0
 
     best_abs = best[0]
+
+    # THE COMPARISON THE RIVAL LOOP CANNOT MAKE. detect_mismatch excludes the
+    # booked client from the candidates by design, so if the winner is the
+    # BOOKED client's own generic form — "Christ our Hope Church" winning on a
+    # block booked to "Christ our Hope Church-Boonville" — no rival comparison
+    # will ever reveal it, and the short name accuses its own longer sibling.
+    # Twelve of eighteen new accusations in org 21's second run of this rule
+    # were that one pair. Checked once, against the booking, before the loop.
+    allow_full_name = (
+        FULL_NAME_BEATS_PARTIAL
+        and best[2] >= FULLY_NAMED
+        and not (booked_cid and _is_magnet(best[1], booked_cid, index))
+    )
+
     second_abs = 0.0
     for abs_hit, cid, _cov, _topw in rest:
         # Below the gate's threshold a candidate cannot change the verdict, so
@@ -689,7 +703,7 @@ def rank_rivals(title, title_tokens, index, cids):
             # The winner's whole name is in this title and this rival's is not,
             # by a wide margin. Same words, less of them — a subset reading,
             # not a competing one.
-            if (FULL_NAME_BEATS_PARTIAL and best[2] >= FULLY_NAMED
+            if (allow_full_name
                     and _cov <= best[2] - COVERAGE_MARGIN
                     and not _is_magnet(best[1], cid, index)):
                 continue
@@ -772,7 +786,8 @@ def detect_mismatch(
     # the ambiguity gate weighs them — see the note above it.
     best, second_abs = rank_rivals(
         title, title_tokens, index,
-        [cid for cid in client_names if cid != booked_cid])
+        [cid for cid in client_names if cid != booked_cid],
+        booked_cid=booked_cid)
 
     if best is None:
         return _acronym_match()

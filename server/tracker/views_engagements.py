@@ -21,6 +21,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from tracker.services.fee_schedule import record_fee
+
 from tracker.models import Engagement, OrganizationMembership
 from tracker.models_engagements import ladder_for
 from tracker.services.engagements import engagement_stats, open_engagement_stats
@@ -329,11 +331,24 @@ def set_engagement_budget_group(request):
     if hours <= 0:
         return Response({"error": "Budget must be greater than zero"}, status=400)
 
+    # The price is recorded first and unconditionally. A client whose next
+    # period has not been created yet still has a fee the firm has decided on,
+    # and losing it because no row existed to hold it is the whole bug.
+    record_fee(org, client_id, etype, hours, fee=fee, user=request.user,
+               set_in=set_in)
+
     engagements = list(Engagement.objects.filter(
         org=org, client_id=client_id, engagement_type=etype, status="open"))
     if not engagements:
-        return Response({"error": "No open engagements for that client and type"},
-                        status=404)
+        return Response({
+            "client_id": client_id,
+            "engagement_type": etype,
+            "budget_hours": round(hours, 2),
+            "periods_updated": 0,
+            "held": True,
+            "detail": "Saved. No period of this job is open yet, so it will "
+                      "apply to the first one that is.",
+        })
 
     for e in engagements:
         e.budget_hours = Decimal(str(round(hours, 2)))
@@ -446,17 +461,20 @@ def engagement_budget_csv(request):
 
         engagements = list(Engagement.objects.filter(
             org=org, client=client, engagement_type=etype, status="open"))
-        if not engagements:
-            problems.append({"line": i, "reason":
-                             f"{client.name} has no open {etype} jobs"})
-            continue
 
+        # A job with no open period is no longer a failed row. The firm has
+        # told us its price; it is the schedule arriving before the work, which
+        # is exactly what happens when a firm hands over its fees during
+        # onboarding, and the price is kept for the first period that opens.
         planned.append({
             "line": i, "client_id": client.id, "client_name": client.name,
             "engagement_type": etype, "budget_hours": round(hours, 2),
             "periods": len(engagements),
+            "held": not engagements,
         })
         if apply:
+            record_fee(org, client.id, etype, hours, fee=raw_f,
+                       user=request.user, set_in="fee schedule CSV")
             for e in engagements:
                 e.budget_hours = Decimal(str(round(hours, 2)))
                 e.budget_amount = Decimal(str(round(hours * rate, 2))) if rate else None
@@ -474,6 +492,7 @@ def engagement_budget_csv(request):
         "summary": {
             "rows": len(planned),
             "periods": sum(p["periods"] for p in planned),
+            "held": sum(1 for p in planned if p["held"]),
             "problems": len(problems),
         },
     })

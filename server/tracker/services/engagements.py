@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 
 from tracker.models import Block, Engagement, Organization
@@ -262,10 +262,56 @@ def _comparable_budget(engagement: Engagement) -> tuple[float, str] | None:
     return median, f"median of {len(samples)} comparable {what} jobs: {median:.1f}h"
 
 
+def _scheduled_budget(engagement: Engagement):
+    """The firm's own price for this arrangement, if they have given us one.
+
+    Checked before anything is estimated, and this is what makes a fee outlive
+    the period it was typed in: next month's engagement is a brand new row with
+    no budget, so without this it would be handed a guess off an under-captured
+    month — the very number a person had already corrected.
+    """
+    from tracker.models_engagements import FeeScheduleEntry
+
+    return FeeScheduleEntry.objects.filter(
+        org_id=engagement.org_id,
+        client_id=engagement.client_id,
+        engagement_type=engagement.engagement_type,
+    ).first()
+
+
 def derive_budget(engagement: Engagement, *, dry_run: bool = True) -> dict:
     """Give this engagement a budget. Never overwrites a manual one."""
     if engagement.budget_source == "manual":
         return {"engagement_id": engagement.id, "action": "kept_manual"}
+
+    entry = _scheduled_budget(engagement)
+    if entry:
+        hours = float(entry.budget_hours)
+        if not dry_run:
+            rate = float(getattr(engagement.org, "billing_rate_default", 0) or 0)
+            engagement.budget_hours = Decimal(str(round(hours, 2)))
+            engagement.budget_amount = (Decimal(str(round(hours * rate, 2)))
+                                        if rate else None)
+            engagement.budget_source = "manual"
+            engagement.budget_basis = (
+                f"fee schedule ({entry.set_in or 'set by the firm'})"
+            )
+            engagement.budget_set_at = timezone.now()
+            engagement.save(update_fields=[
+                "budget_hours", "budget_amount", "budget_source", "budget_basis",
+                "budget_set_at", "updated_at",
+            ])
+            type(entry).objects.filter(pk=entry.pk).update(
+                applied_count=F("applied_count") + 1,
+                last_applied_at=timezone.now(),
+            )
+        return {
+            "engagement_id": engagement.id,
+            "action": "set",
+            "source": "manual",
+            "hours": hours,
+            "basis": "fee schedule",
+        }
 
     found = _prior_year_budget(engagement)
     source = "prior_year"

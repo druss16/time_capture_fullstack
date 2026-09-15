@@ -35,7 +35,7 @@ from django.utils import timezone
 from tracker.models import (
     Organization, OrganizationMembership, Client, TaskType, TaskTypeSet,
     OrgDeploymentToken, DeviceProvisioningMap, Block, AgentDevice,
-    Engagement, Invoice,
+    Engagement, Invoice, FeeScheduleEntry,
 )
 
 OK, WARN, BAD = 'ok', 'warn', 'bad'
@@ -390,15 +390,24 @@ class Command(BaseCommand):
 
         open_eng = Engagement.objects.filter(org=org, status='open').exclude(client=None)
         pairs = set(open_eng.values_list('client_id', 'engagement_type'))
-        if pairs:
+        # Fees on file, including any the firm handed over before the work
+        # existed. A schedule taken at intake should stop this reading as
+        # "unpriced" the moment it lands, not once the first period opens.
+        on_file = set(FeeScheduleEntry.objects.filter(org=org)
+                      .values_list('client_id', 'engagement_type'))
+        held = len(on_file - pairs)
+        if pairs or on_file:
             manual = set(open_eng.filter(budget_source='manual')
                          .values_list('client_id', 'engagement_type'))
-            state = OK if len(manual) == len(pairs) else WARN
-            self._line('fee schedule', state,
-                       f'{len(manual)}/{len(pairs)} jobs have a fee the firm set', quiet)
+            priced = manual | (on_file & pairs)
+            state = OK if pairs and len(priced) == len(pairs) else WARN
+            detail = f'{len(priced)}/{len(pairs)} jobs have a fee the firm set'
+            if held:
+                detail += f' · {held} more held for jobs not open yet'
+            self._line('fee schedule', state, detail, quiet)
             if state != OK:
                 out.append((WARN, 'fee schedule',
-                            f'{len(pairs) - len(manual)} of {len(pairs)} jobs have no fee '
+                            f'{len(pairs) - len(priced)} of {len(pairs)} jobs have no fee '
                             f'from the firm, so Set Fees shows them no budget. The firm '
                             f'can price a client from the Fees page or upload a schedule '
                             f'in Settings -> Economics; to do it here, '

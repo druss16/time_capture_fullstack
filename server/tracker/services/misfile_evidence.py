@@ -391,12 +391,25 @@ def _title_signal(block, ctx):
     detect_title_client for callers whose block was never flagged.
     """
     from tracker.utils.client_name_match import (detect_mismatch,
-                                                 detect_title_client)
+                                                 detect_title_client,
+                                                 is_internal_client)
 
     det = None
     if TITLE_SIGNAL_TRUSTS_THE_FLAG and block.client_id:
         m = detect_mismatch(block.window_title or '', block.client_id,
                             ctx.index, ctx.names, firm_name=ctx.firm_name)
+        # THE ONE DISCIPLINE detect_mismatch DOES NOT SHARE. It buckets an
+        # internal/firm target as 'internal' and returns it; detect_title_client
+        # refuses it outright, because "a title that only fingerprints
+        # 'Internal - Tax' is not a reroute target". Borrowing the first
+        # detector without borrowing that refusal was catastrophic on org 21:
+        # the firm is called TL Wall ACCOUNTING and Tax Corp, so its own name in
+        # a QuickBooks banner or a WordPress tab matched the client "Internal -
+        # Accounting" on one shared word, and 76 of 76 "rescued" rows plus every
+        # retarget pointed there. The whole queue went to one verdict, which is
+        # what a shadow run is for.
+        if m and is_internal_client(m['looks_like_client_name'], ctx.firm_name):
+            m = None
         if m:
             # An acronym match ("SFA P&L 2025" -> St Francis of Assisi) reports
             # coverage 1.0 and zero mass by construction, because no word

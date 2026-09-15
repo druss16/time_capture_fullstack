@@ -105,8 +105,106 @@ def is_internal_client(name: str, firm_name: str | None = None) -> bool:
     return False
 
 
+# ── Plural / possessive normalisation ───────────────────────────────────────
+#
+# _tokenize did no normalisation at all: regex, lowercase, drop single chars.
+# So a roster reading "St. Peters Church" tokenizes to `peters` while its own
+# documents say "St. Peter's" -> `peter`, the two never meet, and the parish
+# scores 0.09 coverage against its own file. Org 21 block 66704: the title said
+# "St. Mary - St. Peter's Church", the booked parish was invisible, and
+# "St Peter's Cemetery" won by default at abs 3.19 to 0.30.
+#
+# Renaming the client is NOT the fix — it is worse. That stray "s" was the only
+# token separating the Church from the Cemetery, so spelling it "St. Peter's
+# Church" makes the two collide at 94% of each other and the ambiguity gate
+# abstains on everything. Measured: 2 of 4 real title spellings match today,
+# 0 of 4 after such a rename.
+#
+# Which is why this ships with ENTITY_CLASS_SEPARATES. Collapsing the plural
+# without restoring a real differentiator just trades a wrong answer for no
+# answer.
+#
+# The stem is deliberately timid. It only ever removes ONE trailing "s", never
+# from a word ending "ss" (Cross, Mass) or "us" (Jesus, Campus), and never from
+# anything that would leave fewer than three characters. Applied to client
+# names and titles through the same function, so both sides always agree.
+NORMALIZE_PLURALS = False
+
+
+def _stem(tok: str) -> str:
+    if not NORMALIZE_PLURALS:
+        return tok
+    if len(tok) > 3 and tok.endswith("s") and not tok.endswith(("ss", "us", "is")):
+        return tok[:-1]
+    return tok
+
+
 def _tokenize(name: str) -> list[str]:
-    return [t for t in _TOKEN_RE.findall((name or "").lower()) if len(t) > 1]
+    return [_stem(t) for t in _TOKEN_RE.findall((name or "").lower())
+            if len(t) > 1]
+
+
+# ── Entity class ────────────────────────────────────────────────────────────
+#
+# A church and its cemetery share every distinctive word they have. The head
+# noun is the ONLY thing separating them, and in this scorer it cannot: every
+# one of these words is in _STOPish and capped at 0.15, i.e. explicitly ruled
+# unable to fingerprint anybody.
+#
+# That cap is right for scoring — "church" must never be evidence FOR a client
+# — but it is wrong for exclusion. "Cemetery" appearing in a candidate's name
+# and nowhere in the title is not weak evidence, it is a contradiction.
+#
+# Owned here rather than in classification_service because this module is pure
+# and that one needs Django; the Stage-3 classifier now imports these from here
+# so both halves of the system read the same list.
+EXCLUSIVE_ENTITY_CLASSES = [
+    # Religious entity types
+    {'church', 'cemetery', 'fund', 'foundation', 'school'},
+    # Business entity types
+    {'inc', 'llc', 'cemetery', 'fund'},
+]
+
+# Different words for the SAME entity class, folded before the class comparison.
+# A parish school is a separate client from its church (org 21 has 790
+# "St. Mary's Church Baldwinsville" and 791 "St. Mary's School Baldwinsville"),
+# but its files are named "St Mary Academy JUN26 P&L" — never "School". Folding
+# academy->school lets the school claim its own files AND excludes the church
+# from them.
+ENTITY_CLASS_SYNONYMS = {
+    'academy': 'school',
+    'preschool': 'school',
+}
+
+ENTITY_CLASS_SEPARATES = False
+
+
+def _entity_classes(tokens) -> set:
+    """The exclusive-class words present, folded through the synonyms."""
+    folded = {ENTITY_CLASS_SYNONYMS.get(t, t) for t in tokens}
+    out = set()
+    for group in EXCLUSIVE_ENTITY_CLASSES:
+        out |= (folded & group)
+    return out
+
+
+def _class_contradicts(title_tokens, cid: int, index: dict) -> bool:
+    """True when this candidate claims an entity class the title denies.
+
+    Only fires when BOTH sides name a class and they do not overlap — "St
+    Peter's Cemetery" against a title that says Church. A title naming no class
+    at all contradicts nothing, and a candidate with no class in its name (most
+    businesses) is never excluded.
+    """
+    if not ENTITY_CLASS_SEPARATES:
+        return False
+    theirs = _entity_classes(index["client_tokens"].get(cid, set()))
+    if not theirs:
+        return False
+    mine = _entity_classes(title_tokens)
+    if not mine:
+        return False
+    return not (theirs & mine)
 
 
 # Words that don't contribute a letter to a client's initialism (SFA, SMA…).
@@ -430,7 +528,12 @@ def rank_rivals(title, title_tokens, index, cids):
     def _center_only(cid):
         return has_center and _named_only_in_center(title, cid, index)
 
-    if not CENTER_ONLY_CANNOT_SUPPRESS:
+    def _excluded(cid):
+        # Two independent reasons a candidate is not a rival: its whole case is
+        # the QB Center bracket, or it claims an entity class the title denies.
+        return _center_only(cid) or _class_contradicts(title_tokens, cid, index)
+
+    if not CENTER_ONLY_CANNOT_SUPPRESS and not ENTITY_CLASS_SEPARATES:
         # Today's behaviour, preserved exactly: rank everything, refuse only if
         # the WINNER turns out to be bracket-only. (The old code ran that check
         # after the ambiguity gate; both paths refuse identically, so moving it
@@ -447,7 +550,7 @@ def rank_rivals(title, title_tokens, index, cids):
     # few candidates can ever matter.
     best, rest = None, []
     for i, row in enumerate(scored):
-        if _center_only(row[1]):
+        if _excluded(row[1]):
             continue
         best, rest = row, scored[i + 1:]
         break
@@ -461,7 +564,7 @@ def rank_rivals(title, title_tokens, index, cids):
         # it is taken as the runner-up without paying for the filter. That keeps
         # the reported `runner_up_abs_hit` honest rather than collapsing it to
         # zero whenever the strongest rival happened to be filtered out.
-        if abs_hit >= AMBIGUITY_RATIO * best_abs and _center_only(cid):
+        if abs_hit >= AMBIGUITY_RATIO * best_abs and _excluded(cid):
             continue
         second_abs = abs_hit
         break                # sorted: the first survivor is the strongest

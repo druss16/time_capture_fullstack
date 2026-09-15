@@ -62,12 +62,24 @@ from django.core.management.base import BaseCommand, CommandError
 
 from tracker.utils import client_name_match as cnm
 
+FLAG_HELP = ('CENTER_ONLY_CANNOT_SUPPRESS', 'NORMALIZE_PLURALS',
+             'ENTITY_CLASS_SEPARATES')
+
 
 class Command(BaseCommand):
     help = "Shadow-compare title detection with CENTER_ONLY_CANNOT_SUPPRESS on and off (read-only)."
 
+    FLAGS = ('CENTER_ONLY_CANNOT_SUPPRESS', 'NORMALIZE_PLURALS',
+             'ENTITY_CLASS_SEPARATES')
+
     def add_arguments(self, parser):
         parser.add_argument('--org', type=int, required=True)
+        parser.add_argument('--flag', default='all',
+                            help="Which experimental flag(s) to shadow: "
+                                 + ', '.join(FLAG_HELP) + ", or 'all' "
+                                 "(default). NORMALIZE_PLURALS and "
+                                 "ENTITY_CLASS_SEPARATES are meaningless apart "
+                                 "— see the module docstring.")
         parser.add_argument('--days', type=int, default=120)
         parser.add_argument('--explain', type=int, default=None,
                             help='A block id: show its full scoring table and which gate silenced it')
@@ -76,26 +88,42 @@ class Command(BaseCommand):
 
     # ── helpers ─────────────────────────────────────────────────────────────
 
-    def _detect(self, title, ctx, flag):
-        before = cnm.CENTER_ONLY_CANNOT_SUPPRESS
-        cnm.CENTER_ONLY_CANNOT_SUPPRESS = flag
+    def _set(self, on):
+        for f in self._flags:
+            setattr(cnm, f, on)
+
+    def _index(self, ctx, on):
+        """The token index for this flag state.
+
+        NORMALIZE_PLURALS changes how CLIENT NAMES tokenize, and
+        build_token_index runs once per roster — so a shadow that reuses
+        ctx.index compares new titles against an old index and reports
+        nonsense. Built once per side, not per call.
+        """
+        self._set(on)
         try:
-            return cnm.detect_title_client(title, ctx.index, ctx.names,
+            return cnm.build_token_index(ctx.names)
+        finally:
+            self._set(False)
+
+    def _detect(self, title, ctx, flag, index):
+        self._set(flag)
+        try:
+            return cnm.detect_title_client(title, index, ctx.names,
                                            firm_name=ctx.firm_name)
         finally:
-            cnm.CENTER_ONLY_CANNOT_SUPPRESS = before
+            self._set(False)
 
-    def _mismatch(self, title, booked_cid, ctx, flag):
+    def _mismatch(self, title, booked_cid, ctx, flag, index):
         """The detector that actually raises a row into the queue."""
         if not booked_cid or booked_cid not in ctx.names:
             return None
-        before = cnm.CENTER_ONLY_CANNOT_SUPPRESS
-        cnm.CENTER_ONLY_CANNOT_SUPPRESS = flag
+        self._set(flag)
         try:
-            return cnm.detect_mismatch(title, booked_cid, ctx.index, ctx.names,
+            return cnm.detect_mismatch(title, booked_cid, index, ctx.names,
                                        firm_name=ctx.firm_name)
         finally:
-            cnm.CENTER_ONLY_CANNOT_SUPPRESS = before
+            self._set(False)
 
     def handle(self, *args, **opts):
         from datetime import timedelta
@@ -110,6 +138,17 @@ class Command(BaseCommand):
         ctx = context_for(org_id)
         if not ctx.names:
             raise CommandError(f"org {org_id} has no clients")
+
+        want = opts['flag']
+        if want == 'all':
+            self._flags = self.FLAGS
+        elif want in self.FLAGS:
+            self._flags = (want,)
+        else:
+            raise CommandError(f"--flag must be 'all' or one of {self.FLAGS}")
+        self.stdout.write(f"  shadowing: {', '.join(self._flags)}")
+        idx_off = self._index(ctx, False)
+        idx_on = self._index(ctx, True)
 
         if opts['explain'] is not None:
             return self._explain(opts['explain'], ctx)
@@ -144,14 +183,15 @@ class Command(BaseCommand):
             scanned += 1
             title = b.window_title or ''
             if title not in seen:
-                old = self._detect(title, ctx, False)
-                new = self._detect(title, ctx, True)
+                old = self._detect(title, ctx, False, idx_off)
+                new = self._detect(title, ctx, True, idx_on)
                 seen[title] = (old, new)
 
             mk = (title, b.client_id)
             if mk not in seen_mm:
-                seen_mm[mk] = (self._mismatch(title, b.client_id, ctx, False),
-                               self._mismatch(title, b.client_id, ctx, True))
+                seen_mm[mk] = (
+                    self._mismatch(title, b.client_id, ctx, False, idx_off),
+                    self._mismatch(title, b.client_id, ctx, True, idx_on))
             mo, mn = seen_mm[mk]
             mo_id = mo['looks_like_client_id'] if mo else None
             mn_id = mn['looks_like_client_id'] if mn else None
@@ -275,7 +315,7 @@ class Command(BaseCommand):
         w(f"  title  : {title}")
         w(f"  booked : {ctx.names.get(b.client_id, '—')}")
         stripped = cnm.strip_app_chrome(title)
-        toks = set(cnm._tokenize(stripped))
+        toks = set(cnm._tokenize(stripped))   # flags off: today's tokenisation
         w(f"  after chrome strip: {stripped!r}")
         w(f"  has [Center:] tag : {bool(cnm._CENTER_BRACKET_RE.search(title))}")
         w("")
@@ -308,8 +348,11 @@ class Command(BaseCommand):
               f"winner (trips at {cnm.AMBIGUITY_RATIO:.0%}) -> "
               f"{'SUPPRESSED' if ratio >= cnm.AMBIGUITY_RATIO else 'ok'}")
         w("")
+        # Each side gets its own index: NORMALIZE_PLURALS retokenizes the
+        # client names themselves, so reusing one index would compare a new
+        # title against an old roster.
         for flag in (False, True):
-            d = self._detect(title, ctx, flag)
-            w(f"  CENTER_ONLY_CANNOT_SUPPRESS={str(flag):<5} -> "
+            d = self._detect(title, ctx, flag, self._index(ctx, flag))
+            w(f"  {'+'.join(self._flags)}={str(flag):<5} -> "
               f"{d['client_name'] if d else None}")
         w("")

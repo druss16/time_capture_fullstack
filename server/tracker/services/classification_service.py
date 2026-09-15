@@ -47,6 +47,14 @@ Other stages are stubbed as TODO and will be implemented in subsequent sessions.
 
 from __future__ import annotations
 from tracker.services.pattern_learning import LEARNED_PATTERN_BLACKLIST
+# Entity classes live in tracker/utils/client_name_match, which is pure and is
+# where the mismatch detector needs them too. Imported (and re-exported) here so
+# the existing readers keep working, and so the two halves of the system can
+# never drift apart on what a church-vs-cemetery contradiction is.
+from tracker.utils.client_name_match import (   # noqa: F401
+    ENTITY_CLASS_SYNONYMS,
+    EXCLUSIVE_ENTITY_CLASSES,
+)
 
 import logging
 from dataclasses import dataclass, field
@@ -7017,26 +7025,6 @@ SHORT_ALIAS_STOPLIST = {
 # is one of them, never multiple. A parish might have BOTH a church and
 # a cemetery as separate accounting entities (separate clients), so
 # matching one to the other is always wrong.
-EXCLUSIVE_ENTITY_CLASSES = [
-    # Religious entity types
-    {'church', 'cemetery', 'fund', 'foundation', 'school'},
-    # Business entity types
-    {'inc', 'llc', 'cemetery', 'fund'},
-]
-
-# Different words for the SAME entity class, folded before the class comparison.
-# A parish school is a separate client from its church (org 21 has 790
-# "St. Mary's Church Baldwinsville" and 791 "St. Mary's School Baldwinsville"),
-# but its files are named "St Mary Academy JUN26 P&L" — never "School". Folding
-# academy->school lets the school claim its own files AND excludes the church
-# from them. Adding "academy" to the exclusive group instead would do the
-# opposite: it would read as a class the school does NOT have, and reject 791
-# from its own balance sheet.
-ENTITY_CLASS_SYNONYMS = {
-    'academy': 'school',
-    'preschool': 'school',
-}
-
 DOMAIN_COMMON_WORDS = {
     # Religious
     'saint', 'church', 'catholic', 'parish', 'diocese', 'cemetery',

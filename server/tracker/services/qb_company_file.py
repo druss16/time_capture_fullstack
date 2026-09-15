@@ -340,8 +340,14 @@ def _identifying_words(text):
     return out
 
 
-def pick_recent_company_file(reports, companies, primary_company=None):
+def pick_recent_company_file(reports, companies, primary_company=None,
+                             two_windows=False):
     """Choose the company file this block was working in, or None.
+
+    `two_windows` — a title in this block carried QuickBooks' '(Secondary)'
+    marker, so TWO different company files were open at once. When more than
+    one candidate then matches, every route below is answering the wrong
+    question and must abstain; see the two_windows guards.
 
     `reports`  — ctx.qb_report dicts from the block's events.
     `companies`— company names seen in ANY of the block's titles.
@@ -436,6 +442,27 @@ def pick_recent_company_file(reports, companies, primary_company=None):
             # and abstain only on a genuine tie — "…_Minoa" beside "…_Clinton",
             # each covered exactly as much, which is the real
             # two-parishes-one-name case that belongs in the picker.
+            # Two windows open and several files answer to the title: nothing
+            # here can say WHICH window this block was in.
+            #
+            # The tie-break below scores how completely the title accounts for
+            # each FILENAME, and abstains only on an exact tie. That is the
+            # right question when one company is open and several of the user's
+            # other files happen to share a saint's name. It is the wrong
+            # question here, and it is almost never a tie: against a title of
+            # "St. Mary's Church", the file "St. Mary's Church_Clinton" scores
+            # 2/3 while "Church of Sacred Heart & St. Mary NY Mills" scores
+            # 2/5 — so Clinton wins for having FEWER EXTRA WORDS, which says
+            # nothing about which window was in front. A coin flip wearing a
+            # score.
+            #
+            # '(Primary)'/'(Secondary)' identify the WINDOW, not the client, and
+            # extract_qb_company strips them — by design, since they are not
+            # part of anybody's name. So the title cannot separate the two
+            # windows either. Abstain and let the picker ask.
+            if two_windows and len(agreeing) > 1:
+                return None, 'two_windows'
+
             if len(agreeing) > 1:
                 def _covered(path):
                     file_words = _identifying_words(clean_stem(path))
@@ -474,10 +501,16 @@ def pick_recent_company_file(reports, companies, primary_company=None):
 
     cnorms = [norm(c) for c in (companies or []) if len(norm(c)) >= 4]
     if cnorms:
-        for age, name in fresh:
-            fnorm = norm(clean_stem(name))
-            if any(cn in fnorm for cn in cnorms):
-                return name, 'named'
+        named = [name for _age, name in fresh
+                 if any(cn in norm(clean_stem(name)) for cn in cnorms)]
+        # Same abstention as the picked route, one step later. Without it the
+        # two-windows case simply falls through to "freshest file whose name
+        # matches", and on a shared drive holding six St. Mary's that is the
+        # same arbitrary pick with a different label on it.
+        if two_windows and len(named) > 1:
+            return None, 'two_windows'
+        if named:
+            return named[0], 'named'
         return None, 'no_name_match'
 
     # No company name anywhere in the block — accept only a decisive lead.

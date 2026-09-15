@@ -3433,8 +3433,23 @@ class ClassificationService:
                 primary_company = extract_qb_company(
                     self._strip_qb_screen_bracket(
                         block.window_title or block.title or ''))
+                # Did QuickBooks have TWO company files open during this block?
+                # It says so itself: "Open Second Company" titles the second
+                # window '<Company> (Secondary)'. Checked across EVERY title in
+                # the block, not just the active one — the secondary window need
+                # not be the one in front when the sample is taken, and one
+                # sighting anywhere in the block proves two were open.
+                #
+                # extract_qb_company strips '(Primary)'/'(Secondary)' because
+                # they name the WINDOW, not the client. Correct, and it is
+                # exactly why the title cannot then say which of the two this
+                # block was in — so the marker has to be read before it is
+                # stripped, and passed down.
+                two_windows = any('(secondary)' in (t or '').lower()
+                                  for t in titles)
                 picked, via = pick_recent_company_file(
-                    reports, companies, primary_company=primary_company)
+                    reports, companies, primary_company=primary_company,
+                    two_windows=two_windows)
                 if picked:
                     path = picked
         except Exception:

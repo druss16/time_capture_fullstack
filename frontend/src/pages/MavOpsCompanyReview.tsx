@@ -937,9 +937,40 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
       );
     }
     const p = row.item;
-    const why = p.why_explanation || p.proposed_reasoning;
-    if (!why) return null;
-    return <span style={{ fontSize: 11.5, color: T.textMuted, ...mono }}>{why}</span>;
+    // TWO different things, and MavOps wants both.
+    //
+    //   why_explanation     the QUESTION, in one line — "the title names a
+    //                       client, but 10 on your roster answer to it".
+    //   proposed_reasoning  the EVIDENCE the classifier actually had — which
+    //                       .qbw file was open, what it matched, what the agent
+    //                       inferred instead and at what confidence.
+    //
+    // The old `why_explanation || proposed_reasoning` meant the second was only
+    // ever seen when the first was missing, so on a staff AUDIT view the most
+    // specific line available was the one systematically hidden. It is also
+    // where disagreements show: on the row that prompted this, the company file
+    // said 'St Mary's Church- Clinton' while the agent inferred 'Sacred Heart &
+    // St. Mary's Church' at 0.88 — visible only in the long form.
+    const why = (p.why_explanation || "").trim();
+    const detail = (p.proposed_reasoning || "").trim();
+    const showDetail = !!detail && detail !== why;
+    if (!why && !showDetail) return null;
+    return (
+      <span style={{ display: "block" }}>
+        {why && (
+          <span style={{ fontSize: 11.5, color: T.textMuted, ...mono }}>{why}</span>
+        )}
+        {showDetail && (
+          <span style={{
+            display: "block", marginTop: why ? 3 : 0,
+            fontSize: 11, lineHeight: 1.45, color: T.textMuted, opacity: 0.75,
+            ...mono, wordBreak: "break-word" as const,
+          }}>
+            {detail}
+          </span>
+        )}
+      </span>
+    );
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────

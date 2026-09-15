@@ -39,6 +39,16 @@ platform sections. Diff them before changing either copy.
 | Watchdog | `tt_watchdog.py`, `watchdog.py`, Scheduled Tasks | `mac_watchdog.py`, launchd |
 | Install | Inno Setup, MSI, GPO | `.pkg`, `.dmg`, `setup.sh` |
 
+## Provisioning at scale
+
+See `PROVISIONING.md` for both platforms end to end. The short version: both
+deploy silently from an MDM-dropped config, but only Windows deploys
+*deliberately* — it matches hostname and AD username against
+`DeviceProvisioningMap`, while the Mac endpoint find-or-creates a user from
+the OS login shortname and invents a `…@yourorg.local` email for anyone it
+does not recognise. Closing that means pointing the Mac agent at
+`/api/deploy/auto-pair/` like Windows; not done.
+
 ## No Mac counterpart, on purpose
 
 **`qb_company_tracker.py`** — reads which QuickBooks Desktop company file is

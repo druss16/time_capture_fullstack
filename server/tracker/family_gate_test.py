@@ -245,6 +245,32 @@ if _ok:
           len(narrowed) == 1
           and {c['client_id'] for c in narrowed[0]['candidates']} == {388, 790})
 
+    print("Ambiguous groups — a dialog is not a headline:")
+    from tracker.services.ambiguous_groups import _headline
+
+    _dialog_block = FakeBlock(30, 5, 0, [390, 391], title='Save Print Output As')
+    _dialog_block.file_path = (
+        "\\\\srv\\Client File Notes\\St Patrick's Jordan\\2026-2027\\"
+        "St Patricks P&L Budget.xlsx")
+    check("the document replaces a title that names nobody",
+          _headline(_dialog_block, {'source': 'folder', 'text': "St Patrick's Jordan"})
+          == 'St Patricks P&L Budget.xlsx')
+    _named_block = FakeBlock(31, 5, 0, [390, 391], title="St Patrick's Jordan - Excel")
+    _named_block.file_path = "\\\\srv\\whatever\\x.xlsx"
+    check("a title that DOES name the group is left alone",
+          _headline(_named_block, {'source': 'title', 'text': "St Patrick's Jordan"})
+          == "St Patrick's Jordan - Excel")
+    _no_path = FakeBlock(32, 5, 0, [390, 391], title='Save Print Output As')
+    _no_path.file_path = ''
+    check("no path to fall back on keeps the title",
+          _headline(_no_path, {'source': 'address', 'text': 'x'})
+          == 'Save Print Output As')
+    _folder_only = FakeBlock(33, 5, 0, [390, 391], title='Save Print Output As')
+    _folder_only.file_path = "\\\\srv\\Clients\\St Patrick's Jordan"
+    check("the headline never repeats what the reason line quotes",
+          _headline(_folder_only, {'source': 'folder', 'text': "St Patrick's Jordan"})
+          == 'Save Print Output As')
+
     print("Ambiguous groups — only gated blocks appear:")
     plain = FakeBlock(9, 30, 0, [388, 790])
     plain.proposed_signals = [{'type': 'agent_inference', 'detail': {}}]

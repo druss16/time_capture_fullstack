@@ -957,7 +957,12 @@ function AmbiguousGroupRow({ g, busy, onPickClient, onPickOther }: {
     <div className={ROW}>
       <span className={CHIP_AMBER}>{fmtMin(g.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[12.5px] text-foreground">{g.window_title || "(untitled)"}</div>
+        <div
+          className="truncate font-mono text-[12.5px] text-foreground"
+          title={g.captured_title ? `On screen: ${g.captured_title}` : g.window_title}
+        >
+          {g.window_title || "(untitled)"}
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11.5px]">
           <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-semibold text-muted-foreground">
             {g.block_count === 1 ? "1 block" : `${g.block_count} blocks`} · {span}

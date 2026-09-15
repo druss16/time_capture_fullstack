@@ -71,6 +71,10 @@ export type AmbiguousGroup = {
    *  and the name came from a folder in the path — so the row says which.
    *  Absent on rows gated before this was recorded. */
   named_by?: { source: "title" | "folder" | "file" | "address"; text: string } | null;
+  /** What was literally on screen, when `window_title` above is the document
+   *  name instead — "Save Print Output As" for a row headlined by the
+   *  spreadsheet it was saving. Shown on hover. Null when they're the same. */
+  captured_title?: string | null;
 };
 
 /** A committed block whose activities point at 2+ clients → offer a split. */

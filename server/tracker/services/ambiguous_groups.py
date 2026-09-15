@@ -177,6 +177,29 @@ def build_groups(blocks, client_names, recent_client_ids=()):
     return groups
 
 
+def _headline(block, named_by):
+    """What the row should call this work.
+
+    The window title is what was on screen, and for a dialog that is "Save
+    Print Output As" — it names nobody and tells the reader nothing about what
+    they were doing. When the client's name had to be read from somewhere other
+    than the title, the DOCUMENT is the better headline: the spreadsheet being
+    saved, not the box asking where to save it.
+
+    Falls back to the title whenever there is no better answer, and never
+    returns the same text the reason line is about to quote.
+    """
+    title = block.window_title or block.title or ''
+    if not named_by or named_by.get('source') == 'title':
+        return title
+    from tracker.services import client_families   # imported lazily, as above
+    segments = [s for s in client_families._PATH_SPLIT.split(
+        getattr(block, 'file_path', '') or '') if s]
+    if segments and segments[-1] != (named_by.get('text') or ''):
+        return segments[-1]
+    return title
+
+
 def _render(run, candidate_ids, client_names, recent_client_ids):
     """One session -> one row."""
     blocks = [b for b, _ in run]
@@ -211,9 +234,14 @@ def _render(run, candidate_ids, client_names, recent_client_ids):
         named_by = next(
             ((s.get('detail') or {}).get('named_by') for _, s in run
              if (s.get('detail') or {}).get('named_by')), None)
+    headline = _headline(representative, named_by)
+    captured = representative.window_title or representative.title or ''
     return {
         'block_ids':    [b.id for b in blocks],
-        'window_title': representative.window_title or representative.title or '',
+        'window_title': headline,
+        # What was literally on screen, when the headline above is the document
+        # instead. Shown on hover, so swapping in the file name hides nothing.
+        'captured_title': captured if captured != headline else None,
         # {'source': 'title'|'folder'|'file'|'address', 'text': str} — what the
         # row shows as its reason for asking. None on signals written before
         # this existed, and the row falls back to the old wording.

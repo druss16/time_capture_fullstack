@@ -358,15 +358,65 @@ def _norm_text(s):
 # The signals
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Default OFF pending `manage.py shadow_needs_human --org 21`. See _title_signal.
+TITLE_SIGNAL_TRUSTS_THE_FLAG = False
+
+
 def _title_signal(block, ctx):
     """The flag's own evidence: the window title names somebody.
 
     NOT independent — this is the claim under review, not a witness to it.
-    """
-    from tracker.utils.client_name_match import detect_title_client
 
-    det = detect_title_client(block.window_title or '', ctx.index, ctx.names,
-                              firm_name=ctx.firm_name)
+    WHICH DETECTOR GETS ASKED MATTERS. A row only reaches here because
+    `_stale_flag_draft` found `detect_mismatch` or `detect_booked_absent` still
+    firing on it — so by construction something DID name a client. But this
+    asked `detect_title_client`, a different question:
+
+        detect_mismatch      ranks the OTHER clients, excluding the booked one,
+                             then compares the winner against the booking.
+        detect_title_client  ranks EVERY client including the booked one, and
+                             abstains when two come out close.
+
+    So a title that names the booked client AND a rival gives detect_mismatch a
+    clean winner (the booked client was never in its ranking) and gives
+    detect_title_client a tie (it was). The row gets flagged, and then the
+    evidence layer reports nothing supporting any rival — `rivals` comes back
+    empty, no branch sets a verdict, and the Draft keeps its default of
+    needs_human. Org 21: 76 of 145 flagged rows, over half the queue, arriving
+    as "there is no recommendation to make" on rows the detector had a specific
+    accusation about.
+
+    The flag's own claim is what this signal is FOR, so it now asks the
+    detector that raised the row first, and only falls back to
+    detect_title_client for callers whose block was never flagged.
+    """
+    from tracker.utils.client_name_match import (detect_mismatch,
+                                                 detect_title_client)
+
+    det = None
+    if TITLE_SIGNAL_TRUSTS_THE_FLAG and block.client_id:
+        m = detect_mismatch(block.window_title or '', block.client_id,
+                            ctx.index, ctx.names, firm_name=ctx.firm_name)
+        if m:
+            # An acronym match ("SFA P&L 2025" -> St Francis of Assisi) reports
+            # coverage 1.0 and zero mass by construction, because no word
+            # matched at all — three uppercase letters did. Passing that
+            # coverage through would award the full-fingerprint bonus to the
+            # thinnest evidence the detector has, so it is pinned to the base
+            # weight instead. This is also the clearest case of the two
+            # detectors diverging: detect_mismatch has an acronym path and
+            # detect_title_client has none, so every row raised that way
+            # produced no title signal at all.
+            acronym = m.get('match_kind') == 'acronym'
+            det = {
+                'client_id': m['looks_like_client_id'],
+                'client_name': m['looks_like_client_name'],
+                'coverage': 0.0 if acronym else m['looks_like_coverage'],
+                'abs_hit': 0.0 if acronym else (m.get('looks_like_abs_hit') or 0.0),
+            }
+    if det is None:
+        det = detect_title_client(block.window_title or '', ctx.index,
+                                  ctx.names, firm_name=ctx.firm_name)
     if not det:
         return None
     # Coverage says "how much of that client's name is here"; abs_hit says "how
@@ -963,6 +1013,63 @@ def _score(for_sigs, against_sigs):
 # The MismatchFlag.agent_* columns it wrote are left in place. Dropping them
 # needs a migration to buy nothing, and they are a record of what the agent
 # proposed while it ran.
+
+
+def flagged_blocks_for_org(org_id, days, limit=500):
+    """The rows the Mismatches tab actually shows, as Block objects.
+
+    THE QUEUE IS DERIVED, NOT STORED. `MismatchFlag` is a detection record, not
+    the queue: the tab re-derives every row live through
+    `mismatch_scan.scan_buckets` over committed blocks and only then asks for
+    drafts. Anything that reads MismatchFlag to find "the flagged rows" is
+    measuring a different population — resolved flags, or (org 21, 120 days) an
+    empty set while the tab was plainly showing rows.
+
+    That mistake cost three round trips against production, so the derivation
+    lives here once and the shadow commands share it rather than each
+    re-implementing the endpoint's query and drifting from it.
+
+    Returns (blocks_queryset, scanned_count).
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from tracker.models import Block
+    from tracker.services.mismatch_scan import scan_buckets
+    from tracker.utils.db_iter import keyset_iter
+    from tracker.views_mavops import _confirmed_correct_block_ids
+
+    ctx = context_for(org_id)
+    cutoff = timezone.now() - timedelta(days=days)
+    # Mirrors the mavops mismatches endpoint, including keyset_iter: Neon's
+    # transaction pooler can hand a named cursor's next FETCH to a different
+    # backend session, so .iterator() truncates silently.
+    scan_qs = (Block.objects
+               .filter(org_id=org_id, deleted_at__isnull=True,
+                       client_id__isnull=False,
+                       classification_state='committed',
+                       start__gte=cutoff)
+               .exclude(window_title__isnull=True)
+               .exclude(window_title=''))
+    result = scan_buckets(
+        keyset_iter(scan_qs, 1000, descending=True),
+        {org_id: ctx.names}, {org_id: ctx.index}, {org_id: ctx.firm_name},
+        limit=limit,
+        skip_block_ids=_confirmed_correct_block_ids(org_id),
+    )
+    ids = [row['block_id']
+           for bucket in ('client', 'internal', 'unsure')
+           for row in result['flagged'].get(bucket, [])]
+    # No .only(): draft_for_block reaches for invoiced, qb_time_activity_id,
+    # xero_invoice_id, state_changed_by and categorized_by inside the veto
+    # check, and a deferred field there is one refresh_from_db per row (the
+    # N+1 that SIGKILLed a worker in PR #439).
+    blocks = (Block.objects
+              .filter(id__in=ids, org_id=org_id, deleted_at__isnull=True,
+                      client_id__isnull=False)
+              .order_by('id'))
+    return blocks, result['scanned']
 
 
 def drafts_for_blocks(org_id, block_ids):

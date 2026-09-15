@@ -41,11 +41,25 @@ from tracker.services.classification_service import (
     GENERIC_HAYSTACK_WORDS,
     META_CLIENT_NAMES,
     SHORT_ALIAS_STOPLIST,
+    SINGLE_TOKEN_ALIAS_BLOCKLIST,
     ClassificationService,
     _canonical_entity_tokens,
 )
 
 _CACHE_TTL = 600  # roster changes are rare; a stale map for 10 min is fine
+
+# Everyday English that also turns up in client names — "estate", "management",
+# "solutions", "properties", "real", "design", "health". Stage 3 has always
+# refused to let one of these single-handedly match an alias; this module was
+# not consulting that list, so a newsletter titled "Gift and estate planning:
+# connecting the pieces" collected four "… Estate" clients and asked a person
+# which of them the email was about. Normalized through the same stemmer the
+# roster words go through, so "properties" here matches "propertie" there.
+_COMMON_WORD_NOISE = {
+    w for w in (ClassificationService._normalize_name(t)
+                for t in SINGLE_TOKEN_ALIAS_BLOCKLIST)
+    if w
+}
 
 
 def _name_words(name):
@@ -84,6 +98,25 @@ def _identifying(words):
         and w not in GENERIC_HAYSTACK_WORDS
         and w not in SHORT_ALIAS_STOPLIST
     }
+
+
+def _names_somebody(hit, ident):
+    """Does this much of a client's name actually point at that client?
+
+    `hit` is the part of the client's identity `ident` that the text carries.
+    ONE everyday word is not a name: an Outlook folder called "Client
+    Communications" resolved to a client named "Communication Workers", and a
+    newsletter titled "Gift and estate planning" offered four different
+    "… Estate" clients to choose between.
+
+    Two of them is a different matter, and so is all of them. "S&A Creative
+    Designs LLC" is nothing but everyday words and has to find its own
+    QuickBooks window; "Internal - Accounting" answers to "accounting" because
+    that is the whole of what it answers to. So the test is per-text rather
+    than per-client — a client is never fished out of a sentence by a single
+    common word, and never loses the only name it has.
+    """
+    return bool(hit - _COMMON_WORD_NOISE) or len(hit) >= 2 or hit == ident
 
 
 # Application chrome that trails a real title. Left in, it is not merely noise:
@@ -168,7 +201,8 @@ class ClientLookalikes:
         text_classes = _entity_classes(words)
         out = []
         for cid, ident in self._ident.items():
-            if not (ident & words):
+            hit = ident & words
+            if not hit or not _names_somebody(hit, ident):
                 continue
             if self._class_conflict(cid, text_classes):
                 continue
@@ -238,8 +272,15 @@ class ClientLookalikes:
         So a real question needs a root that at least two candidates share —
         several clients answering to the same word is what makes it a NAME
         rather than an incidental word — and members that could actually be
-        confused with the leader. Returns [] when there is no question worth
+        confused with each other. Returns [] when there is no question worth
         asking, which callers should read as "say nothing".
+
+        Two clients sharing one word is not yet a family. "Music School of CNY"
+        and "Crescendo Music" both answer to "music" and have nothing else in
+        common, so a Pandora tab reading "Listen to Your Favorite Music,
+        Podcasts, and Radio Stations for Free!" was a two-button question about
+        which of them the song was for. Members that no OTHER member could be
+        confused with are dropped, and a root with nobody left is not a family.
         """
         words = set(words)
         if candidates is None:
@@ -248,16 +289,29 @@ class ClientLookalikes:
         for cid in candidates:
             for word in self._ident.get(cid, set()) & words:
                 by_word.setdefault(word, []).append(cid)
-        families = [(w, cids) for w, cids in by_word.items() if len(cids) >= 2]
-        if not families:
-            return []
+
         # Most specific root wins: "St Mary Baldwinsville" should ask
-        # church-or-school, not line up all fourteen St. Mary's.
-        _root, family = min(families, key=lambda f: (len(f[1]), -len(f[0])))
-        ranked = self.rank(family, words)
-        head, rest = ranked[0], ranked[1:]
-        ranked = [head] + [c for c in rest if self.are_lookalikes(head, c)]
-        return ranked if len(ranked) >= 2 else []
+        # church-or-school, not line up all fourteen St. Mary's. Specificity is
+        # judged on what SURVIVES the look-alike test, and every root is tried:
+        # "St. Mary - St. Peter's Church" has a two-client "peter" root (a
+        # parish and an unrelated Peter) that dissolves, and the real question
+        # is the ten St. Mary's behind it.
+        best = None
+        for word, cids in by_word.items():
+            # A family's root is a shared NAME. "Real" is what Sager Real Estate
+            # and Appraisal & Real Estate have in common, and it is not a
+            # question anyone can answer from a page that says "real".
+            if len(cids) < 2 or word in _COMMON_WORD_NOISE:
+                continue
+            family = [c for c in cids
+                      if any(self.are_lookalikes(c, other)
+                             for other in cids if other != c)]
+            if len(family) < 2:
+                continue
+            key = (len(family), -len(word))
+            if best is None or key < best[0]:
+                best = (key, family)
+        return self.rank(best[1], words) if best else []
 
     def resolve(self, words):
         """The one client this text names, or None when it can't tell.

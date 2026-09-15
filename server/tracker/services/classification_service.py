@@ -635,6 +635,19 @@ class ClassificationService:
                 for s in decision.matched_signals):
             return decision
 
+        # A decision that commits NO client is not committing a client on thin
+        # evidence — it is the personal-browsing / overhead / idle answer, and
+        # it was already settled in the safe direction. There is nothing here
+        # for this stage to stop, and stopping it costs a person their morning:
+        # "Listen to Your Favorite Music, Podcasts, and Radio Stations for
+        # Free!", already committed to Personal/Non-Billable by the
+        # personal-browsing detector, was demoted to a proposal, flagged for
+        # review, and shown in Daily Review as a question about which of two
+        # clients with "Music" in their names the radio station belonged to.
+        if (client_id is None and not decision.is_billable
+                and decision.recommended_state == 'committed'):
+            return decision
+
         try:
             from tracker.services import client_families
             # Memoized per service instance: one instance classifies many
@@ -648,7 +661,14 @@ class ClassificationService:
                 getattr(block, 'file_path', '') or '',
                 getattr(block, 'url', '') or '',
             )
-            candidates = lookalikes.candidates_for(words)
+            # Ask the look-alike question, not the "who is this text consistent
+            # with" question. candidates_for is deliberately generous so
+            # resolve() can check whether a sibling also fits; put in front of a
+            # person it turns one incidental word into a client decision —
+            # "Homepage - Tarbell Management Group" became a choice between two
+            # unrelated firms whose names contain "Management". family_for keeps
+            # only clients a person could genuinely confuse for each other.
+            candidates = lookalikes.family_for(words)
             if len(candidates) < 2:
                 return decision
             # With a client, gate only when the text actually pointed at it —
@@ -677,7 +697,7 @@ class ClassificationService:
             if client_id and lookalikes.resolve(words) is not None:
                 return decision
 
-            ranked = lookalikes.rank(candidates, words)
+            ranked = candidates           # family_for already ranked them
             if decision.recommended_state == 'committed':
                 decision.recommended_state = 'proposed'
             decision.needs_review = True

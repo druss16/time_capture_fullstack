@@ -66,6 +66,19 @@ if _ok:
         FakeClient(300, 'Mary Rodman'),
         FakeClient(270, 'Inventory Plus, Inc'),
         FakeClient(500, 'Halvorsen Machining LLC'),
+        # Clients that share nothing but an everyday word. None of these groups
+        # is a family, and each one was a question in org 21's review queue.
+        FakeClient(216, 'Crescendo Music'),
+        FakeClient(309, 'Music School of CNY , Inc.'),
+        FakeClient(274, 'James H Michel Estate'),
+        FakeClient(294, 'Linda M Vescio Estate'),
+        FakeClient(362, 'Sager Real Estate Inc'),
+        FakeClient(600, 'Spierit Management Services'),
+        FakeClient(601, 'Victory Development Management'),
+        FakeClient(414, 'St. Peters Church'),
+        FakeClient(330, 'Peter Dugan'),
+        # A real client whose name is nothing but everyday words.
+        FakeClient(602, 'S&A Creative Designs LLC'),
     ]
     L = client_families.ClientLookalikes(ROSTER)
     W = client_families.text_words
@@ -115,6 +128,44 @@ if _ok:
     check("a person does not lead a 'Church' title", ranked[0] != 300)
     check("recently-worked client leads when known",
           L.rank(L.candidates_for(bare_mary), bare_mary, recent=[409])[0] == 409)
+
+    print("Look-alike clients — a shared word is not yet a family:")
+    check("a bare 'St. Mary's Church' IS a family",
+          len(L.family_for(W("St. Mary's Church" + QB))) >= 2)
+    check("a Pandora tab is not a question about clients with 'Music' in them",
+          L.family_for(W('Listen to Your Favorite Music, Podcasts, and Radio '
+                         'Stations for Free! - Work - Microsoft Edge')) == [])
+    check("an estate-planning newsletter names no family",
+          L.family_for(W('Gift and estate planning: connecting the pieces '
+                         '- Message (HTML)')) == [])
+    check("'Management' in two unrelated firm names is not a family",
+          L.family_for(W('Homepage - Tarbell Management Group and 3 more '
+                         'pages - Work - Microsoft Edge')) == [])
+    check("a person who shares a first name with a parish is not its look-alike",
+          L.family_for(W('Peter Dugan 2026 letter.pdf')) == [])
+    # "peter" is the most specific root here (two candidates) but it dissolves:
+    # St. Peters Church and Peter Dugan are not confusable. The real question
+    # is the St. Mary's behind it, and it must survive the dissolved root.
+    _two_parishes = L.family_for(W("St. Mary - St. Peter's Church" + QB))
+    check("a root that dissolves doesn't take the real question with it",
+          len(_two_parishes) >= 2 and 330 not in _two_parishes)
+
+    print("Look-alike clients — ONE everyday word names nobody:")
+    check("'estate' alone doesn't make an estate client a candidate",
+          274 not in L.candidates_for(W('Gift and estate planning')))
+    check("...but the name still does",
+          274 in L.candidates_for(W('Michel estate 1041 draft.pdf')))
+    check("'management' alone doesn't make a firm a candidate",
+          600 not in L.candidates_for(W('Cable Clips Cord Holder Cable '
+                                        'Management Finisher')))
+    check("a client whose whole name is everyday words still finds its own file",
+          602 in L.candidates_for(W('S&A Creative Designs, LLC' + QB)))
+    check("...but one of those words on its own does not",
+          602 not in L.candidates_for(W('Creative Cloud Desktop')))
+    # "music" is in nobody's stoplist and never will be — the roster is what
+    # decides. Two clients answering to it is what the family test is for.
+    check("'music' still makes a music client a candidate",
+          309 in L.candidates_for(W('Music School of CNY recital budget.xlsx')))
 
     print("Look-alike clients — has_lookalikes:")
     check("a parish in a group has look-alikes", L.has_lookalikes(388) is True)
@@ -227,6 +278,43 @@ if _ok:
     ]
     check("...and so is an agent inference drawn from that file",
           is_open_question(agent_from_file) is False)
+
+    print("The gate stops a client commit — and nothing else:")
+    from tracker.services.classification_service import (
+        ClassificationDecision, ClassificationService,
+    )
+
+    def _gate(state, client_id=None, title="St. Mary's Church" + QB):
+        """Run Stage 11 over a decision without touching the database."""
+        svc = ClassificationService.__new__(ClassificationService)
+        svc._lookalikes = L            # set, so the roster is never fetched
+        block = FakeBlock(99, 10, 0, [], title=title)
+        block.file_path = block.url = ''
+        block.client_id = client_id
+        block.proposed_signals = []
+        decision = ClassificationDecision(
+            client_id=client_id, recommended_state=state,
+            # FIX 6 in _finalize_decision: no client means not billable.
+            is_billable=client_id is not None)
+        return svc._gate_family_ambiguity(block, decision)
+
+    def _asked(decision):
+        return any(s.type == 'family_ambiguous' for s in decision.matched_signals)
+
+    _personal = _gate(
+        'committed',
+        title='Listen to Your Favorite Music, Podcasts, and Radio Stations '
+              'for Free! - Work - Microsoft Edge')
+    check("a settled non-billable commit is not re-opened",
+          _personal.recommended_state == 'committed' and not _personal.needs_review)
+    _overhead = _gate('committed')     # no client, but the title names a family
+    check("...even when the title does name a look-alike family",
+          _overhead.recommended_state == 'committed' and not _asked(_overhead))
+    _unattributed = _gate('captured')
+    check("an unattributed block still gets its shortlist", _asked(_unattributed))
+    _guess = _gate('committed', client_id=790)
+    check("a client committed on thin evidence is still downgraded",
+          _guess.recommended_state == 'proposed' and _asked(_guess))
 
     print("Ambiguous groups — recency decides the leftmost button:")
     recent_first = build_groups([FakeBlock(1, 20, 0, [388, 790])], NAMES,

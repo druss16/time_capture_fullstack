@@ -172,6 +172,22 @@ tray (Windows). It clears the pairing, shows the pairing window and restarts
 the agent. This is why that item is never hidden behind the vendor ticker
 flag: it is the only route back, and hiding it makes a device unrecoverable.
 
+On macOS it also writes `relink_requested` into the config, and the next start
+consumes that flag and skips the org-token claim. Without it, Re-link would be
+useless on precisely the managed fleets it matters most for: clearing the key
+does not clear the org token, which lives in the plist under `/Library` where
+the user cannot reach it, so the claim would run on the very next start and
+put the device straight back on whoever `DeviceProvisioningMap` names — with
+the pairing window never appearing. The flag fires once, so a later start, or
+a fresh deploy, auto-pairs normally.
+
+**Windows has no such flag.** `drop_api_key()` and `repair_device()` clear
+`api_key` and `server_device_id` and leave `org_token` in place, so once the
+`/api/api/` URL bug above is fixed, a repaired Windows machine will re-claim
+silently rather than prompt. That is the documented intent — fix the
+`DeviceProvisioningMap` row FIRST — but it is worth knowing before the fix
+lands, because today the 404 makes every repair fall through to the picker.
+
 **Scripted, for IT** — delete the stored key and restart. The deployed config
 is still on disk, so the agent re-claims with the org token on next start with
 no user interaction:

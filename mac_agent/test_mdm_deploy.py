@@ -166,5 +166,36 @@ check("no org token is a no-op, not an error",
       M.do_org_token_claim(cfg, lambda c: None, API, "1.0", "d",
                            log=lambda *_a: None) is None)
 
+# --- 5. Re-link must survive MDM ----------------------------------------
+# The regression this nearly shipped: Re-link Device clears api_key but NOT
+# org_token, and on a managed Mac the token lives in the plist under /Library
+# where the user cannot reach it. So the claim would run on the very next
+# start and put the device straight back on whoever DeviceProvisioningMap
+# names — the pairing window never appearing. Re-link is the only route back
+# from a wrong account, so it has to win over the org token exactly once.
+import re as _re
+
+_main = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "main.py"), encoding="utf-8").read()
+_gui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "timetracker_gui.py"), encoding="utf-8").read()
+
+check("Re-link sets a marker the next start can see",
+      'cfg["relink_requested"] = True' in _gui)
+check("...and main.py consumes it with pop(), so it fires once",
+      'config.pop("relink_requested"' in _main)
+check("...gating the MDM read itself, not just the claim",
+      _re.search(r"mdm_config\s*=\s*None if relink else get_mdm_config\(\)",
+                 _main) is not None)
+check("...and persisting the cleared flag, so a crash cannot re-arm it",
+      _re.search(r"if relink:\s*\n\s*save_config\(config\)", _main) is not None)
+
+# The flag must be read BEFORE the claim, or it cannot prevent anything.
+_i_flag = _main.index('config.pop("relink_requested"')
+# Match the CALL, not the word — the docstring above names the function too,
+# and matching that made this pass for the wrong reason.
+_i_claim = _main.index("key = do_org_token_claim(")
+check("...read before the claim runs, not after", _i_flag < _i_claim)
+
 print(f"\n  {_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

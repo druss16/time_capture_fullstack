@@ -3110,7 +3110,20 @@ def run_agent():
         # mdm_deploy walks the same three endpoints the Windows agent does, so
         # a Mac now pairs to whoever the DeviceProvisioningMap says owns it.
         # See mac_agent/PROVISIONING.md.
-        mdm_config = get_mdm_config()
+        # A deliberate Re-link must ASK, never silently re-pair. The org token
+        # lives in the MDM plist under /Library, which the user cannot clear,
+        # so without this the claim below would run on the next start and put
+        # the device straight back on whoever DeviceProvisioningMap names —
+        # making Re-link Device useless on exactly the managed fleets it
+        # matters most for. Consumed once, so the NEXT start (or a fresh
+        # deploy) auto-pairs normally.
+        relink = bool(config.pop("relink_requested", False))
+        if relink:
+            save_config(config)
+            log("[MDM] Re-link was requested — skipping the org-token claim "
+                "so you can choose an account")
+
+        mdm_config = None if relink else get_mdm_config()
         if mdm_config:
             log("[MDM] Found a deployed configuration — claiming with the org token")
             org_token = (mdm_config.get('OrgToken')

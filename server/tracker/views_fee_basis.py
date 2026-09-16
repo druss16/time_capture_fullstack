@@ -119,11 +119,22 @@ def _capture_by_user(org, user_ids, start_d, end_d) -> dict[int, float]:
     Same basis as the readiness checklist and the Review tab — tracked working
     hours over calendar capacity — so the firm is never told two different
     coverage numbers by two different screens.
+
+    Non-chargeable staff are left out entirely, the same population filter firm
+    utilization uses. This page shipped without it and the first thing it did
+    was accuse someone: org 21's admin read 21% captured, which looked like a
+    dead agent and was nothing of the sort — her agent reported today, she works
+    about 3.8h a day across 14 days a month, and the firm has already declared
+    her tier non-chargeable. Measuring an admin against a fee-earner's eight-hour
+    day produces a number that is wrong about her and drags the firm's average
+    down with it.
     """
     from tracker.analytics_v2.blocks import working_qs
     from tracker.analytics_v2.capacity import capacity_hours_map
+    from tracker.analytics_v2.cost_rates import non_utilization_user_ids
 
-    user_ids = [u for u in user_ids if u]
+    excluded = non_utilization_user_ids(org)
+    user_ids = [u for u in user_ids if u and u not in excluded]
     if not user_ids:
         return {}
 

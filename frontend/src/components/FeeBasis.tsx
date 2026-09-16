@@ -18,7 +18,7 @@
  * multiplier, and in the second case his instinct is the barometer and we are
  * decoration.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   RefreshCw, Users, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Info,
@@ -111,6 +111,10 @@ function priorYearDelta(c: FeeClient): { pct: number; tone: string; label: strin
     ? { pct, tone: 'text-emerald-700', label: `${pct}% above last year` }
     : { pct, tone: 'text-amber-700', label: `${Math.abs(pct)}% below last year` };
 }
+
+/** The separator between facts on the detail line. A character rather than a
+ *  border, so the line wraps like prose instead of breaking into a grid. */
+const Dot = () => <span className="text-muted-foreground/45" aria-hidden>·</span>;
 
 /** A figure that can be lifted out of the page. Quiet until you point at it —
  *  these are the biggest numbers on the row and should not read as buttons. */
@@ -212,11 +216,6 @@ export default function FeeBasis() {
     if (!range) return;
     load(shiftMonth(range.start, delta));
   };
-
-  const maxHours = useMemo(
-    () => Math.max(1, ...(data?.clients || []).map((c) => c.hours)),
-    [data]
-  );
 
   if (loading && !data) {
     return <div className="p-6 text-sm text-muted-foreground">Loading the period…</div>;
@@ -340,14 +339,14 @@ export default function FeeBasis() {
       )}
 
       {/* ── One row per client ─────────────────────────────────────────── */}
-      <div className="overflow-hidden rounded-2xl border border-border/60 bg-card">
+      <div className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         {data.clients.length === 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground">
             No time captured in this period.
           </div>
         )}
 
-        <div className="divide-y divide-border/60">
+        <div className="divide-y divide-border/40">
           {(showTail ? [...mainRows, ...tailRows] : mainRows).map((c) => {
             const delta = priorYearDelta(c);
             const feeBudget =
@@ -363,27 +362,32 @@ export default function FeeBasis() {
             // who barely runs it.
             const seen = c.capture ?? null;
             return (
-              <div key={c.client_id} className="px-5 py-4">
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="text-[15px] font-bold tracking-[-0.01em] text-foreground">
+              <div
+                key={c.client_id}
+                className="group grid grid-cols-[1fr_auto] items-baseline gap-x-6 px-5 py-3 transition-colors hover:bg-muted/30"
+              >
+                {/* Line 1 — who, and the two numbers he came for. The numbers
+                    sit in fixed columns so they line up down the whole page:
+                    scanning a hundred clients is a vertical job, and ragged
+                    right edges make it a horizontal one. */}
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                  <span className="truncate text-[14px] font-semibold tracking-[-0.01em] text-foreground">
                     {c.name}
                   </span>
                   {c.code && (
-                    <span className="font-mono text-[11px] text-muted-foreground/70">{c.code}</span>
+                    <span className="shrink-0 font-mono text-[10.5px] uppercase tracking-wide text-muted-foreground/60">
+                      {c.code}
+                    </span>
                   )}
                   {c.arrangement.type !== 'hourly' && (
-                    <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {c.arrangement.type.replace('_', ' ')}
                       {c.arrangement.amount ? ` · ${money(c.arrangement.amount)}` : ''}
                     </span>
                   )}
-                  <span className="flex-1" />
-                  {/* The one interaction this page earns: he is reading the
-                      number here and typing it into QuickBooks there, so let
-                      him carry it across. Copying asks nothing of him and
-                      records nothing — which is why it belongs on a page that
-                      otherwise decides nothing. Both numbers are live because
-                      nobody yet knows which one he reaches for. */}
+                </div>
+
+                <div className="flex shrink-0 items-baseline gap-1">
                   <CopyNumber
                     label="hours"
                     display={`${c.hours.toFixed(1)}h`}
@@ -391,7 +395,7 @@ export default function FeeBasis() {
                     copied={copied === `${c.client_id}:h`}
                     failed={copied === `${c.client_id}:h:failed`}
                     onCopy={() => copy(`${c.client_id}:h`, c.hours.toFixed(1))}
-                    className="text-foreground"
+                    className="w-[5.5rem] justify-end text-foreground"
                   />
                   <CopyNumber
                     label="amount at standard rates"
@@ -400,88 +404,93 @@ export default function FeeBasis() {
                     copied={copied === `${c.client_id}:$`}
                     failed={copied === `${c.client_id}:$:failed`}
                     onCopy={() => copy(`${c.client_id}:$`, c.value_at_rates.toFixed(2))}
-                    className="text-primary"
+                    className="w-[6.5rem] justify-end text-primary"
                   />
                 </div>
 
-                {/* Relative scale — which clients ate the month, at a glance. */}
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary/70"
-                    style={{ width: `${Math.max(2, (c.hours / maxHours) * 100)}%` }}
-                  />
-                </div>
+                {/* Line 2 — everything needed to judge the number above it,
+                    on one line rather than three. Separated by middots so it
+                    reads as a sentence and not as a form. */}
+                <div className="col-span-2 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
+                  <span>{c.people} {c.people === 1 ? 'person' : 'people'}</span>
 
-                <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px]">
-                  <span className="inline-flex items-center gap-1 text-muted-foreground">
-                    <Users className="h-3 w-3" />
-                    {c.people} {c.people === 1 ? 'person' : 'people'}
-                  </span>
-                  {/* The doubt belongs next to the people, because that is
-                      where it comes from: this is their capture, weighted by
-                      how much of this client's work each of them did. */}
                   {seen != null && seen < 0.9 && (
-                    <span
-                      className={cn(
-                        'font-medium',
-                        seen < 0.5 ? 'text-amber-700' : 'text-muted-foreground'
-                      )}
-                      title={`We captured about ${Math.round(seen * 100)}% of the scheduled time of the people who worked this client, so their hours here are a floor.`}
-                    >
-                      {Math.round(seen * 100)}% of their time captured
-                    </span>
+                    <>
+                      <Dot />
+                      <span
+                        className={cn('font-medium', seen < 0.5 ? 'text-amber-700' : '')}
+                        title={`We captured about ${Math.round(seen * 100)}% of the scheduled time of the people who worked this client, so the hours here are a floor.`}
+                      >
+                        {Math.round(seen * 100)}% captured
+                      </span>
+                    </>
                   )}
-                  {c.work.slice(0, 4).map((w) => (
-                    <span key={w.name} className="text-muted-foreground">
-                      {w.name}{' '}
-                      <span className="font-mono tabular-nums text-foreground/70">
-                        {w.hours.toFixed(1)}h
-                      </span>
-                    </span>
-                  ))}
-                </div>
 
-                {/* The anchors. Absent ones are simply not shown — an empty
-                    row of dashes reads as broken rather than as "no history". */}
-                {(delta || feeBudget || typical || c.prior_year_billed || c.last_invoice) && (
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-                    {c.prior_year_billed != null && (
-                      <span className="text-muted-foreground">
-                        Last year{' '}
-                        <span className="font-mono tabular-nums text-foreground/80">
-                          {money(c.prior_year_billed)}
-                        </span>
-                      </span>
-                    )}
-                    {delta && <span className={cn('font-medium', delta.tone)}>{delta.label}</span>}
-                    {feeBudget != null && (
-                      <span className={cn(overBudget ? 'font-medium text-amber-700' : 'text-muted-foreground')}>
-                        Budget{' '}
-                        <span className="font-mono tabular-nums">{feeBudget.toFixed(1)}h</span>
-                        {overBudget && ` · over by ${(c.hours - feeBudget).toFixed(1)}h`}
-                      </span>
-                    )}
-                    {typical != null && (
-                      <span className="text-muted-foreground">
-                        {periodIsMonth ? 'Typical month' : 'Typical period'}{' '}
+                  {typical != null && (
+                    <>
+                      <Dot />
+                      <span>
+                        usually{' '}
                         <span className="font-mono tabular-nums text-foreground/80">
                           {typical.toFixed(1)}h
                         </span>
                         {Math.abs(typicalDelta) >= 0.1 && (
-                          <span className="font-mono tabular-nums">
-                            {` · ${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)}h`}
+                          <span
+                            className={cn(
+                              'font-mono tabular-nums',
+                              typicalDelta > 0 ? 'text-foreground/80' : ''
+                            )}
+                          >
+                            {` (${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)})`}
                           </span>
                         )}
                       </span>
-                    )}
-                    {c.last_invoice && (
-                      <span className="text-muted-foreground/70">
-                        Last invoiced {c.last_invoice.date}
-                      </span>
-                    )}
-                  </div>
-                )}
+                    </>
+                  )}
 
+                  {feeBudget != null && (
+                    <>
+                      <Dot />
+                      <span className={overBudget ? 'font-medium text-amber-700' : ''}>
+                        fee {feeBudget.toFixed(1)}h
+                        {overBudget && ` · over by ${(c.hours - feeBudget).toFixed(1)}h`}
+                      </span>
+                    </>
+                  )}
+
+                  {c.prior_year_billed != null && (
+                    <>
+                      <Dot />
+                      <span>
+                        last year{' '}
+                        <span className="font-mono tabular-nums text-foreground/80">
+                          {money(c.prior_year_billed)}
+                        </span>
+                      </span>
+                    </>
+                  )}
+                  {delta && (
+                    <>
+                      <Dot />
+                      <span className={cn('font-medium', delta.tone)}>{delta.label}</span>
+                    </>
+                  )}
+
+                  {/* The work mix last: it is the longest part and the least
+                      often decisive, so it wraps rather than pushing the
+                      judgement out of sight. */}
+                  {c.work.slice(0, 3).map((w) => (
+                    // Fragment, not a wrapper: inside one span the separator
+                    // sits flush against the label and reads as "·Accounting".
+                    <Fragment key={w.name}>
+                      <Dot />
+                      <span className="text-muted-foreground/70">
+                        {w.name}{' '}
+                        <span className="font-mono tabular-nums">{w.hours.toFixed(1)}h</span>
+                      </span>
+                    </Fragment>
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -491,7 +500,7 @@ export default function FeeBasis() {
       {tailRows.length > 0 && (
         <button
           onClick={() => setShowTail((v) => !v)}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 px-4 py-2.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 px-4 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground"
         >
           {showTail ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           {showTail ? 'Hide' : 'Show'} {tailRows.length} client

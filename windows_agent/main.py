@@ -431,6 +431,25 @@ HEARTBEAT_INTERVAL_S = int(_get("heartbeat_interval_seconds", 60))
 # split into max_event_duration chunks.
 MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 
+# ── Unobserved-time ceiling (v1.8.3) ────────────────────────────────────────
+# Chunking a long interval is NOT the same as having watched it. A live loop
+# emits a heartbeat every HEARTBEAT_INTERVAL_S, so any emit covering much more
+# than that is a stretch the loop did not observe at all — the machine slept,
+# the thread froze, or a syscall blocked. mouse_idle_seconds() was never polled
+# during it, so idle detection could not fire, and on thaw the loop resumes
+# mid-iteration carrying a stale idle reading and closes the dwell over the
+# whole gap.
+#
+# TL Wall, 2026-09-16: a dwell opened at 20:01 local on QuickBooks and was
+# closed at 08:51 the next morning by a window change — 154 chunks, 12h50m,
+# 8h50m of it committed as billable time on a client. The desktop-shell guard
+# below only caught the variant where the frozen foreground was Explorer.
+#
+# Rule: credit at most MOUSE_IDLE_PAUSE_S of an unobserved stretch — exactly
+# what idle detection would have credited had it been able to run — and drop
+# the rest. The server enforces the same rule, with the same number, at ingest
+# for agents still on older builds (tracker/services/unobserved.py).
+
 # Synthetic signature for Meeting events — forms its own block in compactor
 def _meeting_sig(meeting_app: str, title: str = None):
     """Build a window signature for a Meeting event.
@@ -3436,6 +3455,13 @@ def run_agent():
      
                 If the interval exceeds MAX_EVENT_DURATION_S, split into chunks so
                 no single event represents more than ~5 minutes.
+
+                An interval longer than MOUSE_IDLE_PAUSE_S was never observed
+                by this loop — a live loop heartbeats every 60s, so a gap that
+                size means nothing was watching and idle could not fire. Only
+                the leading grace window is written; the rest is dropped, but
+                last_emit_ts still advances to the true end so the dropped span
+                is not re-emitted by the next heartbeat.
                 """
                 nonlocal last_emit_ts
                 if current_sig is None or last_emit_ts is None:
@@ -3445,6 +3471,29 @@ def run_agent():
      
                 if (end_ts - last_emit_ts) < 1.0:
                     return
+     
+                real_end = end_ts
+                gap_s = end_ts - last_emit_ts
+                if current_sig != IDLE_SIG and gap_s > MOUSE_IDLE_PAUSE_S:
+                    end_ts = last_emit_ts + MOUSE_IDLE_PAUSE_S
+                    credited_s = end_ts - last_emit_ts
+                    log(f"[DWELL] ⚠️ Loop unobserved for {gap_s / 60:.1f} min on "
+                        f"{current_sig[0]} • {(current_sig[2] or '')[:40]} — crediting "
+                        f"{credited_s / 60:.1f} min, dropping {(gap_s - credited_s) / 60:.1f} min")
+                    try:
+                        report_error_to_backend(
+                            "unobserved_gap",
+                            f"Tracking loop unobserved for {gap_s:.0f}s",
+                            context={
+                                "gap_seconds": round(gap_s, 1),
+                                "credited_seconds": round(credited_s, 1),
+                                "app": current_sig[0],
+                                "window_title": (current_sig[2] or "")[:200],
+                                "hostname": hostname,
+                            },
+                        )
+                    except Exception as e:
+                        log(f"[DWELL] unobserved_gap report failed: {e}", "warning")
      
                 cursor_ts = last_emit_ts
                 while cursor_ts < end_ts:
@@ -3457,7 +3506,7 @@ def run_agent():
                     )
                     cursor_ts = chunk_end
      
-                last_emit_ts = end_ts
+                last_emit_ts = real_end
      
             def _start_new_dwell(sig, start_ts: float):
                 """Helper: enter a new dwell."""

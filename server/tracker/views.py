@@ -1186,6 +1186,7 @@ from django.utils import timezone
 
 from tracker.auth import AgentKeyAuthentication
 from tracker.models import RawEvent, CurrentClient, Client
+from tracker.services import unobserved as unobs
 
 import logging
 logger = logging.getLogger(__name__)
@@ -1251,7 +1252,7 @@ def raw_events(request):
     device_host = getattr(device, "hostname", "") if device else ""
     default_host = header_host or device_host or "unknown"
 
-    created, errors = 0, []
+    created, errors, unwatched = 0, [], 0
 
     for item in payload:
         # ── Strict dual-timestamp validation ──
@@ -1278,6 +1279,21 @@ def raw_events(request):
 
         hostname = (default_host or item.get("hostname") or "unknown").strip() or "unknown"
 
+        # An event the length of the agent's chunk ceiling was backfilled over a
+        # stretch the tracking loop never watched (sleep, freeze, blocked
+        # syscall), not observed. Credit one idle-grace window of it and mark
+        # the rest — stored for fleet health, excluded from block minutes.
+        # See tracker/services/unobserved.py.
+        event_ctx = item.get("ctx", {}) or {}
+        if unobs.is_gap_chunk(
+            item.get("app_name"), item.get("bundle_id"), start_dt, end_dt
+        ):
+            prior = unobs.gap_before(agent_user, start_dt, hostname=hostname) or 0.0
+            span = (end_dt - start_dt).total_seconds()
+            if not unobs.within_grace(prior, span):
+                event_ctx = unobs.mark_unobserved(event_ctx, prior + span)
+                unwatched += 1
+
         try:
             RawEvent.objects.create(
                 start_ts=start_dt,
@@ -1289,7 +1305,7 @@ def raw_events(request):
                 file_path=item.get("file_path"),
                 user=agent_user,
                 hostname=hostname,
-                ctx=item.get("ctx", {}) or {},
+                ctx=event_ctx,
                 device_id=str(device.id) if device else "unknown",
                 # Prefer the agent's payload (captured at dwell_start) over the
                 # server-side lookup (captured at write time). The agent knows
@@ -1331,11 +1347,18 @@ def raw_events(request):
         else status.HTTP_400_BAD_REQUEST
     )
 
+    if unwatched:
+        logger.warning(
+            f"[INGEST] {unwatched}/{created} events from {agent_user.username}@{hostname} "
+            f"cover time the agent loop never observed — not credited"
+        )
+
     return Response(
         {
             "created": created,
             "errors": errors,
             "blocks_created": blocks_created,
+            "unobserved": unwatched,
             "current_client": current_client_name,
         },
         status=status_code,

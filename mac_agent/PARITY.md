@@ -39,6 +39,22 @@ platform sections. Diff them before changing either copy.
 | Watchdog | `tt_watchdog.py`, `watchdog.py`, Scheduled Tasks | `mac_watchdog.py`, launchd |
 | Install | Inno Setup, MSI, GPO | `.pkg`, `.dmg`, `setup.sh` |
 
+## Provisioning at scale
+
+See `PROVISIONING.md` for both platforms end to end. Both now walk the same
+three endpoints — `/deploy/auto-pair/`, `/deploy/claim/`, `/deploy/confirm-user/`
+— so a Mac pairs to whoever `DeviceProvisioningMap` says owns it, in the same
+identity namespace as a PC. `mac_agent/mdm_deploy.py` is the counterpart to
+`windows_agent/mdm_deploy.py`; the header lists the five deliberate
+differences.
+
+The Mac used to post to `/agent/register/`, which invents a
+`…@yourorg.local` user from the OS short name. That is gone: it put Macs in a
+separate identity namespace, and it could not work regardless — see the
+"Known broken" section of `PROVISIONING.md`, which also records the
+`/api/api/` prefix bug that still stops the **Windows** MDM path from
+reaching any of these endpoints.
+
 ## No Mac counterpart, on purpose
 
 **`qb_company_tracker.py`** — reads which QuickBooks Desktop company file is

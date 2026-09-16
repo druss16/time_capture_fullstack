@@ -465,51 +465,19 @@ def get_mdm_config() -> Optional[dict]:
     return None
 
 
-def register_with_org_token(mdm_config: dict, hostname: str) -> Optional[str]:
-    """Auto-register device using org token from MDM config."""
-    api_endpoint = (
-        mdm_config.get('ApiEndpoint') or 
-        mdm_config.get('api_endpoint') or 
-        API_BASE
-    )
-    org_token = mdm_config.get('OrgToken') or mdm_config.get('org_token')
-    
-    if not org_token:
-        log("[MDM] No org_token in MDM config")
-        return None
-    
-    register_url = f"{api_endpoint.rstrip('/')}/agent/register/"
-    
-    payload = {
-        "org_token": org_token,
-        "machine_name": hostname,
-        "os": "macos" if sys.platform == 'darwin' else 'windows',
-        "os_version": platform.platform(),
-        "username": get_os_username(),
-        "device_id": get_device_id(),
-        "app_version": APP_VERSION,
-    }
-    
-    try:
-        log(f"[MDM] Registering with org token at {register_url}...")
-        raw = http_post_json(register_url, payload, {"Content-Type": "application/json"}, timeout=10)
-        data = json.loads(raw or b"{}")
-        
-        agent_key = data.get("agent_key")
-        if agent_key:
-            config["api_key"] = agent_key
-            config["api_base"] = api_endpoint
-            save_config(config)
-            log(f"[MDM] ✅ Registered successfully!")
-            log(f"[MDM]    User: {data.get('username')}")
-            log(f"[MDM]    Org: {data.get('org_name')}")
-            return agent_key
-        else:
-            log(f"[MDM] ❌ Registration failed: no agent_key in response")
-            return None
-    except Exception as e:
-        log(f"[MDM] ❌ Registration error: {e}")
-        return None
+# register_with_org_token() lived here. It posted to /agent/register/, which
+# find-or-creates a user from the OS short name and mints an email like
+# dan@yourfirm.local — a different identity namespace from the one the
+# Windows agent pairs into, so one person on two machines became two users.
+#
+# It could not work in any case. The view raises TypeError on
+# `user.groups.add(org)` (Organization is not a Group), and the key it
+# returns lives in AgentRegistration, which AgentKeyAuthentication never
+# consults — so even past the crash the key authenticates nothing.
+#
+# Replaced by mdm_deploy.do_org_token_claim, which walks the same
+# auto-pair -> claim -> confirm-user endpoints the Windows agent uses.
+# See mac_agent/PROVISIONING.md.
 
 # ---------------- Config ----------------
 CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
@@ -3129,13 +3097,46 @@ def run_agent():
     key = config.get("api_key") or API_KEY
     
     if not key:
-        # Try MDM config first
+        # Try the org token IT deployed, before asking a human anything.
+        #
+        # This used to call register_with_org_token(), which posts to
+        # /agent/register/ — an endpoint that find-or-creates a user from the
+        # OS short name and invents an email like dan@yourfirm.local. That put
+        # Mac users in a different identity namespace from the one Windows
+        # pairs into, and it could not work regardless: the view raises
+        # TypeError on user.groups.add(org), and the key it returns lives in
+        # AgentRegistration, which AgentKeyAuthentication never reads.
+        #
+        # mdm_deploy walks the same three endpoints the Windows agent does, so
+        # a Mac now pairs to whoever the DeviceProvisioningMap says owns it.
+        # See mac_agent/PROVISIONING.md.
         mdm_config = get_mdm_config()
         if mdm_config:
-            log("[MDM] Found MDM configuration, attempting auto-registration...")
-            key = register_with_org_token(mdm_config, hostname)
-            if key:
-                API_KEY = key
+            log("[MDM] Found a deployed configuration — claiming with the org token")
+            org_token = (mdm_config.get('OrgToken')
+                         or mdm_config.get('org_token') or '').strip()
+            api_endpoint = (mdm_config.get('ApiEndpoint')
+                            or mdm_config.get('api_endpoint') or API_BASE)
+            if org_token:
+                # The claim writes api_key back into `config`, so hand it the
+                # real one and let it persist through save_config.
+                config['org_token'] = org_token
+                config['api_base'] = api_endpoint
+                config['os_username'] = os_user
+                try:
+                    from mdm_deploy import do_org_token_claim
+                    key = do_org_token_claim(config, save_config, api_endpoint,
+                                             APP_VERSION, get_device_id(), log=log)
+                except Exception as e:
+                    log(f"[MDM] Claim raised {type(e).__name__}: {e}")
+                    key = None
+                if key:
+                    API_KEY = key
+                else:
+                    log("[MDM] Org token claim did not pair this Mac — "
+                        "falling back to manual pairing")
+            else:
+                log("[MDM] Deployed config carries no OrgToken")
         
         # Fallback to interactive pairing (GUI or terminal)
         if not key:

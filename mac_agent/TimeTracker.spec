@@ -24,6 +24,10 @@ a = Analysis(
         ('update_checker.py', '.'),
         ('sync_manager.py', '.'),
         ('native_picker.py', '.'),
+        # Org-token pairing. Imported from inside run_agent, so the analysis
+        # cannot see it; without this an IT-deployed Mac silently falls back
+        # to asking the user to pair by hand.
+        ('mdm_deploy.py', '.'),
         ('picker_subprocess.py', '.'),
         ('version.py', '.'),
         ('inference', 'inference'),
@@ -43,6 +47,7 @@ a = Analysis(
         'finder_watcher',
         'meeting_detector',
         'update_checker',
+        'mdm_deploy',
         'version',
         'inference',
         'inference.collectors',

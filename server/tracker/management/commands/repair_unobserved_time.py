@@ -15,7 +15,7 @@ foreground window when she went home.
 This command finds those stretches in events already stored, marks everything
 past the idle-grace window as unobserved, and rebuilds the blocks that were made
 from them. tracker/services/unobserved.py holds the rule; the same rule now runs
-at ingest and (from v1.8.3) at the agent's own emit site, so this is a one-time
+at ingest and (from v1.8.5) at the agent's own emit site, so this is a one-time
 repair for history rather than an ongoing sweep.
 
 Dry-run by default. Invoiced blocks are never touched — they are reported so a

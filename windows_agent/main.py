@@ -431,7 +431,7 @@ HEARTBEAT_INTERVAL_S = int(_get("heartbeat_interval_seconds", 60))
 # split into max_event_duration chunks.
 MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 
-# ── Unobserved-time ceiling (v1.8.3) ────────────────────────────────────────
+# ── Unobserved-time ceiling (v1.8.5) ────────────────────────────────────────
 # Chunking a long interval is NOT the same as having watched it. A live loop
 # emits a heartbeat every HEARTBEAT_INTERVAL_S, so any emit covering much more
 # than that is a stretch the loop did not observe at all — the machine slept,
@@ -3474,8 +3474,14 @@ def run_agent():
      
                 real_end = end_ts
                 gap_s = end_ts - last_emit_ts
-                if current_sig != IDLE_SIG and gap_s > MOUSE_IDLE_PAUSE_S:
-                    end_ts = last_emit_ts + MOUSE_IDLE_PAUSE_S
+                # Floor the grace at one heartbeat. MOUSE_IDLE_PAUSE_S is
+                # whatever the server last sent (org settings, no validators on
+                # that field), so a 0 would otherwise collapse the write loop
+                # below to zero iterations and the agent would silently stop
+                # recording ANY time. Never credit less than one heartbeat.
+                grace_s = max(int(MOUSE_IDLE_PAUSE_S or 0), HEARTBEAT_INTERVAL_S)
+                if current_sig != IDLE_SIG and gap_s > grace_s:
+                    end_ts = last_emit_ts + grace_s
                     credited_s = end_ts - last_emit_ts
                     log(f"[DWELL] ⚠️ Loop unobserved for {gap_s / 60:.1f} min on "
                         f"{current_sig[0]} • {(current_sig[2] or '')[:40]} — crediting "

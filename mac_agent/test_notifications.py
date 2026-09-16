@@ -6,10 +6,21 @@ Run this on your Mac to verify notifications are working:
     python3 test_notifications.py
 
 You should see several test notifications appear in Notification Center.
+
+Notifications are disabled by default in normal operation; this script sets
+AGENT_NOTIF_ENABLED=1 for its own process so the test still shows something.
 """
 
+import os
 import time
 import sys
+
+# Banners are off by default now (see notifications.notifications_enabled).
+# This script exists precisely to make them appear, and is only ever run
+# deliberately, so it opts itself back in rather than silently doing nothing
+# and looking like the framework is broken.
+os.environ.setdefault("AGENT_NOTIF_ENABLED", "1")
+
 
 def main():
     print("=" * 60)

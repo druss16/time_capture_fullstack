@@ -36,6 +36,62 @@ except ImportError:
     print("[NOTIF] UserNotifications framework not available")
 
 
+# ---------------------------------------------------------------------------
+# The one switch
+# ---------------------------------------------------------------------------
+# Every banner this agent can raise goes out through some call to
+# UNUserNotificationCenter, and there are five of them across three files:
+# _send_notification below (seven nag types), _notify_switch in
+# ai_client_switcher, and the subscription-inactive, MavOps-nudge and
+# startup-timesheet-review paths in main. They all consult this.
+#
+# The default is OFF. The agent's job is to watch quietly; a banner on every
+# auto-detected client switch, plus periodic check-ins, duration reminders,
+# idle-return prompts and a timesheet review at every launch, is a stream of
+# interruptions in exchange for very little — the same information is on the
+# dashboard, where it can be read when it is wanted rather than announced
+# when it is not.
+#
+# This reuses the agent's existing flag rather than minting a second one with
+# a different spelling — main.py has had `notifications_enabled` /
+# AGENT_NOTIF_ENABLED all along. Two changes to it: the default is now off,
+# and the environment variable is now actually read (the old expression
+# evaluated `_get`'s default only when the config key was already present, so
+# AGENT_NOTIF_ENABLED could never take effect).
+#
+# Turn them back on with either:
+#     AGENT_NOTIF_ENABLED=1            (environment)
+#     "notifications_enabled": true    (~/.timetracker/config.json)
+#
+# Nothing else changes when they are off: detection, capture, MavOps prompt
+# bookkeeping and every log line still run exactly as before. The only
+# difference is that nothing is posted to Notification Center.
+_NOTIF_CONFIG_FILE = os.path.expanduser("~/.timetracker/config.json")
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def notifications_enabled() -> bool:
+    """True only if the user has explicitly asked for banners. Default False.
+
+    Read on every call rather than cached at import: the config file is edited
+    while the agent is running, and this is not a hot path — it is consulted
+    once per notification that would otherwise be posted.
+    """
+    env = os.getenv("AGENT_NOTIF_ENABLED")
+    if env is not None:
+        return env.strip().lower() in _TRUTHY
+    try:
+        with open(_NOTIF_CONFIG_FILE) as fh:
+            value = json.load(fh).get("notifications_enabled")
+    except Exception:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return False
+
+
 class NotificationType(Enum):
     """Types of notifications we send"""
     CLIENT_SUGGESTION = "client_suggestion"
@@ -380,6 +436,11 @@ class ClientNotificationManager:
         callback: Callable = None,
         delay_seconds: float = 0
     ) -> bool:
+        # Silent unless the user asked for banners. Checked before the
+        # throttle, so a disabled agent does not consume its own rate limit
+        # or record a "last notification" it never sent.
+        if not notifications_enabled():
+            return False
         if not self._can_send_notification(notif_type):
             return False
         

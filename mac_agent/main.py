@@ -403,8 +403,16 @@ def check_subscription_response(http_error):
     return False
 
 def show_subscription_inactive_notification():
-    """Show macOS notification about inactive subscription."""
-    if NOTIF_AVAILABLE:
+    """Show macOS notification about inactive subscription.
+
+    Silenced with the rest of them. This is the one worth naming: if the org's
+    subscription lapses, tracking pauses and the only remaining signal is the
+    "[SUB] Subscription inactive — agent paused" line in the log. Re-enable
+    notifications (see notifications.py) to get the banner back.
+    """
+    # NOTIF_ENABLED is defined further down the module; this only runs at
+    # call time, long after import.
+    if NOTIF_AVAILABLE and NOTIF_ENABLED:
         try:
             content = UNMutableNotificationContent.alloc().init()
             content.setTitle_("TimeTracker - Subscription Inactive")
@@ -960,7 +968,18 @@ CPA_TOOL_DETECTION = {
 }
 
 # Notification settings
-NOTIF_ENABLED = bool(_get("notifications_enabled", os.getenv("AGENT_NOTIF_ENABLED") != "0") if _get("notifications_enabled") is not None else True)
+# Defaults to OFF, and delegates to notifications.notifications_enabled() so
+# there is one answer to "should this agent raise banners" rather than one per
+# call site. The previous expression also had a dead branch: `_get`'s default
+# argument is only used when the key is ABSENT from config, but the outer
+# conditional already returned True in that case — so AGENT_NOTIF_ENABLED was
+# never read by anything.
+try:
+    from notifications import notifications_enabled as _notifications_enabled
+except Exception:
+    def _notifications_enabled() -> bool:
+        return False
+NOTIF_ENABLED = _notifications_enabled()
 NOTIF_DURATION_MINUTES = int(_get("notif_duration_minutes", os.getenv("AGENT_NOTIF_DURATION_MINUTES")) or 60)
 NOTIF_IDLE_THRESHOLD = int(_get("notif_idle_threshold", os.getenv("AGENT_NOTIF_IDLE_THRESHOLD")) or 300)
 NOTIF_NO_CLIENT_MINUTES = int(_get("notif_no_client_minutes", os.getenv("AGENT_NOTIF_NO_CLIENT_MINUTES")) or 15)
@@ -2483,7 +2502,7 @@ class NotificationManager:
 
     def notify_nudge(self, *, prompt_id: str, client_id: int, client_name: str,
                      confidence: float, hostname: str, os_user: str) -> bool:
-        if not (self.ready and NOTIF_AVAILABLE):
+        if not (self.ready and NOTIF_AVAILABLE) or not NOTIF_ENABLED:
             return False
         try:
             req_id = f"mavops-{prompt_id}"
@@ -3324,7 +3343,7 @@ def run_agent():
                     
                     log(f"[NOTIF] Startup review: {data.get('hours', 0)}h, {data.get('unassigned', 0)} unassigned")
                     
-                    if NOTIF_AVAILABLE:
+                    if NOTIF_AVAILABLE and NOTIF_ENABLED:
                         from UserNotifications import UNNotificationSound, UNTimeIntervalNotificationTrigger
                         content = UNMutableNotificationContent.alloc().init()
                         content.setTitle_(title)
@@ -3343,6 +3362,9 @@ def run_agent():
                             request, None
                         )
                         log("[NOTIF] ✅ Startup timesheet review notification sent")
+                    elif not NOTIF_ENABLED:
+                        log("[NOTIF] Startup timesheet review suppressed "
+                            "(notifications disabled)")
                     else:
                         log("[NOTIF] No notification framework available")
 

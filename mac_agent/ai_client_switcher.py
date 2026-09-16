@@ -385,7 +385,12 @@ DEFAULT_CONFIG = {
     # and eats keystrokes (v1.2.96). UNUserNotificationCenter does not — a Mac
     # notification never takes focus — so the Mac agent keeps telling the user
     # when it moves their time.
-    "notify_on_switch": True,
+    # MAC: off. This fired a banner on EVERY auto-detected client switch,
+    # which on a normal working day is the single loudest thing the agent
+    # does. The switch still happens and is still logged; it just no longer
+    # announces itself. `notifications_enabled()` gates it as well, so
+    # turning this back on alone is not enough — see notifications.py.
+    "notify_on_switch": False,
     "undo_window_seconds": 120,
     "max_switch_history": 50,
     "debug": False,
@@ -2336,6 +2341,16 @@ class AIClientSwitcher:
                        conf: float = 0, method: str = "", is_undo: bool = False):
         if not self.config["notify_on_switch"]:
             return
+        # The global switch wins over the per-feature one. This method has a
+        # raw UNUserNotificationCenter fallback below that bypasses
+        # notif_manager entirely, so guarding _send_notification alone would
+        # leave this path still talking.
+        try:
+            from notifications import notifications_enabled
+            if not notifications_enabled():
+                return
+        except Exception:
+            return          # can't confirm it was asked for -> stay quiet
         if is_undo:
             title    = "⏱ Client Reverted"
             body     = f"Back to {new_name}"

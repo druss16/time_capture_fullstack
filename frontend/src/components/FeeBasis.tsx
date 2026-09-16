@@ -1,75 +1,32 @@
-// src/components/FeeBasis.tsx
 /**
- * What to charge each client, this month, worked one at a time.
+ * The number a partner prices from, and how much of it we actually saw.
  *
- * This firm re-prices monthly off the hours — a client who took 28 hours is
- * not charged what they were charged for 5 — so the decision this page exists
- * to support happens twelve times a year, per client, and the hours ARE the
- * input. That is why it sits between Daily Review, which settles whose time it
- * was, and the invoice the partner raises in their own system.
+ * This firm sets each client's fee monthly off the hours: QuickBooks is open,
+ * they look up what went into the account, they arrive at a fair figure, and
+ * they invoice it from their own system. So nothing is decided here and
+ * nothing is recorded here. Earlier passes put a fee box, a "mark billed"
+ * button and a "0 of 103 priced" counter on this page; all of it was data
+ * entry that made the product feel complete and the partner slower, and it has
+ * been taken back out.
  *
- * It records the FEE, never the invoice. What was actually sent, and when, is
- * QuickBooks' fact; a copy of it here would be unverifiable and would drift.
- * What the firm decided to charge, on the other hand, is made right here out
- * of our own numbers — and, kept next to the time at standard rates, it is
- * realization without a single invoice imported from anywhere.
- *
- * This was a report for a long time and it read like one: eighty-two rows, no
- * beginning and no end, nothing to show which clients you had already settled.
- * A partner would read a row, raise the invoice in QuickBooks — that is where
- * the money moves; it does not move here — and come back to a page that looked
- * exactly as it had before.
- *
- * So the list is now finite. Every row ends in a number you charged, "Left to
- * do" hides the ones you have settled, and the count in the header answers
- * "am I nearly finished". The decision is also the anchor the page could never
- * show before: next month this client's row says what you charged them this
- * one, from your own record, with no invoice imported from anywhere.
- *
- * Firms do not bill out of TimeTracker — they weigh it against their own
- * judgement — so this screen is built to be argued with rather than exported.
- * Each row carries the evidence (hours, who, what the work was) next to the
- * anchors a fee actually gets set against: last year's invoice, the engagement
- * budget, the standing arrangement.
- *
- * An anchor is only shown when it was measured the same way as the number it
- * sits beside. "Budget" appears for a budget the firm typed in from its own fee
- * schedule; a budget the ladder derived from a month when the agent saw 42% of
- * the week is not shown, because comparing it against a better-captured month
- * reports an overrun nobody had. Those rows get the client's own typical period
- * instead, carried across as a share of the firm's month so that growing
- * coverage does not read as growing work — which answers what the partner is
- * really asking: is this month unusual for them?
- *
- * And the number can be set here. It could not before: this page showed the
- * evidence while the only place to record a decision was Settings → Economics
- * → Engagement budgets, two clicks away and showing none of it. Same endpoint,
- * same client x job-type grain as that tab and as the CSV importer — all three
- * must agree about what a fee belongs to — so a fee typed here is the same
- * `manual` budget, and the nightly derivation pass will not undo it.
- *
- * It counts every captured block, including time nobody has reviewed. On a
- * screen whose job is to stop a firm underbilling, hiding hours is the one
- * unrecoverable mistake — a fee set from a number that was quietly 90% short
- * is money gone for good.
+ * What is left is the part he cannot get from QuickBooks, his memory, or the
+ * Reports client table: our hours, carrying the honesty that makes a reference
+ * worth respecting. The number is a FLOOR — org 21 captures about 45% of
+ * scheduled time — so the page says so once at the top, and every row says how
+ * completely the people who did that client's work were captured. A partner
+ * pricing off a silent under-count either loses money or applies a private gut
+ * multiplier, and in the second case his instinct is the barometer and we are
+ * decoration.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   RefreshCw, Users, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Info,
-  Check, Loader2, Tag, X, Copy,
+  AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 type Work = { name: string; hours: number };
-
-/** The firm's own record of what it charged, for one client for one period. */
-type Decision = {
-  amount: number;
-  note: string;
-  decided_at: string;
-  decided_by: string;
-};
 
 type FeeClient = {
   client_id: number;
@@ -87,10 +44,11 @@ type FeeClient = {
   /** True only when every budget behind this row came from the firm's own fee
    *  schedule (budget_source 'manual'), the one kind worth quoting back. */
   budget_is_fee?: boolean;
-  /** The fee set for this period, once somebody has set it. */
-  decision?: Decision | null;
   /** False for the sub-hour tail: shown, but not in the way. */
   material?: boolean;
+  /** 0..1 — how much of the scheduled time of the people who worked this
+   *  client we actually captured, weighted by how much each of them did. */
+  capture?: number | null;
   /** What they were charged for the period before this one. */
   last_charged?: { amount: number; period: string } | null;
   /** What this client's usual share of the firm's period comes to in this
@@ -100,25 +58,13 @@ type FeeClient = {
   last_invoice: { date: string; amount: number } | null;
 };
 
-/** One client x job type with an open engagement — the grain a fee belongs to.
- *  Straight from /engagements/budget-setup/, the same feed the Economics tab
- *  reads, so the two screens cannot drift apart. */
-type Job = {
-  client_id: number;
-  client_name: string;
-  engagement_type: string;
-  open_periods: number;
-  typical_hours: number;
-  budget_hours: number | null;
-  budget_fee: number | null;
-  budget_source: string;
-};
-
 type Payload = {
   period: { start: string; end: string };
   totals: { clients: number; hours: number; value: number; unapproved_hours: number };
-  decided?: { clients: number; amount: number };
   tail?: { clients: number; hours: number; value: number };
+  /** capture: 0..1 of scheduled time the firm's people actually recorded.
+   *  unassigned_hours: captured time this period with no client on it. */
+  completeness?: { capture: number | null; unassigned_billable_hours: number };
   uses_approval?: boolean;
   clients: FeeClient[];
 };
@@ -135,9 +81,6 @@ function pctOfStandard(amount: number, standard: number) {
   if (pct === 0) return 'at standard';
   return pct < 0 ? `${Math.abs(pct)}% under standard` : `${pct}% over standard`;
 }
-
-const jobLabel = (t: string) =>
-  t.replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase());
 
 function isWholeMonth(startIso: string, endIso: string) {
   const start = new Date(startIso + 'T00:00:00');
@@ -174,157 +117,7 @@ export default function FeeBasis() {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-
-  // ── Setting the fee ────────────────────────────────────────────────────
-  // Jobs are fetched once, on the first row anyone opens. The list is small
-  // (one row per client x job type) but it is beside the point on a page most
-  // partners will only read, so it does not load with the period.
-  const [jobs, setJobs] = useState<Job[] | null>(null);
-  const [jobsErr, setJobsErr] = useState<string | null>(null);
-  const [openClient, setOpenClient] = useState<number | null>(null);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
-
-  // ── Working the list ───────────────────────────────────────────────────
-  // "Left to do" is the default because the page's job is to run out of rows.
-  const [show, setShow] = useState<'todo' | 'done' | 'all'>('todo');
-  const [charge, setCharge] = useState<Record<number, string>>({});
-  const [deciding, setDeciding] = useState<number | null>(null);
-  const [copied, setCopied] = useState<number | null>(null);
-  const [decideErr, setDecideErr] = useState<string | null>(null);
   const [showTail, setShowTail] = useState(false);
-
-  const decide = async (c: FeeClient, amount: number) => {
-    if (!range) return;
-    setDeciding(c.client_id);
-    setDecideErr(null);
-    try {
-      const res = await safeFetchJson<{ decision: Decision }>(
-        `${API_BASE}/billing/fee-decision/`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_id: c.client_id, start: range.start, end: range.end, amount,
-          }),
-        }
-      );
-      // Patch the one row rather than refetching the period: the row is about
-      // to leave the list, and a full reload here makes settling a client feel
-      // like the slowest thing on the page.
-      setData((d) => d && ({
-        ...d,
-        clients: d.clients.map((x) =>
-          x.client_id === c.client_id ? { ...x, decision: res.decision } : x),
-        decided: {
-          clients: (d.decided?.clients ?? 0) + (c.decision ? 0 : 1),
-          amount: round2((d.decided?.amount ?? 0) - (c.decision?.amount ?? 0) + amount),
-        },
-      }));
-      setCharge((m) => { const n = { ...m }; delete n[c.client_id]; return n; });
-    } catch (e: any) {
-      setDecideErr(e?.message || "Couldn't record that");
-    } finally {
-      setDeciding(null);
-    }
-  };
-
-  const undecide = async (c: FeeClient) => {
-    if (!range || !c.decision) return;
-    setDeciding(c.client_id);
-    setDecideErr(null);
-    const was = c.decision.amount;
-    try {
-      await safeFetchJson(`${API_BASE}/billing/fee-decision/`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: c.client_id, start: range.start, end: range.end,
-        }),
-      });
-      setData((d) => d && ({
-        ...d,
-        clients: d.clients.map((x) =>
-          x.client_id === c.client_id ? { ...x, decision: null } : x),
-        decided: {
-          clients: Math.max(0, (d.decided?.clients ?? 1) - 1),
-          amount: round2((d.decided?.amount ?? was) - was),
-        },
-      }));
-    } catch (e: any) {
-      setDecideErr(e?.message || "Couldn't undo that");
-    } finally {
-      setDeciding(null);
-    }
-  };
-
-  const copyAmount = async (c: FeeClient, amount: number) => {
-    // The invoice is raised in their own system, so the number's last job here
-    // is to be easy to carry across.
-    try {
-      await navigator.clipboard.writeText(amount.toFixed(2));
-      setCopied(c.client_id);
-      window.setTimeout(() => setCopied((x) => (x === c.client_id ? null : x)), 1500);
-    } catch {
-      /* clipboard refused (permissions, http) — the number is on screen anyway */
-    }
-  };
-
-  const loadJobs = useCallback(async () => {
-    setJobsErr(null);
-    try {
-      const d = await safeFetchJson<{ rows: Job[] }>(`${API_BASE}/engagements/budget-setup/`);
-      setJobs(d.rows || []);
-    } catch (e: any) {
-      setJobsErr(e?.message || "Couldn't load this client's jobs");
-      setJobs([]);
-    }
-  }, []);
-
-  const toggleClient = (clientId: number) => {
-    setSaved(null);
-    // Clear the error with the row: a complaint about what was typed for one
-    // client, still sitting under the next client's job, is worse than no
-    // message at all.
-    setJobsErr(null);
-    setOpenClient((cur) => (cur === clientId ? null : clientId));
-    if (jobs === null) void loadJobs();
-  };
-
-  const saveFee = async (job: Job) => {
-    const key = `${job.client_id}:${job.engagement_type}`;
-    const raw = (draft[key] ?? '').trim();
-    if (!raw) return;
-    const fee = Number(raw.replace(/[$,\s]/g, ''));
-    if (!Number.isFinite(fee) || fee <= 0) {
-      setJobsErr('Enter the fee as a number greater than zero.');
-      return;
-    }
-    setSaving(key);
-    setJobsErr(null);
-    try {
-      await safeFetchJson(`${API_BASE}/engagements/budget-group/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: job.client_id,
-          engagement_type: job.engagement_type,
-          monthly_fee: fee,
-          set_in: 'Fees',
-        }),
-      });
-      setDraft((d) => { const next = { ...d }; delete next[key]; return next; });
-      setSaved(key);
-      // Both feeds move: the job row shows the new fee, and the client's row
-      // above it swaps its "typical" anchor for the budget that now exists.
-      await Promise.all([loadJobs(), load(range)]);
-    } catch (e: any) {
-      setJobsErr(e?.message || 'Could not save that fee');
-    } finally {
-      setSaving(null);
-    }
-  };
 
   const load = useCallback(async (r: { start: string; end: string } | null) => {
     setLoading(true);
@@ -377,11 +170,8 @@ export default function FeeBasis() {
   // The stepper only ever produces whole months, but the endpoint accepts any
   // range, so the label follows the data rather than assuming.
   const periodIsMonth = isWholeMonth(data.period.start, data.period.end);
-  const doneCount = data.decided?.clients ?? 0;
-  const decidedAmount = data.decided?.amount ?? 0;
-  const todoCount = data.clients.filter((c) => !c.decision).length;
-  const shownClients = data.clients.filter((c) =>
-    show === 'all' ? true : show === 'done' ? !!c.decision : !c.decision);
+  const capture = data.completeness?.capture ?? null;
+  const shownClients = data.clients;
   // The sub-hour tail is real work the firm still charges for, so it is never
   // dropped — but 44 rounding errors standing between a partner and the eight
   // clients that need thinking about is how a page stops being used.
@@ -449,47 +239,34 @@ export default function FeeBasis() {
         </div>
       )}
 
-      {/* ── How much of the month is settled ───────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-[13px] text-muted-foreground">
-          <span className="font-semibold text-foreground">
-            {doneCount} of {totals.clients}
-          </span>{' '}
-          {/* Plural follows the total, not the count done: "1 of 103 client
-              priced" is the kind of wrong that makes a page look unfinished. */}
-          {totals.clients === 1 ? 'client' : 'clients'} priced
-          {decidedAmount > 0 && (
-            <>
-              {' · '}
-              <span className="font-mono tabular-nums font-semibold text-foreground">
-                {money(decidedAmount)}
-              </span>{' '}
-              this month
-            </>
-          )}
+      {/* ── What the numbers below are standing on ─────────────────────
+          Said once, plainly, because a partner pricing off a silent
+          under-count either loses money or applies a private gut multiplier —
+          and in the second case his instinct is the barometer and this page is
+          decoration. */}
+      {capture != null && capture < 0.9 && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <p className="text-[13px] leading-relaxed text-amber-900">
+            Your team's agents captured about{' '}
+            <span className="font-semibold">{Math.round(capture * 100)}%</span> of their
+            scheduled time this {periodIsMonth ? 'month' : 'period'}, so every figure below
+            is a floor — hours we saw, not hours worked.
+            {data.completeness && data.completeness.unassigned_billable_hours >= 1 && (
+              <>
+                {' '}A further{' '}
+                <span className="font-semibold">
+                  {data.completeness.unassigned_billable_hours.toFixed(1)}h
+                </span>{' '}
+                of billable time was captured with no client on it.{' '}
+                <a href="/daily" className="font-medium underline underline-offset-2">
+                  Settle it in Daily Review
+                </a>{' '}
+                and it lands on these rows.
+              </>
+            )}
+          </p>
         </div>
-        <div className="flex items-center gap-1 rounded-xl border border-border/60 bg-card p-0.5">
-          {([['todo', `Left to do${todoCount ? ` (${todoCount})` : ''}`],
-             ['done', 'Priced'],
-             ['all', 'All']] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setShow(key)}
-              className={cn(
-                'rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-colors',
-                show === key
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {decideErr && (
-        <p className="px-1 text-[12.5px] font-medium text-amber-700">{decideErr}</p>
       )}
 
       {/* ── One row per client ─────────────────────────────────────────── */}
@@ -497,21 +274,6 @@ export default function FeeBasis() {
         {data.clients.length === 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground">
             No time captured in this period.
-          </div>
-        )}
-        {data.clients.length > 0 && shownClients.length === 0 && (
-          // Running out of rows is the goal, so say so rather than showing an
-          // empty box that reads like a failure.
-          <div className="p-8 text-center">
-            <p className="text-sm font-semibold text-foreground">
-              {show === 'todo' ? "Every client has a fee for this month."
-                : 'No fees set yet for this month.'}
-            </p>
-            <p className="mt-1 text-[12.5px] text-muted-foreground">
-              {show === 'todo'
-                ? `${totals.clients} of ${totals.clients} settled.`
-                : 'Set a fee below and it will appear here.'}
-            </p>
           </div>
         )}
 
@@ -525,25 +287,11 @@ export default function FeeBasis() {
             const overBudget = feeBudget != null && c.hours > feeBudget;
             const typical = feeBudget == null ? c.typical_hours ?? null : null;
             const typicalDelta = typical != null ? c.hours - typical : 0;
-            const isOpen = openClient === c.client_id;
-            // Never an empty box: the fee they agreed to if the firm has told
-            // us one, otherwise this month's time at standard rates.
-            const proposed = (c.budget_is_fee && c.budget_amount)
-              ? c.budget_amount
-              : c.value_at_rates;
-            const typedCharge = charge[c.client_id];
-            const chargeValue = typedCharge ?? (proposed ? String(Math.round(proposed)) : '');
-            const busy = deciding === c.client_id;
-            // What he is giving away, shown while he decides it rather than
-            // discovered in a report three months later. Only meaningful
-            // against time at standard rates, so a flat-fee client — whose
-            // number was never derived from hours — gets nothing.
-            const typedNum = Number(chargeValue.replace(/[$,\s]/g, ''));
-            const vsStandard =
-              !c.budget_is_fee && c.value_at_rates > 0 && Number.isFinite(typedNum) && typedNum > 0
-                ? (typedNum - c.value_at_rates) / c.value_at_rates
-                : null;
-            const clientJobs = (jobs || []).filter((j) => j.client_id === c.client_id);
+            // How completely the people who did THIS client's work were
+            // captured. A firm-wide average would hide both the client worked
+            // by someone the agent sees all day and the one worked by someone
+            // who barely runs it.
+            const seen = c.capture ?? null;
             return (
               <div key={c.client_id} className="px-5 py-4">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -581,6 +329,20 @@ export default function FeeBasis() {
                     <Users className="h-3 w-3" />
                     {c.people} {c.people === 1 ? 'person' : 'people'}
                   </span>
+                  {/* The doubt belongs next to the people, because that is
+                      where it comes from: this is their capture, weighted by
+                      how much of this client's work each of them did. */}
+                  {seen != null && seen < 0.9 && (
+                    <span
+                      className={cn(
+                        'font-medium',
+                        seen < 0.5 ? 'text-amber-700' : 'text-muted-foreground'
+                      )}
+                      title={`We captured about ${Math.round(seen * 100)}% of the scheduled time of the people who worked this client, so their hours here are a floor.`}
+                    >
+                      {Math.round(seen * 100)}% of their time captured
+                    </span>
+                  )}
                   {c.work.slice(0, 4).map((w) => (
                     <span key={w.name} className="text-muted-foreground">
                       {w.name}{' '}
@@ -589,20 +351,6 @@ export default function FeeBasis() {
                       </span>
                     </span>
                   ))}
-                  <span className="flex-1" />
-                  <button
-                    onClick={() => toggleClient(c.client_id)}
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1',
-                      'text-[11.5px] font-semibold transition-colors',
-                      isOpen
-                        ? 'border-primary/30 bg-primary/8 text-primary'
-                        : 'border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-                    )}
-                  >
-                    {isOpen ? <X className="h-3 w-3" /> : <Tag className="h-3 w-3" />}
-                    {isOpen ? 'Close' : 'Standing fee'}
-                  </button>
                 </div>
 
                 {/* The anchors. Absent ones are simply not shown — an empty
@@ -646,197 +394,6 @@ export default function FeeBasis() {
                   </div>
                 )}
 
-                {/* ── The row's ending ──────────────────────────────────
-                    Every client here is a decision waiting to be made. The
-                    money moves in the firm's own system, so the most useful
-                    thing this can do is hand over the number and remember that
-                    the call was made. */}
-                {c.decision ? (
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]">
-                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/8 px-2.5 py-1 font-semibold text-primary">
-                      <Check className="h-3.5 w-3.5" />
-                      This month {money(c.decision.amount)}
-                    </span>
-                    {!c.budget_is_fee && c.value_at_rates > 0 && (
-                      <span className="text-muted-foreground">
-                        {pctOfStandard(c.decision.amount, c.value_at_rates)}
-                      </span>
-                    )}
-                    <span className="text-muted-foreground/70">
-                      {c.decision.decided_by || 'someone'} ·{' '}
-                      {new Date(c.decision.decided_at).toLocaleDateString('en-US',
-                        { month: 'short', day: 'numeric' })}
-                    </span>
-                    <span className="flex-1" />
-                    <button
-                      onClick={() => void undecide(c)}
-                      disabled={busy}
-                      className="rounded-lg px-2 py-1 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                    >
-                      {busy ? 'Clearing…' : 'Change'}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                    <span className="text-[12.5px] text-muted-foreground">This month</span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[13px] text-muted-foreground">$</span>
-                      <input
-                        value={chargeValue}
-                        onChange={(e) =>
-                          setCharge((m) => ({ ...m, [c.client_id]: e.target.value }))}
-                        onKeyDown={(e) => {
-                          if (e.key !== 'Enter') return;
-                          const n = Number(chargeValue.replace(/[$,\s]/g, ''));
-                          if (Number.isFinite(n) && n >= 0) void decide(c, n);
-                        }}
-                        inputMode="decimal"
-                        className="w-28 rounded-lg border border-border bg-card px-2 py-1 font-mono text-[13px] tabular-nums outline-none focus:border-primary/50"
-                      />
-                    </div>
-                    <button
-                      onClick={() => {
-                        const n = Number(chargeValue.replace(/[$,\s]/g, ''));
-                        if (Number.isFinite(n)) void copyAmount(c, n);
-                      }}
-                      title="Copy the amount, for the invoice in your own system"
-                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11.5px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      {copied === c.client_id
-                        ? <><Check className="h-3 w-3" /> Copied</>
-                        : <><Copy className="h-3 w-3" /> Copy</>}
-                    </button>
-                    {vsStandard != null ? (
-                      <span className={cn(
-                        'text-[11.5px] font-medium',
-                        vsStandard <= -0.2 ? 'text-amber-700' : 'text-muted-foreground'
-                      )}>
-                        {pctOfStandard(typedNum, c.value_at_rates)}
-                      </span>
-                    ) : proposed != null && (
-                      <span className="text-[11.5px] text-muted-foreground">
-                        {c.budget_is_fee ? 'their standing fee' : 'time at standard rates'}
-                      </span>
-                    )}
-                    {/* When the fee moves with the hours every month, what you
-                        charged last month is the number the next one is argued
-                        against. */}
-                    {c.last_charged && (
-                      <span className="text-[11.5px] text-muted-foreground">
-                        last {periodIsMonth ? 'month' : 'period'}{' '}
-                        <span className="font-mono tabular-nums text-foreground/80">
-                          {money(c.last_charged.amount)}
-                        </span>
-                      </span>
-                    )}
-                    <span className="flex-1" />
-                    <button
-                      onClick={() => {
-                        const n = Number(chargeValue.replace(/[$,\s]/g, ''));
-                        if (!Number.isFinite(n) || n < 0) {
-                          setDecideErr('Enter the amount as a number.');
-                          return;
-                        }
-                        void decide(c, n);
-                      }}
-                      disabled={busy || !chargeValue.trim()}
-                      className={cn(
-                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-all',
-                        busy || !chargeValue.trim()
-                          ? 'cursor-not-allowed bg-muted text-muted-foreground'
-                          : 'bg-primary text-primary-foreground hover:opacity-90'
-                      )}
-                    >
-                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                      {busy ? 'Saving' : "Set this month's fee"}
-                    </button>
-                  </div>
-                )}
-
-                {isOpen && (
-                  <div className="mt-3 rounded-xl border border-border/70 bg-muted/30 p-3">
-                    {jobs === null ? (
-                      <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading this client's jobs…
-                      </p>
-                    ) : clientJobs.length === 0 ? (
-                      // No recurring job means nothing to attach a fee to. Saying
-                      // so beats an empty box that looks broken.
-                      <p className="text-[12.5px] text-muted-foreground">
-                        No recurring job on file for {c.name}, so there is nothing to price
-                        yet. Recurring work appears here once it has been through a period.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {clientJobs.map((j) => {
-                          const key = `${j.client_id}:${j.engagement_type}`;
-                          const isSaving = saving === key;
-                          const justSaved = saved === key;
-                          const current = j.budget_source === 'manual' ? j.budget_fee : null;
-                          return (
-                            <div key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                              <span className="min-w-[8.5rem] text-[12.5px] font-semibold text-foreground">
-                                {jobLabel(j.engagement_type)}
-                              </span>
-                              <span className="text-[11.5px] text-muted-foreground">
-                                usually{' '}
-                                <span className="font-mono tabular-nums text-foreground/80">
-                                  {j.typical_hours.toFixed(1)}h
-                                </span>
-                                {' · '}{j.open_periods} open {j.open_periods === 1 ? 'period' : 'periods'}
-                              </span>
-                              <span className="flex-1" />
-                              {current != null && !justSaved && (
-                                <span className="text-[11.5px] text-muted-foreground">
-                                  now <span className="font-mono tabular-nums">{money(current)}</span>
-                                </span>
-                              )}
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[12.5px] text-muted-foreground">$</span>
-                                <input
-                                  value={draft[key] ?? ''}
-                                  onChange={(e) =>
-                                    setDraft((d) => ({ ...d, [key]: e.target.value }))
-                                  }
-                                  onKeyDown={(e) => { if (e.key === 'Enter') void saveFee(j); }}
-                                  inputMode="decimal"
-                                  placeholder={current != null ? String(Math.round(current)) : 'fee'}
-                                  className="w-24 rounded-lg border border-border bg-card px-2 py-1 font-mono text-[12.5px] tabular-nums outline-none focus:border-primary/50"
-                                />
-                                <span className="text-[11.5px] text-muted-foreground">per period</span>
-                                <button
-                                  onClick={() => void saveFee(j)}
-                                  disabled={isSaving || !(draft[key] ?? '').trim()}
-                                  className={cn(
-                                    'inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition-all',
-                                    (draft[key] ?? '').trim() && !isSaving
-                                      ? 'bg-primary text-primary-foreground hover:opacity-90'
-                                      : 'cursor-not-allowed bg-muted text-muted-foreground'
-                                  )}
-                                >
-                                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin" />
-                                    : justSaved ? <Check className="h-3 w-3" /> : null}
-                                  {isSaving ? 'Saving' : justSaved ? 'Saved' : 'Save'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        <p className="pt-1 text-[11.5px] text-muted-foreground">
-                          A fee saves across every open period of that job and will not be
-                          overwritten by the nightly estimate. Pricing the whole firm at once?
-                          Upload the schedule in{' '}
-                          <a href="/settings?tab=economics" className="font-medium text-primary hover:underline">
-                            Settings → Economics
-                          </a>.
-                        </p>
-                      </div>
-                    )}
-                    {jobsErr && (
-                      <p className="mt-2 text-[12px] font-medium text-amber-700">{jobsErr}</p>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -862,10 +419,12 @@ export default function FeeBasis() {
       <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
         These figures are a reference, not an invoice. Value shown is time at standard rates —
         what the work would come to before any judgement about scope, relationship, or what was
-        actually agreed. “Typical {periodIsMonth ? 'month' : 'period'}” is this client's usual
-        share of the firm's work, at this {periodIsMonth ? 'month' : 'period'}'s size, so a
-        {' '}{periodIsMonth ? 'month' : 'period'} where more of the firm was captured does not
-        read as a client doing more. “Budget” appears only where the firm entered a fee itself.
+        actually agreed. Hours are what the agents captured, never what was worked — treat
+        every figure as a minimum. “Typical {periodIsMonth ? 'month' : 'period'}” is this
+        client's usual share of the firm's work, at this{' '}
+        {periodIsMonth ? 'month' : 'period'}'s size, so a {periodIsMonth ? 'month' : 'period'}{' '}
+        where more of the firm was captured does not read as a client doing more. Fees are set
+        in Settings → Economics; nothing on this page changes anything.
       </p>
     </div>
   );

@@ -516,7 +516,6 @@ urlpatterns = [
     path("blocks/<int:block_id>/evidence/", views_block_evidence.block_evidence, name="block_evidence"),
     path("blocks/<int:block_id>/why/", views_block_evidence.block_why, name="block_why"),
     path("billing/fee-basis/", views_fee_basis.fee_basis, name="fee_basis"),
-    path("billing/fee-decision/", views_fee_basis.fee_decision, name="fee_decision"),
     path("billing/week-coverage/", views_week_coverage.week_coverage, name="week_coverage"),
     path("daily/<str:day>/reviewed/", views_day_review.day_review, name="day_review"),
     path("daily/<str:day>/seen/", views_day_review.day_seen, name="day_seen"),

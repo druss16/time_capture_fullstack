@@ -1,17 +1,25 @@
 """
 tracker/views_fee_basis.py
 
-What a partner needs in front of them to set a fair fee for a period — and
-somewhere for the answer to go.
+The number a partner prices from, and how much of it we actually saw.
 
-The second half was missing for a long time and it was the more important half.
-The page showed a partner everything about a client's month and then ended:
-they raised the invoice in their own system and came back to a list that looked
-exactly as it had before, with no way to tell the eleven clients they had
-settled from the seventy they had not. `decision` and `decided_totals` below
-are what make eighty-two rows finite — and, because the firm records what it
-charged as it goes, they become the anchor that invoice imports were never
-going to supply.
+This firm sets each client's fee monthly off the hours. QuickBooks is open,
+they look up what went into the account, they arrive at a fair figure, and they
+invoice from their own system. Nothing is decided here and nothing is recorded
+here — earlier versions of this endpoint asked the partner to mark clients
+billed or priced, which was data entry that made the product feel complete and
+made him slower, and it has been taken back out.
+
+What is left is the one thing he cannot get from QuickBooks, his memory, or the
+Reports client table: our hours, with the honesty about them that makes a
+reference worth respecting.
+
+Because the number is a FLOOR, not a total. org 21 captures about 45% of
+scheduled hours; "Basilica: 28.1h" reads like a fact and is a minimum. A
+partner pricing off a silent under-count either loses money or applies a
+private gut multiplier — and if he is doing the second, the barometer is his
+instinct and we are decoration. So every figure here travels with how much of
+that client's team we actually saw.
 
 Firms do not bill straight out of TimeTracker — the numbers are a reference
 they weigh against their own judgement. That changes what this endpoint owes
@@ -28,6 +36,12 @@ them compared with the invoice-prep view:
     becomes one next to what you charged last year, what the engagement was
     budgeted at, and what the standing arrangement says. Those three anchors
     live in three different tables and nothing had ever put them side by side.
+
+  · Confidence belongs to the CLIENT, not the firm. A firm-wide 45% says
+    nothing about whether to trust this row: Basilica had five people on it,
+    and what matters is how completely those five were captured, weighted by
+    how much of the work each of them did. One partner who never runs the agent
+    makes his clients' numbers soft and nobody else's.
 
   · An anchor has to be measured the same way as the number beside it. A budget
     derived from a month when the agent saw 42% of the week, compared against a
@@ -63,9 +77,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from tracker.analytics_v2.stats import partition_material
-from tracker.models import (
-    BillingDecision, Block, Client, Invoice, OrganizationMembership,
-)
+from tracker.models import Block, Client, Invoice, OrganizationMembership
 
 ZERO = Decimal("0")
 TOP_WORK_TYPES = 4
@@ -99,6 +111,42 @@ def _prior_windows(start_d: date, end_d: date, n: int = 3):
         windows.append((w_end - timedelta(days=span - 1), w_end))
         w_end = w_end - timedelta(days=span)
     return windows
+
+
+def _capture_by_user(org, user_ids, start_d, end_d) -> dict[int, float]:
+    """How much of each person's scheduled time we actually captured, 0..1.
+
+    Same basis as the readiness checklist and the Review tab — tracked working
+    hours over calendar capacity — so the firm is never told two different
+    coverage numbers by two different screens.
+    """
+    from tracker.analytics_v2.blocks import working_qs
+    from tracker.analytics_v2.capacity import capacity_hours_map
+
+    user_ids = [u for u in user_ids if u]
+    if not user_ids:
+        return {}
+
+    tracked = {
+        r["user_id"]: (r["m"] or 0) / 60.0
+        for r in (
+            working_qs(
+                Block.objects.filter(
+                    org=org, user_id__in=user_ids,
+                    day__gte=start_d, day__lte=end_d,
+                ), org,
+            )
+            .values("user_id")
+            .annotate(m=Sum("minutes"))
+        )
+    }
+    capacity = capacity_hours_map(org, user_ids, start_d, end_d)
+    out = {}
+    for uid in user_ids:
+        cap = capacity.get(uid) or 0
+        if cap > 0:
+            out[uid] = min(1.0, tracked.get(uid, 0.0) / cap)
+    return out
 
 
 def _median(values):
@@ -200,29 +248,30 @@ def fee_basis(request):
         .values_list("client_id", "total")
     )
 
-    # ── What has already been settled for this period ─────────────────────
-    decisions = {
-        d.client_id: d
-        for d in BillingDecision.objects.filter(
-            org=org, client_id__in=client_ids,
-            period_start=start_d, period_end=end_d,
-        ).select_related("decided_by")
-    }
+    # ── How much of each client's month we actually saw ───────────────────
+    # Weighted by who did the work: a client whose hours came mostly from
+    # someone with patchy capture is a softer number than one worked by people
+    # the agent sees all day, and a firm-wide average would hide both.
+    minutes_by_client_user = {}
+    for r in (
+        blocks.filter(client_id__in=client_ids)
+        .values("client_id", "user_id")
+        .annotate(minutes=Sum("minutes"))
+    ):
+        minutes_by_client_user.setdefault(r["client_id"], []).append(
+            (r["user_id"], r["minutes"] or 0)
+        )
+    all_user_ids = {u for rows_ in minutes_by_client_user.values() for u, _ in rows_}
+    capture_by_user = _capture_by_user(org, all_user_ids, start_d, end_d)
 
-    # And what they charged the period before — the firm's own record, which
-    # needs no invoice to have been imported from anywhere.
-    prev_windows = _prior_windows(start_d, end_d, n=1)
-    last_decision = {}
-    if prev_windows:
-        p_start, p_end = prev_windows[0]
-        last_decision = {
-            d.client_id: {"amount": float(d.amount),
-                          "period": p_start.isoformat()}
-            for d in BillingDecision.objects.filter(
-                org=org, client_id__in=client_ids,
-                period_start=p_start, period_end=p_end,
+    capture_by_client = {}
+    for cid, pairs in minutes_by_client_user.items():
+        weighted = [(capture_by_user[u], m) for u, m in pairs if u in capture_by_user]
+        total_m = sum(m for _, m in weighted)
+        if total_m > 0:
+            capture_by_client[cid] = round(
+                sum(cap * m for cap, m in weighted) / total_m, 3
             )
-        }
 
     last_invoice = {}
     for inv in Invoice.objects.filter(
@@ -304,7 +353,6 @@ def fee_basis(request):
                 "period": prof.flat_period or None,
             }
 
-        decision = decisions.get(cid)
         budget = budgets.get(cid)
         # Only the firm's own fee schedule is quoted as a budget. The derived
         # ladder (prior_year off an under-captured month, or the median of
@@ -333,6 +381,7 @@ def fee_basis(request):
             "unapproved_hours": _hours(r["unapproved_minutes"]),
             "value_at_rates": float(r["value"] or 0),
             "people": r["people"],
+            "capture": capture_by_client.get(cid),
             "work": shown,
             "arrangement": arrangement,
             "budget_hours": float(budget["hours"]) if budget and budget["hours"] else None,
@@ -343,14 +392,6 @@ def fee_basis(request):
             "typical_periods": len(shares),
             "prior_year_billed": float(prior_year[cid]) if cid in prior_year else None,
             "last_invoice": last_invoice.get(cid),
-            "last_charged": last_decision.get(cid),
-            "decision": ({
-                "amount": float(decision.amount),
-                "note": decision.note,
-                "decided_at": decision.decided_at.isoformat(),
-                "decided_by": (decision.decided_by.username
-                               if decision.decided_by else ""),
-            } if decision else None),
         })
 
     # An hour is the line. Below it a client is a rounding error on the month
@@ -364,7 +405,23 @@ def fee_basis(request):
     for c in out:
         c["material"] = c["client_id"] not in tail_ids
 
-    decided = [c for c in out if c["decision"]]
+    # The firm's own capture over this period, and the time we did see but
+    # could not put against a client — which on this page is money sitting one
+    # decision away from being billable.
+    firm_users = list(blocks.order_by().values_list("user_id", flat=True).distinct())
+    firm_capture_map = _capture_by_user(org, firm_users, start_d, end_d)
+    firm_capture = (round(sum(firm_capture_map.values()) / len(firm_capture_map), 3)
+                    if firm_capture_map else None)
+    # BILLABLE and client-less. The raw figure is 378h at org 21 in August and
+    # would have been a lie on this page: 331h of it is already marked
+    # non-billable — someone's lunch, admin, 204h the classifier never gave a
+    # task type. What is actually one decision away from a client's row is
+    # 47.1h, and a reference that overstates by eight times is not one.
+    unassigned_minutes = (
+        blocks.filter(client_id__isnull=True, is_billable=True)
+        .aggregate(m=Sum("minutes"))["m"] or 0
+    )
+
     total_hours = round(sum(c["hours"] for c in out), 2)
     unapproved = round(sum(c["unapproved_hours"] for c in out), 2)
     # A firm that has never approved anything is not "behind on review" — it
@@ -385,88 +442,13 @@ def fee_basis(request):
             "hours": round(sum(c["hours"] for c in tail), 2),
             "value": round(sum(c["value_at_rates"] for c in tail), 2),
         },
-        # The two numbers that turn a list into a piece of work: how much of it
-        # is done, and what has been charged so far.
-        "decided": {
-            "clients": len(decided),
-            "amount": round(sum(c["decision"]["amount"] for c in decided), 2),
+        # What the whole page is standing on. Said once, at the top, because a
+        # firm pricing off a silent under-count either loses money or applies a
+        # private gut multiplier — and in the second case the barometer is the
+        # partner's instinct and these numbers are decoration.
+        "completeness": {
+            "capture": firm_capture,
+            "unassigned_billable_hours": _hours(unassigned_minutes),
         },
         "clients": out,
-    })
-
-
-@api_view(["POST", "DELETE"])
-@permission_classes([IsAuthenticated])
-def fee_decision(request):
-    """Record — or undo — what the firm charged one client for one period.
-
-    POST {client_id, start, end, amount, note?}    DELETE {client_id, start, end}
-
-    Deliberately forgiving about being called twice: a decision is upserted, so
-    correcting a number is the same gesture as making it. And deliberately
-    undoable — the row this settles disappears from the list, which is exactly
-    the kind of action a person needs to be able to take back without asking
-    anyone.
-    """
-    membership = OrganizationMembership.objects.filter(
-        user=request.user
-    ).select_related("organization").first()
-    if not membership:
-        return Response({"error": "No organization"}, status=403)
-    if membership.role not in ("owner", "admin", "manager"):
-        return Response({"error": "Permission denied"}, status=403)
-
-    org = membership.organization
-    data = request.data or {}
-    client_id = data.get("client_id")
-    try:
-        start_d = date.fromisoformat(data.get("start"))
-        end_d = date.fromisoformat(data.get("end"))
-    except (TypeError, ValueError):
-        return Response({"error": "start and end must be YYYY-MM-DD"}, status=400)
-    if not client_id or not Client.objects.filter(org=org, id=client_id).exists():
-        return Response({"error": "Unknown client"}, status=404)
-
-    if request.method == "DELETE":
-        BillingDecision.objects.filter(
-            org=org, client_id=client_id,
-            period_start=start_d, period_end=end_d,
-        ).delete()
-        return Response({"client_id": client_id, "decision": None})
-
-    try:
-        amount = Decimal(str(data.get("amount")).replace("$", "").replace(",", ""))
-    except (TypeError, ValueError, ArithmeticError):
-        return Response({"error": "amount must be a number"}, status=400)
-    if amount < 0:
-        return Response({"error": "amount cannot be negative"}, status=400)
-
-    # Snapshot what the page was showing. The hours keep moving after the call
-    # is made, and the interesting question later is what the fee was charged
-    # AGAINST, not what the client eventually accumulated.
-    agg = Block.objects.filter(
-        org=org, client_id=client_id, day__gte=start_d, day__lte=end_d,
-    ).aggregate(
-        minutes=Sum("minutes"),
-        value=Coalesce(Sum("billing_amount", filter=Q(is_billable=True)), ZERO),
-    )
-
-    decision, _ = BillingDecision.objects.update_or_create(
-        org=org, client_id=client_id, period_start=start_d, period_end=end_d,
-        defaults={
-            "amount": amount,
-            "hours_at_decision": Decimal(str(_hours(agg["minutes"]))),
-            "value_at_decision": agg["value"] or ZERO,
-            "note": (data.get("note") or "")[:200],
-            "decided_by": request.user,
-        },
-    )
-    return Response({
-        "client_id": client_id,
-        "decision": {
-            "amount": float(decision.amount),
-            "note": decision.note,
-            "decided_at": decision.decided_at.isoformat(),
-            "decided_by": request.user.username,
-        },
     })

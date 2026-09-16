@@ -4834,8 +4834,7 @@ from tracker.models_task_type_sets import (
 
 # Engagements — budget + progress unit (see models_engagements.py)
 from tracker.models_engagements import (  # noqa: F401, E402
-    BillingDecision, Engagement, FeeScheduleEntry, PHASE_LADDERS, ladder_for,
-    phase_progress,
+    Engagement, FeeScheduleEntry, PHASE_LADDERS, ladder_for, phase_progress,
 )
 
 

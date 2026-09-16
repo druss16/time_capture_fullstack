@@ -87,7 +87,7 @@ def _hours(minutes) -> float:
     return round(float(minutes or 0) / 60.0, 2)
 
 
-def _prior_windows(start_d: date, end_d: date, n: int = 3):
+def _prior_windows(start_d: date, end_d: date, n: int = 6):
     """The n windows immediately before this one, most recent first.
 
     Whole calendar months step by month so February is compared with January
@@ -161,11 +161,20 @@ def _capture_by_user(org, user_ids, start_d, end_d) -> dict[int, float]:
 
 
 def _median(values):
+    """Median, rounded by the caller and not by this.
+
+    It used to round to two decimals, which was written for hours and then
+    reused on SHARES of a firm-month — fractions like 0.00538. Two decimals
+    quantises those to the nearest whole percent of the firm: a client with an
+    even number of prior periods either jumped to 1% or collapsed to zero and
+    lost its anchor entirely. Basilica's "usually 5.1h" was 0.635% rounded up to
+    1%. A helper that does not know the units must not round.
+    """
     ordered = sorted(values)
     mid = len(ordered) // 2
     if len(ordered) % 2:
         return ordered[mid]
-    return round((ordered[mid - 1] + ordered[mid]) / 2, 2)
+    return (ordered[mid - 1] + ordered[mid]) / 2
 
 
 def _period_defaults(request):
@@ -326,6 +335,10 @@ def fee_basis(request):
     # only other month was their onboarding is worse than no anchor at all.
     firm_now_minutes = sum(r["total_minutes"] or 0 for r in rows)
     shares_by_client = {}
+    # Six periods back, not three: a client who is only worked in some months
+    # deserves the same footing as one worked every month, and the share basis
+    # already makes an old period comparable to a recent one. Looking further
+    # back takes org 21 from 30 clients with three months of history to 42.
     for w_start, w_end in _prior_windows(start_d, end_d):
         window = Block.objects.filter(
             org=org, client_id__isnull=False, day__gte=w_start, day__lte=w_end
@@ -374,7 +387,13 @@ def fee_basis(request):
         shares = shares_by_client.get(cid, [])
         typical = (
             round(_median(shares) * _hours(firm_now_minutes), 2)
-            if len(shares) >= 2
+            # THREE periods, not two. Two points cannot establish a norm, and
+            # at org 21 thirty-nine of the sixty-nine clients carrying the word
+            # "usually" had exactly two months behind it — with Basilica's two
+            # being 1.8h and 6.4h, the start of a ramp that reached 28.1h. The
+            # page called that "usually 5.1h", which is a claim the data had not
+            # earned. Below three, the row says how new the client is instead.
+            if len(shares) >= 3
             else None
         )
         # A share this small carries across as 0.0h, and "typical month 0.0h ·

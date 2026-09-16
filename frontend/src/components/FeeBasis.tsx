@@ -52,8 +52,12 @@ type FeeClient = {
   /** What they were charged for the period before this one. */
   last_charged?: { amount: number; period: string } | null;
   /** What this client's usual share of the firm's period comes to in this
-   *  one's hours. Null until they have two prior periods to take a share of. */
+   *  one's hours. Null until three prior periods have time in them — two
+   *  points are not a norm, and at org 21 most of the two-point ones were a
+   *  new client's opening months mistaken for their baseline. */
   typical_hours?: number | null;
+  /** How many of the six prior periods this client had any time in. */
+  typical_periods?: number;
   prior_year_billed: number | null;
   last_invoice: { date: string; amount: number } | null;
 };
@@ -422,6 +426,22 @@ export default function FeeBasis() {
                         title={`We captured about ${Math.round(seen * 100)}% of the scheduled time of the people who worked this client, so the hours here are a floor.`}
                       >
                         {Math.round(seen * 100)}% captured
+                      </span>
+                    </>
+                  )}
+
+                  {/* No norm yet. Saying how new they are beats saying nothing:
+                      a client with one month behind them is a different thing
+                      from a quiet one, and only the row can tell you which. */}
+                  {typical == null && !feeBudget && (c.typical_periods ?? 0) < 3 && (
+                    <>
+                      <Dot />
+                      <span className="text-muted-foreground/80">
+                        {(c.typical_periods ?? 0) === 0
+                          ? 'first month with us'
+                          : `only ${c.typical_periods} prior ${
+                              c.typical_periods === 1 ? 'month' : 'months'
+                            } — no usual yet`}
                       </span>
                     </>
                   )}

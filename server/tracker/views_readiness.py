@@ -159,9 +159,10 @@ def setup_readiness(request):
             "tier": HEALTH,
             "title": "Get the agent running everywhere",
             "status": OK if cov >= 80 else (PARTIAL if cov >= 50 else MISSING),
-            "detail": (f"About {cov:.0f}% of scheduled hours are reaching the "
-                       f"system. Everything else here is a floor, not a total — "
-                       f"we can only report what we see."),
+            "detail": (f"On the days your team works, about {cov:.0f}% of a "
+                       f"standard day reaches the system. Everything else here "
+                       f"is a floor, not a total — we can only report what we "
+                       f"see."),
             "unlocks": "Numbers that stand up next to a P&L",
             "where": "Settings → Devices",
             "link": "/settings?tab=devices",
@@ -195,28 +196,31 @@ def setup_readiness(request):
 
 
 def _coverage_pct(org) -> float | None:
-    """Tracked hours against scheduled capacity over the last 30 days.
+    """Captured hours over the days people actually worked, last 30 days.
 
-    Deliberately the same basis the Review tab shows, so the checklist and the
-    dashboard can't quote different coverage numbers at each other.
+    Shares `services.capture` with the Fees page, so the checklist and that page
+    can't quote different coverage numbers at each other.
+
+    It used to divide by scheduled capacity, which answers a different question
+    and answered it badly: a part-timer who worked eight full days read as a
+    broken agent, and an admin nobody expects chargeable hours from dragged the
+    firm's figure down. See the module for what 100% would actually mean — not
+    "every hour", but a full day of client-facing work with no lunch and no
+    admin, which nobody reaches.
     """
     from datetime import timedelta
 
-    from django.db.models import Sum
     from django.utils import timezone
 
     from tracker.analytics_v2.blocks import working_qs
-    from tracker.analytics_v2.capacity import capacity_hours_map
     from tracker.models import Block
+    from tracker.services.capture import firm_capture
 
     end = timezone.localdate()
     start = end - timedelta(days=30)
     qs = working_qs(Block.objects.filter(org=org, day__gte=start, day__lte=end), org)
-    tracked = (qs.aggregate(s=Sum("minutes"))["s"] or 0) / 60.0
     uids = list(qs.order_by().values_list("user_id", flat=True).distinct())
     if not uids:
         return None
-    capacity = sum(capacity_hours_map(org, uids, start, end).values())
-    if capacity <= 0:
-        return None
-    return min(100.0, tracked / capacity * 100)
+    pct = firm_capture(org, uids, start, end)
+    return None if pct is None else pct * 100

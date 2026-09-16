@@ -37,6 +37,11 @@ them compared with the invoice-prep view:
     budgeted at, and what the standing arrangement says. Those three anchors
     live in three different tables and nothing had ever put them side by side.
 
+  · Confidence is measured over the days people ACTUALLY WORKED, not over a
+    calendar that assumes everyone is full-time — see services/capture.py. The
+    first version of this divided by scheduled capacity and told a part-timer
+    her agent was broken.
+
   · Confidence belongs to the CLIENT, not the firm. A firm-wide 45% says
     nothing about whether to trust this row: Basilica had five people on it,
     and what matters is how completely those five were captured, weighted by
@@ -77,6 +82,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from tracker.analytics_v2.stats import partition_material
+from tracker.services.capture import capture_by_user, firm_capture
 from tracker.models import Block, Client, Invoice, OrganizationMembership
 
 ZERO = Decimal("0")
@@ -111,53 +117,6 @@ def _prior_windows(start_d: date, end_d: date, n: int = 6):
         windows.append((w_end - timedelta(days=span - 1), w_end))
         w_end = w_end - timedelta(days=span)
     return windows
-
-
-def _capture_by_user(org, user_ids, start_d, end_d) -> dict[int, float]:
-    """How much of each person's scheduled time we actually captured, 0..1.
-
-    Same basis as the readiness checklist and the Review tab — tracked working
-    hours over calendar capacity — so the firm is never told two different
-    coverage numbers by two different screens.
-
-    Non-chargeable staff are left out entirely, the same population filter firm
-    utilization uses. This page shipped without it and the first thing it did
-    was accuse someone: org 21's admin read 21% captured, which looked like a
-    dead agent and was nothing of the sort — her agent reported today, she works
-    about 3.8h a day across 14 days a month, and the firm has already declared
-    her tier non-chargeable. Measuring an admin against a fee-earner's eight-hour
-    day produces a number that is wrong about her and drags the firm's average
-    down with it.
-    """
-    from tracker.analytics_v2.blocks import working_qs
-    from tracker.analytics_v2.capacity import capacity_hours_map
-    from tracker.analytics_v2.cost_rates import non_utilization_user_ids
-
-    excluded = non_utilization_user_ids(org)
-    user_ids = [u for u in user_ids if u and u not in excluded]
-    if not user_ids:
-        return {}
-
-    tracked = {
-        r["user_id"]: (r["m"] or 0) / 60.0
-        for r in (
-            working_qs(
-                Block.objects.filter(
-                    org=org, user_id__in=user_ids,
-                    day__gte=start_d, day__lte=end_d,
-                ), org,
-            )
-            .values("user_id")
-            .annotate(m=Sum("minutes"))
-        )
-    }
-    capacity = capacity_hours_map(org, user_ids, start_d, end_d)
-    out = {}
-    for uid in user_ids:
-        cap = capacity.get(uid) or 0
-        if cap > 0:
-            out[uid] = min(1.0, tracked.get(uid, 0.0) / cap)
-    return out
 
 
 def _median(values):
@@ -282,11 +241,11 @@ def fee_basis(request):
             (r["user_id"], r["minutes"] or 0)
         )
     all_user_ids = {u for rows_ in minutes_by_client_user.values() for u, _ in rows_}
-    capture_by_user = _capture_by_user(org, all_user_ids, start_d, end_d)
+    capture_by_user_map = capture_by_user(org, all_user_ids, start_d, end_d)
 
     capture_by_client = {}
     for cid, pairs in minutes_by_client_user.items():
-        weighted = [(capture_by_user[u], m) for u, m in pairs if u in capture_by_user]
+        weighted = [(capture_by_user_map[u], m) for u, m in pairs if u in capture_by_user_map]
         total_m = sum(m for _, m in weighted)
         if total_m > 0:
             capture_by_client[cid] = round(
@@ -439,9 +398,7 @@ def fee_basis(request):
     # could not put against a client — which on this page is money sitting one
     # decision away from being billable.
     firm_users = list(blocks.order_by().values_list("user_id", flat=True).distinct())
-    firm_capture_map = _capture_by_user(org, firm_users, start_d, end_d)
-    firm_capture = (round(sum(firm_capture_map.values()) / len(firm_capture_map), 3)
-                    if firm_capture_map else None)
+    firm_pct = firm_capture(org, firm_users, start_d, end_d)
     # BILLABLE and client-less. The raw figure is 378h at org 21 in August and
     # would have been a lie on this page: 331h of it is already marked
     # non-billable — someone's lunch, admin, 204h the classifier never gave a
@@ -477,7 +434,7 @@ def fee_basis(request):
         # private gut multiplier — and in the second case the barometer is the
         # partner's instinct and these numbers are decoration.
         "completeness": {
-            "capture": firm_capture,
+            "capture": round(firm_pct, 3) if firm_pct is not None else None,
             "unassigned_billable_hours": _hours(unassigned_minutes),
         },
         "clients": out,

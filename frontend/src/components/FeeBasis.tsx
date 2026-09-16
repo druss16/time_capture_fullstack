@@ -321,10 +321,9 @@ export default function FeeBasis() {
         <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
           <p className="text-[13px] leading-relaxed text-amber-900">
-            Your team's agents captured about{' '}
-            <span className="font-semibold">{Math.round(capture * 100)}%</span> of their
-            scheduled time this {periodIsMonth ? 'month' : 'period'}, so every figure below
-            is a floor — hours we saw, not hours worked.
+            On the days your team worked this {periodIsMonth ? 'month' : 'period'}, about{' '}
+            <span className="font-semibold">{Math.round(capture * 100)}%</span> of a standard
+            day reached us — so every figure below is a floor, not a total.
             {data.completeness && data.completeness.unassigned_billable_hours >= 1 && (
               <>
                 {' '}A further{' '}
@@ -423,9 +422,9 @@ export default function FeeBasis() {
                       <Dot />
                       <span
                         className={cn('font-medium', seen < 0.5 ? 'text-amber-700' : '')}
-                        title={`We captured about ${Math.round(seen * 100)}% of the scheduled time of the people who worked this client, so the hours here are a floor.`}
+                        title={`On the days they worked, we captured about ${Math.round(seen * 100)}% of a standard day for the people on this client — so the hours here are a floor.`}
                       >
-                        {Math.round(seen * 100)}% captured
+                        {Math.round(seen * 100)}% of their day captured
                       </span>
                     </>
                   )}

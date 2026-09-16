@@ -2431,7 +2431,18 @@ def repair_device():
         if "server_device_id" in config:
             del config["server_device_id"]
             print("[REPAIR] Cleared server_device_id from config")
-        
+
+        # The repair dialog promises "you'll need to re-enter a pairing code
+        # from the web app", and repair is how a machine gets OFF a wrong
+        # account. Clearing api_key does not clear org_token, and on an
+        # IT-deployed box it should not — the token is how the machine was
+        # provisioned. So without this marker the org-token claim would run on
+        # the very next start and put the device straight back where it was,
+        # and no pairing code would ever be asked for. Consumed once by
+        # run_agent, so a later start still auto-claims normally.
+        config["relink_requested"] = True
+        print("[REPAIR] Next start will ask for a pairing code, not re-claim")
+
         save_config(config)
         API_KEY = None
         
@@ -3175,7 +3186,16 @@ def run_agent():
     key = config.get("api_key") or API_KEY
     # ── MDM/Intune org token claim ──
     if not key:
-        org_token = config.get("org_token")
+        # A deliberate repair must ASK, never silently re-claim — see
+        # repair_device(). Popped and saved immediately so a crash between
+        # here and pairing cannot leave it armed forever.
+        if config.pop("relink_requested", False):
+            save_config(config)
+            log("[MDM] Repair was requested — skipping the org-token claim "
+                "so a pairing code can be entered")
+            org_token = None
+        else:
+            org_token = config.get("org_token")
         if org_token:
             from mdm_deploy import do_org_token_claim
             key = do_org_token_claim(config, save_config, API_BASE, APP_VERSION)

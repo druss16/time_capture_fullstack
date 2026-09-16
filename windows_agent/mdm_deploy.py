@@ -1,6 +1,24 @@
 """
 MDM / Org Token deployment support for the Windows agent.
 
+URLS. These append /deploy/... to api_base, NOT /api/deploy/... — api_base
+already ends in /api. It is the same value main.py builds every other agent
+URL from (f"{API_BASE}/raw-events/", f"{API_BASE}/agents/hello2/"), and it is
+passed straight through at main.py's do_org_token_claim call site.
+
+For a long time this file added the prefix a second time, so all three
+resolved to /api/api/deploy/... and production answered with a Django routing
+404 rather than the view:
+
+    POST /api/deploy/auto-pair/       {"error": "Invalid org token"}   the view
+    POST /api/api/deploy/auto-pair/   <!doctype html> ... Not Found    routing
+
+do_org_token_claim then logged "Org token claim failed — falling back to
+manual pairing", which is the one outcome org-token deployment exists to
+prevent: every IT-deployed machine asked its user to pair by hand. Nothing
+else in this file uses api_base, so the prefix is the whole bug.
+test_mdm_urls.py pins all three against the server's real routes.
+
 Supports two flows:
 1. Auto-pair via DeviceProvisioningMap (new - hostname matching)
 2. Fallback to deploy/claim endpoint (legacy - email matching)
@@ -25,7 +43,7 @@ def claim_with_auto_pair(api_base: str, org_token: str, hostname: str,
     
     Returns dict with status: "paired", "unprovisioned", or "error"
     """
-    url = f"{api_base.rstrip('/')}/api/deploy/auto-pair/"
+    url = f"{api_base.rstrip('/')}/deploy/auto-pair/"
     
     # Generate or read device_id
     device_id = _get_or_create_device_id()
@@ -84,7 +102,7 @@ def claim_with_org_token_legacy(api_base: str, org_token: str, hostname: str,
     Legacy claim endpoint - falls back to email matching and user picker.
     Used when auto-pair doesn't find a hostname match.
     """
-    url = f"{api_base.rstrip('/')}/api/deploy/claim/"
+    url = f"{api_base.rstrip('/')}/deploy/claim/"
     payload = {
         "org_token": org_token,
         "hostname": hostname,
@@ -123,7 +141,7 @@ def confirm_user_selection(api_base: str, org_token: str, hostname: str,
     """
     Confirm user selection after the picker was shown (legacy flow).
     """
-    url = f"{api_base.rstrip('/')}/api/deploy/confirm-user/"
+    url = f"{api_base.rstrip('/')}/deploy/confirm-user/"
     payload = {
         "org_token": org_token,
         "hostname": hostname,

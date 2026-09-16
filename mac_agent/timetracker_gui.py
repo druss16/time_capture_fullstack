@@ -394,6 +394,16 @@ class GUIState:
                 cfg.pop("api_key", None)
                 cfg.pop("username", None)
                 cfg.pop("org_name", None)
+                # Re-link is a deliberate "put me somewhere else" request, so
+                # the next start must ASK rather than silently re-pair. On an
+                # MDM-managed Mac the org token lives in the plist under
+                # /Library, which the user cannot clear — without this marker
+                # the org-token claim runs on the very next start and lands
+                # the device straight back on whoever DeviceProvisioningMap
+                # names, with the pairing window never appearing. Re-link is
+                # the only route back from a wrong account; it has to survive
+                # MDM. main.py consumes and clears this.
+                cfg["relink_requested"] = True
                 with open(CONFIG_FILE, 'w') as f:
                     json.dump(cfg, f, indent=2)
         except Exception:

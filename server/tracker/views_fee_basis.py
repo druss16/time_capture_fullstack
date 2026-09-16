@@ -137,15 +137,27 @@ def _median(values):
 
 
 def _period_defaults(request):
-    """Default to last completed month — the period a fee is usually set for."""
+    """Default to the month in progress — the one a partner is living in.
+
+    It used to open on the last completed month, on the reasoning that a fee is
+    set for a finished period. That was the right default while a half-finished
+    month was unreadable: every figure looked halved against a norm built from
+    whole months, so the page could only be trusted once the month was over.
+
+    The norm is a share of the firm's period scaled to THIS one, so half a month
+    of work is compared against half a month of expectation and the page reads
+    correctly on the 16th. Opening on September in September is what somebody
+    checking in actually wants, and the stepper is one click from the month just
+    ended.
+    """
     start = request.query_params.get("start")
     end = request.query_params.get("end")
     if start and end:
         return date.fromisoformat(start), date.fromisoformat(end)
     today = date.today()
-    this_month = today.replace(day=1)
-    end_d = this_month - timedelta(days=1)
-    return end_d.replace(day=1), end_d
+    first = today.replace(day=1)
+    last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    return first, last
 
 
 @api_view(["GET"])

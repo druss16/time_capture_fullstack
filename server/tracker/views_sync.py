@@ -127,7 +127,7 @@ def sync_status(request):
                 'hash': _compute_hash(
                     f"{int(bool(getattr(org, 'show_client_widget', False)))}:"
                     f"{getattr(org, 'ai_sensitivity', 50)}:"
-                    f"{getattr(org, 'mouse_idle_pause_seconds', 600)}"
+                    f"{org.agent_idle_pause_seconds()}"
                 ),
             },
         },
@@ -370,7 +370,9 @@ def sync_full(request):
     # Org settings relevant to agent
     org_settings = {
         'ai_sensitivity': getattr(org, 'ai_sensitivity', 50) or 50,
-        'mouse_idle_pause_seconds': getattr(org, 'mouse_idle_pause_seconds', 90) or 90,  # ← ADD
+        # Clamped, not raw: a 0 or negative here silences an agent. The hash
+        # above uses the same clamped value so the two can never disagree.
+        'mouse_idle_pause_seconds': org.agent_idle_pause_seconds(),
         # Vendor-controlled: when False (default), the desktop agent hides the
         # floating client ticker AND disables all manual client-switching, so the
         # client experience is fully hands-off. MavOps staff flip it on per-org

@@ -283,9 +283,35 @@ class Organization(models.Model):
         help_text='Per-org override for mail sync cadence. Default 5 min.',
     )
         
+    # How long a user may sit still before the agent stops counting. Sent to
+    # every agent on each sync poll. Read it through agent_idle_pause_seconds()
+    # rather than directly — see that method for why a raw 0 is dangerous.
     mouse_idle_pause_seconds = models.IntegerField(default=600)
 
     trial_ends_at = models.DateTimeField(null=True, blank=True)
+
+    # One heartbeat. The agent credits at most this much of a stretch its
+    # tracking loop never observed, and chunks that credit into events; a value
+    # below one heartbeat can leave it with nothing to write. Agents from
+    # v1.8.6 floor it themselves, but every agent already in the field trusts
+    # whatever sync sends, so the floor has to hold here too.
+    AGENT_MIN_IDLE_PAUSE_S = 60
+
+    def agent_idle_pause_seconds(self) -> int:
+        """The idle pause to send agents — never below one heartbeat.
+
+        mouse_idle_pause_seconds is a plain IntegerField with no validators, so
+        an admin edit (or a fixture, or a bad import) can put 0 or a negative
+        number in it. An agent that takes that literally computes a zero-length
+        credit window and silently records no time at all, with nothing to
+        report because nothing threw. Clamp on the way out instead of trusting
+        every agent version in the fleet to defend itself.
+        """
+        try:
+            value = int(self.mouse_idle_pause_seconds)
+        except (TypeError, ValueError):
+            value = 0
+        return max(value, self.AGENT_MIN_IDLE_PAUSE_S)
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)

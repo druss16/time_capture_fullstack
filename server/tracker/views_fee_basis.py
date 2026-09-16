@@ -191,6 +191,11 @@ def fee_basis(request):
             "clients": [],
         })
 
+    # The size of this period, which every scaled figure below divides into.
+    # Defined here rather than beside its first use: two different anchors scale
+    # by it and one of them used to run before it existed.
+    firm_now_minutes = sum(r["total_minutes"] or 0 for r in rows)
+
     # ── Anchors, gathered per table rather than per client ────────────────
     work_by_client = {}
     for w in (
@@ -252,6 +257,37 @@ def fee_basis(request):
                 sum(cap * m for cap, m in weighted) / total_m, 3
             )
 
+    # Last period's hours, kept two ways on purpose.
+    #
+    # `last_period_hours` is what the client actually took — a real, checkable
+    # figure, and the one worth putting in front of a partner. `last_period_at_
+    # this_size` is that same period expressed as a share of the firm and scaled
+    # to THIS one, which is the only version that can be compared with anything
+    # here. The difference matters most exactly when someone is using the page:
+    # on the 16th of the month a full previous month is about twice a
+    # half-finished one, so comparing the raw figures flags every client on the
+    # roster as having shifted when all that shifted was the calendar.
+    last_period_hours = {}
+    last_period_scaled = {}
+    _prev = _prior_windows(start_d, end_d, n=1)
+    if _prev:
+        p_start, p_end = _prev[0]
+        p_window = Block.objects.filter(
+            org=org, client_id__isnull=False, day__gte=p_start, day__lte=p_end,
+        )
+        p_firm = p_window.aggregate(m=Sum("minutes"))["m"] or 0
+        for r in (
+            p_window.filter(client_id__in=client_ids)
+            .values("client_id")
+            .annotate(minutes=Sum("minutes"))
+        ):
+            hours = _hours(r["minutes"])
+            last_period_hours[r["client_id"]] = hours
+            if p_firm > 0:
+                last_period_scaled[r["client_id"]] = round(
+                    (float(r["minutes"] or 0) / float(p_firm)) * _hours(firm_now_minutes), 2
+                )
+
     last_invoice = {}
     for inv in Invoice.objects.filter(
         org=org, client_id__in=client_ids
@@ -292,7 +328,6 @@ def fee_basis(request):
     #
     # Two prior periods minimum — one month is an anecdote, and a client whose
     # only other month was their onboarding is worse than no anchor at all.
-    firm_now_minutes = sum(r["total_minutes"] or 0 for r in rows)
     shares_by_client = {}
     # Six periods back, not three: a client who is only worked in some months
     # deserves the same footing as one worked every month, and the share basis
@@ -379,6 +414,8 @@ def fee_basis(request):
             "budget_sources": budget_sources,
             "typical_hours": typical,
             "typical_periods": len(shares),
+            "last_period_hours": last_period_hours.get(cid),
+            "last_period_at_this_size": last_period_scaled.get(cid),
             "prior_year_billed": float(prior_year[cid]) if cid in prior_year else None,
             "last_invoice": last_invoice.get(cid),
         })

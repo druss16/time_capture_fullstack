@@ -1,6 +1,18 @@
 // src/components/FeeBasis.tsx
 /**
- * The month's billing, worked through one client at a time.
+ * What to charge each client, this month, worked one at a time.
+ *
+ * This firm re-prices monthly off the hours — a client who took 28 hours is
+ * not charged what they were charged for 5 — so the decision this page exists
+ * to support happens twelve times a year, per client, and the hours ARE the
+ * input. That is why it sits between Daily Review, which settles whose time it
+ * was, and the invoice the partner raises in their own system.
+ *
+ * It records the FEE, never the invoice. What was actually sent, and when, is
+ * QuickBooks' fact; a copy of it here would be unverifiable and would drift.
+ * What the firm decided to charge, on the other hand, is made right here out
+ * of our own numbers — and, kept next to the time at standard rates, it is
+ * realization without a single invoice imported from anywhere.
  *
  * This was a report for a long time and it read like one: eighty-two rows, no
  * beginning and no end, nothing to show which clients you had already settled.
@@ -44,7 +56,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
-  RefreshCw, Users, ChevronLeft, ChevronRight, Info,
+  RefreshCw, Users, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Info,
   Check, Loader2, Tag, X, Copy,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
@@ -75,8 +87,10 @@ type FeeClient = {
   /** True only when every budget behind this row came from the firm's own fee
    *  schedule (budget_source 'manual'), the one kind worth quoting back. */
   budget_is_fee?: boolean;
-  /** What was charged for this period, once somebody has said. */
+  /** The fee set for this period, once somebody has set it. */
   decision?: Decision | null;
+  /** False for the sub-hour tail: shown, but not in the way. */
+  material?: boolean;
   /** What they were charged for the period before this one. */
   last_charged?: { amount: number; period: string } | null;
   /** What this client's usual share of the firm's period comes to in this
@@ -104,6 +118,7 @@ type Payload = {
   period: { start: string; end: string };
   totals: { clients: number; hours: number; value: number; unapproved_hours: number };
   decided?: { clients: number; amount: number };
+  tail?: { clients: number; hours: number; value: number };
   uses_approval?: boolean;
   clients: FeeClient[];
 };
@@ -112,6 +127,14 @@ const money = (n: number) =>
   n >= 1000 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(0)}`;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** "23% under standard" / "at standard" — what the fee gives away, in the
+ *  vocabulary of the decision rather than as a raw write-down figure. */
+function pctOfStandard(amount: number, standard: number) {
+  const pct = Math.round(((amount - standard) / standard) * 100);
+  if (pct === 0) return 'at standard';
+  return pct < 0 ? `${Math.abs(pct)}% under standard` : `${pct}% over standard`;
+}
 
 const jobLabel = (t: string) =>
   t.replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase());
@@ -170,6 +193,7 @@ export default function FeeBasis() {
   const [deciding, setDeciding] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [decideErr, setDecideErr] = useState<string | null>(null);
+  const [showTail, setShowTail] = useState(false);
 
   const decide = async (c: FeeClient, amount: number) => {
     if (!range) return;
@@ -358,6 +382,11 @@ export default function FeeBasis() {
   const todoCount = data.clients.filter((c) => !c.decision).length;
   const shownClients = data.clients.filter((c) =>
     show === 'all' ? true : show === 'done' ? !!c.decision : !c.decision);
+  // The sub-hour tail is real work the firm still charges for, so it is never
+  // dropped — but 44 rounding errors standing between a partner and the eight
+  // clients that need thinking about is how a page stops being used.
+  const mainRows = shownClients.filter((c) => c.material !== false);
+  const tailRows = shownClients.filter((c) => c.material === false);
 
   return (
     <div className="space-y-4">
@@ -427,21 +456,21 @@ export default function FeeBasis() {
             {doneCount} of {totals.clients}
           </span>{' '}
           {/* Plural follows the total, not the count done: "1 of 103 client
-              billed" is the kind of wrong that makes a page look unfinished. */}
-          {totals.clients === 1 ? 'client' : 'clients'} billed
+              priced" is the kind of wrong that makes a page look unfinished. */}
+          {totals.clients === 1 ? 'client' : 'clients'} priced
           {decidedAmount > 0 && (
             <>
               {' · '}
               <span className="font-mono tabular-nums font-semibold text-foreground">
                 {money(decidedAmount)}
               </span>{' '}
-              charged
+              this month
             </>
           )}
         </div>
         <div className="flex items-center gap-1 rounded-xl border border-border/60 bg-card p-0.5">
           {([['todo', `Left to do${todoCount ? ` (${todoCount})` : ''}`],
-             ['done', 'Billed'],
+             ['done', 'Priced'],
              ['all', 'All']] as const).map(([key, label]) => (
             <button
               key={key}
@@ -475,19 +504,19 @@ export default function FeeBasis() {
           // empty box that reads like a failure.
           <div className="p-8 text-center">
             <p className="text-sm font-semibold text-foreground">
-              {show === 'todo' ? "Every client is billed for this period."
-                : 'Nothing billed yet for this period.'}
+              {show === 'todo' ? "Every client has a fee for this month."
+                : 'No fees set yet for this month.'}
             </p>
             <p className="mt-1 text-[12.5px] text-muted-foreground">
               {show === 'todo'
                 ? `${totals.clients} of ${totals.clients} settled.`
-                : 'Bill a client below and it will appear here.'}
+                : 'Set a fee below and it will appear here.'}
             </p>
           </div>
         )}
 
         <div className="divide-y divide-border/60">
-          {shownClients.map((c) => {
+          {(showTail ? [...mainRows, ...tailRows] : mainRows).map((c) => {
             const delta = priorYearDelta(c);
             const feeBudget =
               c.budget_is_fee && c.budget_hours != null && c.budget_hours > 0
@@ -505,6 +534,15 @@ export default function FeeBasis() {
             const typedCharge = charge[c.client_id];
             const chargeValue = typedCharge ?? (proposed ? String(Math.round(proposed)) : '');
             const busy = deciding === c.client_id;
+            // What he is giving away, shown while he decides it rather than
+            // discovered in a report three months later. Only meaningful
+            // against time at standard rates, so a flat-fee client — whose
+            // number was never derived from hours — gets nothing.
+            const typedNum = Number(chargeValue.replace(/[$,\s]/g, ''));
+            const vsStandard =
+              !c.budget_is_fee && c.value_at_rates > 0 && Number.isFinite(typedNum) && typedNum > 0
+                ? (typedNum - c.value_at_rates) / c.value_at_rates
+                : null;
             const clientJobs = (jobs || []).filter((j) => j.client_id === c.client_id);
             return (
               <div key={c.client_id} className="px-5 py-4">
@@ -563,7 +601,7 @@ export default function FeeBasis() {
                     )}
                   >
                     {isOpen ? <X className="h-3 w-3" /> : <Tag className="h-3 w-3" />}
-                    {isOpen ? 'Close' : feeBudget != null ? 'Change fee' : 'Set fee'}
+                    {isOpen ? 'Close' : 'Standing fee'}
                   </button>
                 </div>
 
@@ -600,14 +638,6 @@ export default function FeeBasis() {
                         )}
                       </span>
                     )}
-                    {c.last_charged && (
-                      <span className="text-muted-foreground">
-                        Last {periodIsMonth ? 'month' : 'period'} you charged{' '}
-                        <span className="font-mono tabular-nums text-foreground/80">
-                          {money(c.last_charged.amount)}
-                        </span>
-                      </span>
-                    )}
                     {c.last_invoice && (
                       <span className="text-muted-foreground/70">
                         Last invoiced {c.last_invoice.date}
@@ -625,9 +655,14 @@ export default function FeeBasis() {
                   <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]">
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/8 px-2.5 py-1 font-semibold text-primary">
                       <Check className="h-3.5 w-3.5" />
-                      Billed {money(c.decision.amount)}
+                      This month {money(c.decision.amount)}
                     </span>
-                    <span className="text-muted-foreground">
+                    {!c.budget_is_fee && c.value_at_rates > 0 && (
+                      <span className="text-muted-foreground">
+                        {pctOfStandard(c.decision.amount, c.value_at_rates)}
+                      </span>
+                    )}
+                    <span className="text-muted-foreground/70">
                       {c.decision.decided_by || 'someone'} ·{' '}
                       {new Date(c.decision.decided_at).toLocaleDateString('en-US',
                         { month: 'short', day: 'numeric' })}
@@ -638,12 +673,12 @@ export default function FeeBasis() {
                       disabled={busy}
                       className="rounded-lg px-2 py-1 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
                     >
-                      {busy ? 'Undoing…' : 'Undo'}
+                      {busy ? 'Clearing…' : 'Change'}
                     </button>
                   </div>
                 ) : (
                   <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                    <span className="text-[12.5px] text-muted-foreground">Charge</span>
+                    <span className="text-[12.5px] text-muted-foreground">This month</span>
                     <div className="flex items-center gap-1">
                       <span className="text-[13px] text-muted-foreground">$</span>
                       <input
@@ -671,9 +706,27 @@ export default function FeeBasis() {
                         ? <><Check className="h-3 w-3" /> Copied</>
                         : <><Copy className="h-3 w-3" /> Copy</>}
                     </button>
-                    {proposed != null && (
+                    {vsStandard != null ? (
+                      <span className={cn(
+                        'text-[11.5px] font-medium',
+                        vsStandard <= -0.2 ? 'text-amber-700' : 'text-muted-foreground'
+                      )}>
+                        {pctOfStandard(typedNum, c.value_at_rates)}
+                      </span>
+                    ) : proposed != null && (
                       <span className="text-[11.5px] text-muted-foreground">
-                        {c.budget_is_fee ? 'their fee' : 'time at standard rates'}
+                        {c.budget_is_fee ? 'their standing fee' : 'time at standard rates'}
+                      </span>
+                    )}
+                    {/* When the fee moves with the hours every month, what you
+                        charged last month is the number the next one is argued
+                        against. */}
+                    {c.last_charged && (
+                      <span className="text-[11.5px] text-muted-foreground">
+                        last {periodIsMonth ? 'month' : 'period'}{' '}
+                        <span className="font-mono tabular-nums text-foreground/80">
+                          {money(c.last_charged.amount)}
+                        </span>
                       </span>
                     )}
                     <span className="flex-1" />
@@ -695,7 +748,7 @@ export default function FeeBasis() {
                       )}
                     >
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                      {busy ? 'Saving' : 'Mark billed'}
+                      {busy ? 'Saving' : "Set this month's fee"}
                     </button>
                   </div>
                 )}
@@ -789,6 +842,22 @@ export default function FeeBasis() {
           })}
         </div>
       </div>
+
+      {tailRows.length > 0 && (
+        <button
+          onClick={() => setShowTail((v) => !v)}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 px-4 py-2.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+        >
+          {showTail ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {showTail ? 'Hide' : 'Show'} {tailRows.length} client
+          {tailRows.length === 1 ? '' : 's'} under an hour
+          {data.tail && !showTail && (
+            <span className="text-muted-foreground/70">
+              · {data.tail.hours.toFixed(1)}h · {money(data.tail.value)} between them
+            </span>
+          )}
+        </button>
+      )}
 
       <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
         These figures are a reference, not an invoice. Value shown is time at standard rates —

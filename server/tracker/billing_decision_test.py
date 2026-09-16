@@ -161,3 +161,29 @@ if failures:
     print(f"{len(failures)} FAILURE(S): {failures}")
     sys.exit(1)
 print("All worklist checks passed.")
+
+
+# ── The tail ───────────────────────────────────────────────────────────────
+# Added after Dan asked, twice, what the page is for: 44 of org 21's 103
+# clients had under an hour in August, and a partner pricing his month should
+# not have to scroll past them.
+print("\n10. The sub-hour tail is marked, not dropped")
+tiny = Client.objects.create(org=org, name="Half Hour Ltd", code="HHL")
+day = dt.date(2026, 9, 4)
+start = dt.datetime.combine(day, dt.time(11, 0))
+Block.objects.create(org=org, user=owner, client=tiny, day=day, start=start,
+                     end=start + dt.timedelta(minutes=30), minutes=30,
+                     is_billable=True, billing_amount=Decimal("37.50"))
+d = basis()
+rows = {c["name"]: c for c in d["clients"]}
+check("tail client still listed", "Half Hour Ltd" in rows)
+check("marked immaterial", rows["Half Hour Ltd"]["material"] is False,
+      f"got {rows['Half Hour Ltd'].get('material')}")
+check("the real client stays material", rows["St Peters Church"]["material"] is True)
+check("tail is summarised", d["tail"]["clients"] == 1 and d["tail"]["hours"] == 0.5,
+      f"got {d['tail']}")
+
+if failures:
+    print(f"\n{len(failures)} FAILURE(S): {failures}")
+    sys.exit(1)
+print("Tail checks passed too.")

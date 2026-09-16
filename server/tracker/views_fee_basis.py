@@ -41,6 +41,13 @@ them compared with the invoice-prep view:
     it lands on the numerator and the denominator alike — and answers what the
     partner is actually asking: is this month unusual for them?
 
+  · Most of the list is not the work. 44 of org 21's 103 clients had under an
+    hour in August; the top twenty are 72% of the month. A partner pricing his
+    month should not wade through sub-hour rows to reach the eight that need
+    thinking about, so the tail is split off here rather than left for the page
+    to scroll past. `partition_material` is the same rule the rest of the
+    product uses for "worth showing, never worth ranking".
+
   · The mix is the argument. A fee conversation turns on what the work *was* —
     a return versus a month of cleanup nobody scoped — so the breakdown by work
     type travels with the total instead of hiding behind a drill-down.
@@ -55,6 +62,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from tracker.analytics_v2.stats import partition_material
 from tracker.models import (
     BillingDecision, Block, Client, Invoice, OrganizationMembership,
 )
@@ -345,6 +353,17 @@ def fee_basis(request):
             } if decision else None),
         })
 
+    # An hour is the line. Below it a client is a rounding error on the month
+    # — min_share is off deliberately, because a 1%-of-the-firm floor would be
+    # 5.1h here and bury clients this firm genuinely charges for.
+    material, tail = partition_material(
+        out, "hours", min_weight=1.0, min_share=0.0,
+        revenue_key="value_at_rates", min_revenue=250.0,
+    )
+    tail_ids = {c["client_id"] for c in tail}
+    for c in out:
+        c["material"] = c["client_id"] not in tail_ids
+
     decided = [c for c in out if c["decision"]]
     total_hours = round(sum(c["hours"] for c in out), 2)
     unapproved = round(sum(c["unapproved_hours"] for c in out), 2)
@@ -361,6 +380,11 @@ def fee_basis(request):
             "unapproved_hours": unapproved,
         },
         "uses_approval": uses_approval,
+        "tail": {
+            "clients": len(tail),
+            "hours": round(sum(c["hours"] for c in tail), 2),
+            "value": round(sum(c["value_at_rates"] for c in tail), 2),
+        },
         # The two numbers that turn a list into a piece of work: how much of it
         # is done, and what has been charged so far.
         "decided": {

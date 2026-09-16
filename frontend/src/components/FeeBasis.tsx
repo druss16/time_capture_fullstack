@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   RefreshCw, Users, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Info,
-  AlertTriangle,
+  AlertTriangle, Copy, Check,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -112,12 +112,82 @@ function priorYearDelta(c: FeeClient): { pct: number; tone: string; label: strin
     : { pct, tone: 'text-amber-700', label: `${Math.abs(pct)}% below last year` };
 }
 
+/** A figure that can be lifted out of the page. Quiet until you point at it —
+ *  these are the biggest numbers on the row and should not read as buttons. */
+function CopyNumber({
+  label, display, value, copied, failed, onCopy, className,
+}: {
+  label: string;
+  display: string;
+  value: string;
+  copied: boolean;
+  failed?: boolean;
+  onCopy: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      onClick={onCopy}
+      title={`Copy ${value} — the ${label}`}
+      className={cn(
+        'group inline-flex items-center gap-1.5 rounded-lg px-1.5 py-0.5 -mx-0.5',
+        'font-mono text-[15px] font-bold tabular-nums transition-colors',
+        'hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+        className
+      )}
+    >
+      {display}
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0 text-emerald-600" />
+      ) : failed ? (
+        <span className="text-[10px] font-semibold text-amber-700">select + copy</span>
+      ) : (
+        <Copy className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-50" />
+      )}
+    </button>
+  );
+}
+
 export default function FeeBasis() {
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [showTail, setShowTail] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copy = async (key: string, value: string) => {
+    // Two ways, because a button that silently does nothing is worse than no
+    // button. The Clipboard API needs a secure context and a permission the
+    // browser can refuse; the old execCommand path needs neither, and one of
+    // the two works essentially everywhere.
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(value);
+      ok = true;
+    } catch {
+      try {
+        const el = document.createElement('textarea');
+        el.value = value;
+        el.setAttribute('readonly', '');
+        el.style.position = 'fixed';
+        el.style.opacity = '0';
+        document.body.appendChild(el);
+        el.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(el);
+      } catch {
+        ok = false;
+      }
+    }
+    // Say which happened. "Copy failed" is a thing he can act on — select the
+    // number and press the shortcut — and silence is not.
+    setCopied(ok ? key : `${key}:failed`);
+    window.setTimeout(
+      () => setCopied((k) => (k === key || k === `${key}:failed` ? null : k)),
+      1600,
+    );
+  };
 
   const load = useCallback(async (r: { start: string; end: string } | null) => {
     setLoading(true);
@@ -308,12 +378,30 @@ export default function FeeBasis() {
                     </span>
                   )}
                   <span className="flex-1" />
-                  <span className="font-mono text-[15px] font-bold tabular-nums text-foreground">
-                    {c.hours.toFixed(1)}h
-                  </span>
-                  <span className="font-mono text-[15px] font-bold tabular-nums text-primary">
-                    {money(c.value_at_rates)}
-                  </span>
+                  {/* The one interaction this page earns: he is reading the
+                      number here and typing it into QuickBooks there, so let
+                      him carry it across. Copying asks nothing of him and
+                      records nothing — which is why it belongs on a page that
+                      otherwise decides nothing. Both numbers are live because
+                      nobody yet knows which one he reaches for. */}
+                  <CopyNumber
+                    label="hours"
+                    display={`${c.hours.toFixed(1)}h`}
+                    value={c.hours.toFixed(1)}
+                    copied={copied === `${c.client_id}:h`}
+                    failed={copied === `${c.client_id}:h:failed`}
+                    onCopy={() => copy(`${c.client_id}:h`, c.hours.toFixed(1))}
+                    className="text-foreground"
+                  />
+                  <CopyNumber
+                    label="amount at standard rates"
+                    display={money(c.value_at_rates)}
+                    value={c.value_at_rates.toFixed(2)}
+                    copied={copied === `${c.client_id}:$`}
+                    failed={copied === `${c.client_id}:$:failed`}
+                    onCopy={() => copy(`${c.client_id}:$`, c.value_at_rates.toFixed(2))}
+                    className="text-primary"
+                  />
                 </div>
 
                 {/* Relative scale — which clients ate the month, at a glance. */}
@@ -424,7 +512,8 @@ export default function FeeBasis() {
         client's usual share of the firm's work, at this{' '}
         {periodIsMonth ? 'month' : 'period'}'s size, so a {periodIsMonth ? 'month' : 'period'}{' '}
         where more of the firm was captured does not read as a client doing more. Fees are set
-        in Settings → Economics; nothing on this page changes anything.
+        in Settings → Economics; nothing on this page changes anything. Click any hours or
+        dollar figure to copy it.
       </p>
     </div>
   );

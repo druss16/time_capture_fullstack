@@ -54,6 +54,7 @@ from tracker.utils.content_classifier import (
 from tracker.utils.content_identity import content_identity
 from tracker.utils.grouping_key import grouping_key, client_folder_bucket
 from tracker.services.qb_company_file import company_file_key as _qb_company_file_key
+from tracker.services.unobserved import is_unobserved
 
 import logging
 logger = logging.getLogger(__name__)
@@ -148,8 +149,12 @@ def _calculate_minutes_from_events(events_qs) -> int:
     """
     Sum real interval durations across events.
     Overlapping events deduplicated via interval union to prevent double-counting.
+
+    Events marked unobserved cover a stretch the agent's tracking loop never
+    watched (see tracker/services/unobserved.py) — they are stored as evidence
+    that an agent froze, never counted as worked time.
     """
-    events = list(events_qs.order_by("start_ts"))
+    events = [e for e in events_qs.order_by("start_ts") if not is_unobserved(e)]
     if not events:
         return 0
 
@@ -167,6 +172,7 @@ def _calculate_minutes_from_events(events_qs) -> int:
 
 def _calculate_minutes_for_events_list(events: list) -> int:
     """Same as above but for a Python list of RawEvent objects (no queryset)."""
+    events = [e for e in events if not is_unobserved(e)]
     if not events:
         return 0
     intervals = sorted((e.start_ts, e.end_ts) for e in events)
@@ -738,6 +744,20 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     events = list(qs)
     if not events:
         return 0
+
+    # Drop events covering time the agent's tracking loop never watched before
+    # any block is built — a frozen agent must not mint a client block at all,
+    # not merely a zero-minute one. They stay unlinked on purpose: they are the
+    # record that the agent froze, and unobserved_events() reads them back.
+    unwatched = [e for e in events if is_unobserved(e)]
+    if unwatched:
+        events = [e for e in events if not is_unobserved(e)]
+        logger.warning(
+            f"[COMPACT] Skipping {len(unwatched)} unobserved events for "
+            f"{user.username} on {day} — agent loop was not running"
+        )
+        if not events:
+            return 0
 
     logger.info(f"[COMPACT] Processing {len(events)} unlinked events for {user.username}")
 

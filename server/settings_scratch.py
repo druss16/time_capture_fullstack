@@ -16,3 +16,7 @@ DATABASES = {
         "PORT": "5432",
     }
 }
+
+# The *_test.py scripts drive the real URLconf through django.test.Client,
+# which speaks to itself as "testserver".
+ALLOWED_HOSTS = list(globals().get("ALLOWED_HOSTS", [])) + ["testserver"]

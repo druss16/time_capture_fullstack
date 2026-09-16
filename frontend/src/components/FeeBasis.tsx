@@ -1,6 +1,18 @@
 // src/components/FeeBasis.tsx
 /**
- * What a partner opens at billing time to decide what to charge.
+ * The month's billing, worked through one client at a time.
+ *
+ * This was a report for a long time and it read like one: eighty-two rows, no
+ * beginning and no end, nothing to show which clients you had already settled.
+ * A partner would read a row, raise the invoice in QuickBooks — that is where
+ * the money moves; it does not move here — and come back to a page that looked
+ * exactly as it had before.
+ *
+ * So the list is now finite. Every row ends in a number you charged, "Left to
+ * do" hides the ones you have settled, and the count in the header answers
+ * "am I nearly finished". The decision is also the anchor the page could never
+ * show before: next month this client's row says what you charged them this
+ * one, from your own record, with no invoice imported from anywhere.
  *
  * Firms do not bill out of TimeTracker — they weigh it against their own
  * judgement — so this screen is built to be argued with rather than exported.
@@ -33,11 +45,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   RefreshCw, Users, ChevronLeft, ChevronRight, Info,
-  Check, Loader2, Tag, X,
+  Check, Loader2, Tag, X, Copy,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 type Work = { name: string; hours: number };
+
+/** The firm's own record of what it charged, for one client for one period. */
+type Decision = {
+  amount: number;
+  note: string;
+  decided_at: string;
+  decided_by: string;
+};
 
 type FeeClient = {
   client_id: number;
@@ -55,6 +75,10 @@ type FeeClient = {
   /** True only when every budget behind this row came from the firm's own fee
    *  schedule (budget_source 'manual'), the one kind worth quoting back. */
   budget_is_fee?: boolean;
+  /** What was charged for this period, once somebody has said. */
+  decision?: Decision | null;
+  /** What they were charged for the period before this one. */
+  last_charged?: { amount: number; period: string } | null;
   /** What this client's usual share of the firm's period comes to in this
    *  one's hours. Null until they have two prior periods to take a share of. */
   typical_hours?: number | null;
@@ -79,12 +103,15 @@ type Job = {
 type Payload = {
   period: { start: string; end: string };
   totals: { clients: number; hours: number; value: number; unapproved_hours: number };
+  decided?: { clients: number; amount: number };
   uses_approval?: boolean;
   clients: FeeClient[];
 };
 
 const money = (n: number) =>
   n >= 1000 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(0)}`;
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const jobLabel = (t: string) =>
   t.replace(/_/g, ' ').replace(/^./, (ch) => ch.toUpperCase());
@@ -135,6 +162,90 @@ export default function FeeBasis() {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+
+  // ── Working the list ───────────────────────────────────────────────────
+  // "Left to do" is the default because the page's job is to run out of rows.
+  const [show, setShow] = useState<'todo' | 'done' | 'all'>('todo');
+  const [charge, setCharge] = useState<Record<number, string>>({});
+  const [deciding, setDeciding] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+  const [decideErr, setDecideErr] = useState<string | null>(null);
+
+  const decide = async (c: FeeClient, amount: number) => {
+    if (!range) return;
+    setDeciding(c.client_id);
+    setDecideErr(null);
+    try {
+      const res = await safeFetchJson<{ decision: Decision }>(
+        `${API_BASE}/billing/fee-decision/`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: c.client_id, start: range.start, end: range.end, amount,
+          }),
+        }
+      );
+      // Patch the one row rather than refetching the period: the row is about
+      // to leave the list, and a full reload here makes settling a client feel
+      // like the slowest thing on the page.
+      setData((d) => d && ({
+        ...d,
+        clients: d.clients.map((x) =>
+          x.client_id === c.client_id ? { ...x, decision: res.decision } : x),
+        decided: {
+          clients: (d.decided?.clients ?? 0) + (c.decision ? 0 : 1),
+          amount: round2((d.decided?.amount ?? 0) - (c.decision?.amount ?? 0) + amount),
+        },
+      }));
+      setCharge((m) => { const n = { ...m }; delete n[c.client_id]; return n; });
+    } catch (e: any) {
+      setDecideErr(e?.message || "Couldn't record that");
+    } finally {
+      setDeciding(null);
+    }
+  };
+
+  const undecide = async (c: FeeClient) => {
+    if (!range || !c.decision) return;
+    setDeciding(c.client_id);
+    setDecideErr(null);
+    const was = c.decision.amount;
+    try {
+      await safeFetchJson(`${API_BASE}/billing/fee-decision/`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: c.client_id, start: range.start, end: range.end,
+        }),
+      });
+      setData((d) => d && ({
+        ...d,
+        clients: d.clients.map((x) =>
+          x.client_id === c.client_id ? { ...x, decision: null } : x),
+        decided: {
+          clients: Math.max(0, (d.decided?.clients ?? 1) - 1),
+          amount: round2((d.decided?.amount ?? was) - was),
+        },
+      }));
+    } catch (e: any) {
+      setDecideErr(e?.message || "Couldn't undo that");
+    } finally {
+      setDeciding(null);
+    }
+  };
+
+  const copyAmount = async (c: FeeClient, amount: number) => {
+    // The invoice is raised in their own system, so the number's last job here
+    // is to be easy to carry across.
+    try {
+      await navigator.clipboard.writeText(amount.toFixed(2));
+      setCopied(c.client_id);
+      window.setTimeout(() => setCopied((x) => (x === c.client_id ? null : x)), 1500);
+    } catch {
+      /* clipboard refused (permissions, http) — the number is on screen anyway */
+    }
+  };
 
   const loadJobs = useCallback(async () => {
     setJobsErr(null);
@@ -242,6 +353,11 @@ export default function FeeBasis() {
   // The stepper only ever produces whole months, but the endpoint accepts any
   // range, so the label follows the data rather than assuming.
   const periodIsMonth = isWholeMonth(data.period.start, data.period.end);
+  const doneCount = data.decided?.clients ?? 0;
+  const decidedAmount = data.decided?.amount ?? 0;
+  const todoCount = data.clients.filter((c) => !c.decision).length;
+  const shownClients = data.clients.filter((c) =>
+    show === 'all' ? true : show === 'done' ? !!c.decision : !c.decision);
 
   return (
     <div className="space-y-4">
@@ -304,6 +420,49 @@ export default function FeeBasis() {
         </div>
       )}
 
+      {/* ── How much of the month is settled ───────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-[13px] text-muted-foreground">
+          <span className="font-semibold text-foreground">
+            {doneCount} of {totals.clients}
+          </span>{' '}
+          {/* Plural follows the total, not the count done: "1 of 103 client
+              billed" is the kind of wrong that makes a page look unfinished. */}
+          {totals.clients === 1 ? 'client' : 'clients'} billed
+          {decidedAmount > 0 && (
+            <>
+              {' · '}
+              <span className="font-mono tabular-nums font-semibold text-foreground">
+                {money(decidedAmount)}
+              </span>{' '}
+              charged
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-1 rounded-xl border border-border/60 bg-card p-0.5">
+          {([['todo', `Left to do${todoCount ? ` (${todoCount})` : ''}`],
+             ['done', 'Billed'],
+             ['all', 'All']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setShow(key)}
+              className={cn(
+                'rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-colors',
+                show === key
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {decideErr && (
+        <p className="px-1 text-[12.5px] font-medium text-amber-700">{decideErr}</p>
+      )}
+
       {/* ── One row per client ─────────────────────────────────────────── */}
       <div className="overflow-hidden rounded-2xl border border-border/60 bg-card">
         {data.clients.length === 0 && (
@@ -311,9 +470,24 @@ export default function FeeBasis() {
             No time captured in this period.
           </div>
         )}
+        {data.clients.length > 0 && shownClients.length === 0 && (
+          // Running out of rows is the goal, so say so rather than showing an
+          // empty box that reads like a failure.
+          <div className="p-8 text-center">
+            <p className="text-sm font-semibold text-foreground">
+              {show === 'todo' ? "Every client is billed for this period."
+                : 'Nothing billed yet for this period.'}
+            </p>
+            <p className="mt-1 text-[12.5px] text-muted-foreground">
+              {show === 'todo'
+                ? `${totals.clients} of ${totals.clients} settled.`
+                : 'Bill a client below and it will appear here.'}
+            </p>
+          </div>
+        )}
 
         <div className="divide-y divide-border/60">
-          {data.clients.map((c) => {
+          {shownClients.map((c) => {
             const delta = priorYearDelta(c);
             const feeBudget =
               c.budget_is_fee && c.budget_hours != null && c.budget_hours > 0
@@ -323,6 +497,14 @@ export default function FeeBasis() {
             const typical = feeBudget == null ? c.typical_hours ?? null : null;
             const typicalDelta = typical != null ? c.hours - typical : 0;
             const isOpen = openClient === c.client_id;
+            // Never an empty box: the fee they agreed to if the firm has told
+            // us one, otherwise this month's time at standard rates.
+            const proposed = (c.budget_is_fee && c.budget_amount)
+              ? c.budget_amount
+              : c.value_at_rates;
+            const typedCharge = charge[c.client_id];
+            const chargeValue = typedCharge ?? (proposed ? String(Math.round(proposed)) : '');
+            const busy = deciding === c.client_id;
             const clientJobs = (jobs || []).filter((j) => j.client_id === c.client_id);
             return (
               <div key={c.client_id} className="px-5 py-4">
@@ -418,11 +600,103 @@ export default function FeeBasis() {
                         )}
                       </span>
                     )}
+                    {c.last_charged && (
+                      <span className="text-muted-foreground">
+                        Last {periodIsMonth ? 'month' : 'period'} you charged{' '}
+                        <span className="font-mono tabular-nums text-foreground/80">
+                          {money(c.last_charged.amount)}
+                        </span>
+                      </span>
+                    )}
                     {c.last_invoice && (
                       <span className="text-muted-foreground/70">
                         Last invoiced {c.last_invoice.date}
                       </span>
                     )}
+                  </div>
+                )}
+
+                {/* ── The row's ending ──────────────────────────────────
+                    Every client here is a decision waiting to be made. The
+                    money moves in the firm's own system, so the most useful
+                    thing this can do is hand over the number and remember that
+                    the call was made. */}
+                {c.decision ? (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/8 px-2.5 py-1 font-semibold text-primary">
+                      <Check className="h-3.5 w-3.5" />
+                      Billed {money(c.decision.amount)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {c.decision.decided_by || 'someone'} ·{' '}
+                      {new Date(c.decision.decided_at).toLocaleDateString('en-US',
+                        { month: 'short', day: 'numeric' })}
+                    </span>
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => void undecide(c)}
+                      disabled={busy}
+                      className="rounded-lg px-2 py-1 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    >
+                      {busy ? 'Undoing…' : 'Undo'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                    <span className="text-[12.5px] text-muted-foreground">Charge</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[13px] text-muted-foreground">$</span>
+                      <input
+                        value={chargeValue}
+                        onChange={(e) =>
+                          setCharge((m) => ({ ...m, [c.client_id]: e.target.value }))}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return;
+                          const n = Number(chargeValue.replace(/[$,\s]/g, ''));
+                          if (Number.isFinite(n) && n >= 0) void decide(c, n);
+                        }}
+                        inputMode="decimal"
+                        className="w-28 rounded-lg border border-border bg-card px-2 py-1 font-mono text-[13px] tabular-nums outline-none focus:border-primary/50"
+                      />
+                    </div>
+                    <button
+                      onClick={() => {
+                        const n = Number(chargeValue.replace(/[$,\s]/g, ''));
+                        if (Number.isFinite(n)) void copyAmount(c, n);
+                      }}
+                      title="Copy the amount, for the invoice in your own system"
+                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11.5px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      {copied === c.client_id
+                        ? <><Check className="h-3 w-3" /> Copied</>
+                        : <><Copy className="h-3 w-3" /> Copy</>}
+                    </button>
+                    {proposed != null && (
+                      <span className="text-[11.5px] text-muted-foreground">
+                        {c.budget_is_fee ? 'their fee' : 'time at standard rates'}
+                      </span>
+                    )}
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => {
+                        const n = Number(chargeValue.replace(/[$,\s]/g, ''));
+                        if (!Number.isFinite(n) || n < 0) {
+                          setDecideErr('Enter the amount as a number.');
+                          return;
+                        }
+                        void decide(c, n);
+                      }}
+                      disabled={busy || !chargeValue.trim()}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-all',
+                        busy || !chargeValue.trim()
+                          ? 'cursor-not-allowed bg-muted text-muted-foreground'
+                          : 'bg-primary text-primary-foreground hover:opacity-90'
+                      )}
+                    >
+                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                      {busy ? 'Saving' : 'Mark billed'}
+                    </button>
                   </div>
                 )}
 

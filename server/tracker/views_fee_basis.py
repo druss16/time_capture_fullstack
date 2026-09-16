@@ -1,7 +1,17 @@
 """
 tracker/views_fee_basis.py
 
-What a partner needs in front of them to set a fair fee for a period.
+What a partner needs in front of them to set a fair fee for a period — and
+somewhere for the answer to go.
+
+The second half was missing for a long time and it was the more important half.
+The page showed a partner everything about a client's month and then ended:
+they raised the invoice in their own system and came back to a list that looked
+exactly as it had before, with no way to tell the eleven clients they had
+settled from the seventy they had not. `decision` and `decided_totals` below
+are what make eighty-two rows finite — and, because the firm records what it
+charged as it goes, they become the anchor that invoice imports were never
+going to supply.
 
 Firms do not bill straight out of TimeTracker — the numbers are a reference
 they weigh against their own judgement. That changes what this endpoint owes
@@ -45,7 +55,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from tracker.models import Block, Client, Invoice, OrganizationMembership
+from tracker.models import (
+    BillingDecision, Block, Client, Invoice, OrganizationMembership,
+)
 
 ZERO = Decimal("0")
 TOP_WORK_TYPES = 4
@@ -180,6 +192,30 @@ def fee_basis(request):
         .values_list("client_id", "total")
     )
 
+    # ── What has already been settled for this period ─────────────────────
+    decisions = {
+        d.client_id: d
+        for d in BillingDecision.objects.filter(
+            org=org, client_id__in=client_ids,
+            period_start=start_d, period_end=end_d,
+        ).select_related("decided_by")
+    }
+
+    # And what they charged the period before — the firm's own record, which
+    # needs no invoice to have been imported from anywhere.
+    prev_windows = _prior_windows(start_d, end_d, n=1)
+    last_decision = {}
+    if prev_windows:
+        p_start, p_end = prev_windows[0]
+        last_decision = {
+            d.client_id: {"amount": float(d.amount),
+                          "period": p_start.isoformat()}
+            for d in BillingDecision.objects.filter(
+                org=org, client_id__in=client_ids,
+                period_start=p_start, period_end=p_end,
+            )
+        }
+
     last_invoice = {}
     for inv in Invoice.objects.filter(
         org=org, client_id__in=client_ids
@@ -260,6 +296,7 @@ def fee_basis(request):
                 "period": prof.flat_period or None,
             }
 
+        decision = decisions.get(cid)
         budget = budgets.get(cid)
         # Only the firm's own fee schedule is quoted as a budget. The derived
         # ladder (prior_year off an under-captured month, or the median of
@@ -298,8 +335,17 @@ def fee_basis(request):
             "typical_periods": len(shares),
             "prior_year_billed": float(prior_year[cid]) if cid in prior_year else None,
             "last_invoice": last_invoice.get(cid),
+            "last_charged": last_decision.get(cid),
+            "decision": ({
+                "amount": float(decision.amount),
+                "note": decision.note,
+                "decided_at": decision.decided_at.isoformat(),
+                "decided_by": (decision.decided_by.username
+                               if decision.decided_by else ""),
+            } if decision else None),
         })
 
+    decided = [c for c in out if c["decision"]]
     total_hours = round(sum(c["hours"] for c in out), 2)
     unapproved = round(sum(c["unapproved_hours"] for c in out), 2)
     # A firm that has never approved anything is not "behind on review" — it
@@ -315,5 +361,88 @@ def fee_basis(request):
             "unapproved_hours": unapproved,
         },
         "uses_approval": uses_approval,
+        # The two numbers that turn a list into a piece of work: how much of it
+        # is done, and what has been charged so far.
+        "decided": {
+            "clients": len(decided),
+            "amount": round(sum(c["decision"]["amount"] for c in decided), 2),
+        },
         "clients": out,
+    })
+
+
+@api_view(["POST", "DELETE"])
+@permission_classes([IsAuthenticated])
+def fee_decision(request):
+    """Record — or undo — what the firm charged one client for one period.
+
+    POST {client_id, start, end, amount, note?}    DELETE {client_id, start, end}
+
+    Deliberately forgiving about being called twice: a decision is upserted, so
+    correcting a number is the same gesture as making it. And deliberately
+    undoable — the row this settles disappears from the list, which is exactly
+    the kind of action a person needs to be able to take back without asking
+    anyone.
+    """
+    membership = OrganizationMembership.objects.filter(
+        user=request.user
+    ).select_related("organization").first()
+    if not membership:
+        return Response({"error": "No organization"}, status=403)
+    if membership.role not in ("owner", "admin", "manager"):
+        return Response({"error": "Permission denied"}, status=403)
+
+    org = membership.organization
+    data = request.data or {}
+    client_id = data.get("client_id")
+    try:
+        start_d = date.fromisoformat(data.get("start"))
+        end_d = date.fromisoformat(data.get("end"))
+    except (TypeError, ValueError):
+        return Response({"error": "start and end must be YYYY-MM-DD"}, status=400)
+    if not client_id or not Client.objects.filter(org=org, id=client_id).exists():
+        return Response({"error": "Unknown client"}, status=404)
+
+    if request.method == "DELETE":
+        BillingDecision.objects.filter(
+            org=org, client_id=client_id,
+            period_start=start_d, period_end=end_d,
+        ).delete()
+        return Response({"client_id": client_id, "decision": None})
+
+    try:
+        amount = Decimal(str(data.get("amount")).replace("$", "").replace(",", ""))
+    except (TypeError, ValueError, ArithmeticError):
+        return Response({"error": "amount must be a number"}, status=400)
+    if amount < 0:
+        return Response({"error": "amount cannot be negative"}, status=400)
+
+    # Snapshot what the page was showing. The hours keep moving after the call
+    # is made, and the interesting question later is what the fee was charged
+    # AGAINST, not what the client eventually accumulated.
+    agg = Block.objects.filter(
+        org=org, client_id=client_id, day__gte=start_d, day__lte=end_d,
+    ).aggregate(
+        minutes=Sum("minutes"),
+        value=Coalesce(Sum("billing_amount", filter=Q(is_billable=True)), ZERO),
+    )
+
+    decision, _ = BillingDecision.objects.update_or_create(
+        org=org, client_id=client_id, period_start=start_d, period_end=end_d,
+        defaults={
+            "amount": amount,
+            "hours_at_decision": Decimal(str(_hours(agg["minutes"]))),
+            "value_at_decision": agg["value"] or ZERO,
+            "note": (data.get("note") or "")[:200],
+            "decided_by": request.user,
+        },
+    )
+    return Response({
+        "client_id": client_id,
+        "decision": {
+            "amount": float(decision.amount),
+            "note": decision.note,
+            "decided_at": decision.decided_at.isoformat(),
+            "decided_by": request.user.username,
+        },
     })

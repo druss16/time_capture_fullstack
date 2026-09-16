@@ -290,3 +290,82 @@ class FeeScheduleEntry(models.Model):
 
     def __str__(self):
         return f"{self.client.name} — {self.get_engagement_type_display()}: {self.budget_hours}h"
+
+
+class BillingDecision(models.Model):
+    """What the firm decided to charge one client for one period.
+
+    The Fees page could show a partner everything about a client's month and
+    then had nowhere for the answer to go. He would read the row, raise the
+    invoice in QuickBooks, and come back to a page that looked exactly as it had
+    before — no way to tell the eleven clients he had settled from the seventy
+    he had not, on a list of eighty-two. A reference with no beginning and no
+    end.
+
+    So the decision lands here. Two things follow from that, and the second is
+    the reason this is a table rather than a flag:
+
+      · The list becomes finite. A client with a decision for the period drops
+        out of what is left to do, and "23 of 82" is a real answer to "am I
+        nearly done".
+
+      · The firm starts accumulating what it actually charged. Every anchor on
+        that page until now depended on invoices being imported from
+        QuickBooks, which org 21 has never done — so "last year you billed
+        them $X" was permanently blank. This is the same fact, recorded by the
+        person who decided it, at the moment they decided it.
+
+    It is NOT an invoice and must never be presented as one: the money moves in
+    the firm's own system. This is the note they wrote to themselves about it.
+    """
+
+    org = models.ForeignKey(
+        "Organization", on_delete=models.CASCADE, related_name="billing_decisions",
+    )
+    client = models.ForeignKey(
+        "Client", on_delete=models.CASCADE, related_name="billing_decisions",
+    )
+
+    # The period as the page framed it, so a decision can be found again by the
+    # same window that produced it.
+    period_start = models.DateField()
+    period_end = models.DateField()
+
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="What the firm charged for this period.",
+    )
+    # What the page was showing when the call was made. Kept because the
+    # interesting question later is not what was charged but what was charged
+    # AGAINST — 12.1 hours billed at $450 is a different fact from 2.9 hours
+    # billed at $450, and the hours keep moving after the decision.
+    hours_at_decision = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+    value_at_decision = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Time at standard rates when the decision was made.",
+    )
+
+    note = models.CharField(max_length=200, blank=True, default="")
+
+    decided_by = models.ForeignKey(
+        "auth.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="billing_decisions",
+    )
+    decided_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # One decision per client per period. Changing your mind edits the
+            # decision; it does not add a second one.
+            models.UniqueConstraint(
+                fields=["org", "client", "period_start", "period_end"],
+                name="uniq_billing_decision_client_period",
+            ),
+        ]
+        indexes = [models.Index(fields=["org", "period_start", "period_end"])]
+
+    def __str__(self):
+        return f"{self.client.name} — {self.period_start:%Y-%m}: {self.amount}"

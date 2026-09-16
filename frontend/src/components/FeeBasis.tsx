@@ -58,6 +58,13 @@ type FeeClient = {
   typical_hours?: number | null;
   /** How many of the six prior periods this client had any time in. */
   typical_periods?: number;
+  /** Hours in the period immediately before this one. History, not a forecast,
+   *  and what gets DISPLAYED — a real figure a partner can go and check. */
+  last_period_hours?: number | null;
+  /** That same period as a share of the firm, scaled to this one. Never shown:
+   *  it exists so the comparison is like-for-like when this period is half
+   *  finished and the last one is complete. */
+  last_period_at_this_size?: number | null;
   prior_year_billed: number | null;
   last_invoice: { date: string; amount: number } | null;
 };
@@ -349,6 +356,14 @@ export default function FeeBasis() {
           </div>
         )}
 
+        {/* Named once at the top rather than repeated on every row. */}
+        <div className="flex items-center gap-x-6 border-b border-border/40 px-5 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/60">
+          <span className="flex-1">Client</span>
+          <span className="w-[5.5rem] pr-1.5 text-right">Hours</span>
+          <span className="w-[6.5rem] pr-1.5 text-right">At standard</span>
+          <span className="w-[5rem] pr-1.5 text-right">vs usual</span>
+        </div>
+
         <div className="divide-y divide-border/40">
           {(showTail ? [...mainRows, ...tailRows] : mainRows).map((c) => {
             const delta = priorYearDelta(c);
@@ -364,6 +379,16 @@ export default function FeeBasis() {
             // by someone the agent sees all day and the one worked by someone
             // who barely runs it.
             const seen = c.capture ?? null;
+            const lastPeriod = c.last_period_hours ?? null;
+            // Compare on the scaled figure, show the real one. On the 16th of
+            // the month a whole previous month is about twice a half-finished
+            // one, so comparing raw hours flags the entire roster as having
+            // shifted when nothing shifted but the date.
+            const lastScaled = c.last_period_at_this_size ?? null;
+            const showLast =
+              typical == null
+                ? true
+                : lastScaled != null && Math.abs(lastScaled - typical) > typical * 0.5;
             return (
               <div
                 key={c.client_id}
@@ -409,32 +434,64 @@ export default function FeeBasis() {
                     onCopy={() => copy(`${c.client_id}:$`, c.value_at_rates.toFixed(2))}
                     className="w-[6.5rem] justify-end text-primary"
                   />
+                  {/* The comparison as a column rather than a clause, so the
+                      movers can be found by running an eye down the page. It is
+                      the delta against the NORM, never against last month: this
+                      is read on the 16th as often as the 30th, and a raw
+                      month-on-month column would print a minus sign beside
+                      every client on the roster and mean nothing but the date.
+                      Blank where a client has too little history to have a
+                      norm — those rows say so in words below. */}
+                  <span
+                    className={cn(
+                      'w-[5rem] shrink-0 pr-1.5 text-right font-mono text-[13px] tabular-nums',
+                      typical == null
+                        ? 'text-muted-foreground/30'
+                        : Math.abs(typicalDelta) < 0.1
+                          ? 'text-muted-foreground/60'
+                          : 'font-semibold text-foreground/75'
+                    )}
+                    title={typical == null
+                      ? 'No usual yet for this client'
+                      : `${c.hours.toFixed(1)}h against a usual ${typical.toFixed(1)}h`}
+                  >
+                    {typical == null
+                      ? '—'
+                      : Math.abs(typicalDelta) < 0.1
+                        ? 'level'
+                        : `${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)}h`}
+                  </span>
                 </div>
 
                 {/* Line 2 — everything needed to judge the number above it,
                     on one line rather than three. Separated by middots so it
                     reads as a sentence and not as a form. */}
-                <div className="col-span-2 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
-                  <span>{c.people} {c.people === 1 ? 'person' : 'people'}</span>
+                {/* One sentence of context, built as a list and joined with
+                    separators rather than each item carrying its own. Prefixing
+                    every item meant the line began with a stray middot the
+                    moment the first item became conditional — which it did. */}
+                {(() => {
+                  const facts: React.ReactNode[] = [];
 
-                  {seen != null && seen < 0.9 && (
-                    <>
-                      <Dot />
+                  // Capture, only when this client is worse than the floor the
+                  // banner already states. At 55-70% on every row it was
+                  // background the eye learns to skip, which is how a real
+                  // warning gets missed when one finally appears.
+                  if (seen != null && capture != null && (seen < 0.5 || seen < capture - 0.1)) {
+                    facts.push(
                       <span
                         className={cn('font-medium', seen < 0.5 ? 'text-amber-700' : '')}
                         title={`On the days they worked, we captured about ${Math.round(seen * 100)}% of a standard day for the people on this client — so the hours here are a floor.`}
                       >
                         {Math.round(seen * 100)}% of their day captured
                       </span>
-                    </>
-                  )}
+                    );
+                  }
 
-                  {/* No norm yet. Saying how new they are beats saying nothing:
-                      a client with one month behind them is a different thing
-                      from a quiet one, and only the row can tell you which. */}
-                  {typical == null && !feeBudget && (c.typical_periods ?? 0) < 3 && (
-                    <>
-                      <Dot />
+                  // No norm yet: a client with one month behind them is a
+                  // different thing from a quiet one, and only the row knows.
+                  if (typical == null && !feeBudget && (c.typical_periods ?? 0) < 3) {
+                    facts.push(
                       <span className="text-muted-foreground/80">
                         {(c.typical_periods ?? 0) === 0
                           ? 'first month with us'
@@ -442,74 +499,66 @@ export default function FeeBasis() {
                               c.typical_periods === 1 ? 'month' : 'months'
                             } — no usual yet`}
                       </span>
-                    </>
-                  )}
+                    );
+                  }
 
-                  {typical != null && (
-                    <>
-                      <Dot />
+                  if (typical != null) {
+                    facts.push(
                       <span>
                         usually{' '}
                         <span className="font-mono tabular-nums text-foreground/80">
                           {typical.toFixed(1)}h
                         </span>
-                        {Math.abs(typicalDelta) >= 0.1 && (
-                          <span
-                            className={cn(
-                              'font-mono tabular-nums',
-                              typicalDelta > 0 ? 'text-foreground/80' : ''
-                            )}
-                          >
-                            {` (${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)})`}
-                          </span>
-                        )}
                       </span>
-                    </>
-                  )}
+                    );
+                  }
 
-                  {feeBudget != null && (
-                    <>
-                      <Dot />
+                  // The most recent period, only where it disagrees with the
+                  // norm — the case where the "usually" has gone stale.
+                  if (lastPeriod != null && lastPeriod > 0 && showLast) {
+                    facts.push(
+                      <span>
+                        last {periodIsMonth ? 'month' : 'period'}{' '}
+                        <span className="font-mono tabular-nums text-foreground/80">
+                          {lastPeriod.toFixed(1)}h
+                        </span>
+                      </span>
+                    );
+                  }
+
+                  if (feeBudget != null) {
+                    facts.push(
                       <span className={overBudget ? 'font-medium text-amber-700' : ''}>
                         fee {feeBudget.toFixed(1)}h
                         {overBudget && ` · over by ${(c.hours - feeBudget).toFixed(1)}h`}
                       </span>
-                    </>
-                  )}
+                    );
+                  }
 
-                  {c.prior_year_billed != null && (
-                    <>
-                      <Dot />
-                      <span>
-                        last year{' '}
-                        <span className="font-mono tabular-nums text-foreground/80">
-                          {money(c.prior_year_billed)}
-                        </span>
-                      </span>
-                    </>
-                  )}
-                  {delta && (
-                    <>
-                      <Dot />
-                      <span className={cn('font-medium', delta.tone)}>{delta.label}</span>
-                    </>
-                  )}
-
-                  {/* The work mix last: it is the longest part and the least
-                      often decisive, so it wraps rather than pushing the
-                      judgement out of sight. */}
-                  {c.work.slice(0, 3).map((w) => (
-                    // Fragment, not a wrapper: inside one span the separator
-                    // sits flush against the label and reads as "·Accounting".
-                    <Fragment key={w.name}>
-                      <Dot />
+                  // What the work was, last and quietest: two types, because a
+                  // third rarely changes a fee and always costs a line.
+                  c.work.slice(0, 2).forEach((w) =>
+                    facts.push(
                       <span className="text-muted-foreground/70">
                         {w.name}{' '}
                         <span className="font-mono tabular-nums">{w.hours.toFixed(1)}h</span>
                       </span>
-                    </Fragment>
-                  ))}
-                </div>
+                    )
+                  );
+
+                  if (!facts.length) return null;
+                  return (
+                    <div className="col-span-2 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
+                      {facts.map((f, i) => (
+                        <Fragment key={i}>
+                          {i > 0 && <Dot />}
+                          {f}
+                        </Fragment>
+                      ))}
+                    </div>
+                  );
+                })()}
+
               </div>
             );
           })}

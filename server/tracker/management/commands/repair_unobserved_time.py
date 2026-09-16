@@ -34,7 +34,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from tracker.models import Block, BlockAuditLog, RawEvent
+from tracker.models import Block, BlockAuditLog, RawEvent, Timesheet
 from tracker.services.unobserved import (
     ABUT_TOLERANCE,
     GRACE_SECONDS,
@@ -78,16 +78,21 @@ class Command(BaseCommand):
         self.stdout.write(f"Scanning {len(rows)} events since {since.date()}...")
 
         stretches = self._find_stretches(rows, min_seconds)
-        if not stretches:
-            self.stdout.write(self.style.SUCCESS("No unobserved stretches found."))
-            return
-
         to_mark, affected_blocks = [], set()
         for st in stretches:
             self._report(st)
             to_mark.extend(st["drop"])
             affected_blocks.update(st["blocks"])
 
+        if not stretches and not self._already_marked_blocks(opts):
+            self.stdout.write(self.style.SUCCESS("No unobserved stretches found."))
+            return
+
+        # Blocks already holding marked events count too, not just the ones this
+        # pass would mark. Marking and rebuilding are separate writes: if a run
+        # marks events and then fails (or runs against a server whose compaction
+        # has not been deployed yet), re-running must still finish the rebuild.
+        affected_blocks |= self._already_marked_blocks(opts)
         affected = Block.all_objects.filter(id__in=affected_blocks, deleted_at__isnull=True)
         invoiced = list(affected.filter(invoiced=True))
         repairable = [b for b in affected if not b.invoiced]
@@ -188,6 +193,16 @@ class Command(BaseCommand):
         return stretches
 
     @staticmethod
+    def _already_marked_blocks(opts):
+        """Blocks still carrying events a previous pass marked unobserved."""
+        qs = RawEvent.objects.filter(ctx__unobserved__isnull=False, block__isnull=False)
+        if opts.get("org"):
+            qs = qs.filter(user__memberships__organization_id=opts["org"])
+        if opts.get("user"):
+            qs = qs.filter(user__username=opts["user"])
+        return set(qs.values_list("block_id", flat=True))
+
+    @staticmethod
     def _states(blocks):
         counts = {}
         for b in blocks:
@@ -222,6 +237,7 @@ class Command(BaseCommand):
         rebuilt = removed = 0
         min_delta = 0
         money_delta = Decimal("0")
+        timesheets = {b.timesheet_id for b in blocks if b.timesheet_id}
 
         for block in blocks:
             with transaction.atomic():
@@ -229,6 +245,9 @@ class Command(BaseCommand):
                 old_min = locked.minutes
                 old_amt = locked.billing_amount or Decimal("0")
                 new_min = _calculate_minutes_from_events(RawEvent.objects.filter(block=locked))
+
+                if new_min == old_min:
+                    continue  # already rebuilt by an earlier pass
 
                 if new_min <= 0:
                     locked.deleted_at = timezone.now()
@@ -260,6 +279,18 @@ class Command(BaseCommand):
                     new_value=str(new_min),
                     notes=f"repair_unobserved_time: {note}",
                     snapshot={"old_billing_amount": str(old_amt)},
+                )
+
+        # Timesheet.total_hours is denormalized off the confirmed block set, so
+        # removing blocks leaves an approved week still claiming hours that no
+        # longer exist anywhere. Refresh every week we touched.
+        for ts in Timesheet.objects.filter(id__in=timesheets):
+            before = ts.total_hours
+            ts.recalculate_totals(commit=True)
+            if before != ts.total_hours:
+                self.stdout.write(
+                    f"  timesheet {ts.id} ({ts.week_start}, {ts.status}): "
+                    f"{before}h -> {ts.total_hours}h"
                 )
 
         return marked, rebuilt, removed, min_delta, money_delta

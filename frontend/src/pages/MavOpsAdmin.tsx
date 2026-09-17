@@ -16,7 +16,7 @@ interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; gra
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
-  deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; health?: OrgHealth;
+  deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; mouse_idle_pause_seconds?: number; health?: OrgHealth;
   industry_type?: string;
   seat_grace_deadline?: string | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
@@ -2954,6 +2954,7 @@ export default function MavOpsAdmin() {
   const [showArchived, setShowArchived] = useState(false);
   const [archivingOrg, setArchivingOrg] = useState<number | null>(null);
   const [widgetOrg, setWidgetOrg] = useState<number | null>(null);
+  const [idleOrg, setIdleOrg] = useState<number | null>(null);
   const [industryOrg, setIndustryOrg] = useState<number | null>(null);
 
   const [impersonatingOrg, setImpersonatingOrg] = useState<{ id: number; name: string } | null>(null);
@@ -3050,6 +3051,34 @@ export default function MavOpsAdmin() {
       await loadOrgs();
     } catch { flash("Failed to update ticker visibility.", "err"); }
     finally { setWidgetOrg(null); }
+  }, [apiFetch, loadOrgs]);
+
+  const setIdlePause = useCallback(async (org: Org) => {
+    const current = org.mouse_idle_pause_seconds ?? 600;
+    const answer = window.prompt(
+      `Minutes of no keyboard or mouse before "${org.name}" stops counting.\n\n` +
+      `Talking is not input, so a firm that sits in long calls or reads on screen ` +
+      `wants this higher. Minimum 1 minute, maximum 240.`,
+      String(Math.round(current / 60)),
+    );
+    if (answer === null) return;
+
+    const minutes = Number(answer);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) {
+      flash("Enter a whole number of minutes between 1 and 240.", "err");
+      return;
+    }
+
+    setIdleOrg(org.id);
+    try {
+      await apiFetch(`/mavops/orgs/${org.id}/idle-pause/`, {
+        method: "POST",
+        body: JSON.stringify({ mouse_idle_pause_seconds: Math.round(minutes * 60) }),
+      });
+      flash(`Idle pause for "${org.name}" set to ${minutes} min — agents pick it up within a minute.`);
+      await loadOrgs();
+    } catch { flash("Failed to update the idle pause.", "err"); }
+    finally { setIdleOrg(null); }
   }, [apiFetch, loadOrgs]);
 
   const loadDevices = useCallback(async () => {
@@ -3573,6 +3602,13 @@ export default function MavOpsAdmin() {
                         onClick={() => setShowWidget(org, !org.show_client_widget)}
                         outline
                         color={org.show_client_widget ? T.teal : T.textMuted}
+                        tiny
+                      />
+                      <Btn
+                        label={idleOrg === org.id ? "…" : `idle ${Math.round((org.mouse_idle_pause_seconds ?? 600) / 60)}m`}
+                        onClick={() => setIdlePause(org)}
+                        outline
+                        color={T.textMuted}
                         tiny
                       />
                       <Btn

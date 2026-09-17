@@ -219,6 +219,7 @@ def mavops_orgs(request):
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
             'show_client_widget': getattr(org, 'show_client_widget', False),
+            'mouse_idle_pause_seconds': getattr(org, 'mouse_idle_pause_seconds', 600),
             'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
@@ -591,6 +592,51 @@ def mavops_set_org_show_client_widget(request, org_id):
     org.save(update_fields=['show_client_widget', 'updated_at'])
 
     return Response({'ok': True, 'id': org.id, 'show_client_widget': org.show_client_widget})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_idle_pause(request, org_id):
+    """
+    How long the agent waits, with no keyboard or mouse, before it stops
+    counting (MavOps staff only).
+    POST /api/mavops/orgs/<org_id>/idle-pause/  body: {"mouse_idle_pause_seconds": 600}
+
+    Sent to every agent on each /sync/full/, so it takes effect within a
+    minute and overrides any local config. It had no interface anywhere —
+    changing it meant editing the database — which made both tuning it for a
+    firm that reads on screen and testing idle behaviour needlessly hard.
+
+    Organization.agent_idle_pause_seconds() clamps the outgoing value to one
+    heartbeat, so 60s is the shortest that reaches an agent whatever is
+    stored here.
+    """
+    try:
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    raw = request.data.get('mouse_idle_pause_seconds')
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        return Response({'error': 'mouse_idle_pause_seconds must be a whole number of seconds'}, status=400)
+
+    # Upper bound is a typo guard: an agent that waits four hours before
+    # calling someone idle will happily bill a closed laptop.
+    if not (60 <= seconds <= 14400):
+        return Response({'error': 'mouse_idle_pause_seconds must be between 60 and 14400'}, status=400)
+
+    org.mouse_idle_pause_seconds = seconds
+    org.save(update_fields=['mouse_idle_pause_seconds', 'updated_at'])
+
+    return Response({
+        'ok': True,
+        'id': org.id,
+        'mouse_idle_pause_seconds': org.mouse_idle_pause_seconds,
+        'sent_to_agents': org.agent_idle_pause_seconds(),
+    })
 
 
 @api_view(['POST'])

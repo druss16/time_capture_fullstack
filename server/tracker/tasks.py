@@ -1959,25 +1959,17 @@ def batch_ai_classify_async(self, block_ids, org_id, user_id=None):
         
         logger.info(f"[ASYNC-AI] ✅ Completed background classification for {len(blocks)} blocks")
         
-        # ✨ NEW: Emit WebSocket event to notify frontend
-        try:
-            from django_eventstream import send_event
-            
-            send_event(
-                f'org_{org_id}_ai_ready',
-                {
-                    'status': 'complete',
-                    'org_id': org_id,
-                    'user_id': user_id,
-                    'block_ids': block_ids,
-                    'blocks_processed': len(blocks),
-                    'timestamp': str(timezone.now()),
-                }
-            )
-            logger.info(f"[ASYNC-AI] ✅ WebSocket event emitted to org_{org_id}_ai_ready")
-        except Exception as e:
-            logger.warning(f"[ASYNC-AI] Failed to emit WebSocket event: {e}")
-        
+        # No push notification to the frontend: there is nothing listening.
+        # The SSE endpoint is commented out in timeserver/urls.py (it kills
+        # sync gunicorn workers without ASGI), django_eventstream is not in
+        # INSTALLED_APPS, and the consumer is commented out at
+        # DailyReview.tsx:559. The emit that used to live here called
+        # send_event(channel, data) against a (channel, event_type, data)
+        # signature, so it raised a TypeError on every run and logged a
+        # warning. If SSE is revived, re-add it with the event type:
+        #     send_event(f'org_{org_id}_ai_ready', 'message', {...})
+        # and uncomment the hook. The frontend polls in the meantime.
+
         return {'status': 'success', 'blocks_processed': len(blocks)}
         
     except Exception as e:

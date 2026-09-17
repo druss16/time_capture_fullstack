@@ -56,6 +56,22 @@ jobs:
           POSTGRES_PORT: '5432'
         run: python manage.py check
 
+      - name: Scheduled tasks are registered
+        working-directory: server
+        # tasks_mail.py spent four months scheduled and unregistered: beat sent
+        # sync_all_mail every five minutes and the worker discarded every one,
+        # because autodiscover_tasks() only walks each app's `tasks` module.
+        # Nothing in the app surfaced it. This compares the schedule against
+        # the task registry, which is a mismatch a machine can see.
+        env:
+          DJANGO_SECRET_KEY: ci-not-a-real-secret
+          POSTGRES_DB: ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: '5432'
+        run: python manage.py verify_beat_tasks
+
   frontend:
     name: TypeScript
     runs-on: ubuntu-latest

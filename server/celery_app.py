@@ -10,9 +10,11 @@ Includes:
 - Maintenance (cleanup, daily summaries)
 """
 
+import logging
 import os
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_ready
 import warnings
 warnings.filterwarnings('ignore', message='.*ssl_cert_reqs.*')
 
@@ -20,6 +22,8 @@ warnings.filterwarnings('ignore', message='.*ssl_cert_reqs.*')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'timeserver.settings')
 
 # Create Celery app
+logger = logging.getLogger(__name__)
+
 app = Celery('timeserver')
 
 # Load configuration from Django settings (CELERY_ namespace)
@@ -363,6 +367,36 @@ def debug_task(self):
 # ============================================================================
 # STARTUP CHECK
 # ============================================================================
+
+@worker_ready.connect
+def verify_scheduled_tasks_are_registered(sender=None, **kwargs):
+    """
+    Say so, loudly, if the schedule names a task this worker cannot run.
+
+    Runs on worker_ready rather than on_after_configure because the registry
+    is only complete once autodiscovery has finished. A mismatch here means
+    beat will send those messages and this worker will discard them as
+    unregistered — silently, as far as every other signal is concerned.
+    """
+    try:
+        from tracker.celery_health import unregistered_scheduled_tasks
+        missing = unregistered_scheduled_tasks(app)
+    except Exception as exc:
+        logger.warning(f"[BEAT-CHECK] Could not verify the schedule: {exc}")
+        return
+
+    if not missing:
+        logger.info("[BEAT-CHECK] All scheduled tasks are registered.")
+        return
+
+    for name, sources in missing.items():
+        logger.error(
+            f"[BEAT-CHECK] Scheduled task {name!r} is NOT registered on this "
+            f"worker (scheduled in: {', '.join(sources)}). Beat will send it "
+            f"and this worker will discard it. If it lives outside "
+            f"tracker/tasks.py, re-export it there."
+        )
+
 
 @app.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):

@@ -1933,6 +1933,13 @@ from tracker.tasks_mail import (  # noqa: F401
     prune_mail_signals,
 )
 
+# Analytics v2 rollup tasks — the same autodiscovery gap, found by
+# manage.py verify_beat_tasks: nothing imported this package at worker
+# startup, so the nightly client/staff rollups and the hourly WIP snapshot
+# were sent by beat and discarded. Importing the module registers every
+# @shared_task it defines, including any added later.
+from tracker.analytics_v2.rollups import tasks as _v2_rollup_tasks  # noqa: F401
+
 # At the end of your existing tracker/tasks.py, add:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)

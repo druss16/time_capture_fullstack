@@ -30,6 +30,18 @@ from tracker.views import get_request_org_override
 logger = logging.getLogger(__name__)
 
 
+# ─── Shared OAuth helpers ─────────────────────────────────────────────────────
+
+def oauth_frontend_base():
+    """Base URL of the SPA — where every OAuth flow lands the user."""
+    base = (
+        getattr(settings, 'FRONTEND_BASE_URL', '')
+        or getattr(settings, 'FRONTEND_URL', '')
+        or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
+    )
+    return base.rstrip('/')
+
+
 # ─── OAuth Start ──────────────────────────────────────────────────────────────
 
 @api_view(['GET'])
@@ -62,7 +74,7 @@ def microsoft_mail_auth_start(request):
 
     auth_url = msgraph.build_auth_url_mail(
         state=state,
-        redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
+        redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
     )
 
     return Response({'auth_url': auth_url})
@@ -75,24 +87,24 @@ def microsoft_mail_auth_start(request):
 @permission_classes([AllowAny])
 def microsoft_mail_auth_callback(request):
     """
-    Microsoft redirects here after user grants Mail.ReadBasic consent.
+    Microsoft redirects here after the user grants Mail.ReadBasic consent —
+    when MS_GRAPH_MAIL_REDIRECT_URI is registered in Azure AD as its own
+    redirect URI.
     URL: /api/mail/auth/callback/?code=...&state=...
 
-    The same redirect URI is used for both calendar and mail. We disambiguate
-    by looking up the UserIntegration row by oauth_state — the row's provider
-    field tells us whether this is a mail or calendar callback.
-
-    Note: if you'd prefer separate redirect URIs for mail vs calendar, register
-    a second URI in Azure AD and add MS_GRAPH_MAIL_REDIRECT_URI to settings.
+    If mail and calendar instead share a single registered redirect URI, the
+    calendar callback receives the redirect and delegates to
+    finish_mail_connection() below — it tells the two flows apart by the
+    provider on the UserIntegration row the state token matches. Either way
+    the same completion code runs.
     """
     code = request.GET.get('code')
     state = request.GET.get('state')
     error = request.GET.get('error')
 
-    frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
-    success_url = f"{frontend_base}/account/connections?mail=connected"
+    frontend_base = oauth_frontend_base()
     error_base = f"{frontend_base}/account/connections?mail=error"
-    
+
     if error:
         logger.warning(f"[MAIL-OAUTH] User cancelled or denied: {error}")
         params = urlencode({'mail': 'error', 'reason': error})
@@ -111,6 +123,25 @@ def microsoft_mail_auth_callback(request):
         logger.warning(f"[MAIL-OAUTH] No matching state token: {state[:8]}...")
         return HttpResponseRedirect(f"{error_base}&reason=invalid_state")
 
+    return finish_mail_connection(integration, code)
+
+
+def finish_mail_connection(integration, code):
+    """
+    Complete a mail connection: trade the code for tokens, persist them, and
+    kick off the first sync. Called by the mail callback, and by the calendar
+    callback when both flows share one registered redirect URI.
+
+    The exchange repeats MS_GRAPH_MAIL_REDIRECT_URI because that is what
+    auth_start signed in with — Graph rejects a redirect_uri that differs from
+    the one the code was issued for, whichever path the redirect landed on.
+
+    Returns the HttpResponseRedirect to send the user back to the app with.
+    """
+    frontend_base = oauth_frontend_base()
+    success_url = f"{frontend_base}/account/connections?mail=connected"
+    error_base = f"{frontend_base}/account/connections?mail=error"
+
     # Re-check kill switch — org policy may have flipped between auth_start and callback
     if getattr(integration.org, 'disable_mail_integration', False):
         logger.warning(f"[MAIL-OAUTH] Org {integration.org.id} flag set during flow — aborting")
@@ -119,7 +150,7 @@ def microsoft_mail_auth_callback(request):
     try:
         result = msgraph.exchange_code_for_tokens_mail(
             code=code,
-            redirect_uri=settings.MS_GRAPH_REDIRECT_URI,
+            redirect_uri=settings.MS_GRAPH_MAIL_REDIRECT_URI,
         )
     except msgraph.MSGraphAuthError as e:
         logger.error(f"[MAIL-OAUTH] Token exchange failed: {e}")

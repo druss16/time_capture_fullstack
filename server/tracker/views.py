@@ -9493,12 +9493,42 @@ def _fetch_latest_version() -> str:
     return _cache["version"] or "0.0.0"
 
 
+def _parse_version(v: str):
+    """Sortable key for a version, pre-releases included.
+
+    ('1.8.7-rc1' → ((1, 8, 7), 0, 'rc1'), and '1.8.7' → ((1, 8, 7), 1, ''))
+    so a pre-release sorts below the release it precedes, and above the one
+    before it — 1.8.6 < 1.8.7-rc1 < 1.8.7.
+
+    Returns None when the string is not a version this can order.
+    """
+    core, _, pre = (v or '').strip().lstrip('v').partition('-')
+    parts = core.split('.')
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    # A release outranks its own pre-releases: 0 sorts below 1.
+    return (tuple(int(p) for p in parts), 0 if pre else 1, pre)
+
+
 def _is_newer(latest: str, current: str) -> bool:
-    try:
-        def p(v): return tuple(int(x) for x in v.strip().lstrip('v').split('.'))
-        return p(latest) > p(current)
-    except Exception:
-        return latest != current
+    """Is `latest` actually newer than what the agent is running?
+
+    The old version of this split on '.' and cast every piece to int, so any
+    pre-release tag ('1.8.7-rc1') raised and fell through to `latest !=
+    current` — which is True for a version NEWER than the published release.
+    Every rc build was therefore told to "update" to the release it was
+    testing, downgrading itself on first launch and reporting no error: the
+    tester sees their build replaced by the old one and measures the bug they
+    just fixed.
+
+    Anything unparseable now means no update. A missed update costs a delayed
+    upgrade; a wrong one silently replaces the build someone is testing.
+    """
+    latest_key, current_key = _parse_version(latest), _parse_version(current)
+    if latest_key is None or current_key is None:
+        print(f"[VERSION] Cannot order {current!r} → {latest!r}; reporting no update")
+        return False
+    return latest_key > current_key
 
 
 @require_GET

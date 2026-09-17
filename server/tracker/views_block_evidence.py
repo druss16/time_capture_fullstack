@@ -13,8 +13,16 @@ v0 signals shipped:
   - title_alias: when an event's window_title contains a client name
     or alias substring
 
-NOT in v0 (deferred to v1):
-  - mail/calendar matches (require Stage 7 metadata storage)
+v1 signals shipped:
+  - mail: the MailSignal rows in Stage 7's attribution window, which client
+    they point to, and which counterparty domains in that window point to
+    nobody. Stage 7 already composes this reasoning when it classifies and
+    then discards it, so an Outlook block could be attributed by email
+    without the panel ever saying so. Restricted to the block's own user —
+    see _build_mail_evidence.
+
+NOT yet (deferred):
+  - calendar matches
   - AI category from Stage 10 (need to persist per-event, not per-block)
   - learned-rule and CPA-file-convention matches
 
@@ -225,6 +233,111 @@ def _neighbor_payload(neighbor: Block, target: Block, side: str) -> Dict[str, An
 #     day_dominant jog.
 
 
+# Stage 7's attribution window, mirrored exactly. If the classifier's window
+# moves, this must move with it, or the panel will explain a decision using
+# evidence the classifier never saw. See
+# ClassificationService._stage_7_mail in services/classification_service.py.
+MAIL_WINDOW_BEFORE = timezone.timedelta(hours=2)
+MAIL_WINDOW_AFTER = timezone.timedelta(minutes=30)
+
+
+def _build_mail_evidence(block: Block, requesting_user) -> Optional[Dict[str, Any]]:
+    """Which emails Stage 7 could see around this block, and what they said.
+
+    Returns None when there is nothing to say.
+
+    PRIVACY — restricted to the block's own user. Everything here is already
+    stored (MailSignal keeps a counterparty DOMAIN, never an address, and a
+    subject only when it already matched a client at >= 0.85), so this exposes
+    no new data. But the Connections card promises the person connecting a
+    mailbox that we handle their mail narrowly, and showing a colleague or an
+    admin who someone emailed at 2pm is not what they agreed to. Org members
+    and MavOps admins can read this endpoint for any block; mail is the one
+    part they do not get. Debug someone else's mail attribution with
+    `manage.py mail_domains --observed`, not by reading their inbox metadata.
+    """
+    from tracker.models import MailSignal
+
+    if block.user_id != getattr(requesting_user, 'id', None):
+        return None
+    if not block.start:
+        return None
+    if getattr(block.org, 'disable_mail_integration', False):
+        return None
+
+    window_start = block.start - MAIL_WINDOW_BEFORE
+    window_end = block.start + MAIL_WINDOW_AFTER
+
+    signals = list(
+        MailSignal.objects
+        .filter(
+            user_id=block.user_id,
+            occurred_at__gte=window_start,
+            occurred_at__lte=window_end,
+        )
+        .select_related('extracted_client')
+        .order_by('occurred_at')
+    )
+    if not signals:
+        return None
+
+    # Grouped the way Stage 7 groups them: by client, most signals wins.
+    per_client: Dict[int, Dict[str, Any]] = {}
+    unmapped: Dict[str, int] = {}
+
+    for sig in signals:
+        if sig.extracted_client_id:
+            entry = per_client.setdefault(sig.extracted_client_id, {
+                "client_id": sig.extracted_client_id,
+                "client_name": sig.extracted_client.name,
+                "count": 0,
+                "domains": [],
+                "subject": "",
+            })
+            entry["count"] += 1
+            if sig.other_party_domain and sig.other_party_domain not in entry["domains"]:
+                entry["domains"].append(sig.other_party_domain)
+            # subject_extract only exists when it already identified this
+            # client at >= 0.85 — it is the strongest thing we can show.
+            if sig.subject_extract and not entry["subject"]:
+                entry["subject"] = sig.subject_extract
+        elif sig.other_party_domain:
+            unmapped[sig.other_party_domain] = unmapped.get(sig.other_party_domain, 0) + 1
+
+    matched = sorted(per_client.values(), key=lambda e: -e["count"])
+
+    # An unmapped domain is not noise — it is the actionable half. It means
+    # mail with that counterparty cannot attribute to anyone until someone
+    # maps it (manage.py mail_domains --map), which is invisible otherwise.
+    unmapped_list = [
+        {"domain": d, "count": n}
+        for d, n in sorted(unmapped.items(), key=lambda kv: -kv[1])
+    ]
+
+    if matched:
+        top = matched[0]
+        detail = f" about '{top['subject']}'" if top["subject"] else ""
+        summary = (
+            f"{top['count']} email{'s' if top['count'] != 1 else ''} with "
+            f"{', '.join(top['domains']) or 'a known contact'} → {top['client_name']}{detail}"
+        )
+    else:
+        n = sum(u["count"] for u in unmapped_list)
+        summary = (
+            f"{n} email{'s' if n != 1 else ''} around this time, "
+            f"none from a domain mapped to a client"
+        )
+
+    return {
+        "summary": summary,
+        "matched": matched,
+        "unmapped_domains": unmapped_list,
+        "signal_count": len(signals),
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+    }
+
+
 def _build_surrounding(block: Block) -> Optional[Dict[str, Any]]:
     """
     Find nearest attributed blocks before/after `block`, the day's dominant
@@ -427,6 +540,7 @@ def block_evidence(request, block_id: int):
             "block": _serialize_block(block),
             "suggestion": _serialize_suggestion(block),
             "surrounding": _build_surrounding(block),
+            "mail": _build_mail_evidence(block, user),
             "events": [],
             "summary": {"total_events": 0, "events_per_client": {}},
         })
@@ -511,6 +625,7 @@ def block_evidence(request, block_id: int):
         "block": _serialize_block(block),
         "suggestion": _serialize_suggestion(block),
         "surrounding": _build_surrounding(block),
+        "mail": _build_mail_evidence(block, user),
         "events": serialized_events,
         "summary": {
             "total_events": len(serialized_events),

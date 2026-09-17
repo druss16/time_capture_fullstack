@@ -6,7 +6,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    # AVFoundation is imported inside media_capture._probe_mac(), and pyobjc
+    # frameworks need naming explicitly or the probe silently reports "no
+    # camera in use" in the packaged build while working in development.
+    hiddenimports=['AVFoundation', 'media_capture'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

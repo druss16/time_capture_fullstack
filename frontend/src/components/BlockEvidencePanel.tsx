@@ -93,6 +93,23 @@ interface Surrounding {
   day_dominant: DayDominant | null;
 }
 
+interface MailMatch {
+  client_id: number;
+  client_name: string;
+  count: number;
+  domains: string[];
+  subject: string;
+}
+
+interface MailEvidence {
+  summary: string;
+  matched: MailMatch[];
+  unmapped_domains: { domain: string; count: number }[];
+  signal_count: number;
+  window_start: string;
+  window_end: string;
+}
+
 interface EvidenceResponse {
   block: {
     id: number;
@@ -102,6 +119,9 @@ interface EvidenceResponse {
   };
   events: EventRow[];
   surrounding?: Surrounding | null;
+  // Absent unless the viewer is the block's own user — see
+  // _build_mail_evidence in views_block_evidence.py.
+  mail?: MailEvidence | null;
   summary: {
     total_events: number;
     events_per_client: Record<string, ClientRollup>;
@@ -177,6 +197,43 @@ function SignalIcon({ type }: { type: Signal["type"] }) {
     case "calendar_match":  return <CalendarClock className={cls} />;
     default: return null;
   }
+}
+
+
+// ─── Mail evidence ────────────────────────────────────────────────────────────
+// Stage 7 works out which emails sat around this block and what they said, then
+// discards that reasoning. This is it, rendered. The unmapped half matters as
+// much as the matched half: mail from an unmapped domain can never attribute to
+// anyone, and nothing else in the product ever mentions it.
+
+function MailEvidenceSection({ mail }: { mail: MailEvidence }) {
+  const top = mail.matched[0];
+
+  return (
+    <div className="mb-3 px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-200">
+      <div className="flex items-start gap-2">
+        <Mail className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-slate-700">{mail.summary}</p>
+
+          {mail.matched.length > 1 && (
+            <p className="text-slate-500 mt-1">
+              Also in this window:{" "}
+              {mail.matched.slice(1).map((m) => `${m.client_name} (${m.count})`).join(", ")}
+            </p>
+          )}
+
+          {mail.unmapped_domains.length > 0 && (
+            <p className="text-slate-500 mt-1">
+              {top ? "Not mapped to any client: " : "From: "}
+              {mail.unmapped_domains.map((u) => u.domain).join(", ")}
+              {!top && " — mail from these can't point at a client until someone maps them."}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
@@ -407,6 +464,9 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
 
   return (
     <div className="text-[13px]">
+      {/* ─── What the mailbox saw around this block (own user only) ─── */}
+      {data.mail && <MailEvidenceSection mail={data.mail} />}
+
       {/* ─── Surrounding context (only present for nameless / no-client blocks) ─── */}
       {data.surrounding && (
         <SurroundingContext

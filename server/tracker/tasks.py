@@ -1922,6 +1922,17 @@ def log_queue_health():
 # Calendar sync tasks
 from tracker.tasks_calendar import sync_all_calendars, sync_user_calendar  # noqa: F401
 
+# Mail sync tasks. Imported here for the same reason as the calendar ones:
+# autodiscover_tasks() only walks each app's `tasks` module, so a task living
+# in tasks_mail.py is never registered on the worker, and beat's messages are
+# discarded as unregistered. Enqueueing still looks like it succeeds, because
+# the web process imports the module itself.
+from tracker.tasks_mail import (  # noqa: F401
+    sync_all_mail,
+    sync_user_mail,
+    prune_mail_signals,
+)
+
 # At the end of your existing tracker/tasks.py, add:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)

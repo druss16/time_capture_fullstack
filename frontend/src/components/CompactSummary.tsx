@@ -22,6 +22,7 @@ import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } f
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, suggestAliasFromTitle, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
+import { BlockEvidencePanel } from "@/components/BlockEvidencePanel";
 import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate, AmbiguousGroup } from "@/lib/dailyReviewLanes";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
@@ -668,6 +669,7 @@ export default function CompactSummary({
                   key={`p${b.block_id}`} b={b} busy={busy}
                   onAccept={(cid) => acceptTo(b, cid)}
                   onAlwaysFile={(cid) => alwaysFile(b, cid)}
+                  onAssigned={onRefresh}
                   onNotBillable={() => acceptTo(b, null)}
                   onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true, suggestAliasFromTitle(b.window_title || ""))}
                   // "Change" means the shown suggestion was wrong, so open on a
@@ -740,9 +742,12 @@ type WhyData = {
 
 /** Pending: accept the green suggested client in one tap (with the contextual
  *  reason from /why/), or pick a client / mark not billable when there's no guess. */
-function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, onChange }: {
+function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, onChange, onAssigned }: {
   b: ProposedInline;
   busy: boolean;
+  /** The evidence panel can assign a client on its own. Without this the row
+   *  would sit there looking unchanged after the write landed. */
+  onAssigned: () => void;
   onAccept: (clientId: number) => void;
   onAlwaysFile: (clientId: number) => void;
   onNotBillable: () => void;
@@ -755,6 +760,10 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
   const hasEmbedded = b.why_suggested_client_id !== undefined || b.why_explanation !== undefined;
   const [why, setWhy] = useState<WhyData | null>(null);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  // Evidence is opt-in per row. This lane is the one the whole firm works
+  // through every morning, and it was explicitly tuned to paint without
+  // per-row fetches — so the panel mounts (and only then fetches) on click.
+  const [showEvidence, setShowEvidence] = useState(false);
   useEffect(() => {
     if (hasEmbedded) return;
     let alive = true;
@@ -804,6 +813,22 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
           )}
         </div>
         {reason && <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">{reason}</div>}
+        <button
+          onClick={() => setShowEvidence((v) => !v)}
+          className="mt-1 inline-flex items-center gap-1 font-sans text-[11px] text-muted-foreground/80 transition-colors hover:text-foreground hover:underline"
+          title="What the agent and your mailbox saw around this block"
+        >
+          {showEvidence ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+          {showEvidence ? "Hide evidence" : "Why?"}
+        </button>
+        {showEvidence && (
+          <div
+            className="mt-2 overflow-hidden rounded-md border border-border bg-background"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <BlockEvidencePanel blockId={b.block_id} onAssigned={onAssigned} />
+          </div>
+        )}
         {askCandidates.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {visibleCandidates.map((c) => (

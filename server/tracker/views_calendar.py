@@ -20,6 +20,8 @@ from tracker.views_mail import finish_mail_connection, oauth_frontend_base
 from tracker.views import get_request_org_override
 
 
+from tracker.services.integration_health import health_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,11 +183,13 @@ def microsoft_calendar_status(request):
     except UserIntegration.DoesNotExist:
         return Response({'connected': False})
     
+    # See views_mail.microsoft_mail_status — `connected` alone is not the truth.
     return Response({
         'connected': integration.is_connected,
         'email': integration.provider_email,
         'last_synced_at': integration.last_synced_at.isoformat() if integration.last_synced_at else None,
         'last_sync_error': integration.last_sync_error,
+        'health': health_payload(integration),
     })
 
 

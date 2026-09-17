@@ -68,6 +68,23 @@ def refresh_access_token(integration):
     Refresh expired access token. Updates integration in place.
     integration: UserIntegration instance.
     """
+    # A row with no refresh token never completed consent — the OAuth flow
+    # creates it at auth_start to hold the state token, and the callback is
+    # what fills in the tokens. Asking Azure to refresh nothing earns
+    # "AADSTS900144: the request body must contain 'refresh_token'", which
+    # reads like a token bug and sent a prod investigation down the wrong path
+    # for weeks. Say what is actually true instead: nobody finished connecting.
+    if not (integration.refresh_token or '').strip():
+        integration.is_connected = False
+        integration.last_sync_error = (
+            'Never connected — the Microsoft consent screen was never completed. '
+            'Reconnect from Settings → Connections.'
+        )
+        integration.save(update_fields=['is_connected', 'last_sync_error'])
+        raise MSGraphAuthError(
+            'No refresh token — this integration was never fully connected.'
+        )
+
     app = _get_msal_app('common')
     result = app.acquire_token_by_refresh_token(
         refresh_token=integration.refresh_token,
@@ -227,6 +244,23 @@ def refresh_access_token_mail(integration):
     Refresh expired mail access token. Updates integration in place.
     integration: UserIntegration instance with provider='microsoft_mail'.
     """
+    # A row with no refresh token never completed consent — the OAuth flow
+    # creates it at auth_start to hold the state token, and the callback is
+    # what fills in the tokens. Asking Azure to refresh nothing earns
+    # "AADSTS900144: the request body must contain 'refresh_token'", which
+    # reads like a token bug and sent a prod investigation down the wrong path
+    # for weeks. Say what is actually true instead: nobody finished connecting.
+    if not (integration.refresh_token or '').strip():
+        integration.is_connected = False
+        integration.last_sync_error = (
+            'Never connected — the Microsoft consent screen was never completed. '
+            'Reconnect from Settings → Connections.'
+        )
+        integration.save(update_fields=['is_connected', 'last_sync_error'])
+        raise MSGraphAuthError(
+            'No refresh token — this integration was never fully connected.'
+        )
+
     app = _get_msal_app('common')
     result = app.acquire_token_by_refresh_token(
         refresh_token=integration.refresh_token,

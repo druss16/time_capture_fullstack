@@ -27,6 +27,8 @@ from tracker.integrations import msgraph
 from tracker.views import get_request_org_override
 
 
+from tracker.services.integration_health import health_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,12 +228,16 @@ def microsoft_mail_status(request):
     # Surface the org-level disable so the frontend can show a "disabled by admin" state
     org_disabled = bool(getattr(integration.org, 'disable_mail_integration', False))
 
+    # `connected` is the legacy bit and it lies in both directions — a row with
+    # abandoned consent reads as merely "not connected", and one paused after 5
+    # failures still reads as "connected". `health` is what the page renders.
     return Response({
         'connected': integration.is_connected and not org_disabled,
         'org_disabled': org_disabled,
         'email': integration.provider_email,
         'last_synced_at': integration.last_synced_at.isoformat() if integration.last_synced_at else None,
         'last_sync_error': integration.last_sync_error,
+        'health': health_payload(integration),
     })
 
 

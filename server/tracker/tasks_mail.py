@@ -266,12 +266,20 @@ def _process_message(msg, integration, user_email, user_domain,
     sender_email = (from_addr or '').lower().strip()
     sender_domain = sender_email.split('@')[-1] if '@' in sender_email else ''
 
-    # Recipient domains (combine to + cc)
+    # Recipient addresses + domains (combine to + cc). The addresses are kept
+    # only for the direction call below — a personal mailbox has no org domain
+    # to compare against, so identity there is the address itself. Nothing but
+    # the domain is ever persisted.
+    recipient_emails = []
     recipient_domains = []
     for recip_field in ('toRecipients', 'ccRecipients'):
         for r in (msg.get(recip_field) or []):
             addr = ((r or {}).get('emailAddress') or {}).get('address', '')
-            d = (addr or '').lower().split('@')[-1] if '@' in (addr or '') else ''
+            addr = (addr or '').lower().strip()
+            if '@' not in addr:
+                continue
+            recipient_emails.append(addr)
+            d = addr.split('@')[-1]
             if d:
                 recipient_domains.append(d)
 
@@ -280,6 +288,9 @@ def _process_message(msg, integration, user_email, user_domain,
         sender_domain=sender_domain,
         recipient_domains=recipient_domains,
         user_domain=user_domain,
+        sender_email=sender_email,
+        recipient_emails=recipient_emails,
+        user_email=user_email,
     )
 
     if direction == 'internal':
@@ -339,33 +350,59 @@ def _process_message(msg, integration, user_email, user_domain,
     return signal
 
 
-def _classify_direction(sender_domain: str, recipient_domains: list, user_domain: str):
+def _classify_direction(sender_domain: str, recipient_domains: list, user_domain: str,
+                        sender_email: str = '', recipient_emails: list = None,
+                        user_email: str = ''):
     """
     Classify message direction and identify the 'other party' domain.
 
     Returns (direction, other_party_domain) where direction is one of:
         'inbound'  — sender is external, user is recipient
         'outbound' — user is sender, recipient is external
-        'internal' — sender + all recipients in user's org domain
+        'internal' — sender + all recipients share the user's identity
         'unknown'  — can't determine (shouldn't happen with valid data)
+
+    "Internal" normally means the user's org domain: colleague-to-colleague
+    mail, which carries no client signal and is dropped by the caller.
+
+    A mailbox on a PUBLIC domain (@outlook.com, @gmail.com) has no org domain
+    to compare against — everyone on earth shares it. Treating it as one made
+    every stranger on that domain look like a colleague and silently discarded
+    their mail, so a personal or trial mailbox produced almost no signal. When
+    the connected mailbox is public, identity is the ADDRESS, not the domain:
+    only the user's own address counts as internal. Addresses are used for this
+    comparison only — the caller persists nothing but the domain.
     """
     if not user_domain:
         return ('unknown', '')
 
-    sender_internal = sender_domain == user_domain
-    recipient_domains_lower = [d.lower() for d in recipient_domains if d]
-    recipients_external = [d for d in recipient_domains_lower if d != user_domain]
-    recipients_internal_only = (
-        bool(recipient_domains_lower) and not recipients_external
-    )
+    user_email = (user_email or '').lower().strip()
+    mailbox_is_public = user_domain in PUBLIC_EMAIL_DOMAINS
+
+    if mailbox_is_public:
+        if not user_email:
+            # No address to compare against — domain equality would call the
+            # whole of outlook.com a colleague, so refuse rather than guess.
+            return ('unknown', '')
+        me = user_email
+        sender_internal = (sender_email or '').lower().strip() == me
+        recipients = [(e or '').lower().strip() for e in (recipient_emails or []) if e]
+        externals = [e for e in recipients if e != me]
+        external_domains = [e.split('@')[-1] for e in externals if '@' in e]
+    else:
+        sender_internal = sender_domain == user_domain
+        recipients = [d.lower() for d in recipient_domains if d]
+        external_domains = [d for d in recipients if d != user_domain]
+
+    recipients_internal_only = bool(recipients) and not external_domains
 
     if sender_internal and recipients_internal_only:
         return ('internal', '')
 
-    if sender_internal and recipients_external:
+    if sender_internal and external_domains:
         # Outbound — pick the most common external recipient domain as "other party"
         from collections import Counter
-        counter = Counter(recipients_external)
+        counter = Counter(external_domains)
         dominant = counter.most_common(1)[0][0]
         return ('outbound', dominant)
 

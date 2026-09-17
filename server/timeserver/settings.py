@@ -348,6 +348,14 @@ REST_FRAMEWORK = {
 # SendGrid
 # -----------------------------------------------------
 
+# Keys for the OAuth token columns (tracker/crypto_fields.py). Ordered and
+# comma-separated: the first encrypts, every one of them can decrypt, which is
+# what makes rotation a deploy rather than an outage. Unset means tokens are
+# stored in plaintext, as they were before — the system check says so.
+TOKEN_ENCRYPTION_KEYS = [
+    k.strip() for k in os.environ.get('TOKEN_ENCRYPTION_KEYS', '').split(',') if k.strip()
+]
+
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 DEFAULT_FROM_EMAIL = 'noreply@mavops.ai'
 DEFAULT_REPLY_TO_EMAIL = 'dan@mavops.ai'

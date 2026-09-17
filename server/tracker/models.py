@@ -1,4 +1,5 @@
 from django.db import models
+from tracker.crypto_fields import EncryptedTextField
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
@@ -1486,8 +1487,8 @@ class Integration(models.Model):
     provider = models.CharField(max_length=50, choices=PROVIDER_CHOICES)
     
     is_connected = models.BooleanField(default=False)
-    access_token = models.TextField(blank=True)
-    refresh_token = models.TextField(blank=True)
+    access_token = EncryptedTextField(blank=True)
+    refresh_token = EncryptedTextField(blank=True)
     token_expires_at = models.DateTimeField(null=True, blank=True)
     
     # Provider-specific
@@ -4715,8 +4716,8 @@ class UserIntegration(models.Model):
     provider = models.CharField(max_length=30, choices=PROVIDER_CHOICES)
 
     is_connected = models.BooleanField(default=False)
-    access_token = models.TextField(blank=True)
-    refresh_token = models.TextField(blank=True)
+    access_token = EncryptedTextField(blank=True)
+    refresh_token = EncryptedTextField(blank=True)
     token_expires_at = models.DateTimeField(null=True, blank=True)
 
     scopes = models.JSONField(default=list, blank=True)

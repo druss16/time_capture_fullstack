@@ -9,6 +9,9 @@ class TrackerConfig(AppConfig):
     def ready(self):
         # Auto-import signal handlers (so Blocks classify automatically)
         import tracker.signals  # noqa
+
+        # Deployment checks (plaintext OAuth tokens, etc.)
+        import tracker.checks  # noqa
         
         # Connect billing rate signal
         from django.db.models.signals import pre_save

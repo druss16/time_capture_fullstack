@@ -15,7 +15,6 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Mail,
-  CheckCircle2,
   AlertCircle,
   Loader2,
   Unplug,
@@ -23,6 +22,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
+import IntegrationHealthCard, { type IntegrationHealth } from '@/components/IntegrationHealthCard';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -31,7 +31,7 @@ interface MailStatus {
   org_disabled?: boolean;
   email?: string;
   last_synced_at?: string | null;
-  last_sync_error?: string;
+  last_sync_error?: string;  health?: IntegrationHealth;
 }
 
 export default function MailConnectionTab() {
@@ -158,6 +158,22 @@ export default function MailConnectionTab() {
     );
   }
 
+  // `connected` alone would show a green check over an integration that has
+  // been paused for weeks, and would render abandoned consent as if the user
+  // had never tried. `health` is the server's assessment — trust it, and fall
+  // back to the legacy bit only if an older API build omits it.
+  const health: IntegrationHealth = status?.health ?? {
+    state: status?.connected ? 'ok' : 'disconnected',
+    label: status?.connected ? 'Connected' : 'Not connected',
+    guidance: '',
+    detail: status?.last_sync_error || '',
+    needs_action: false,
+    syncing: !!status?.connected,
+  };
+  // A paused row is still "connected" to the server, and a never-finished one
+  // is not — both need the card rather than the marketing pitch.
+  const showCard = !!status?.connected || health.needs_action;
+
   return (
     <div className="space-y-4">
       {toast && (
@@ -184,35 +200,27 @@ export default function MailConnectionTab() {
         </div>
       </div>
 
-      {status?.connected ? (
+      {showCard ? (
         <div className="space-y-4 pt-2">
-          <div className="flex items-start gap-3 px-4 py-3 bg-primary/5 border border-primary/20 rounded-lg">
-            <CheckCircle2 className="w-5 h-5 text-primary mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-slate-900">Connected</p>
-              <p className="text-sm text-slate-600 mt-0.5 truncate">
-                {status.email || '(account email unavailable)'}
-              </p>
-              {status.last_synced_at && (
-                <p className="text-xs text-slate-500 mt-1">
-                  Last synced {new Date(status.last_synced_at).toLocaleString()}
-                </p>
-              )}
-              {status.last_sync_error && (
-                <p className="text-xs text-rose-600 mt-1.5 italic">
-                  {status.last_sync_error}
-                </p>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={handleDisconnect}
-            disabled={disconnecting}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-lg disabled:opacity-50 transition-all"
-          >
-            {disconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
-            Disconnect
-          </button>
+          <IntegrationHealthCard
+            health={health}
+            email={status?.email}
+            lastSyncedAt={status?.last_synced_at}
+            onReconnect={handleConnect}
+            reconnecting={connecting}
+            reconnectLabel="Reconnect Microsoft Mail"
+          />
+          {/* Nothing to disconnect from when consent was never completed. */}
+          {health.state !== 'never_connected' && (
+            <button
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-lg disabled:opacity-50 transition-all"
+            >
+              {disconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+              Disconnect
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-4 pt-2">

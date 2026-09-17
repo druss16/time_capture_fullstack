@@ -6,10 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    # AVFoundation is imported inside media_capture._probe_mac(), and pyobjc
-    # frameworks need naming explicitly or the probe silently reports "no
-    # camera in use" in the packaged build while working in development.
-    hiddenimports=['AVFoundation', 'media_capture'],
+    # CoreMediaIO is imported inside media_capture._mac_camera_in_use(), and
+    # pyobjc frameworks need naming explicitly or the probe silently reports
+    # "no camera in use" in the packaged build while working in development.
+    # (The mic half reaches CoreAudio through ctypes and needs nothing here.)
+    hiddenimports=['CoreMediaIO', 'media_capture'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

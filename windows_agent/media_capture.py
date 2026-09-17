@@ -13,11 +13,24 @@ a site nobody whitelisted. This module answers the narrower question where a
 false negative costs real billable time and a false positive only inflates a
 block that a human will see in review.
 
-macOS: AVCaptureDevice.isInUseByAnotherApplication() — the OS's own answer,
-across every video and audio device (built-in, Continuity Camera, virtual
-cameras). The camera daemons the old probe looked for (VDCAssistant,
-AppleCameraAssistant) do not run at all on macOS 13+, so that probe reported
-False on every modern Mac.
+macOS: the `...DeviceIsRunningSomewhere` property, which is the OS's own
+answer to "is any process using this device" — CoreMediaIO for cameras,
+CoreAudio for microphones. Measured on 15.1 against a live camera: the
+in-use device reported 1 and the other three reported 0.
+
+Two things this had to get past, both verified rather than assumed:
+
+  · AVCaptureDevice.isInUseByAnotherApplication() looks like the obvious API
+    and does not work. With Photo Booth holding the camera it returned False
+    for every device, including the one in use.
+  · The camera daemons the old meeting probe looked for (VDCAssistant,
+    AppleCameraAssistant) do not run at all on macOS 13+. The ones that do
+    (appleh13camerad, avconferenced, cameracaptured) run constantly, so
+    their presence says nothing either way.
+
+The two frameworks are reached differently because only one route works for
+each: CoreMediaIO through pyobjc (raw ctypes calls into it segfault), and
+CoreAudio through ctypes (its pyobjc binding rejects every buffer type).
 
 Windows: the CapabilityAccessManager consent store, where LastUsedTimeStop == 0
 means the device is open right now. Unlike the meeting detector's use of the
@@ -49,19 +62,114 @@ class CaptureState:
 _cache = CaptureState()
 
 
-def _probe_mac() -> CaptureState:
-    import AVFoundation as AV
-    from AVFoundation import AVCaptureDevice
+def _mac_camera_in_use() -> list:
+    """Cameras running in any process, via CoreMediaIO."""
+    import struct
+    import CoreMediaIO as CM
 
+    element = getattr(CM, 'kCMIOObjectPropertyElementMain', None)
+    if element is None:
+        element = getattr(CM, 'kCMIOObjectPropertyElementMaster', 0)
+
+    def address(selector):
+        return CM.CMIOObjectPropertyAddress(
+            selector, CM.kCMIOObjectPropertyScopeGlobal, element,
+        )
+
+    _, size = CM.CMIOObjectGetPropertyDataSize(
+        CM.kCMIOObjectSystemObject, address(CM.kCMIOHardwarePropertyDevices),
+        0, None, None,
+    )
+    if not size:
+        return []
+
+    result = CM.CMIOObjectGetPropertyData(
+        CM.kCMIOObjectSystemObject, address(CM.kCMIOHardwarePropertyDevices),
+        0, None, size, None, None,
+    )
+    device_ids = struct.unpack(f'<{size // 4}I', bytes(result[-1])[:size])
+
+    running = []
+    for device_id in device_ids:
+        answer = CM.CMIOObjectGetPropertyData(
+            device_id,
+            address(CM.kCMIODevicePropertyDeviceIsRunningSomewhere),
+            0, None, 4, None, None,
+        )
+        if struct.unpack('<I', bytes(answer[-1])[:4])[0]:
+            running.append(f'camera:{device_id}')
+    return running
+
+
+def _mac_mic_in_use() -> list:
+    """Microphones running in any process, via CoreAudio."""
+    import ctypes
+    import ctypes.util
+    import struct
+
+    class _Address(ctypes.Structure):
+        _fields_ = [
+            ('mSelector', ctypes.c_uint32),
+            ('mScope', ctypes.c_uint32),
+            ('mElement', ctypes.c_uint32),
+        ]
+
+    def fourcc(code):
+        return int.from_bytes(code.encode(), 'big')
+
+    SYSTEM_OBJECT = 1
+    DEVICES, GLOBAL_SCOPE = fourcc('dev#'), fourcc('glob')
+    RUNNING_SOMEWHERE, STREAMS, INPUT_SCOPE = fourcc('gone'), fourcc('stm#'), fourcc('inpt')
+
+    lib = ctypes.CDLL(ctypes.util.find_library('CoreAudio'))
+    get_size, get_data = lib.AudioObjectGetPropertyDataSize, lib.AudioObjectGetPropertyData
+    # Without explicit prototypes ctypes truncates the pointers and the
+    # process dies on the first call.
+    get_size.restype = get_data.restype = ctypes.c_int32
+    get_size.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(_Address), ctypes.c_uint32,
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
+    ]
+    get_data.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(_Address), ctypes.c_uint32,
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+    ]
+
+    def size_of(obj, selector, scope=GLOBAL_SCOPE):
+        addr, out = _Address(selector, scope, 0), ctypes.c_uint32(0)
+        if get_size(obj, ctypes.byref(addr), 0, None, ctypes.byref(out)) != 0:
+            return 0
+        return out.value
+
+    def read(obj, selector, size, scope=GLOBAL_SCOPE):
+        if not size:
+            return None
+        addr = _Address(selector, scope, 0)
+        io_size, buf = ctypes.c_uint32(size), ctypes.create_string_buffer(size)
+        if get_data(obj, ctypes.byref(addr), 0, None, ctypes.byref(io_size), buf) != 0:
+            return None
+        return buf.raw[:io_size.value]
+
+    raw = read(SYSTEM_OBJECT, DEVICES, size_of(SYSTEM_OBJECT, DEVICES)) or b''
+    running = []
+    for device_id in struct.unpack(f'<{len(raw) // 4}I', raw):
+        # No input streams means it is a speaker, and can never be a mic.
+        if not size_of(device_id, STREAMS, INPUT_SCOPE):
+            continue
+        answer = read(device_id, RUNNING_SOMEWHERE, 4)
+        if answer and struct.unpack('<I', answer)[0]:
+            running.append(f'mic:{device_id}')
+    return running
+
+
+def _probe_mac() -> CaptureState:
     in_use = []
-    for media_type in (AV.AVMediaTypeVideo, AV.AVMediaTypeAudio):
-        kind = 'camera' if media_type == AV.AVMediaTypeVideo else 'mic'
-        for device in (AVCaptureDevice.devicesWithMediaType_(media_type) or []):
-            try:
-                if device.isInUseByAnotherApplication():
-                    in_use.append(f"{kind}:{device.localizedName()}")
-            except Exception:
-                continue
+    for name, probe in (('camera', _mac_camera_in_use), ('mic', _mac_mic_in_use)):
+        try:
+            in_use.extend(probe())
+        except Exception as e:
+            # One framework failing must not blind the other.
+            logger.debug(f"[CAPTURE] mac {name} probe failed: {e}")
     return CaptureState(active=bool(in_use), devices=tuple(in_use))
 
 

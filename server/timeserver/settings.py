@@ -396,9 +396,16 @@ MS_GRAPH_REDIRECT_URI = os.environ.get(
     'https://timetracker-api-k375.onrender.com/api/calendar/auth/callback/',
 )
 
+# Mail has its own callback path, so it needs its own redirect URI registered
+# in Azure AD. Default it off the calendar URI so a dev or preview environment
+# gets the right host for free. If only one URI is registered in Azure, set
+# this to that same URI — the callback dispatches on the OAuth state token, so
+# a shared URI works too.
 MS_GRAPH_MAIL_REDIRECT_URI = os.getenv(
     'MS_GRAPH_MAIL_REDIRECT_URI',
-    'https://timetracker-api-k375.onrender.com/api/mail/auth/callback/'
+    MS_GRAPH_REDIRECT_URI.replace(
+        '/api/calendar/auth/callback/', '/api/mail/auth/callback/',
+    ),
 )
 
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')

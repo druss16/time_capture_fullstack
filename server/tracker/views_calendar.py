@@ -16,6 +16,7 @@ from rest_framework.response import Response
 
 from tracker.models import UserIntegration
 from tracker.integrations import msgraph
+from tracker.views_mail import finish_mail_connection, oauth_frontend_base
 from tracker.views import get_request_org_override
 
 
@@ -62,21 +63,31 @@ def microsoft_auth_callback(request):
     """
     Microsoft redirects here after user grants consent.
     URL: /api/calendar/auth/callback/?code=...&state=...
-    
+
     No auth on this endpoint because Microsoft is the caller, not a logged-in user.
     Identity is established by the state token matching a row in UserIntegration.
+
+    Mail and calendar may share a single redirect URI registered in Azure AD,
+    so a mail consent can land here too. The provider on the row the state
+    token matches says which flow it is; mail flows are handed to
+    views_mail.finish_mail_connection().
     """
     code = request.GET.get('code')
     state = request.GET.get('state')
     error = request.GET.get('error')
     
-    frontend_base = getattr(settings, 'FRONTEND_BASE_URL', None) or settings.MS_GRAPH_REDIRECT_URI.rsplit('/api/', 1)[0]
+    frontend_base = oauth_frontend_base()
     success_url = f"{frontend_base}/account/connections?calendar=connected"
     error_url = f"{frontend_base}/account/connections?calendar=error"
     
     if error:
         logger.warning(f"[CAL-OAUTH] User cancelled or denied: {error}")
-        params = urlencode({'calendar': 'error', 'reason': error})
+        # A shared redirect URI means this may be an abandoned mail flow —
+        # name the right card on the connections page.
+        key = 'mail' if (state and UserIntegration.objects.filter(
+            provider='microsoft_mail', oauth_state=state,
+        ).exists()) else 'calendar'
+        params = urlencode({key: 'error', 'reason': error})
         return HttpResponseRedirect(f"{frontend_base}/account/connections?{params}")
     
     if not code or not state:
@@ -86,13 +97,18 @@ def microsoft_auth_callback(request):
     # Find integration by oauth_state (no user context yet — state is the lookup)
     try:
         integration = UserIntegration.objects.select_related('user', 'org').get(
-            provider='microsoft_calendar',
+            provider__in=('microsoft_calendar', 'microsoft_mail'),
             oauth_state=state,
         )
     except UserIntegration.DoesNotExist:
         logger.warning(f"[CAL-OAUTH] No matching state token: {state[:8]}...")
         return HttpResponseRedirect(f"{error_url}&reason=invalid_state")
-    
+
+    if integration.provider == 'microsoft_mail':
+        # Mail consent arriving on a shared redirect URI — same completion
+        # path as /api/mail/auth/callback/.
+        return finish_mail_connection(integration, code)
+
     # Exchange code for tokens
     try:
         result = msgraph.exchange_code_for_tokens(

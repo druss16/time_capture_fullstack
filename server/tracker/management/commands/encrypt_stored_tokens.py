@@ -1,6 +1,8 @@
 """Rewrite plaintext OAuth tokens as ciphertext.
 
-Reports by default; --apply writes. Safe to run repeatedly.
+Reports by default; --apply writes. Safe to run repeatedly — a partial run
+converts the rows it reached and the next run picks up the rest, because what
+counts as "still plaintext" is re-read from the database each time.
 
 Which rows are plaintext can only be answered in SQL: reading through the ORM
 runs the decrypt converter, so every value looks like plaintext by the time
@@ -13,6 +15,7 @@ from django.db import connection
 
 from tracker.crypto_fields import FERNET_PREFIX
 from tracker.models import Integration, UserIntegration
+from tracker.utils.db_iter import keyset_iter
 
 FIELDS = ('access_token', 'refresh_token')
 TABLES = (
@@ -61,7 +64,11 @@ class Command(BaseCommand):
                 continue
 
             done = 0
-            for row in model.objects.filter(id__in=ids).iterator():
+            # keyset_iter, not .iterator(): the latter opens a named
+            # server-side cursor, which Neon's transaction pooler invalidates
+            # as soon as the loop writes — and this loop writes to the rows it
+            # is walking.
+            for row in keyset_iter(model.objects.filter(id__in=ids)):
                 # The values are already decrypted in memory; writing them back
                 # sends them through the field, which encrypts.
                 model.objects.filter(pk=row.pk).update(

@@ -77,9 +77,8 @@ def microsoft_auth_callback(request):
     error = request.GET.get('error')
     
     frontend_base = oauth_frontend_base()
-    success_url = f"{frontend_base}/account/connections?calendar=connected"
     error_url = f"{frontend_base}/account/connections?calendar=error"
-    
+
     if error:
         logger.warning(f"[CAL-OAUTH] User cancelled or denied: {error}")
         # A shared redirect URI means this may be an abandoned mail flow —
@@ -108,6 +107,26 @@ def microsoft_auth_callback(request):
         # Mail consent arriving on a shared redirect URI — same completion
         # path as /api/mail/auth/callback/.
         return finish_mail_connection(integration, code)
+
+    return finish_calendar_connection(integration, code)
+
+
+def finish_calendar_connection(integration, code):
+    """
+    Complete a calendar connection: trade the code for tokens and persist
+    them. Called by the calendar callback, and by the mail callback when a
+    calendar consent lands there because both flows share one registered
+    redirect URI.
+
+    The exchange repeats MS_GRAPH_REDIRECT_URI because that is what
+    auth_start signed in with — Graph rejects a redirect_uri that differs
+    from the one the code was issued for, whichever path it landed on.
+
+    Returns the HttpResponseRedirect to send the user back to the app with.
+    """
+    frontend_base = oauth_frontend_base()
+    success_url = f"{frontend_base}/account/connections?calendar=connected"
+    error_url = f"{frontend_base}/account/connections?calendar=error"
 
     # Exchange code for tokens
     try:

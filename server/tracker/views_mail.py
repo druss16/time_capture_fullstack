@@ -107,7 +107,12 @@ def microsoft_mail_auth_callback(request):
 
     if error:
         logger.warning(f"[MAIL-OAUTH] User cancelled or denied: {error}")
-        params = urlencode({'mail': 'error', 'reason': error})
+        # A shared redirect URI means this may be an abandoned calendar flow —
+        # name the right card on the connections page.
+        key = 'calendar' if (state and UserIntegration.objects.filter(
+            provider='microsoft_calendar', oauth_state=state,
+        ).exists()) else 'mail'
+        params = urlencode({key: 'error', 'reason': error})
         return HttpResponseRedirect(f"{frontend_base}/account/connections?{params}")
 
     if not code or not state:
@@ -116,12 +121,19 @@ def microsoft_mail_auth_callback(request):
 
     try:
         integration = UserIntegration.objects.select_related('user', 'org').get(
-            provider='microsoft_mail',
+            provider__in=('microsoft_mail', 'microsoft_calendar'),
             oauth_state=state,
         )
     except UserIntegration.DoesNotExist:
         logger.warning(f"[MAIL-OAUTH] No matching state token: {state[:8]}...")
         return HttpResponseRedirect(f"{error_base}&reason=invalid_state")
+
+    if integration.provider == 'microsoft_calendar':
+        # Calendar consent arriving on a shared redirect URI. Imported here
+        # rather than at module scope: views_calendar imports this module, so
+        # a top-level import back would be circular.
+        from tracker.views_calendar import finish_calendar_connection
+        return finish_calendar_connection(integration, code)
 
     return finish_mail_connection(integration, code)
 

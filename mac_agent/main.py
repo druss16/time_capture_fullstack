@@ -603,6 +603,66 @@ _DETECTION_STATS = {"system_events": 0, "nsworkspace": 0, "quartz": 0, "failed":
 PAIR_CODE = _get("pair_code", os.getenv("AGENT_PAIR_CODE"))
 
 MOUSE_IDLE_PAUSE_S = int(_get("mouse_idle_pause_seconds", os.getenv("AGENT_MOUSE_IDLE_PAUSE_SECONDS") or 600))
+
+
+# ── Camera/mic holds idle open ───────────────────────────────────────────────
+# Talking is not input. A video consult with no typing looks exactly like an
+# empty desk to the OS idle timer — which is how a 60-minute telehealth call
+# became a 14-minute block. If a camera or microphone is open, the person is
+# working, whatever the mouse says.
+#
+# This is separate from meeting detection on purpose. That asks "which meeting
+# app, for which client" and is conservative — browser media without a known
+# meeting title is dropped as playback, which is right for Spotify and wrong
+# for a call on a site nobody whitelisted. Here a false negative silently
+# destroys billable time, while a false positive inflates a block a human sees.
+#
+# Capped, because a device that is never released (a stuck tab, a dictation
+# tool) would otherwise bill straight through the night.
+CAPTURE_IDLE_SUPPRESS_MAX_S = int(_get("capture_idle_suppress_max_seconds", 7200))
+
+_capture_suppress_since = 0.0
+_capture_capped_logged = 0.0
+
+
+def _capture_holds_idle_open(idle_s: float) -> bool:
+    """True while a camera or mic is open and the suppression cap has room.
+
+    Called every iteration, not only once the idle threshold is crossed: any
+    input clears the cap timer, and a two-hour call with occasional typing
+    must not arrive at its quiet stretches with the cap already spent. The
+    device probe still only runs when idle, so an active user costs nothing.
+    """
+    global _capture_suppress_since, _capture_capped_logged
+
+    if not MEDIA_CAPTURE_AVAILABLE:
+        return False
+
+    if idle_s < MOUSE_IDLE_PAUSE_S:
+        _capture_suppress_since = 0.0
+        return False
+
+    state = capture_in_use()
+    now = time.time()
+
+    if not state.active:
+        _capture_suppress_since = 0.0
+        return False
+
+    if not _capture_suppress_since:
+        _capture_suppress_since = now
+        log(f"[CAPTURE] {', '.join(state.devices) or 'device'} in use — "
+            f"holding idle off (input quiet {int(idle_s)}s)")
+
+    held = now - _capture_suppress_since
+    if held > CAPTURE_IDLE_SUPPRESS_MAX_S:
+        if now - _capture_capped_logged > 300:
+            _capture_capped_logged = now
+            log(f"[CAPTURE] Device held {int(held // 60)}m with no input — cap "
+                f"reached, allowing idle ({', '.join(state.devices)})", "warning")
+        return False
+
+    return True
 IDLE_SIG = ("Idle", "__idle__", "Idle/Uncategorized", None, None)
 _wake_event = threading.Event()
 _wake_idle_bypass_until = 0.0
@@ -1320,6 +1380,15 @@ def snapshot_ctx() -> dict:
 
 # ---------------- macOS frameworks ----------------
 from AppKit import NSWorkspace, NSRunningApplication
+
+# Camera/mic capture probe — keeps a silent video call out of idle
+try:
+    from media_capture import capture_in_use
+    MEDIA_CAPTURE_AVAILABLE = True
+except ImportError:
+    MEDIA_CAPTURE_AVAILABLE = False
+    capture_in_use = None
+    print("[WARN] media_capture.py not found - camera/mic idle suppression disabled")
 
 AX_AVAILABLE = False
 if not DISABLE_AX:
@@ -3965,6 +4034,12 @@ def run_agent():
                     if current_sig and current_sig != IDLE_SIG:
                         app_name, bundle_id, title, url, fpath = current_sig
                         in_meeting = is_in_meeting(bundle_id, url, app_name, title)
+
+                    # A live camera or mic counts as working, even when the
+                    # site is one nobody whitelisted — see
+                    # _capture_holds_idle_open().
+                    if _capture_holds_idle_open(idle):
+                        in_meeting = True
                     
                     # ── IDLE ENTRY: lock screen, or mouse idle (unless in meeting) ──
                     _in_wake_bypass = time.time() < _wake_idle_bypass_until

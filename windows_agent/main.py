@@ -440,10 +440,20 @@ _capture_capped_logged = 0.0
 
 
 def _capture_holds_idle_open(idle_s: float) -> bool:
-    """True while a camera or mic is open and the suppression cap has room."""
+    """True while a camera or mic is open and the suppression cap has room.
+
+    Called every iteration, not only once the idle threshold is crossed: any
+    input clears the cap timer, and a two-hour call with occasional typing
+    must not arrive at its quiet stretches with the cap already spent. The
+    device probe still only runs when idle, so an active user costs nothing.
+    """
     global _capture_suppress_since, _capture_capped_logged
 
     if not MEDIA_CAPTURE_AVAILABLE:
+        return False
+
+    if idle_s < MOUSE_IDLE_PAUSE_S:
+        _capture_suppress_since = 0.0
         return False
 
     state = capture_in_use()
@@ -3772,8 +3782,8 @@ def run_agent():
                         # A live camera or mic counts as working, even when
                         # no meeting app is recognised — see
                         # _capture_holds_idle_open().
-                        if not in_meeting and idle >= MOUSE_IDLE_PAUSE_S:
-                            in_meeting = _capture_holds_idle_open(idle)
+                        if _capture_holds_idle_open(idle):
+                            in_meeting = True
 
                         if in_meeting:
                             front = front_peek

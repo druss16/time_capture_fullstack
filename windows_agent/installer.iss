@@ -95,6 +95,38 @@ Filename: "{cmd}"; Parameters: "/c taskkill /F /IM tt_watchdog.exe /T"; Flags: r
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM TimeTrackerAgent.exe /T"; Flags: runhidden; RunOnceId: "KillAgent"
 Filename: "{cmd}"; Parameters: "/c taskkill /F /IM TimeTracker.exe /T"; Flags: runhidden; RunOnceId: "KillGui"
 
+; ── Browser extension, installed silently when we have the rights ──────────
+;
+; The extension is normally installed by the agent at runtime, but an
+; unprivileged agent cannot write HKCU\Software\Policies (ACL'd to
+; Administrators and SYSTEM), so it falls back to an EXTERNAL extension
+; registration. That works, but the browser then parks the extension DISABLED
+; behind "Another program on your computer added an extension..." and asks the
+; user to approve it, once per browser profile.
+;
+; Setup is the one moment we may already have admin — IT deploying through
+; Intune or SCCM runs this as SYSTEM, and a manual install can elevate via
+; PrivilegesRequiredOverridesAllowed. When that is the case, write the
+; MACHINE-WIDE policy here instead: the extension then arrives enabled, for
+; every user on the box, with no prompt and no way for a user to remove it.
+;
+; Guarded by IsAdminInstallMode so a non-elevated install writes nothing and
+; behaves exactly as before, leaving the agent's fallback to do its job.
+;
+; The value NAMES are deliberately high numbers, not "1". Chrome enumerates
+; every value under this key, and an IT-managed forcelist may already occupy
+; the low slots — writing "1" would silently clobber somebody else's extension.
+; uninsdeletevalue removes only our own entries on uninstall.
+[Registry]
+Root: HKLM; Subkey: "Software\Policies\Google\Chrome\ExtensionInstallForcelist"; \
+  ValueType: string; ValueName: "9001"; \
+  ValueData: "ophdgbaogdhfdhmfnnjniegccekmgfok;https://clients2.google.com/service/update2/crx"; \
+  Flags: uninsdeletevalue; Check: IsAdminInstallMode
+Root: HKLM; Subkey: "Software\Policies\Microsoft\Edge\ExtensionInstallForcelist"; \
+  ValueType: string; ValueName: "9001"; \
+  ValueData: "bnnifiompbeebhapoojlonamdghmlifh;https://edge.microsoft.com/extensionwebstorebase/v1/crx"; \
+  Flags: uninsdeletevalue; Check: IsAdminInstallMode
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 Type: filesandordirs; Name: "{localappdata}\Programs\TimeTracker"

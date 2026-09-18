@@ -25,6 +25,11 @@ import urllib.error
 # How often to re-check while agent is running (seconds)
 RECHECK_INTERVAL = 300  # 5 mins
 
+# Retry backoff after a FAILED install: 60s, 120s, 240s ... capped at an hour.
+# A transient locked file should cost a minute, not a release.
+RETRY_BACKOFF_BASE = 60
+RETRY_BACKOFF_MAX = 3600
+
 # Network readiness settings
 NETWORK_READY_MAX_WAIT = 30
 NETWORK_READY_POLL = 3
@@ -124,8 +129,38 @@ def _cleanup_file(path: str):
 
 def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = None) -> bool:
     """
-    Download zip of new agent files and extract via bat script after agent exits.
-    No installer involved — writes directly to user-owned LocalAppData.
+    Download the new agent and hand extraction to a detached PowerShell script.
+
+    WHY THIS IS NOT A THREE-LINE BAT ANY MORE
+    -----------------------------------------
+    It used to be: sleep 3, taskkill, sleep 2, Expand-Archive, start watchdog.
+    Two fixed sleeps standing in for "the agent has exited" and "extraction
+    finished". A 37 MB / 1057-file archive does not extract in the gap between
+    them, and the field log of the 1.9.3 -> 1.9.4 update shows exactly what that
+    costs:
+
+        13:34:55  Update bat launched - exiting old agent
+        13:35:04  (agent restarts - STILL 1.9.3)
+        13:35:08  Nag says installed but still on 1.9.3 - retrying
+        13:35:12  Zip update failed: [Errno 13] Permission denied: ...-1.9.4.zip
+
+    Expand-Archive was still running and still holding the zip when the
+    scheduled task restarted the old agent, which then tried to re-download on
+    top of the file its own updater had open. The update silently did not
+    happen, and the retry could not happen either.
+
+    Three things fix it, and all three matter:
+      * the zip path is unique per attempt, so a retry can never collide with an
+        extraction still in flight;
+      * the updater WAITS for the processes to actually exit and RETRIES the
+        extraction, instead of assuming five seconds was enough;
+      * it kills anything that got started during the extraction before
+        restarting, because the scheduled task does not know an update is
+        running.
+
+    It also verifies the version on disk afterwards and writes its own log, so
+    the next failure says what happened instead of looking like a version number
+    that will not move.
     """
     import subprocess
     import tempfile
@@ -134,10 +169,19 @@ def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = 
         _log("[UPDATE] No zip_url provided — cannot update")
         return False
 
-    update_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker", "Updates")
+    local = os.environ.get("LOCALAPPDATA", "")
+    install_dir = os.path.join(local, "TimeTracker")
+    update_dir = os.path.join(install_dir, "Updates")
+    log_dir = os.path.join(install_dir, "Logs")
     os.makedirs(update_dir, exist_ok=True)
-    zip_path = os.path.join(update_dir, f"TimeTrackerAgent-{latest_version}.zip")
-    install_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "TimeTracker")
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Unique per attempt. The old fixed name is precisely what produced
+    # [Errno 13]: a second attempt reopened the file the first attempt's
+    # Expand-Archive still had open.
+    stamp = f"{os.getpid()}-{int(time.time())}"
+    zip_path = os.path.join(update_dir, f"TimeTrackerAgent-{latest_version}-{stamp}.zip")
+    update_log = os.path.join(log_dir, "update.log")
 
     try:
         if not _wait_for_network(zip_url):
@@ -152,32 +196,121 @@ def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = 
             _cleanup_file(zip_path)
             return False
 
-        # Can't extract while agent is running — files are locked.
-        # Bat script waits 3s for agent to exit, extracts zip, launches new agent.
-        new_exe = _installed_agent_path()
-        bat = os.path.join(tempfile.gettempdir(), "tt_update.bat")
-        with open(bat, "w") as f:
-            f.write("@echo off\n")
-            f.write("timeout /t 3 /nobreak >NUL\n")
-            # Kill watchdog before replacing files
-            f.write("taskkill /F /IM tt_watchdog.exe 2>nul\n")
-            f.write("taskkill /F /IM TimeTrackerAgent.exe 2>nul\n")
-            f.write("timeout /t 2 /nobreak >NUL\n")
-            # Extract new files
-            f.write(f'powershell -Command "Expand-Archive -Path \\"{zip_path}\\" -DestinationPath \\"{install_dir}\\" -Force"\n')
-            f.write(f'del "{zip_path}"\n')
-            # Start watchdog — it will start the agent
-            f.write(f'start "" "{os.path.join(install_dir, "tt_watchdog.exe")}"\n')
-            f.write('del "%~f0"\n')
+        watchdog = os.path.join(install_dir, "tt_watchdog.exe")
+        ps1 = os.path.join(tempfile.gettempdir(), f"tt_update-{stamp}.ps1")
+        with open(ps1, "w", encoding="utf-8") as f:
+            f.write(_UPDATER_PS1)
 
-        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)
-        _log(f"[UPDATE] ✅ Update bat launched — exiting old agent")
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1,
+             "-Zip", zip_path, "-InstallDir", install_dir,
+             "-Watchdog", watchdog, "-Version", latest_version, "-LogFile", update_log],
+            creationflags=0x08000000,
+        )
+        _log(f"[UPDATE] Updater launched (log: {update_log}) — exiting old agent")
         return True
 
     except Exception as e:
         _log(f"[UPDATE] Zip update failed: {e}")
         _cleanup_file(zip_path)
         return False
+
+
+# The detached updater. Runs after the agent exits, so nothing here may assume
+# the agent is alive — it logs to its own file and is the only account of what
+# happened if the version does not change.
+_UPDATER_PS1 = r"""
+param(
+  [Parameter(Mandatory=$true)][string]$Zip,
+  [Parameter(Mandatory=$true)][string]$InstallDir,
+  [Parameter(Mandatory=$true)][string]$Watchdog,
+  [Parameter(Mandatory=$true)][string]$Version,
+  [Parameter(Mandatory=$true)][string]$LogFile
+)
+
+function W($m) {
+  try { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" |
+        Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+}
+
+function Stop-Agent {
+  foreach ($n in @('TimeTrackerAgent','tt_watchdog')) {
+    Get-Process -Name $n -ErrorAction SilentlyContinue |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+  }
+}
+
+W "=== update to v$Version starting (zip: $Zip)"
+
+# 1. Stop the agent and WAIT for it to really be gone. The old bat slept two
+#    seconds and hoped; a locked file is what made the extraction fail.
+Stop-Agent
+$deadline = (Get-Date).AddSeconds(60)
+while ((Get-Date) -lt $deadline) {
+  $alive = @(Get-Process -Name 'TimeTrackerAgent','tt_watchdog' -ErrorAction SilentlyContinue)
+  if ($alive.Count -eq 0) { break }
+  Start-Sleep -Milliseconds 500
+}
+$alive = @(Get-Process -Name 'TimeTrackerAgent','tt_watchdog' -ErrorAction SilentlyContinue)
+W ("processes still alive after wait: " + $alive.Count)
+
+# 2. Extract, retrying. A transient lock should cost seconds, not a whole
+#    release.
+$ok = $false
+for ($i = 1; $i -le 5; $i++) {
+  try {
+    Expand-Archive -LiteralPath $Zip -DestinationPath $InstallDir -Force -ErrorAction Stop
+    $ok = $true
+    W "extraction succeeded on attempt $i"
+    break
+  } catch {
+    W "extraction attempt $i failed: $($_.Exception.Message)"
+    Stop-Agent
+    Start-Sleep -Seconds 3
+  }
+}
+
+# 3. Say what is actually on disk now. A silent wrong version is the whole
+#    reason this script exists.
+$vf = Join-Path $InstallDir '_internal\version.py'
+if (Test-Path $vf) {
+  $line = (Get-Content $vf | Where-Object { $_ -match 'APP_VERSION' }) -join ' '
+  W "on disk after extraction: $line"
+  if ($line -notmatch [regex]::Escape($Version)) {
+    W "WARNING: expected v$Version on disk and did not find it"
+  }
+} else {
+  W "WARNING: $vf missing after extraction"
+}
+
+if ($ok) {
+  Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
+} else {
+  W "EXTRACTION FAILED - previous install left in place, zip kept for diagnosis"
+}
+
+# 4. The scheduled task does not know an update is running and may have started
+#    the OLD agent while we extracted. Kill whatever is there, then start clean,
+#    or the machine keeps running the version we just replaced.
+Stop-Agent
+Start-Sleep -Milliseconds 500
+try {
+  Start-Process -FilePath $Watchdog -ErrorAction Stop
+  W "watchdog restarted"
+} catch {
+  W "could not start watchdog: $($_.Exception.Message)"
+}
+
+# Old zips from earlier attempts pile up at ~37 MB each.
+try {
+  Get-ChildItem (Join-Path $InstallDir 'Updates') -Filter 'TimeTrackerAgent-*.zip' -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+} catch {}
+
+W "=== update finished (extracted=$ok)"
+try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}
+"""
 
 
 def _auto_update_mac(download_url: str, latest_version: str) -> bool:
@@ -251,7 +384,15 @@ def _already_nagged(version: str) -> bool:
                 if time.time() - nag_ts > 86400:
                     return False
                 if not data.get("download_ok"):
-                    if time.time() - nag_ts > 3600:
+                    # Progressive, not a flat hour. This branch used to sit out
+                    # 3600s after ANY failure — including one transient locked
+                    # file — while logging "will retry next cycle", which was
+                    # not what it did. A machine could therefore sit on the old
+                    # version for an hour with one misleading line to explain it.
+                    attempts = int(data.get("attempts", 1) or 1)
+                    backoff = min(RETRY_BACKOFF_BASE * (2 ** max(0, attempts - 1)),
+                                  RETRY_BACKOFF_MAX)
+                    if time.time() - nag_ts > backoff:
                         return False
                 return True
     except Exception:
@@ -260,11 +401,27 @@ def _already_nagged(version: str) -> bool:
 
 
 def _mark_nagged(version: str, download_ok: bool = False):
+    """
+    Record an attempt. `attempts` drives the retry backoff, and only counts
+    consecutive failures for the SAME version — a new version starts fresh,
+    because a release that failed says nothing about the next one.
+    """
     try:
         path = _nag_file()
+        attempts = 0
+        if not download_ok:
+            try:
+                with open(path) as f:
+                    prev = json.load(f)
+                if prev.get("version") == version and not prev.get("download_ok"):
+                    attempts = int(prev.get("attempts", 0) or 0)
+            except Exception:
+                attempts = 0
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"version": version, "ts": time.time(), "download_ok": download_ok}, f)
+            json.dump({"version": version, "ts": time.time(),
+                       "download_ok": download_ok,
+                       "attempts": attempts + (0 if download_ok else 1)}, f)
     except Exception:
         pass
 
@@ -411,7 +568,8 @@ def check_for_update_blocking(api_base: str, current_version: str):
                     else:
                         _log(f"[UPDATE] ✅ v{latest} install complete — will restart on next mtime check")
                 else:
-                    _log("[UPDATE] Download/install failed - will retry later")
+                    _log("[UPDATE] Download/install failed — backing off, see "
+                         "Logs/update.log for what the updater saw")
 
             threading.Thread(target=_bg_update, daemon=True).start()
 
@@ -490,7 +648,8 @@ def start_background_checker(api_base: str, current_version: str):
                         else:
                             _log(f"[UPDATE] ✅ v{latest} installed — will restart on next mtime check")
                     else:
-                        _log("[UPDATE] Download/install failed - will retry next cycle")
+                        _log("[UPDATE] Download/install failed — backing off, see "
+                             "Logs/update.log for what the updater saw")
 
             except Exception as e:
                 _log(f"[UPDATE] Background check error (non-fatal): {e}")

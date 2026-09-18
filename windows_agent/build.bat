@@ -53,7 +53,7 @@ if errorlevel 1 (
 REM Build Agent (no console, background service)
 echo.
 echo [4/5] Building TimeTrackerAgent.exe (Background Agent)...
-python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --icon "timetracker.ico" --hidden-import=timetracker_gui --add-data "timetracker_gui.py;." main.py
+python -m PyInstaller --onefile --noconsole --name "TimeTrackerAgent" --icon "timetracker.ico" --hidden-import=timetracker_gui --hidden-import=ensure_extension --add-data "timetracker_gui.py;." --add-data "ensure_extension.py;." main.py
 if errorlevel 1 (
     echo ERROR: Failed to build TimeTrackerAgent.exe
     pause

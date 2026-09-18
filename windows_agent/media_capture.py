@@ -163,21 +163,33 @@ def _mac_mic_in_use() -> list:
 
 
 def _probe_mac() -> CaptureState:
-    in_use = []
+    in_use, broken = [], []
     for name, probe in (('camera', _mac_camera_in_use), ('mic', _mac_mic_in_use)):
         try:
             in_use.extend(probe())
         except Exception as e:
-            # One framework failing must not blind the other.
+            # One framework failing must not blind the other — but it must not
+            # pass for "no device in use" either. A probe that cannot run and a
+            # camera that is off are the same silence, and only one of them is
+            # good news.
+            broken.append(f"{name}: {e}")
             logger.debug(f"[CAPTURE] mac {name} probe failed: {e}")
-    return CaptureState(active=bool(in_use), devices=tuple(in_use))
+    return CaptureState(
+        active=bool(in_use),
+        devices=tuple(in_use),
+        error='; '.join(broken),
+    )
+
+
+FIELDS = ('webcam', 'microphone')
 
 
 def _probe_windows() -> CaptureState:
     import winreg
 
     in_use = []
-    for device_type in ('webcam', 'microphone'):
+    missing_stores = 0
+    for device_type in FIELDS:
         kind = 'camera' if device_type == 'webcam' else 'mic'
         base = (
             r"Software\Microsoft\Windows\CurrentVersion"
@@ -195,6 +207,7 @@ def _probe_windows() -> CaptureState:
                     except OSError:
                         break
         except FileNotFoundError:
+            missing_stores += 1
             continue
 
         for hive in hives:
@@ -218,6 +231,13 @@ def _probe_windows() -> CaptureState:
                             in_use.append(f"{kind}:{who.rsplit(chr(92), 1)[-1]}")
             except OSError:
                 continue
+
+    if missing_stores == len(FIELDS):
+        # No consent store at all: this machine cannot report device use, which
+        # is not the same as no device being in use.
+        return CaptureState(
+            error='no CapabilityAccessManager consent store for webcam or microphone',
+        )
 
     return CaptureState(active=bool(in_use), devices=tuple(in_use))
 

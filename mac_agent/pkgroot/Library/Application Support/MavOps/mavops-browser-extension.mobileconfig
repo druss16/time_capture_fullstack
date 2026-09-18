@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Force-install the TimeTracker URL Reporter extension in Chrome and Edge on macOS.
+
+  WHY THIS FILE EXISTS
+  ====================
+  On Windows the agent installs the extension itself: ensure_extension.py writes
+  a PER-USER ExtensionInstallForcelist under HKCU, which Chrome and Edge both
+  honour without admin rights. macOS has no equivalent. Chrome reads policy from
+  the managed-preferences domain and ignores anything that is not *forced*, so a
+  `defaults write` does nothing and the agent — which runs unprivileged — cannot
+  install the extension on its own. It takes a configuration profile.
+
+  WHAT IS LOST WITHOUT IT
+  =======================
+  PARITY.md says the extension "matters less" on a Mac because the agent reads
+  browser URLs directly over AppleScript. That is no longer the whole story. The
+  native reader gives the URL; it does NOT give the two things the extension was
+  built to capture, because neither is in the address bar:
+
+    * clio_matter_id  — which Clio matter is open. Tier 0 of matter attribution
+                        (services/matter_attribution.py), and the only signal
+                        that separates two same-named matters for one client.
+    * qbo_company_id  — which QuickBooks Online company is open.
+
+  A Mac firm without this profile gets no matter attribution beyond what a
+  filename happens to spell out. For a law firm that is most of the value.
+
+  HOW TO INSTALL
+  ==============
+  Preferred — via MDM (Jamf, Kandji, Mosyle, Intune):
+      Upload this file as a custom configuration profile, scope it to the
+      machines running the agent. No user interaction.
+
+  Without MDM, per machine:
+      sudo profiles install -path "/Library/Application Support/MavOps/mavops-browser-extension.mobileconfig"
+      Then approve it in System Settings -> General -> Device Management.
+
+  Quit and reopen the browser afterwards. Verify at chrome://policy (or
+  edge://policy) — ExtensionInstallForcelist should list the id below — and then
+  at chrome://extensions, where the extension appears as "Installed by your
+  administrator" and cannot be removed by the user.
+
+  MAINTENANCE
+  ===========
+  The policy pins the extension ID, never a version, so updates arrive on their
+  own: the browser polls the store roughly every few hours and upgrades
+  silently. Publishing a new version to the store is the entire update
+  procedure. This file only ever changes if an extension ID changes.
+
+  The two ids differ because each store mints its own. They are the same ids the
+  Windows agent force-lists in ensure_extension.py; keep the two in sync.
+-->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+
+    <!-- Google Chrome -->
+    <dict>
+      <key>PayloadType</key><string>com.google.Chrome</string>
+      <key>PayloadIdentifier</key><string>com.mavops.browserext.chrome</string>
+      <key>PayloadUUID</key><string>69186724-05D8-4260-97E2-71239CC03204</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>Chrome: TimeTracker URL Reporter</string>
+      <key>PayloadEnabled</key><true/>
+
+      <key>ExtensionInstallForcelist</key>
+      <array>
+        <string>ophdgbaogdhfdhmfnnjniegccekmgfok;https://clients2.google.com/service/update2/crx</string>
+      </array>
+    </dict>
+
+    <!-- Microsoft Edge -->
+    <dict>
+      <key>PayloadType</key><string>com.microsoft.Edge</string>
+      <key>PayloadIdentifier</key><string>com.mavops.browserext.edge</string>
+      <key>PayloadUUID</key><string>DA63878A-88D0-4482-87E9-DC0EF54FD00B</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>Edge: TimeTracker URL Reporter</string>
+      <key>PayloadEnabled</key><true/>
+
+      <key>ExtensionInstallForcelist</key>
+      <array>
+        <string>bnnifiompbeebhapoojlonamdghmlifh;https://edge.microsoft.com/extensionwebstorebase/v1/crx</string>
+      </array>
+    </dict>
+
+  </array>
+
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadIdentifier</key><string>com.mavops.profile.browserextension</string>
+  <key>PayloadUUID</key><string>46249E7E-2B52-47E6-BD15-2F43F713DEF1</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadScope</key><string>System</string>
+  <key>PayloadDisplayName</key><string>MavOps – TimeTracker Browser Extension</string>
+  <key>PayloadOrganization</key><string>MavOps</string>
+  <key>PayloadDescription</key><string>Installs the TimeTracker URL Reporter extension in Chrome and Edge so browser work is attributed to the right client and matter.</string>
+  <key>PayloadRemovalDisallowed</key><false/>
+</dict>
+</plist>

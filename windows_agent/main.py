@@ -3422,11 +3422,17 @@ def run_agent():
     # Reaches manually-installed machines (no MDM/GPO) via normal auto-update:
     # writes HKCU ExtensionInstallForcelist policies so Edge AND Chrome silently
     # install the URL Reporter extension. Idempotent + fail-open.
+    # log(), not print(): the agent is built --noconsole, so a print here goes to
+    # a stdout that does not exist. That is how this step stayed broken in every
+    # signed release since v1.7.15 — `ensure_extension` was never declared to
+    # PyInstaller, the import raised ModuleNotFoundError, and the one message
+    # that said so was written somewhere nobody could read. A feature that can
+    # fail must fail where someone will see it.
     try:
         from ensure_extension import ensure_extensions_forceinstall
-        ensure_extensions_forceinstall(log=lambda m: print(m, flush=True))
+        ensure_extensions_forceinstall(log=log)
     except Exception as _ext_e:
-        print(f"[EXT] force-install step skipped: {_ext_e}", flush=True)
+        log(f"[EXT] force-install step SKIPPED: {_ext_e}")
 
     # === EXTERNAL WATCHDOG TASK ===
     try:

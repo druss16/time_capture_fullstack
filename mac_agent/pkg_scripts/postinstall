@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 #
+# !! THIS IS NOT THE SCRIPT A TAGGED RELEASE SHIPS. !!
+#
+# `.github/workflows/release.yml` writes its OWN preinstall/postinstall inline
+# and hands those to pkgbuild, so nothing in this directory reaches a customer
+# through a tag. This file is used by build_and_release.sh only.
+#
+# That divergence already cost a release: the browser-extension install was
+# added here, shipped in v1.9.1, and did nothing at all, because the pkg was
+# built from the inline copy. Change BOTH, or change release.yml.
+#
+# The same applies to ../pkgroot/: pkgbuild ships only dist/TimeTracker.app, so
+# files staged there are not in the payload either. Anything the installer must
+# place on disk travels inside the app bundle's Resources/.
+#
 # Load the LaunchAgent for the logged-in user.
 #
 # The agent is /Applications/TimeTracker.app, not a bare binary: it calls

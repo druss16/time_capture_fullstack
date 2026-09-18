@@ -217,6 +217,10 @@ jobs:
 
           cat > scripts/postinstall << 'SCRIPT'
           #!/bin/bash
+          # Everything below is logged: this script had no log at all, so when
+          # it silently failed to do something there was nothing to read.
+          exec >>/var/tmp/mavops-timetracker-postinstall.log 2>&1
+          echo "== postinstall $(date)"
           LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
           LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
           if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
@@ -230,9 +234,60 @@ jobs:
               chmod 644 "$PLIST_DST"
               sudo -u "$LOGGED_IN_USER" launchctl bootstrap "gui/$LOGGED_IN_UID" "$PLIST_DST"
           fi
+          # === BROWSER EXTENSION ===
+          # Chrome and Edge read "external extension" drop files: a JSON naming
+          # the store update URL, acted on at the browser's next launch. Root
+          # can write them, so the package installs the extension with nobody
+          # clicking anything.
+          #
+          # A package CANNOT install a configuration profile — Apple removed
+          # programmatic installs in macOS 13+ — so the mobileconfig staged
+          # beside this is the MDM/manual path, for ENFORCEMENT. External
+          # extensions install automatically but a user can remove one and the
+          # browser will not put it back; the profile is what survives that.
+          #
+          # Chrome ignores a drop file it considers insecurely permissioned, so
+          # the ownership and mode here are load-bearing, not tidiness.
+          drop_ext() {
+              d="$1/External Extensions"
+              mkdir -p "$d" || return 0
+              printf '{\n  "external_update_url": "%s"\n}\n' "$3" > "$d/$2.json"
+              chown root:wheel "$d" "$d/$2.json" 2>/dev/null || true
+              chmod 755 "$d" 2>/dev/null || true
+              chmod 644 "$d/$2.json" 2>/dev/null || true
+              echo "wrote $d/$2.json"
+          }
+          drop_ext "/Library/Application Support/Google/Chrome" \
+              "ophdgbaogdhfdhmfnnjniegccekmgfok" \
+              "https://clients2.google.com/service/update2/crx"
+          drop_ext "/Library/Application Support/Microsoft/Edge" \
+              "bnnifiompbeebhapoojlonamdghmlifh" \
+              "https://edge.microsoft.com/extensionwebstorebase/v1/crx"
+
+          PROFILE_SRC="/Applications/TimeTracker.app/Contents/Resources/mavops-browser-extension.mobileconfig"
+          if [ -f "$PROFILE_SRC" ]; then
+              mkdir -p "/Library/Application Support/MavOps"
+              cp "$PROFILE_SRC" "/Library/Application Support/MavOps/"
+              echo "staged $PROFILE_SRC"
+          else
+              echo "WARNING: enforcement profile missing from the app bundle"
+          fi
+
           exit 0
           SCRIPT
           chmod +x scripts/postinstall
+
+          # Stage the enforcement profile INSIDE the app bundle. pkgbuild below
+          # ships only dist/TimeTracker.app — mac_agent/pkgroot/ is not part of
+          # the payload and never has been — so anything the installer must put
+          # on disk has to travel in Resources and be copied out by postinstall,
+          # exactly as the LaunchAgent plist already does.
+          PROFILE="pkgroot/Library/Application Support/MavOps/mavops-browser-extension.mobileconfig"
+          if [ ! -f "$PROFILE" ]; then
+            echo "ERROR: $PROFILE is missing; the pkg would ship without it"
+            exit 1
+          fi
+          cp "$PROFILE" dist/TimeTracker.app/Contents/Resources/
 
           pkgbuild --component dist/TimeTracker.app \
             --identifier com.mavops.timetracker \

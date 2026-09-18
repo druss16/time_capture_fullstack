@@ -184,11 +184,36 @@ def _probe_mac() -> CaptureState:
 FIELDS = ('webcam', 'microphone')
 
 
+def _windows_in_use_at(winreg, path):
+    """True when the key at `path` records a device still held."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            last_stop, _ = winreg.QueryValueEx(key, 'LastUsedTimeStop')
+    except (FileNotFoundError, OSError):
+        return False
+    return last_stop == 0          # 0 = the app has not let go
+
+
 def _probe_windows() -> CaptureState:
+    r"""Read the CapabilityAccessManager consent store.
+
+    The store nests two different ways, and reading only one of them is how
+    this probe reported "nothing" on a machine with its camera plainly on:
+
+        ConsentStore\webcam\Microsoft.WindowsCamera_8wekyb3d8bbwe
+            LastUsedTimeStop = 0                    <- on the package key
+        ConsentStore\webcam\NonPackaged\C:#...#chrome.exe
+            LastUsedTimeStop = 0                    <- one level down
+
+    Packaged apps — Windows Camera, new Teams, anything from the Store —
+    record usage on the package family key itself. Desktop executables record
+    it under NonPackaged, keyed by encoded path. Both levels are checked.
+    """
     import winreg
 
     in_use = []
     missing_stores = 0
+
     for device_type in FIELDS:
         kind = 'camera' if device_type == 'webcam' else 'mic'
         base = (
@@ -196,10 +221,10 @@ def _probe_windows() -> CaptureState:
             r"\CapabilityAccessManager\ConsentStore"
             f"\\{device_type}"
         )
+
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as consent:
-                hives = []
-                i = 0
+                hives, i = [], 0
                 while True:
                     try:
                         hives.append(winreg.EnumKey(consent, i))
@@ -211,8 +236,15 @@ def _probe_windows() -> CaptureState:
             continue
 
         for hive in hives:
+            hive_path = f"{base}\\{hive}"
+
+            # Packaged app: the value lives on the package family key.
+            if _windows_in_use_at(winreg, hive_path):
+                in_use.append(f"{kind}:{hive}")
+
+            # Desktop app: one level down, keyed by encoded exe path.
             try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{base}\\{hive}") as hive_key:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, hive_path) as hive_key:
                     j = 0
                     while True:
                         try:
@@ -220,15 +252,10 @@ def _probe_windows() -> CaptureState:
                             j += 1
                         except OSError:
                             break
-                        try:
-                            with winreg.OpenKey(hive_key, sub) as entry:
-                                last_stop, _ = winreg.QueryValueEx(entry, 'LastUsedTimeStop')
-                        except (FileNotFoundError, OSError):
+                        if not _windows_in_use_at(winreg, f"{hive_path}\\{sub}"):
                             continue
-                        # 0 means the app still holds the device.
-                        if last_stop == 0:
-                            who = sub.replace('#', '\\') if hive.lower() == 'nonpackaged' else hive
-                            in_use.append(f"{kind}:{who.rsplit(chr(92), 1)[-1]}")
+                        who = sub.replace('#', chr(92)) if hive.lower() == 'nonpackaged' else hive
+                        in_use.append(f"{kind}:{who.rsplit(chr(92), 1)[-1]}")
             except OSError:
                 continue
 
@@ -239,7 +266,7 @@ def _probe_windows() -> CaptureState:
             error='no CapabilityAccessManager consent store for webcam or microphone',
         )
 
-    return CaptureState(active=bool(in_use), devices=tuple(in_use))
+    return CaptureState(active=bool(in_use), devices=tuple(dict.fromkeys(in_use)))
 
 
 def capture_in_use(force: bool = False) -> CaptureState:

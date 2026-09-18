@@ -278,6 +278,21 @@ class _BaseProbe:
         return []
 
 
+def _match_consent_app(path_lower: str):
+    """Map a consent-store key (exe path or package family) to a meeting app."""
+    for exe, app in MEETING_APPS_WINDOWS.items():
+        if exe in path_lower:
+            return app
+    # Packaged family names that don't appear in the exe map.
+    if 'msteams' in path_lower or 'microsoft.teams' in path_lower:
+        return 'teams'
+    if 'zoom' in path_lower:
+        return 'zoom'
+    if 'webex' in path_lower:
+        return 'webex'
+    return None
+
+
 class WindowsMeetingProbe(_BaseProbe):
     """Windows-specific detection via pycaw, registry, and psutil."""
 
@@ -402,6 +417,26 @@ class WindowsMeetingProbe(_BaseProbe):
                 continue
 
             for hive_name, hive_path in hives_to_check:
+                # A packaged app records usage on the package family key
+                # itself, not in a child key. Reading only children is why
+                # this probe never saw new Teams, Windows Camera, or anything
+                # else from the Store — the v1.2.99 note below fixed which
+                # hives were walked, but not which key the value is read from.
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, hive_path) as pkg_key:
+                        try:
+                            pkg_stop, _ = winreg.QueryValueEx(pkg_key, "LastUsedTimeStop")
+                        except FileNotFoundError:
+                            pkg_stop = None
+                    if pkg_stop == 0:
+                        pkg_app = _match_consent_app(hive_name.lower())
+                        if pkg_app:
+                            results.append(DetectionProbe(
+                                active=True, app=pkg_app, source=source
+                            ))
+                except OSError:
+                    pass
+
                 try:
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, hive_path) as base_key:
                         i = 0
@@ -435,22 +470,7 @@ class WindowsMeetingProbe(_BaseProbe):
                                         # (MSTeams_*, etc.)
                                         path_lower = hive_name.lower()
 
-                                    matched_app = None
-                                    for exe, app in MEETING_APPS_WINDOWS.items():
-                                        if exe in path_lower:
-                                            matched_app = app
-                                            break
-
-                                    # v1.2.99: also match packaged app family
-                                    # names that don't appear in our exe map
-                                    if not matched_app:
-                                        if 'msteams' in path_lower or 'microsoft.teams' in path_lower:
-                                            matched_app = 'teams'
-                                        elif 'zoom' in path_lower:
-                                            matched_app = 'zoom'
-                                        elif 'webex' in path_lower:
-                                            matched_app = 'webex'
-
+                                    matched_app = _match_consent_app(path_lower)
                                     if matched_app:
                                         results.append(DetectionProbe(
                                             active=True, app=matched_app, source=source

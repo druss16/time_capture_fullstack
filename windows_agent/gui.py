@@ -124,6 +124,68 @@ def launchctl(args):
         return 1, "", str(e)
 
 
+# The packaged agent is TimeTrackerAgent.exe; in development it is
+# `python main.py`. Anything that looks for the agent has to accept both.
+AGENT_EXE_NAMES = ("timetrackeragent.exe",)
+
+
+def _is_agent_process(name, cmdline=None):
+    """True if this process looks like the background agent.
+
+    Matching only on "python" made a packaged agent invisible, so a paired
+    machine reported "not running" forever: the desktop icon silently spawned
+    another copy and never showed a window.
+    """
+    name = (name or "").lower()
+    if name in AGENT_EXE_NAMES:
+        return True
+    if "python" not in name:
+        return False
+    cmd = " ".join(str(a) for a in (cmdline or [])).lower()
+    return "main.py" in cmd and "gui.py" not in cmd
+
+
+def spawn_agent_detached():
+    """Launch the background agent detached from this process.
+
+    Returns (ok, reason). Both the Start button and the desktop-icon path go
+    through here so the two can't drift apart.
+    """
+    agent_path = get_agent_script_path()
+    if not agent_path:
+        return False, "Agent not found"
+    if not os.path.exists(agent_path):
+        return False, f"Agent not found at: {agent_path}"
+
+    try:
+        if IS_WINDOWS:
+            if agent_path.endswith(".exe"):
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                DETACHED_PROCESS = 0x00000008
+                subprocess.Popen(
+                    [agent_path, "start"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+                )
+            else:
+                subprocess.Popen(
+                    f'start /b "" "{sys.executable}" "{agent_path}" start',
+                    shell=True,
+                )
+        else:
+            subprocess.Popen(
+                [sys.executable, agent_path, "start"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except Exception as e:
+        return False, str(e)
+    return True, ""
+
+
 def is_agent_running():
     """Check if agent is running - cross-platform"""
     if IS_WINDOWS:
@@ -145,8 +207,13 @@ def is_agent_running():
                     try:
                         import psutil
                         proc = psutil.Process(pid)
-                        # Check if it's a python process (not something else that reused the PID)
-                        if proc.is_running() and 'python' in proc.name().lower():
+                        # Guard against PID reuse, but accept the packaged exe as
+                        # well as a dev `python main.py`.
+                        try:
+                            cmdline = proc.cmdline()
+                        except Exception:
+                            cmdline = []
+                        if proc.is_running() and _is_agent_process(proc.name(), cmdline):
                             print(f"[GUI] Process {pid} is running (psutil)")
                             return True
                     except ImportError:
@@ -170,22 +237,10 @@ def is_agent_running():
             import psutil
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
-                    name = (proc.info.get('name') or '').lower()
-                    if 'python' not in name:
-                        continue
-                    
-                    cmdline = proc.info.get('cmdline') or []
-                    cmdline_str = ' '.join(str(arg) for arg in cmdline).lower()
-                    
-                    # Look for main.py but exclude gui.py
-                    if 'main.py' in cmdline_str and 'gui.py' not in cmdline_str:
+                    if _is_agent_process(proc.info.get('name'), proc.info.get('cmdline')):
                         print(f"[GUI] Found agent process: PID {proc.info['pid']}")
                         return True
-                    # Also check for compiled exe
-                    if 'timetracker' in cmdline_str and 'gui' not in cmdline_str:
-                        print(f"[GUI] Found timetracker process: PID {proc.info['pid']}")
-                        return True
-                        
+
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     pass
         except ImportError:
@@ -457,30 +512,41 @@ class ModernConfigGUI:
         self.update_label.pack(side="right")
         self.update_label.pack_forget()  # Hide initially
 
-    def _show_paired_success(self):
-        """Show success message pointing to system tray, then close GUI"""
-        try:
-            from CTkMessagebox import CTkMessagebox
-            CTkMessagebox(
-                title="Device Paired!",
-                message=(
-                    "TimeTracker is now running!\n\n"
-                    "Look for the ⏱ icon in your system tray\n"
-                    "(bottom-right corner of your taskbar).\n\n"
-                    "Right-click it to switch clients."
-                ),
-                icon="check",
-                option_1="Got it!"
-            )
-        except Exception:
-            messagebox.showinfo(
-                "Device Paired!",
+    def _show_paired_success(self, started=True):
+        """Confirm pairing, then close the GUI.
+
+        `started` reflects whether the agent actually came up — this used to
+        promise "TimeTracker is now running!" even when the start had failed.
+        """
+        if started:
+            title = "Device Paired!"
+            message = (
                 "TimeTracker is now running!\n\n"
-                "Look for the icon in your system tray (bottom-right corner).\n"
+                "Look for the \u23f1 icon in your system tray\n"
+                "(bottom-right corner of your taskbar).\n\n"
                 "Right-click it to switch clients."
             )
-        self.root.destroy()
-    
+            icon = "check"
+        else:
+            title = "Paired, but not running"
+            message = (
+                "This device is paired, but the background agent "
+                "didn't start.\n\n"
+                "Open TimeTracker again and press Start, or check the logs "
+                "from Advanced Settings."
+            )
+            icon = "warning"
+
+        try:
+            from CTkMessagebox import CTkMessagebox
+            CTkMessagebox(title=title, message=message, icon=icon, option_1="Got it!")
+        except Exception:
+            messagebox.showinfo(title, message)
+
+        # Leave the window open when there's something to fix.
+        if started:
+            self.root.destroy()
+
     def _create_input_field(self, parent, label, var_name, default="", placeholder="", help_text="", show=None):
         """Create a styled input field"""
         frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -566,83 +632,33 @@ class ModernConfigGUI:
     def _start_agent(self):
         """Start the agent - cross-platform"""
         try:
-            if IS_WINDOWS:
-                agent_path = get_agent_script_path()
-                print(f"[GUI] Agent path: {agent_path}")
-                
-                if not agent_path:
-                    self._show_toast("Error", "Agent not found", "error")
-                    return
-                
-                if not os.path.exists(agent_path):
-                    self._show_toast("Error", f"Agent not found at: {agent_path}", "error")
-                    return
-                
-                print(f"[GUI] Starting agent: {agent_path}")
-                
-                # Check if it's an exe or py file
-                if agent_path.endswith('.exe'):
-                    # Run exe directly
-                    try:
-                        CREATE_NEW_PROCESS_GROUP = 0x00000200
-                        DETACHED_PROCESS = 0x00000008
-                        
-                        proc = subprocess.Popen(
-                            [agent_path, "start"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            stdin=subprocess.DEVNULL,
-                            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
-                        )
-                        print(f"[GUI] Agent started with PID: {proc.pid}")
-                        self.root.after(2500, self._update_status)
-                        self._show_toast("Success", "Agent started successfully!", "success")
-                        return
-                    except Exception as e:
-                        print(f"[GUI] Failed to start exe: {e}")
-                        self._show_toast("Error", f"Failed to start agent: {e}", "error")
-                else:
-                    # Run Python script
-                    try:
-                        cmd = f'start /b "" "{sys.executable}" "{agent_path}" start'
-                        print(f"[GUI] Running: {cmd}")
-                        subprocess.Popen(cmd, shell=True)
-                        
-                        self.root.after(2500, self._update_status)
-                        self._show_toast("Success", "Agent started successfully!", "success")
-                        return
-                    except Exception as e:
-                        print(f"[GUI] Failed to start script: {e}")
-                        self._show_toast("Error", f"Failed to start agent: {e}", "error")
-            
-            else:
-                # macOS: Try launchctl first
-                if PLIST and os.path.exists(PLIST):
-                    code, _, stderr = launchctl(["load", "-w", PLIST])
-                    if code == 0:
-                        self.root.after(1000, self._update_status)
-                        self._show_toast("Success", "Agent started successfully!", "success")
-                        return
-                
-                # Fallback to direct script execution
-                agent_path = get_agent_script_path()
-                if agent_path:
-                    subprocess.Popen(
-                        [sys.executable, agent_path, "start"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
+            # macOS prefers the launch agent so it survives logout.
+            if not IS_WINDOWS and PLIST and os.path.exists(PLIST):
+                code, _, stderr = launchctl(["load", "-w", PLIST])
+                if code == 0:
                     self.root.after(1000, self._update_status)
                     self._show_toast("Success", "Agent started successfully!", "success")
-                else:
-                    self._show_toast("Error", "Agent script not found", "error")
-        
+                    return True
+
+            ok, reason = spawn_agent_detached()
+            if not ok:
+                print(f"[GUI] Failed to start agent: {reason}")
+                self._show_toast("Error", reason, "error")
+                return False
+
+            # Don't block waiting for it to come up: a one-file PyInstaller
+            # agent can be slow to cold-start, and the status line re-checks
+            # every 3s anyway — so it corrects itself either way.
+            self.root.after(2500, self._update_status)
+            self._show_toast("Success", "Agent started successfully!", "success")
+            return True
+
         except Exception as e:
             import traceback
             traceback.print_exc()
             self._show_toast("Error", f"Failed to start agent: {e}", "error")
-    
+            return False
+
     def _stop_agent(self):
         """Stop the agent - cross-platform"""
         try:
@@ -870,33 +886,34 @@ class ModernConfigGUI:
                     # Clear the pairing code field after successful pairing
                     self.pair_code_var.set("")
 
-                    # Save config immediately so agent can read it
-                    config = {
-                        "api_base": api_base,
-                        "api_key": api_key,
-                    }
+                    # Save config immediately so agent can read it. Merge into
+                    # what's already there — rebuilding the dict dropped every
+                    # other setting (verbose, notifications, tuning overrides)
+                    # on every pairing.
+                    config = dict(self.config or {})
+                    config["api_base"] = api_base
+                    config["api_key"] = api_key
                     if server_device_id:
                         config["server_device_id"] = server_device_id
                     save_config(config)
                     self.config = config
-                    
+
                     # Auto-start the agent
-                    self._start_agent()
-                    
+                    started = self._start_agent()
+
                     # Show success pointing to system tray, then close
-                    self._show_paired_success()
+                    self._show_paired_success(started)
                     return
                 else:
                     return
             
-            config = {
-                "api_base": api_base,
-                "api_key": api_key,
-            }
-            
+            config = dict(self.config or {})
+            config["api_base"] = api_base
+            config["api_key"] = api_key
+
             if server_device_id:
                 config["server_device_id"] = server_device_id
-            
+
             print(f"[GUI] Saving config: {config}")
             save_config(config)
             self.config = config
@@ -1023,45 +1040,33 @@ class ModernConfigGUI:
 
 
 def main():
-    # If already paired, auto-start agent and skip the GUI entirely
+    # The desktop/Start-menu icon runs this. Autostart uses TimeTrackerAgent.exe
+    # directly, so reaching here always means the user asked for the window —
+    # it used to start the agent and return, so after pairing the app appeared
+    # to do nothing at all, forever.
     config = load_config()
-    if config.get("api_key"):
-        if not is_agent_running():
-            agent_path = get_agent_script_path()
-            if agent_path:
-                if IS_WINDOWS:
-                    if agent_path.endswith('.exe'):
-                        CREATE_NEW_PROCESS_GROUP = 0x00000200
-                        DETACHED_PROCESS = 0x00000008
-                        subprocess.Popen(
-                            [agent_path, "start"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            stdin=subprocess.DEVNULL,
-                            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
-                        )
-                    else:
-                        subprocess.Popen(
-                            f'start /b "" "{sys.executable}" "{agent_path}" start',
-                            shell=True
-                        )
-                else:
-                    subprocess.Popen(
-                        [sys.executable, agent_path, "start"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
-        # Either way, agent is running — no GUI needed
-        return
+    start_error = ""
 
-    # Not paired yet — show the config GUI
-    if MODERN_UI:
-        app = ModernConfigGUI()
-        app.run()
-    else:
+    if config.get("api_key") and not is_agent_running():
+        ok, reason = spawn_agent_detached()
+        if not ok:
+            start_error = reason
+
+    if not MODERN_UI:
         print("CustomTkinter not installed. Run: pip install customtkinter CTkMessagebox")
         sys.exit(1)
+
+    app = ModernConfigGUI()
+    if start_error:
+        app.root.after(
+            300,
+            lambda: messagebox.showerror(
+                "TimeTracker could not start",
+                f"{start_error}\n\nThe window is open so you can check your "
+                f"settings, view the logs, or repair the device.",
+            ),
+        )
+    app.run()
 
 
 if __name__ == "__main__":

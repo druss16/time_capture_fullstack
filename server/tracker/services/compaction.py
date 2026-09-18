@@ -36,7 +36,7 @@ KEY INVARIANTS
 """
 
 from __future__ import annotations
-from datetime import datetime, timedelta, date as date_type
+from datetime import datetime, timedelta, date as date_type, timezone as dt_timezone
 from typing import Optional, List, Dict, Any
 from django.db import transaction
 from django.db.models import Q, Count
@@ -1347,6 +1347,78 @@ def _resolve_billing_rate(org, user, client_id, task_type_id=None):
     return default
 
 
+# How long a Clio matter anchor stays believable after the extension last saw it.
+#
+# The extension stamps every post with `tab_focused_at` and goes SILENT the
+# moment the browser loses focus (`reportActiveTab` returns early when no window
+# is focused). The agent's context bus, though, only ever overwrites — nothing
+# expires — so `_CONTEXT["browser_extension"]` holds the last payload
+# indefinitely and `snapshot_ctx()` copies it onto every later event's ctx.
+#
+# Un-aged, that anchor is dangerous rather than merely stale: a lawyer who opens
+# matter 00001, closes Chrome, then spends the day in Word on matter 00002's
+# documents would get every one of those blocks stamped 00001 — at tier 0, which
+# outranks both the folder memory and an explicit matter number in the filename.
+# The strongest signal we have would be the wrong one, and it would bill the
+# wrong matter with the resolver's full confidence.
+#
+# The agent already ages this exact payload when it reads a browser URL out of
+# the bus (`_BROWSER_CTX_TTL_SECONDS = 35`); the anchor just never got the same
+# treatment. Tier 0 means "Clio had this matter open" — present tense — so the
+# window is deliberately tight. Work that merely sits BETWEEN two Clio visits is
+# tier 4 (`temporal`)'s job, and that tier exists precisely for it.
+#
+# 120s rather than the agent's 35s: the extension's keepalive re-posts every 30s,
+# but MV3 service workers get killed and their alarms throttled, so a missed beat
+# or two must not drop a matter that really is open on screen.
+CLIO_ANCHOR_TTL_SECONDS = 120.0
+
+
+def _parse_ctx_timestamp(raw) -> Optional[datetime]:
+    """Parse the extension's ISO-8601 `tab_focused_at`, or None if unusable."""
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).strip().replace('Z', '+00:00'))
+    except (TypeError, ValueError):
+        return None
+    if timezone.is_naive(parsed):
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    return parsed
+
+
+def _fresh_clio_matter_id(event) -> str:
+    """
+    The Clio matter id on `event`'s browser context — but only while it was
+    still current. Returns "" otherwise.
+
+    An anchor carrying no usable `tab_focused_at` is REFUSED rather than
+    trusted. The agent's URL reader makes the same call for the same reason
+    ("No timestamp — can't verify freshness, don't trust it"), and the cost of
+    being wrong is higher here: a stale tier-0 anchor bills another client's
+    matter.
+    """
+    bx = (getattr(event, 'ctx', {}) or {}).get('browser_extension') or {}
+    cand = bx.get('clio_matter_id')
+    cand = str(cand).strip() if cand is not None else ""
+    if not cand:
+        return ""
+
+    stamped = _parse_ctx_timestamp(bx.get('tab_focused_at'))
+    if stamped is None:
+        return ""
+
+    observed = getattr(event, 'end_ts', None) or getattr(event, 'start_ts', None)
+    if observed is None:
+        return ""
+    if timezone.is_naive(observed):
+        observed = observed.replace(tzinfo=dt_timezone.utc)
+
+    # A negative age means the context arrived mid-event, which is fresh by
+    # definition, not stale — only lateness is disqualifying.
+    return cand if (observed - stamped).total_seconds() <= CLIO_ANCHOR_TTL_SECONDS else ""
+
+
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
     """Create a new block. Work pattern detection, idle classification, billing rate resolution unchanged."""
     app_name = (block_data.get("app_name") or "").lower()
@@ -1466,11 +1538,13 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
         # Same idea for Clio: a lawyer's working documents never name the matter,
         # but Clio states it exactly whenever they are looking at it. Carried
         # separately from the QBO loop above, which stops at its first hit.
+        # Newest-first, taking the newest anchor that was still CURRENT when its
+        # event fired. An anchor that went stale later in the block does not
+        # veto an earlier fresh one: if Clio was genuinely on screen during this
+        # dwell, the matter is the subject of it.
         _clio_matter_id = ""
         for _ev in reversed(block_data.get('source_events', []) or []):
-            _bx = (getattr(_ev, 'ctx', {}) or {}).get('browser_extension') or {}
-            _cand = _bx.get('clio_matter_id')
-            _cand = str(_cand).strip() if _cand is not None else ""
+            _cand = _fresh_clio_matter_id(_ev)
             if _cand:
                 _clio_matter_id = _cand
                 break

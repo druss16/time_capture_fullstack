@@ -449,7 +449,9 @@ export default function FeeBasis() {
                         ? 'text-muted-foreground/30'
                         : Math.abs(typicalDelta) < 0.1
                           ? 'text-muted-foreground/60'
-                          : 'font-semibold text-foreground/75'
+                          : typicalDelta > 0
+                            ? 'font-semibold text-emerald-700'
+                            : 'font-semibold text-red-600'
                     )}
                     title={typical == null
                       ? 'No usual yet for this client'

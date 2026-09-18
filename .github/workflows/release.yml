@@ -132,6 +132,23 @@ jobs:
       - name: Add LaunchAgent plist to app bundle
         working-directory: mac_agent
         run: |
+          # ORDER IS LOAD-BEARING. Everything that goes into the app bundle must
+          # go in HERE, before "Sign app". Adding a file to a bundle after
+          # codesign --deep breaks its seal, and notarization rejects it with
+          # "The signature of the binary is invalid" — which is what happened to
+          # v1.9.2 when the profile below was copied in at pkgbuild time.
+          #
+          # pkgbuild ships only dist/TimeTracker.app; mac_agent/pkgroot/ is not
+          # in the payload. So anything the installer must place on disk travels
+          # in Resources/ and is copied out by postinstall, exactly as the
+          # LaunchAgent plist does.
+          PROFILE="pkgroot/Library/Application Support/MavOps/mavops-browser-extension.mobileconfig"
+          if [ ! -f "$PROFILE" ]; then
+            echo "ERROR: $PROFILE is missing; the pkg would ship without it"
+            exit 1
+          fi
+          cp "$PROFILE" dist/TimeTracker.app/Contents/Resources/
+
           cat > dist/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -276,18 +293,6 @@ jobs:
           exit 0
           SCRIPT
           chmod +x scripts/postinstall
-
-          # Stage the enforcement profile INSIDE the app bundle. pkgbuild below
-          # ships only dist/TimeTracker.app — mac_agent/pkgroot/ is not part of
-          # the payload and never has been — so anything the installer must put
-          # on disk has to travel in Resources and be copied out by postinstall,
-          # exactly as the LaunchAgent plist already does.
-          PROFILE="pkgroot/Library/Application Support/MavOps/mavops-browser-extension.mobileconfig"
-          if [ ! -f "$PROFILE" ]; then
-            echo "ERROR: $PROFILE is missing; the pkg would ship without it"
-            exit 1
-          fi
-          cp "$PROFILE" dist/TimeTracker.app/Contents/Resources/
 
           pkgbuild --component dist/TimeTracker.app \
             --identifier com.mavops.timetracker \

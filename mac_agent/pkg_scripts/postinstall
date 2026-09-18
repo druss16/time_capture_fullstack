@@ -92,9 +92,12 @@ fi
 # MDM or a human clicking through System Settings. So the profile is the right
 # answer for a firm with MDM, and this is the right answer for everyone else.
 #
-# The trade is honest: external extensions INSTALL automatically but are not
-# ENFORCED. A user can disable or remove it, and Chrome remembers the removal
-# and will not put it back. Force-install via the profile is what survives that.
+# The trade is sharper than "not enforced". A drop file gets the extension
+# INSTALLED, not RUNNING: Chrome parks it disabled behind "Another program on
+# your computer added an extension...", and that approval is needed once PER
+# CHROME PROFILE. Observed on macOS 15 with v1.9.3. Fine for a beta tester who
+# can click once; wrong to hand a firm, which should get the profile instead.
+# See the same block in .github/workflows/release.yml for the full note.
 #
 # The ids below are the same two in windows_agent/ensure_extension.py and in
 # mavops-browser-extension.mobileconfig. Three copies now; keep them in step.

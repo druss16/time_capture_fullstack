@@ -259,9 +259,30 @@ jobs:
           #
           # A package CANNOT install a configuration profile — Apple removed
           # programmatic installs in macOS 13+ — so the mobileconfig staged
-          # beside this is the MDM/manual path, for ENFORCEMENT. External
-          # extensions install automatically but a user can remove one and the
-          # browser will not put it back; the profile is what survives that.
+          # beside this is the MDM path.
+          #
+          # DO NOT PLAN A FIRM-WIDE ROLLOUT ON THIS ALONE. Observed on macOS 15
+          # with v1.9.3: a drop file gets the extension INSTALLED, not RUNNING.
+          # Chrome parks it disabled and shows
+          #
+          #   "Another program on your computer added an extension that may
+          #    change the way Chrome works."  [Remove from Chrome] [Enable]
+          #
+          # which is Chrome's defence against exactly what this is — a program
+          # adding an extension. Three frictions follow, none of them ours:
+          #   1. that dialog, which reads like malware to a non-technical user;
+          #   2. the extension arrives DISABLED until somebody clicks Enable;
+          #   3. the click is PER CHROME PROFILE. A user with four profiles
+          #      approves four times.
+          # The bubble is transient; the pending state is not. It persists in
+          # each profile's Secure Preferences and is cleared only by enabling.
+          #
+          # Force-install has none of this: the extension arrives enabled and
+          # the user cannot remove it. That is the Windows path
+          # (ExtensionInstallForcelist via HKCU) and, on a Mac, the profile.
+          #
+          # So: this is the right mechanism for beta testers who can click once,
+          # and the WRONG one to hand a firm. Push the profile there.
           #
           # Chrome ignores a drop file it considers insecurely permissioned, so
           # the ownership and mode here are load-bearing, not tidiness.

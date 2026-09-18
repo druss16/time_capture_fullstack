@@ -66,6 +66,53 @@ fi
 
 /bin/launchctl print "gui/$GUI_UID/$LABEL" 2>/dev/null | grep -E 'program|state = ' || true
 
+# === BROWSER EXTENSION, INSTALLED BY THE PACKAGE ===
+# Chrome and Edge both read "external extensions" drop files: a JSON naming the
+# store update URL, which the browser acts on at its next launch. Root can write
+# them, so the package can install the extension with nobody clicking anything.
+#
+# WHY NOT THE CONFIGURATION PROFILE. mavops-browser-extension.mobileconfig is
+# also in this payload and is the STRONGER mechanism — force-installed, and the
+# user cannot remove it. But a package cannot install a profile: Apple removed
+# programmatic installs (`profiles install` is gone as of macOS 13+), leaving
+# MDM or a human clicking through System Settings. So the profile is the right
+# answer for a firm with MDM, and this is the right answer for everyone else.
+#
+# The trade is honest: external extensions INSTALL automatically but are not
+# ENFORCED. A user can disable or remove it, and Chrome remembers the removal
+# and will not put it back. Force-install via the profile is what survives that.
+#
+# The ids below are the same two in windows_agent/ensure_extension.py and in
+# mavops-browser-extension.mobileconfig. Three copies now; keep them in step.
+CHROME_EXT_ID="ophdgbaogdhfdhmfnnjniegccekmgfok"
+CHROME_UPDATE_URL="https://clients2.google.com/service/update2/crx"
+EDGE_EXT_ID="bnnifiompbeebhapoojlonamdghmlifh"
+EDGE_UPDATE_URL="https://edge.microsoft.com/extensionwebstorebase/v1/crx"
+
+drop_external_extension() {
+  # $1 = browser support dir, $2 = extension id, $3 = update url
+  local dir="$1/External Extensions"
+  local file="$dir/$2.json"
+  mkdir -p "$dir" || return 1
+  cat >"$file" <<JSON
+{
+  "external_update_url": "$3"
+}
+JSON
+  # Chrome ignores external extension files it considers insecurely permissioned,
+  # so ownership and mode are load-bearing, not tidiness.
+  chown root:wheel "$dir" "$file" || true
+  chmod 755 "$dir" || true
+  chmod 644 "$file" || true
+  echo "  wrote $file"
+}
+
+echo "Installing browser extension drop files…"
+drop_external_extension "/Library/Application Support/Google/Chrome" \
+  "$CHROME_EXT_ID" "$CHROME_UPDATE_URL" || echo "  WARNING: Chrome drop file failed"
+drop_external_extension "/Library/Application Support/Microsoft/Edge" \
+  "$EDGE_EXT_ID" "$EDGE_UPDATE_URL" || echo "  WARNING: Edge drop file failed"
+
 # Accessibility is what lets the agent read window titles. Without it the
 # agent runs and still attributes by file path and URL, but every window
 # title arrives empty. macOS 13+ requires MDM to grant it.

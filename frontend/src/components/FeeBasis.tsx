@@ -22,7 +22,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import {
   RefreshCw, Users, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Info,
-  AlertTriangle, Copy, Check,
+  AlertTriangle, Copy, Check, ArrowUp, ArrowDown,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
@@ -457,11 +457,26 @@ export default function FeeBasis() {
                       ? 'No usual yet for this client'
                       : `${c.hours.toFixed(1)}h against a usual ${typical.toFixed(1)}h`}
                   >
-                    {typical == null
-                      ? '—'
-                      : Math.abs(typicalDelta) < 0.1
-                        ? 'level'
-                        : `${typicalDelta > 0 ? '+' : '−'}${Math.abs(typicalDelta).toFixed(1)}h`}
+                    {typical == null ? (
+                      '—'
+                    ) : Math.abs(typicalDelta) < 0.1 ? (
+                      'level'
+                    ) : (
+                      <>
+                        {/* The arrow carries the direction on its own, so the
+                            column still reads for the reader who cannot tell
+                            the green from the red. */}
+                        {typicalDelta > 0 ? (
+                          <ArrowUp className="mr-px inline-block h-3 w-3 align-[-0.15em]" aria-hidden />
+                        ) : (
+                          <ArrowDown className="mr-px inline-block h-3 w-3 align-[-0.15em]" aria-hidden />
+                        )}
+                        <span className="sr-only">
+                          {typicalDelta > 0 ? 'up ' : 'down '}
+                        </span>
+                        {`${Math.abs(typicalDelta).toFixed(1)}h`}
+                      </>
+                    )}
                   </span>
                 </div>
 

@@ -676,4 +676,14 @@ jobs:
             ./intune/install_timetracker.intunewin
           tag_name: ${{ github.ref_name }}
           token: ${{ secrets.RELEASES_PAT }}
-          make_latest: true
+          # A tag carrying a pre-release suffix (v1.9.0-rc1) must NOT become the
+          # release that agents auto-update to. The server asks GitHub for
+          # `releases/latest` on druss16/timetracker-releases and hands whatever
+          # it finds to every agent that checks in, and _is_newer orders
+          # ((1,9,0),0,'rc1') above ((1,8,9),1,'') — so an unconditional
+          # make_latest published a test build straight onto the whole fleet.
+          #
+          # There was therefore no safe way to try a build on one machine before
+          # committing to it, which is exactly when a release most needs trying.
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}

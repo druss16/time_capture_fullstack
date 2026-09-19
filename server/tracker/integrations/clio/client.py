@@ -392,6 +392,10 @@ class ClioClient:
         params = {'fields': fields} if fields else None
         return self._request('PATCH', path, params=params, json_body={'data': body})
 
+    def delete(self, path: str) -> dict:
+        """Delete a record. Used to tear down webhook subscriptions."""
+        return self._request('DELETE', path)
+
     def deauthorize(self):
         """
         Tell Clio to invalidate our token. Best-effort: a firm that already

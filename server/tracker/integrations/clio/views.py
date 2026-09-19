@@ -17,8 +17,11 @@ import logging
 import secrets
 
 from django.conf import settings
+from django.db import models
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from datetime import timedelta
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -26,7 +29,7 @@ from rest_framework.response import Response
 
 import requests
 
-from tracker.models import Integration, Organization, OrganizationMembership
+from tracker.models import ClioWebhook, Integration, Organization, OrganizationMembership
 from tracker.integrations.clio.client import (
     ClioClient,
     ClioError,
@@ -154,7 +157,51 @@ def clio_callback(request):
 
     logger.info('Clio connected for org %s (region %s)',
                 integration.organization_id, region)
+
+    _start_first_sync(integration)
+
     return _oauth_success_response('clio')
+
+
+def _start_first_sync(integration):
+    """
+    Import the firm's clients and matters the moment they connect.
+
+    Before this, connecting Clio produced a card that said "Connected" and
+    "0 clients" until someone happened to find the Sync button. That reads as
+    a broken integration, and it is the first thing a firm sees.
+
+    Queued, not inline: this runs inside an OAuth redirect the browser is
+    waiting on, and a large firm's sync can sit behind rate-limit pauses for
+    minutes. But queuing is exactly what hid earlier failures — a dropped
+    task was indistinguishable from a sync that never ran. So the status is
+    written to 'pending' FIRST, which means the card can distinguish three
+    states it previously could not: never connected, importing now, and
+    imported. If the worker never picks it up, 'pending' is what stays on
+    screen, and the hourly sweep repairs it within the hour.
+    """
+    integration.last_sync_status = 'pending'
+    integration.last_sync_error = ''
+    integration.save(update_fields=[
+        'last_sync_status', 'last_sync_error', 'updated_at',
+    ])
+
+    try:
+        from tracker.integrations.clio.sync import sync_clio_full
+        sync_clio_full.delay(integration.id)
+    except Exception as e:
+        # The broker is unreachable. Say so on the card rather than leaving a
+        # 'pending' that will never resolve without explanation.
+        logger.warning('Clio first-sync enqueue failed for org %s: %s',
+                       integration.organization_id, e)
+        integration.last_sync_status = 'failed'
+        integration.last_sync_error = (
+            f'Could not start the first import ({type(e).__name__}). '
+            f'Press Sync to run it now.'
+        )[:500]
+        integration.save(update_fields=[
+            'last_sync_status', 'last_sync_error', 'updated_at',
+        ])
 
 
 @api_view(['POST'])
@@ -273,6 +320,96 @@ def clio_push_time(request):
     return Response({'dry_run': False, 'window': plan['window'], **result})
 
 
+@csrf_exempt
+def clio_webhook(request, url_token):
+    """
+    Inbound Clio callback. Unauthenticated by necessity — Clio calls this.
+
+    ORDER IS THE SECURITY PROPERTY HERE. Routing by `url_token` only selects
+    which secret to check against; it proves nothing on its own, because a
+    token in a URL is a token an attacker could have captured from a log or a
+    proxy. Nothing is written until the HMAC over the RAW body verifies.
+
+    Always answers fast. Clio retries on non-2xx, and a slow handler turns a
+    burst of matter updates into a pile of duplicate deliveries.
+    """
+    if request.method != 'POST':
+        return HttpResponse(status=405)
+
+    hook = (
+        ClioWebhook.objects
+        .select_related('integration', 'integration__organization')
+        .filter(url_token=url_token)
+        .first()
+    )
+    if hook is None:
+        # Deliberately 404 rather than 401: an unknown token should look like
+        # an unknown URL, not like a wrong password on a known one.
+        logger.warning('Clio webhook: unknown url_token')
+        return HttpResponse(status=404)
+
+    from tracker.integrations.clio import webhooks as clio_hooks
+
+    # ── Handshake ───────────────────────────────────────────────────────
+    # Clio POSTs a fresh secret in X-Hook-Secret right after creation and on
+    # any URL change. Echoing it back is what flips the subscription from
+    # `pending` to live. Skipping this is THE reason Clio webhooks silently
+    # deliver nothing, so it is handled before anything else — the handshake
+    # request has no signature to verify and no body worth reading.
+    handshake_secret = request.headers.get('X-Hook-Secret')
+    if handshake_secret:
+        # Stored ALONGSIDE the secret we supplied at creation, not over it.
+        # Clio's docs describe both mechanisms without saying which one signs
+        # the callbacks, so we keep both and verify against either — see
+        # ClioWebhook. Discarding ours here on a guess would make every later
+        # delivery fail its signature check, and a failing signature is
+        # indistinguishable from an attack in the logs.
+        hook.handshake_secret = handshake_secret
+        hook.status = 'active'
+        hook.last_error = ''
+        hook.save(update_fields=[
+            'handshake_secret', 'status', 'last_error', 'updated_at',
+        ])
+        logger.info('Clio webhook handshake completed: org %s, model %s',
+                    hook.integration.organization_id, hook.model)
+        response = HttpResponse(status=200)
+        response['X-Hook-Secret'] = handshake_secret
+        return response
+
+    # ── Signature ───────────────────────────────────────────────────────
+    signature = request.headers.get('X-Hook-Signature', '')
+    if not clio_hooks.verify_signature(hook, request.body, signature):
+        logger.warning('Clio webhook: bad signature for org %s (%s)',
+                       hook.integration.organization_id, hook.model)
+        return HttpResponse(status=401)
+
+    # ── Apply ───────────────────────────────────────────────────────────
+    try:
+        result = clio_hooks.handle_event(hook, request.body)
+    except Exception as e:
+        # 500 so Clio retries — this is our fault, not a bad payload.
+        logger.exception('Clio webhook handling failed for org %s (%s)',
+                         hook.integration.organization_id, hook.model)
+        ClioWebhook.objects.filter(pk=hook.pk).update(
+            last_error=f'{type(e).__name__}: {e}'[:500],
+        )
+        return HttpResponse(status=500)
+
+    ClioWebhook.objects.filter(pk=hook.pk).update(
+        last_event_at=timezone.now(),
+        events_received=models.F('events_received') + 1,
+        status='active',
+        last_error='' if result.get('ok') else str(result.get('reason', ''))[:500],
+    )
+
+    # 200 even on a payload we chose not to act on. Retrying a matter we
+    # skipped for a missing client would just fail identically five more
+    # times; the hourly sweep is what resolves that case.
+    logger.info('Clio webhook %s/%s → %s', hook.model,
+                hook.integration.organization_id, result)
+    return HttpResponse(status=200)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def clio_status(request):
@@ -282,6 +419,23 @@ def clio_status(request):
     if not integration:
         return Response({'connected': False})
 
+    # Live-sync health, collapsed to one word the card can render. A firm
+    # does not care which of two subscriptions lapsed; they care whether new
+    # clients are arriving on their own. 'off' is an honest answer — it means
+    # the hourly sweep is doing the work, which is a slower but working state,
+    # not an error.
+    hooks = list(ClioWebhook.objects.filter(integration=integration))
+    if not hooks:
+        live_sync = 'off'
+    elif all(h.status == 'active' for h in hooks):
+        live_sync = 'active'
+    elif any(h.status == 'active' for h in hooks):
+        live_sync = 'partial'
+    elif any(h.status == 'pending' for h in hooks):
+        live_sync = 'pending'
+    else:
+        live_sync = 'failed'
+
     return Response({
         'connected': integration.is_connected,
         'region': integration.api_region or None,
@@ -289,6 +443,18 @@ def clio_status(request):
         'last_synced_at': integration.last_synced_at,
         'last_sync_status': integration.last_sync_status or None,
         'last_sync_error': integration.last_sync_error or None,
+        'live_sync': live_sync,
+        'live_sync_detail': [
+            {
+                'model': h.model,
+                'status': h.status,
+                'expires_at': h.expires_at,
+                'last_event_at': h.last_event_at,
+                'events_received': h.events_received,
+                'last_error': h.last_error or None,
+            }
+            for h in hooks
+        ],
         'push_trigger': org.clio_push_trigger,
         'push_trigger_choices': [
             {'value': v, 'label': label}
@@ -343,6 +509,18 @@ def clio_disconnect(request):
         integration = Integration.objects.get(organization=org, provider='clio')
     except Integration.DoesNotExist:
         return Response({'success': True})
+
+    # Tear down subscriptions BEFORE dropping the token — deleting them at
+    # Clio needs the very credential the next lines destroy. Left behind, they
+    # would keep firing at a URL whose secret no longer exists, and every one
+    # of those deliveries would be a 401 in our logs until they expired.
+    try:
+        from tracker.integrations.clio.webhooks import deregister_webhooks
+        removed = deregister_webhooks(integration)
+        if removed:
+            logger.info('Clio: removed %s webhook(s) for org %s', removed, org.id)
+    except Exception as e:
+        logger.warning('Clio webhook teardown failed for org %s: %s', org.id, e)
 
     if integration.is_connected and integration.access_token:
         try:

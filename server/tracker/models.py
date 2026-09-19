@@ -4857,6 +4857,7 @@ from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402
 from tracker.models_task_type_sets import (
     TaskTypeSet, TaskTypeSetMember, ClientTaskType,
     ExternalClientMapping, ExternalTaskTypeMapping, ExternalStaffMapping,
+    ClioWebhook,
 )
 
 # Engagements — budget + progress unit (see models_engagements.py)

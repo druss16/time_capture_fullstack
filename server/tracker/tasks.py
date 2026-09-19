@@ -1940,6 +1940,20 @@ from tracker.tasks_mail import (  # noqa: F401
 # @shared_task it defines, including any added later.
 from tracker.analytics_v2.rollups import tasks as _v2_rollup_tasks  # noqa: F401
 
+# Clio sync + webhook tasks — the same autodiscovery gap, and it had already
+# bitten: sync_clio_full has carried a "runs on the scheduled sweep" docstring
+# since it was written, but it lived in integrations/clio/sync.py, which only
+# ever got imported from inside function bodies. Nothing registered it on the
+# worker, so there was no sweep to be scheduled on — a firm's client list only
+# moved when somebody pressed Sync.
+from tracker.integrations.clio.sync import (  # noqa: F401
+    sync_clio_full,
+    sync_all_clio_orgs,
+)
+from tracker.integrations.clio.webhooks import (  # noqa: F401
+    renew_clio_webhooks,
+)
+
 # At the end of your existing tracker/tasks.py, add:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)

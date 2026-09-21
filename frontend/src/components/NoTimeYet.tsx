@@ -5,11 +5,12 @@
  * Three different things produce an empty day — never set up, set up but the
  * agent is not running, and simply not working that day — and they need three
  * different sentences. An earlier version decided between them from
- * /api/devices/, which is guarded by @login_required and redirects a
+ * /api/devices/, which was guarded by @login_required and redirected a
  * token-authenticated caller to a login page rather than returning anything.
  * The empty result read as "no device", so a partner with four hundred blocks
  * that week was told the desktop app was not connected and offered a setup
- * wizard, on a day he was simply out of the office.
+ * wizard, on a day he was simply out of the office. (That endpoint has since
+ * been fixed, but it is still the wrong question to ask here.)
  *
  * Capture history is the honest signal and cannot be wrong in that direction:
  * somebody who has captured time obviously has a working agent. Setup is only
@@ -35,6 +36,26 @@ type Situation = "checking" | "never_set_up" | "agent_quiet" | "day_off";
 function daysAgo(iso: string | null): number | null {
   if (!iso) return null;
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
+
+/**
+ * When the agent last checked in, said as a fact rather than a diagnosis.
+ *
+ * Nothing the server knows can tell a laptop that is broken from a laptop that
+ * is closed on a beach — a quiet agent looks identical either way. So name the
+ * day and let the reader supply the reason: someone on vacation recognises
+ * their own last working day, and someone sitting at their desk recognises
+ * that something is wrong.
+ */
+function lastCheckIn(iso: string | null): string {
+  if (!iso) return "a while ago";
+  const d = daysAgo(iso);
+  if (d === null || d < 0) return "a while ago";
+  if (d === 0) return "earlier today";
+  if (d === 1) return "yesterday";
+  const when = new Date(iso);
+  if (d < 7) return `on ${when.toLocaleDateString(undefined, { weekday: "long" })}`;
+  return `on ${when.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
 export default function NoTimeYet({ isToday }: { isToday: boolean }) {
@@ -118,17 +139,15 @@ export default function NoTimeYet({ isToday }: { isToday: boolean }) {
   }
 
   if (situation === "agent_quiet") {
-    const d = daysAgo(status?.last_device_seen_at ?? null);
     return (
       <div className="mt-2.5">
         <h1 className="text-[22px] font-bold tracking-[-0.01em] text-slate-900">
           Nothing tracked yet today.
         </h1>
         <p className="mt-2 max-w-lg text-[14px] leading-relaxed text-slate-500">
-          If you've been working, the desktop app probably isn't running — TimeTracker
-          last heard from your computer{" "}
-          {d === null ? "a while ago" : d === 0 ? "earlier today" : d === 1 ? "yesterday" : `${d} days ago`}.
-          Open it and this page will catch up on its own.
+          Your computer last checked in {lastCheckIn(status?.last_device_seen_at ?? null)} —
+          normal if you've been away. As soon as you're back on it, this page fills in on
+          its own.
         </p>
         <Link
           to="/devices"

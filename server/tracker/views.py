@@ -760,7 +760,9 @@ def _get_user_obj(username: Optional[str]):
 
 def _get_agent_device(request):
     """Return the AgentDevice for the given API key, or None.
-    Raises PermissionError('subscription_inactive') if device exists but is deactivated.
+    Raises PermissionError if the device exists but is deactivated:
+    'device_revoked' when an admin switched it off, 'subscription_inactive'
+    otherwise.
     """
     api_key = request.META.get(AGENT_HEADER)
     if not api_key:
@@ -769,8 +771,14 @@ def _get_agent_device(request):
         return AgentDevice.objects.select_related("user").get(api_key=api_key, is_active=True)
     except AgentDevice.DoesNotExist:
         # Check if device exists but was deactivated (subscription cancelled/expired)
-        if AgentDevice.objects.filter(api_key=api_key, is_active=False).exists():
-            raise PermissionError("subscription_inactive")
+        dead = AgentDevice.objects.filter(api_key=api_key, is_active=False).first()
+        if dead is not None:
+            # An admin switching off one machine is not a lapsed subscription;
+            # see the same distinction in tracker/auth.py.
+            raise PermissionError(
+                "device_revoked" if dead.deactivated_reason == "admin_revoked"
+                else "subscription_inactive"
+            )
         return None
 
 def _host(url: str) -> str:
@@ -879,27 +887,34 @@ def pair_start(request):
     return Response({"code": pc.code, "expires_at": pc.expires_at})
 
 
-# Optional: list & manage devices
-@login_required
+# List & manage devices.
+#
+# NOT @login_required. That decorator runs before DRF authentication, so it
+# judges a token-authenticated caller by the session cookie alone and redirects
+# them to a login page. The app and the API are on different origins, so that
+# cookie is absent whenever the browser withholds third-party cookies — every
+# incognito window, and any profile with them turned off. The redirect lands on
+# a 200 HTML page, the client parses no devices out of it, and the page tells
+# somebody with a working, paired laptop that they have none. Same reason
+# /api/capture-status/ exists: see views_capture_status.
+#
+# IsAuthenticated also means MavOps "View as" works here, since DRF swaps
+# request.user during authentication.
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def my_devices(request):
     q = AgentDevice.objects.filter(user=request.user).order_by("-last_seen_at", "-created_at")
     return Response([{
         "id": d.id, "hostname": d.hostname, "device_id": d.device_id,
+        # The client renders these two as columns; omitting them printed a
+        # table of dashes next to every real machine.
+        "platform": d.platform, "app_version": d.app_version,
         "is_active": d.is_active, "last_seen_at": d.last_seen_at, "created_at": d.created_at,
     } for d in q])
 
 
-@login_required
-@api_view(["POST"])
-def revoke_device(request, pk=None):
-    try:
-        d = AgentDevice.objects.get(id=pk, user=request.user)
-    except AgentDevice.DoesNotExist:
-        return Response({"detail": "Not found."}, status=404)
-    d.is_active = False
-    d.save(update_fields=["is_active"])
-    return Response({"ok": True})
+# There is deliberately no self-service revoke. Unlinking a machine is an
+# IT decision — see settings_device_set_active, which is admin-only.
 
 @csrf_exempt
 @api_view(["POST"])
@@ -8444,26 +8459,106 @@ def settings_devices(request):
     
     return Response(result)
 
+def _org_agent_device(request, device_id):
+    """The AgentDevice with this id, if it belongs to a member of the caller's org."""
+    from tracker.models import AgentDevice, OrganizationMembership
+
+    org = get_user_org(request.user)
+    if not org:
+        return None, Response({"error": "No organization found"}, status=404)
+
+    org_user_ids = OrganizationMembership.objects.filter(
+        organization=org
+    ).values_list("user_id", flat=True)
+    try:
+        return AgentDevice.objects.select_related("user").get(
+            id=device_id, user_id__in=org_user_ids
+        ), None
+    except AgentDevice.DoesNotExist:
+        return None, Response({"error": "Device not found"}, status=404)
+
+
+def _set_device_active(device, is_active):
+    """
+    Turn a machine's agent on or off. Returns how many rows changed.
+
+    AgentKeyAuthentication is the only thing that consults AgentDevice.is_active,
+    so this flag is what actually stops or restarts an agent. Nothing else does:
+    an earlier version of this endpoint flipped a row in AgentRegistration, a
+    parallel legacy table the authenticator never reads, so the device it named
+    kept right on tracking.
+
+    Acts on every row for that user and hostname, not just the id that was
+    clicked. One physical computer can own several AgentDevice rows — agents
+    used to mint a fresh device_id on update — and settings_devices collapses
+    them, showing only the most recent. Switching off the visible row alone
+    would leave a sibling key live, and the machine would carry on tracking
+    while the page reported it revoked.
+
+    The API key is deliberately left intact. Reactivating is meant to put a
+    machine straight back to work, and burning the key would strand it with no
+    way back short of a fresh pairing code — which staff at an IT-deployed firm
+    cannot get, because that card is hidden from them.
+    """
+    from tracker.models import AgentDevice
+
+    siblings = AgentDevice.objects.filter(user_id=device.user_id)
+    # A blank hostname identifies nothing, so it must not be used to group.
+    siblings = (
+        siblings.filter(hostname=device.hostname) if device.hostname
+        else siblings.filter(pk=device.pk)
+    )
+    return siblings.update(
+        is_active=is_active,
+        # Named so the seat-overage sweep can tell an admin's decision from its
+        # own. That task reactivates only what IT deactivated for 'seat_overage'
+        # (see tasks.py), and must not quietly undo a revoke somebody meant.
+        deactivated_reason="" if is_active else "admin_revoked",
+    )
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated, IsOrgAdmin])
+def settings_device_set_active(request, device_id):
+    """
+    PATCH /api/settings/devices/<id>/  {"is_active": true|false}
+
+    Admin-only, and deliberately the only way to revoke a machine: staff must
+    not be able to unlink their own computers, so there is no counterpart on
+    /devices. The Settings tab has been calling exactly this URL since it was
+    written, but no route answered it — both its buttons 404'd.
+    """
+    is_active = (request.data or {}).get("is_active")
+    if not isinstance(is_active, bool):
+        return Response({"error": "is_active (true or false) is required."}, status=400)
+
+    device, err = _org_agent_device(request, device_id)
+    if err:
+        return err
+
+    changed = _set_device_active(device, is_active)
+    name = device.hostname or device.device_id
+    return Response({
+        "success": True,
+        "id": device.id,
+        "is_active": is_active,
+        "rows_changed": changed,
+        "message": f"{'Activated' if is_active else 'Deactivated'} device: {name}",
+    })
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsOrgAdmin])
 def settings_device_deactivate(request, device_id):
-    """Deactivate a device (revoke its agent key)"""
-    org = get_user_org(request.user)
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-    
-    try:
-        device = AgentRegistration.objects.get(id=device_id, org=org)
-    except AgentRegistration.DoesNotExist:
-        return Response({"error": "Device not found"}, status=404)
-    
-    device.is_active = False
-    device.agent_key = f"revoked_{device.agent_key}"  # Invalidate the key
-    device.save()
-    
+    """Deactivate a device (revoke its agent key). Kept for older callers."""
+    device, err = _org_agent_device(request, device_id)
+    if err:
+        return err
+
+    _set_device_active(device, False)
     return Response({
         "success": True,
-        "message": f"Deactivated device: {device.machine_name}",
+        "message": f"Deactivated device: {device.hostname or device.device_id}",
     })
 
 

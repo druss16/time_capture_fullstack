@@ -57,7 +57,20 @@ class AgentKeyAuthentication(BaseAuthentication):
         except AgentDevice.DoesNotExist:
             # Check if device exists but was deactivated (subscription cancelled/expired)
             if auth_source in ("X-Agent-Key", "DeviceKey"):
-                if AgentDevice.objects.filter(api_key=key, is_active=False).exists():
+                dead = AgentDevice.objects.filter(api_key=key, is_active=False).first()
+                if dead is not None:
+                    # An admin unlinking one machine is not a lapsed
+                    # subscription, and must not say so: the agent matches on
+                    # the literal "subscription_inactive" and pops a dialog
+                    # telling that person their firm has stopped paying. Say
+                    # what happened instead — an agent that does not recognise
+                    # this simply retries quietly, which is the right outcome
+                    # for a machine somebody meant to switch off.
+                    if dead.deactivated_reason == "admin_revoked":
+                        raise AuthenticationFailed(
+                            "device_revoked: This computer was disconnected from "
+                            "TimeTracker by an administrator."
+                        )
                     raise AuthenticationFailed(
                         "subscription_inactive: Your organization's subscription is inactive. "
                         "Please ask your administrator to reactivate at "

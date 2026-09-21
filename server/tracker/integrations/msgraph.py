@@ -26,14 +26,39 @@ class MSGraphAPIError(Exception):
     """Graph API call error."""
 
 
-def _get_msal_app(tenant='common'):
+def _graph_credentials(client='calendar'):
+    """
+    Resolve the Azure app registration to authenticate against.
+
+    Mail and calendar began life sharing one registration, differing only by
+    the scopes each flow requested. That is honest at the consent PROMPT — the
+    mail flow asks for Mail.ReadBasic + User.Read and nothing else — but the
+    app object itself still carries Calendars.Read, so a tenant admin granting
+    consent for the app grants both. Consenting to mail alone requires a
+    registration that has only the mail permissions on it.
+
+    The pair falls back TOGETHER when the mail registration is unconfigured.
+    Falling back field by field would let a mail client ID be paired with the
+    calendar registration's secret, which authenticates as neither.
+    """
+    if client == 'mail' and settings.MS_GRAPH_MAIL_CLIENT_ID:
+        return (
+            settings.MS_GRAPH_MAIL_CLIENT_ID,
+            settings.MS_GRAPH_MAIL_CLIENT_SECRET,
+        )
+    return (settings.MS_GRAPH_CLIENT_ID, settings.MS_GRAPH_CLIENT_SECRET)
+
+
+def _get_msal_app(tenant='common', client='calendar'):
     """
     Build MSAL ConfidentialClientApplication.
     'common' = multi-tenant; lets any org's user sign in.
+    client = 'calendar' | 'mail' — which app registration to use.
     """
+    client_id, client_secret = _graph_credentials(client)
     return msal.ConfidentialClientApplication(
-        client_id=settings.MS_GRAPH_CLIENT_ID,
-        client_credential=settings.MS_GRAPH_CLIENT_SECRET,
+        client_id=client_id,
+        client_credential=client_secret,
         authority=f'https://login.microsoftonline.com/{tenant}',
     )
 
@@ -216,7 +241,7 @@ MAIL_DELEGATED_SCOPES = [
 
 def build_auth_url_mail(state, redirect_uri):
     """Generate Microsoft sign-in URL for mail (Mail.ReadBasic scope)."""
-    app = _get_msal_app('common')
+    app = _get_msal_app('common', client='mail')
     return app.get_authorization_request_url(
         scopes=MAIL_DELEGATED_SCOPES,
         state=state,
@@ -227,7 +252,7 @@ def build_auth_url_mail(state, redirect_uri):
 
 def exchange_code_for_tokens_mail(code, redirect_uri):
     """Trade OAuth code for mail access + refresh tokens."""
-    app = _get_msal_app('common')
+    app = _get_msal_app('common', client='mail')
     result = app.acquire_token_by_authorization_code(
         code=code,
         scopes=MAIL_DELEGATED_SCOPES,
@@ -261,7 +286,7 @@ def refresh_access_token_mail(integration):
             'No refresh token — this integration was never fully connected.'
         )
 
-    app = _get_msal_app('common')
+    app = _get_msal_app('common', client='mail')
     result = app.acquire_token_by_refresh_token(
         refresh_token=integration.refresh_token,
         scopes=MAIL_DELEGATED_SCOPES,
@@ -270,14 +295,32 @@ def refresh_access_token_mail(integration):
     if 'error' in result:
         fail_count = (integration.sync_failure_count or 0) + 1
         DISCONNECT_THRESHOLD = 3
-        will_disconnect = fail_count >= DISCONNECT_THRESHOLD
+        # 'invalid_grant' means the refresh token itself is no longer usable —
+        # consent withdrawn, password changed, token aged out, or the token was
+        # issued to a DIFFERENT app registration than the one asking. That last
+        # case is what moving mail onto its own registration creates: every
+        # mailbox connected under the shared registration holds a token the new
+        # client cannot refresh. None of those heal by waiting, so burning three
+        # sync cycles on them only delays a reconnect the user has to do anyway.
+        # Retrying is for transient Azure errors (throttling, brief outages).
+        is_terminal = result.get('error') == 'invalid_grant'
+        will_disconnect = is_terminal or fail_count >= DISCONNECT_THRESHOLD
         logger.error(
             f"[MSGRAPH-MAIL] Refresh failed for user {integration.user_id} "
-            f"(attempt {fail_count}, disconnect={will_disconnect}): "
+            f"(attempt {fail_count}, terminal={is_terminal}, "
+            f"disconnect={will_disconnect}): "
             f"{result.get('error_description', '')[:200]}"
         )
         integration.sync_failure_count = fail_count
-        integration.last_sync_error = f"Refresh failed: {result.get('error_description')}"
+        if is_terminal:
+            # Say what the user has to DO. The raw AADSTS text names a client ID
+            # and a directory GUID, which tells them nothing actionable.
+            integration.last_sync_error = (
+                'Mail access needs to be granted again — reconnect from '
+                'Settings → Connections.'
+            )
+        else:
+            integration.last_sync_error = f"Refresh failed: {result.get('error_description')}"
         if will_disconnect:
             integration.is_connected = False
         integration.save(update_fields=[

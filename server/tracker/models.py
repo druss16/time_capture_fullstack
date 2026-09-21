@@ -4663,9 +4663,15 @@ class MailSignal(models.Model):
         ('google',    'Gmail'),
         ('microsoft', 'Microsoft Graph'),
     ]
+    # Direction is read off the message HEADERS, not off a folder — the sync
+    # reads the Inbox and only the Inbox. An Inbox message can still be one the
+    # user sent: mail addressed to themselves, a Cc back to themselves, or a
+    # distribution list that loops their own message back in. Those are 'out'.
+    # This label used to read 'Sent', which a customer's IT reasonably took as
+    # evidence we were reading Sent Items. It never was a folder name.
     DIRECTION_CHOICES = [
-        ('in',  'Received'),
-        ('out', 'Sent'),
+        ('in',  'Inbound'),
+        ('out', 'Outbound'),
     ]
 
     org = models.ForeignKey(

@@ -319,6 +319,10 @@ urlpatterns = [
     path('integrations/clio/status/', clio_views.clio_status, name='clio-status'),
     path('integrations/clio/push-trigger/', clio_views.clio_push_trigger, name='clio-push-trigger'),
     path('integrations/clio/disconnect/', clio_views.clio_disconnect, name='clio-disconnect'),
+    # Unauthenticated by necessity — Clio calls it. The token selects which
+    # subscription's secret to verify the HMAC against; the HMAC authorizes.
+    path('integrations/clio/webhook/<str:url_token>/', clio_views.clio_webhook,
+         name='clio-webhook'),
     path('clients/bulk-assign/', views_bulk_assignments.bulk_assign_clients, name='bulk-assign-clients'),
     path('clients/bulk-unassign/', views_bulk_assignments.bulk_unassign_clients, name='bulk-unassign-clients'),
     path('clients/copy-assignments/', views_bulk_assignments.copy_assignments, name='copy-assignments'),

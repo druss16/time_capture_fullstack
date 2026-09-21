@@ -1425,6 +1425,27 @@ def integrations_status(request):
                 # approvers are the people submitting will wait forever for a
                 # review nobody performs.
                 integrations[provider]['push_trigger'] = org.clio_push_trigger
+                # Whether new clients arrive on their own or only on the
+                # hourly sweep. Collapsed to one word: a firm does not care
+                # which of two subscriptions lapsed, they care whether the
+                # client list is keeping up. 'off' is a working state, not an
+                # error — it means the sweep is doing the work.
+                from tracker.models import ClioWebhook
+                hook_states = list(
+                    ClioWebhook.objects.filter(integration=i)
+                    .values_list('status', flat=True)
+                )
+                if not hook_states:
+                    live = 'off'
+                elif all(st == 'active' for st in hook_states):
+                    live = 'active'
+                elif any(st == 'active' for st in hook_states):
+                    live = 'partial'
+                elif any(st == 'pending' for st in hook_states):
+                    live = 'pending'
+                else:
+                    live = 'failed'
+                integrations[provider]['live_sync'] = live
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 

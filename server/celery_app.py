@@ -46,6 +46,27 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=2, minute=15),
         'options': {'expires': 3600},
     },
+    # Hourly: pull every connected firm's Clio clients and matters.
+    # This is the BACKSTOP, and it stays even though webhooks are live.
+    # Clio subscriptions expire (31 days maximum) and Clio neither warns nor
+    # retries when one lapses — deliveries just stop. Without this sweep a
+    # missed renewal is a client list that quietly stopped updating; with it,
+    # the worst case is an hour of staleness.
+    'sync-clio-orgs-hourly': {
+        'task': 'tracker.sync_all_clio_orgs',
+        'schedule': crontab(minute=20),
+        'options': {'expires': 3000},
+    },
+
+    # Nightly 3:20 AM: extend Clio webhook subscriptions nearing expiry and
+    # register any that are missing. Renews at 7 days remaining, so a run has
+    # three weeks of nightly retries before anything actually lapses.
+    'renew-clio-webhooks-nightly': {
+        'task': 'tracker.renew_clio_webhooks',
+        'schedule': crontab(hour=3, minute=20),
+        'options': {'expires': 3600},
+    },
+
     # =========================================================================
     # BLOCK PROCESSING (Frequent)
     # =========================================================================

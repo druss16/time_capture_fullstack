@@ -396,6 +396,12 @@ CLIO_CLIENT_ID = os.environ.get('CLIO_CLIENT_ID', default='')
 CLIO_CLIENT_SECRET = os.environ.get('CLIO_CLIENT_SECRET', default='')
 CLIO_REDIRECT_URI = os.environ.get('CLIO_REDIRECT_URI', default='')
 
+# Public HTTPS origin Clio posts webhooks back to, e.g. https://api.example.com.
+# Optional: when blank it is derived from CLIO_REDIRECT_URI, which is already a
+# public HTTPS URL pointing at this API. Set it only when the callback must
+# arrive on a different host than the OAuth redirect.
+CLIO_WEBHOOK_BASE_URL = os.environ.get('CLIO_WEBHOOK_BASE_URL', default='')
+
 # Microsoft Graph (Calendar Integration)
 MS_GRAPH_CLIENT_ID = os.environ.get('MS_GRAPH_CLIENT_ID', '')
 MS_GRAPH_CLIENT_SECRET = os.environ.get('MS_GRAPH_CLIENT_SECRET', '')

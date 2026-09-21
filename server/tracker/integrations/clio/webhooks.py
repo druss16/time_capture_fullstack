@@ -57,7 +57,11 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
-from tracker.integrations.clio.client import ClioClient, ClioError
+from tracker.integrations.clio.client import (
+    ClioClient,
+    ClioError,
+    ClioValidationError,
+)
 from tracker.models import ClioWebhook, Integration
 
 logger = logging.getLogger(__name__)
@@ -136,28 +140,43 @@ def register_webhooks(integration: Integration) -> dict:
     """
     stats = {'created': 0, 'renewed': 0, 'skipped': 0, 'errors': []}
 
-    base = webhook_base_url()
-    if not base:
-        stats['errors'].append('no_public_url')
-        logger.warning(
-            'Clio webhooks skipped for org %s: neither CLIO_WEBHOOK_BASE_URL '
-            'nor a usable CLIO_REDIRECT_URI is set.', integration.organization_id,
+    def bail(code, message):
+        """Record WHY on any existing rows, so the card can say it.
+
+        These paths return before touching the API, so without this the only
+        trace is a log line nobody reads — and any rows from a previous
+        attempt keep claiming 'pending'.
+        """
+        stats['errors'].append(code)
+        logger.warning('Clio webhooks skipped for org %s: %s',
+                       integration.organization_id, message)
+        ClioWebhook.objects.filter(integration=integration).update(
+            status='failed', last_error=message[:500],
         )
         return stats
+
+    base = webhook_base_url()
+    if not base:
+        return bail(
+            'no_public_url',
+            'No public callback URL is configured on the server '
+            '(set CLIO_WEBHOOK_BASE_URL, or a CLIO_REDIRECT_URI we can derive '
+            'it from). Live updates are off; the hourly sync still runs.',
+        )
 
     if not base.startswith('https://'):
         # Clio refuses plaintext callbacks. Say so here rather than letting it
         # come back as an opaque 422 from the API.
-        stats['errors'].append('insecure_url')
-        logger.warning('Clio webhooks skipped for org %s: callback base %r is not HTTPS.',
-                       integration.organization_id, base)
-        return stats
+        return bail(
+            'insecure_url',
+            f'The callback URL {base!r} is not HTTPS, which Clio refuses. '
+            f'Live updates are off; the hourly sync still runs.',
+        )
 
     try:
         api = ClioClient(integration)
     except ClioError as e:
-        stats['errors'].append(str(e)[:200])
-        return stats
+        return bail('client_unavailable', f'Cannot reach Clio: {str(e)[:300]}')
 
     for model in WATCHED_MODELS:
         try:
@@ -213,8 +232,45 @@ def _ensure_subscription(api: ClioClient, integration: Integration, model: str) 
         'shared_secret': shared_secret,
         'expires_at': expires_at.isoformat(),
     }
-    response = api.post('/webhooks', payload, fields='id,status,expires_at')
+    # RECORD THE FAILURE ON THE ROW, NOT JUST IN A RETURN VALUE.
+    #
+    # This is the bug this block exists to fix. The row is created before the
+    # API call, with status 'pending'. When the call failed, the row simply
+    # stayed 'pending' — which is ALSO the legitimate state for "created at
+    # Clio, waiting for the handshake". One shape, two meanings, one of them an
+    # error. The reason went into a return value that nothing persisted, so the
+    # Settings card showed a subscription politely waiting for a handshake that
+    # could never arrive, and `last_error` was empty.
+    #
+    # An error state must never share a shape with a working one.
+    try:
+        response = api.post('/webhooks', payload, fields='id,status,expires_at')
+    except Exception as e:
+        detail = str(e)[:400]
+        if isinstance(e, ClioValidationError) and e.response_body:
+            detail = f'{detail} | body={str(e.response_body)[:200]}'
+        hook.status = 'failed'
+        hook.last_error = f'Could not create the subscription: {detail}'
+        hook.save(update_fields=['status', 'last_error', 'updated_at'])
+        logger.warning('Clio webhook create failed (org %s, %s): %s',
+                       integration.organization_id, model, detail)
+        raise
+
     data = response.get('data') or {}
+
+    # A 2xx carrying no id is the same silent failure wearing a success code:
+    # without an id we can neither renew nor delete the subscription, and the
+    # row would sit at 'pending' forever looking healthy.
+    if not data.get('id'):
+        hook.status = 'failed'
+        hook.last_error = (
+            'Clio accepted the request but returned no webhook id. '
+            f'Response: {str(response)[:300]}'
+        )
+        hook.save(update_fields=['status', 'last_error', 'updated_at'])
+        logger.warning('Clio webhook create returned no id (org %s, %s): %s',
+                       integration.organization_id, model, str(response)[:300])
+        raise ClioError(f'Clio returned no webhook id for {model}')
 
     hook.external_id = str(data.get('id') or '')
     # Clio reports 'pending' until the handshake completes. We do not fake
@@ -447,3 +503,79 @@ def renew_clio_webhooks() -> dict:
 
     logger.info('Clio webhook renewal: %s', stats)
     return stats
+
+
+# ============================================================================
+# Health, for the Settings card
+# ============================================================================
+
+# How long a subscription may sit unconfirmed before we stop calling it
+# "waiting". Clio fires the handshake within seconds of creation, so anything
+# still pending after this is stuck, not in progress.
+HANDSHAKE_GRACE = timedelta(minutes=10)
+
+
+def live_sync_state(integration: Integration):
+    """
+    ('off'|'active'|'partial'|'pending'|'failed', [per-subscription detail]).
+
+    One word, because a firm does not care which of two subscriptions lapsed —
+    they care whether new clients arrive on their own. 'off' is an honest
+    answer, not an error: it means the hourly sweep is doing the work.
+
+    The state that needs care is `pending`. It legitimately means "created at
+    Clio, waiting for the handshake", and it is ALSO what a row looks like when
+    creation failed before this function learned to record that. So a row that
+    has been pending longer than the handshake could possibly take is reported
+    as stuck, with the reason attached — never as a subscription still politely
+    waiting.
+
+    Shared by both status endpoints. Two copies of this logic would drift, and
+    the drifting half would be the one that decides whether a firm is told
+    their live updates are broken.
+    """
+    hooks = list(ClioWebhook.objects.filter(integration=integration))
+
+    now = timezone.now()
+    detail = []
+    for h in hooks:
+        stuck = (
+            h.status == 'pending'
+            and not h.external_id
+            and (now - h.updated_at) > HANDSHAKE_GRACE
+        )
+        detail.append({
+            'model': h.model,
+            'status': 'failed' if stuck else h.status,
+            'registered': bool(h.external_id),
+            'expires_at': h.expires_at,
+            'last_event_at': h.last_event_at,
+            'events_received': h.events_received,
+            'last_error': h.last_error or (
+                'Never confirmed by Clio. The subscription was not created — '
+                'the hourly sync is still running.' if stuck else None
+            ),
+        })
+
+    if not detail:
+        return 'off', detail
+
+    states = {d['status'] for d in detail}
+    if states == {'active'}:
+        state = 'active'
+    elif 'active' in states:
+        state = 'partial'
+    elif 'pending' in states:
+        state = 'pending'
+    else:
+        state = 'failed'
+    return state, detail
+
+
+def live_sync_error(integration: Integration) -> str:
+    """First recorded reason live updates are not working, or ''."""
+    _state, detail = live_sync_state(integration)
+    for d in detail:
+        if d['status'] in ('failed', 'expired') and d['last_error']:
+            return d['last_error']
+    return ''

@@ -55,7 +55,6 @@ from Quartz import (
     kCGEventScrollWheel,
 )
 
-from quick_switcher import QuickSwitcher, start_hotkey_listener, stop_hotkey_listener
 
 # Progress-based heartbeat + idle classification, shared with windows_agent.
 # The watchdog's own heartbeat says the thread is alive; progress_tick() says
@@ -3334,14 +3333,19 @@ def run_agent():
             threading.Thread(target=_do, daemon=True).start()
                 
         def on_notif_switch():
-            """Handle user requesting client switch from notification"""
+            """Handle user requesting client switch from notification.
+
+            This used to open the Tk 'Select Client' popup. That picker is
+            gone, so send the user to Daily Review on the web, which is where
+            the firm's people correct attribution anyway.
+            """
             def _do():
-                log("[NOTIF] User requested client switch - opening picker")
-                if gui_menu_bar and hasattr(gui_menu_bar, 'app'):
-                    try:
-                        gui_menu_bar.app._on_search(None)
-                    except Exception as e:
-                        log(f"[NOTIF] Failed to open picker: {e}")
+                log("[NOTIF] User requested client switch - opening Daily Review")
+                try:
+                    import webbrowser
+                    webbrowser.open("https://timetracker.mavops.ai/daily")
+                except Exception as e:
+                    log(f"[NOTIF] Failed to open Daily Review: {e}")
             threading.Thread(target=_do, daemon=True).start()
         
         def on_notif_snooze(client_id, minutes):
@@ -3511,9 +3515,6 @@ def run_agent():
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     gui_menu_bar = None
-    quick_switcher = None
-    # _hotkey_global_monitor = None   # ADD
-    # _hotkey_local_monitor = None    # ADD
     if GUI_AVAILABLE:
         try:
             gui_menu_bar = run_gui_app(
@@ -3535,65 +3536,11 @@ def run_agent():
                     gui_menu_bar.refresh_client_menu(sync.clients)
                     log(f"[GUI] Refreshed menu with {len(sync.clients)} clients from sync")
             
-            # === QUICK SWITCHER (Option+Shift+T) ===
-            # === QUICK SWITCHER (Ctrl+Option+T) ===
-            # === QUICK SWITCHER (Ctrl+Option+T) ===
-            try:
-                from pynput import keyboard
-                
-                # Track pressed modifier keys
-                _pressed_keys = set()
-                _hotkey_listener = None
-                
-                def on_key_press(key):
-                    """Track key presses for hotkey detection"""
-                    try:
-                        # Track modifiers
-                        if key == keyboard.Key.ctrl or key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-                            _pressed_keys.add('ctrl')
-                        elif key == keyboard.Key.alt or key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-                            _pressed_keys.add('alt')
-                        elif hasattr(key, 'char') and key.char and key.char.lower() == 't':
-                            # Check if Ctrl+Alt+T is pressed
-                            if 'ctrl' in _pressed_keys and 'alt' in _pressed_keys:
-                                log("[QUICK] Ctrl+Option+T pressed!")
-                                if gui_menu_bar and gui_menu_bar.app:
-                                    def show_picker():
-                                        try:
-                                            gui_menu_bar.app._on_search(None)
-                                        except Exception as e:
-                                            log(f"[QUICK] Error showing picker: {e}")
-                                    threading.Thread(target=show_picker, daemon=True).start()
-                    except Exception as e:
-                        # Silently ignore errors to prevent crashes
-                        pass
-                
-                def on_key_release(key):
-                    """Track key releases"""
-                    try:
-                        if key == keyboard.Key.ctrl or key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-                            _pressed_keys.discard('ctrl')
-                        elif key == keyboard.Key.alt or key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-                            _pressed_keys.discard('alt')
-                    except Exception:
-                        pass
-                
-                # Use Listener instead of GlobalHotKeys (more reliable on macOS)
-                _hotkey_listener = keyboard.Listener(
-                    on_press=on_key_press,
-                    on_release=on_key_release,
-                    suppress=False  # Don't block other apps from seeing keys
-                )
-                _hotkey_listener.start()
-                log("[QUICK] ✅ Ready - Ctrl+Option+T (⌃⌥T)")
-                
-            except ImportError:
-                log("[QUICK] pynput not installed - hotkey disabled (pip install pynput)")
-            except Exception as e:
-                log(f"[QUICK] Failed to setup hotkey: {e}")
-                import traceback
-                traceback.print_exc()
-                    
+            # The Ctrl+Option+T global hotkey opened the Tk 'Select Client'
+            # popup. Both are gone. Dropping the listener also drops a
+            # pynput keyboard hook that watched every keystroke system-wide
+            # (and needed Input Monitoring) purely to serve that one window.
+
         except Exception as e:
             log(f"[GUI] Failed to initialize: {e}")
 
@@ -3624,55 +3571,10 @@ def run_agent():
         except Exception as e:
             log(f"[CLIENT] Failed to restore client state: {e}")
 
-    # === STARTUP: Prompt for client if none selected ===
-    # === STARTUP: Prompt for client if none selected ===
-    _startup_prompt_done = False  # Flag to run only once
-
-    def prompt_client_on_startup():
-        """Show client picker on startup if no client is selected"""
-        nonlocal _startup_prompt_done
-        if _startup_prompt_done:
-            return
-        _startup_prompt_done = True
-        
-        import time
-        time.sleep(2)  # Wait for GUI to fully initialize
-        
-        # Check LOCAL state first (faster, already loaded)
-        if gui_menu_bar and hasattr(gui_menu_bar, 'state'):
-            if gui_menu_bar.state.current_client_id:
-                log(f"[STARTUP] Client already set locally: {gui_menu_bar.state.current_client_name}")
-                return
-        
-        # Fallback: check backend
-        api_key = config.get("api_key") or API_KEY
-        if not api_key or not API_BASE:
-            return
-        
-        try:
-            current = get_current_client_from_backend(API_BASE, api_key)
-            
-            if not current or not current.get("client_id"):
-                log("[STARTUP] No client selected - showing client picker")
-                
-                if gui_menu_bar and hasattr(gui_menu_bar, 'app') and gui_menu_bar.app:
-                    def show_picker():
-                        time.sleep(0.5)
-                        try:
-                            gui_menu_bar.app._on_search(None)
-                        except Exception as e:
-                            log(f"[STARTUP] Failed to show picker: {e}")
-                    
-                    threading.Thread(target=show_picker, daemon=True).start()
-            else:
-                log(f"[STARTUP] Client already set: {current.get('client_name')}")
-                
-        except Exception as e:
-            log(f"[STARTUP] Error checking client: {e}")
-
-    # Start the startup prompt in background
-    if gui_menu_bar:
-        threading.Thread(target=prompt_client_on_startup, daemon=True).start()
+    # A startup 'no client selected' prompt used to shove the Tk picker in
+    # the user's face on every launch that began with no client. That window
+    # is gone, and so is the prompt: attribution runs without a manually
+    # chosen client, and anything it gets wrong is corrected in Daily Review.
 
     # Notifications setup
     # Notifications setup (OLD system - skip if new system is active)
@@ -4381,14 +4283,6 @@ def run_agent():
             log("[TRACKING] Interrupted")
 
     # === ADD CLEANUP HERE ===
-    # Cleanup hotkey monitor
-    if '_hotkey_listener' in dir() and _hotkey_listener:
-        try:
-            _hotkey_listener.stop()
-            log("[QUICK] Hotkey listener stopped")
-        except:
-            pass
-    
     if sync:
         sync.stop()
         log("[SYNC] Stopped")

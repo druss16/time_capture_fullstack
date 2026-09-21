@@ -849,281 +849,16 @@ def _run_today_time_process(data_json: str):
     root.mainloop()
 
 
-def _run_client_picker_process(clients_json: str, usage_json: str, result_queue):
-    """Run Client Picker window in separate process"""
-    import json
-    import tkinter as tk
-    import customtkinter as ctk
-    
-    # Colors - matching Today's Time style
-    colors = {
-        "primary": "#14B8A6",
-        "primary_hover": "#0D9488",
-        "bg_window": "#1C1C1C",
-        "bg_card": "#2A2A2A",
-        "bg_card_hover": "#333333",
-        "bg_card_selected": "#14B8A6",
-        "bg_scrollbar": "#3A3A3A",
-        "bg_scrollbar_hover": "#4A4A4A",
-        "text_primary": "#FFFFFF",
-        "text_accent": "#14B8A6",
-        "text_secondary": "#888888",
-        "text_muted": "#555555",
-    }
-    
-    clients = json.loads(clients_json) if clients_json else []
-    usage_data = json.loads(usage_json) if usage_json else {}
-    usage_data = {int(k): v for k, v in usage_data.items()}
-    
-    selected = {"id": None, "name": None}
-    confirmed = {"value": False}
-    row_widgets = []
-    
-    def sort_by_usage(client_list):
-        return sorted(client_list, key=lambda c: usage_data.get(c.get("id", 0), 0), reverse=True)
-    
-    # Window setup
-    ctk.set_appearance_mode("dark")
-    root = ctk.CTk()
-    root.title("Select Client")
-    root.geometry("380x520")
-    root.minsize(320, 400)
-    root.configure(fg_color=colors["bg_window"])
-    
-    # Make window float on top without stealing app focus
-    root.attributes('-topmost', True)
-    
-    # Center window
-    root.withdraw()
-    root.update_idletasks()
-    x = (root.winfo_screenwidth() // 2) - 190
-    y = (root.winfo_screenheight() // 2) - 260
-    root.geometry(f"+{x}+{y}")
-    root.deiconify()
-    root.lift()
-    root.focus_force()
-    
-    def do_confirm():
-        confirmed["value"] = True
-        root.quit()
-    
-    def do_cancel():
-        selected["id"] = None
-        selected["name"] = None
-        confirmed["value"] = False
-        root.quit()
-    
-    def do_clear():
-        selected["id"] = 0
-        selected["name"] = "No Client"
-        for row, rid, rn in row_widgets:
-            row.configure(fg_color=colors["bg_card"])
-        ok_btn.configure(fg_color=colors["primary"])
-    
-    # Main container
-    container = ctk.CTkFrame(root, fg_color="transparent")
-    container.pack(fill="both", expand=True, padx=16, pady=12)
-    
-    # Search section
-    search_label = ctk.CTkLabel(container, text="Search",
-                                font=ctk.CTkFont(size=12),
-                                text_color=colors["text_secondary"], anchor="w")
-    search_label.pack(fill="x", pady=(0, 6))
-    
-    search_var = ctk.StringVar()
-    search_entry = ctk.CTkEntry(container, textvariable=search_var,
-                                placeholder_text="Type to filter...",
-                                fg_color=colors["bg_card"],
-                                border_width=0,
-                                text_color=colors["text_primary"],
-                                placeholder_text_color=colors["text_muted"],
-                                height=36, corner_radius=8,
-                                font=ctk.CTkFont(size=13))
-    search_entry.pack(fill="x", pady=(0, 12))
-    
-    # Results count
-    results_label = ctk.CTkLabel(container, text="",
-                                 font=ctk.CTkFont(size=11),
-                                 text_color=colors["text_muted"], anchor="w")
-    results_label.pack(fill="x", pady=(0, 8))
-    
-    # === USE CTkScrollableFrame for native macOS trackpad support ===
-    scroll_frame = ctk.CTkScrollableFrame(
-        container, 
-        fg_color="transparent",
-        scrollbar_button_color=colors["bg_scrollbar"],
-        scrollbar_button_hover_color=colors["bg_scrollbar_hover"],
-    )
-    scroll_frame.pack(fill="both", expand=True, pady=(0, 12))
-    
-    # Buttons at bottom
-    btn_frame = ctk.CTkFrame(container, fg_color="transparent", height=60)
-    btn_frame.pack(fill="x", pady=(0, 0))
-    
-    clear_btn = ctk.CTkButton(btn_frame, text="Clear", command=do_clear,
-                              fg_color="transparent", hover_color=colors["bg_card"],
-                              text_color=colors["text_muted"],
-                              height=32, width=60, corner_radius=6,
-                              font=ctk.CTkFont(size=12))
-    clear_btn.pack(side="left")
-    
-    cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", command=do_cancel,
-                               fg_color=colors["bg_card"], hover_color=colors["bg_card_hover"],
-                               text_color=colors["text_primary"],
-                               height=36, width=80, corner_radius=8,
-                               font=ctk.CTkFont(size=13))
-    cancel_btn.pack(side="right")
-    
-    ok_btn = ctk.CTkButton(btn_frame, text="OK", command=do_confirm,
-                           fg_color=colors["bg_card"], hover_color=colors["primary_hover"],
-                           text_color=colors["text_primary"],
-                           height=36, width=80, corner_radius=8,
-                           font=ctk.CTkFont(size=13, weight="bold"))
-    ok_btn.pack(side="right", padx=(0, 8))
-    
-    def select_row(cid, cname, card):
-        selected["id"] = cid
-        selected["name"] = cname
-        for row, rid, rn in row_widgets:
-            if rid == cid:
-                row.configure(fg_color=colors["primary"])
-            else:
-                row.configure(fg_color=colors["bg_card"])
-        ok_btn.configure(fg_color=colors["primary"])
-    
-    def build_list(query=""):
-        nonlocal row_widgets
-        row_widgets = []
-        
-        # Clear existing
-        for w in scroll_frame.winfo_children():
-            w.destroy()
-        
-        query_lower = query.lower().strip()
-        if query_lower:
-            filtered = [c for c in clients 
-                       if query_lower in c.get("name", "").lower() 
-                       or query_lower in c.get("code", "").lower()]
-        else:
-            filtered = clients
-        
-        filtered = sort_by_usage(filtered)
-        
-        total = len(clients)
-        showing = len(filtered)
-        results_label.configure(text=f"{showing} of {total}" if query_lower else f"{total} clients")
-        
-        if not filtered:
-            empty = ctk.CTkLabel(scroll_frame, text="No clients found",
-                                font=ctk.CTkFont(size=13), text_color=colors["text_muted"])
-            empty.pack(pady=30)
-            return
-        
-        for idx, client in enumerate(filtered):
-            cid = client.get("id")
-            cname = client.get("name", "Unknown")
-            ccode = client.get("code", "")
-            
-            # Card row
-            card = ctk.CTkFrame(scroll_frame, fg_color=colors["bg_card"],
-                               corner_radius=10)
-            card.pack(fill="x", pady=3, padx=2)
-            
-            row_widgets.append((card, cid, cname))
-            
-            # Content
-            content = ctk.CTkFrame(card, fg_color="transparent")
-            content.pack(fill="x", padx=14, pady=12)
-            
-            # Client name (left)
-            name_label = ctk.CTkLabel(content, text=cname,
-                                     font=ctk.CTkFont(size=14),
-                                     text_color=colors["text_primary"])
-            name_label.pack(side="left")
-            
-            # Client code (right, teal)
-            code_label = None
-            if ccode:
-                code_label = ctk.CTkLabel(content, text=ccode,
-                                         font=ctk.CTkFont(size=13),
-                                         text_color=colors["text_accent"])
-                code_label.pack(side="right")
-            
-            # Click handlers
-            def make_click(c, n, w):
-                return lambda e: select_row(c, n, w)
-            
-            def make_dblclick(c, n, w):
-                return lambda e: [select_row(c, n, w), do_confirm()]
-            
-            click_fn = make_click(cid, cname, card)
-            dblclick_fn = make_dblclick(cid, cname, card)
-            
-            # Bind clicks to all widgets in the card
-            for widget in [card, content, name_label] + ([code_label] if code_label else []):
-                widget.bind("<Button-1>", click_fn)
-                widget.bind("<Double-Button-1>", dblclick_fn)
-            
-            # Hover effect
-            def make_hover(c, cid_val):
-                def enter(e):
-                    if selected["id"] != cid_val:
-                        c.configure(fg_color=colors["bg_card_hover"])
-                def leave(e):
-                    if selected["id"] != cid_val:
-                        c.configure(fg_color=colors["bg_card"])
-                return enter, leave
-            
-            enter_fn, leave_fn = make_hover(card, cid)
-            card.bind("<Enter>", enter_fn)
-            card.bind("<Leave>", leave_fn)
-        
-        # Re-highlight if previously selected client is still in list
-        if selected["id"] is not None and selected["name"] != "No Client":
-            for row, rid, rn in row_widgets:
-                if rid == selected["id"]:
-                    row.configure(fg_color=colors["primary"])
-                    break
-    
-    def on_search(*args):
-        build_list(search_var.get())
-    search_var.trace_add("write", on_search)
-    
-    def on_key_down(e):
-        if not row_widgets:
-            return
-        
-        current_idx = -1
-        for i, (row, rid, rn) in enumerate(row_widgets):
-            if rid == selected["id"]:
-                current_idx = i
-                break
-        
-        if e.keysym == "Down":
-            new_idx = min(current_idx + 1, len(row_widgets) - 1) if current_idx >= 0 else 0
-            row, rid, rn = row_widgets[new_idx]
-            select_row(rid, rn, row)
-        elif e.keysym == "Up":
-            new_idx = max(current_idx - 1, 0) if current_idx > 0 else 0
-            row, rid, rn = row_widgets[new_idx]
-            select_row(rid, rn, row)
-    
-    root.bind("<Return>", lambda e: do_confirm() if selected["id"] is not None or selected["name"] == "No Client" else None)
-    root.bind("<Escape>", lambda e: do_cancel())
-    root.bind("<Down>", on_key_down)
-    root.bind("<Up>", on_key_down)
-    
-    build_list("")
-    search_entry.focus_set()
-    
-    root.mainloop()
-    root.destroy()
-    
-    if confirmed["value"] and (selected["id"] is not None or selected["name"] == "No Client"):
-        result_queue.put((selected["id"], selected["name"]))
-    else:
-        result_queue.put((None, None))
-    
+# The searchable client picker window used to live here. It was removed:
+# it ran as a spawned copy of the whole frozen app just to draw a Tk
+# window, and when the parent terminated it on timeout, Tk's signal
+# handler tore the window down from inside a CoreAnimation redraw and
+# deadlocked on the backing-store lock it already held. The result was an
+# orphaned 'TimeTracker (not responding)' process holding a dead Select
+# Client window on screen while the real agent kept tracking fine.
+# Manual client switching now lives in the native menu bar submenu, which
+# needs no subprocess and no Tk.
+
 # ============================================================
 # TODAY'S TIME WINDOW (WRAPPER)
 # ============================================================
@@ -1148,52 +883,6 @@ class TodayTimeWindowModern:
         p = multiprocessing.Process(target=_run_today_time_process, args=(data_json,))
         p.start()
 
-
-# ============================================================
-# SEARCHABLE CLIENT PICKER (PROFESSIONAL)
-# ============================================================
-
-class ClientPickerWindow:
-    """Professional searchable client picker with usage ranking (subprocess wrapper)"""
-    
-    def __init__(self, client_mgr: ClientManager, on_select: Callable):
-        self.client_mgr = client_mgr
-        self.on_select = on_select
-    
-    def show(self):
-        """Show picker in subprocess and get result"""
-        clients = self.client_mgr.get_all()
-        usage_data = load_client_usage()
-        
-        clients_json = json.dumps(clients)
-        usage_json = json.dumps(usage_data)
-        
-        # Use multiprocessing Queue to get result
-        result_queue = multiprocessing.Queue()
-        
-        p = multiprocessing.Process(
-            target=_run_client_picker_process,
-            args=(clients_json, usage_json, result_queue)
-        )
-        p.start()
-        p.join(timeout=300)  # 5 min timeout max
-        
-        if p.is_alive():
-            p.terminate()
-            print("[GUI] Client picker timed out")
-            return
-
-        # Menu bar reactivation is handled by rumps keepalive timer
-        # Do NOT call AppKit from this background thread - it causes Trace/BPT trap
-        
-        # Get result
-        try:
-            selected_id, selected_name = result_queue.get(timeout=2)
-            if selected_id is not None or selected_name == "No Client":
-                self.on_select(selected_id if selected_id else 0, selected_name)
-                print(f"[GUI] Client selected: {selected_name} (id={selected_id})")
-        except Exception as e:
-            print(f"[GUI] Client picker - no selection or cancelled")
 
 # ============================================================
 # PAIRING WINDOW - with username capture
@@ -1722,11 +1411,6 @@ if RUMPS_AVAILABLE:
                 self._add_tail_menu_items()
                 return
 
-            # Search clients
-            search_item = rumps.MenuItem("Search Clients...    ⌃⌥T")
-            search_item.set_callback(self._on_search)
-            self.menu.add(search_item)
-            
             # Switch client submenu
             switch_menu = rumps.MenuItem("Switch Client")
             
@@ -1822,37 +1506,10 @@ if RUMPS_AVAILABLE:
             except Exception as e:
                 print(f"[GUI] menu rebuild after ticker flip failed: {e}")
         
-        def _on_search(self, _):
-            """Open the searchable client picker window"""
-            if self.controller.fetch_clients_callback:
-                try:
-                    self.controller.client_mgr.load(self.controller.fetch_clients_callback)
-                except Exception as e:
-                    print(f"[GUI] Failed to refresh clients: {e}")
-            
-            def show_picker():
-                picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
-                picker.show()
-                
-                # Rebuild menu on main rumps thread (safe)
-                try:
-                    self._rebuild_menu()
-                except Exception as e:
-                    print(f"[GUI] Error after picker close: {e}")
-            
-            threading.Thread(target=show_picker, daemon=True).start()
-        
-        
-        def _show_client_picker(self):
-            if self.controller.fetch_clients_callback:
-                try:
-                    self.controller.client_mgr.load(self.controller.fetch_clients_callback)
-                except Exception as e:
-                    print(f"[GUI] Failed to refresh clients: {e}")
-            
-            picker = ClientPickerWindow(self.controller.client_mgr, self._switch_client)
-            picker.show()
-        
+        # _on_search / _show_client_picker (the Tk 'Select Client' popup)
+        # were removed with the picker itself. Clients are switched from the
+        # native Switch Client submenu built in _rebuild_menu.
+
         def _show_today_time(self):
             window = TodayTimeWindowModern(self.controller.get_today_time_callback)
             window.show_and_refresh()

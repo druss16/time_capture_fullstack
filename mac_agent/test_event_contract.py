@@ -59,9 +59,6 @@ def _install_stubs():
           kCGEventMouseMoved=0, kCGEventKeyDown=0, kCGEventScrollWheel=0)
     _stub("timetracker_gui", run_gui_app=lambda **k: None,
           show_pairing_window=lambda *a, **k: None, GUI_AVAILABLE=False)
-    _stub("quick_switcher", QuickSwitcher=object,
-          start_hotkey_listener=lambda *a, **k: None,
-          stop_hotkey_listener=lambda *a, **k: None)
     _stub("certifi", where=lambda: "/etc/ssl/cert.pem")
     _stub("objc")
     _stub("Foundation", NSObject=object, NSLog=lambda *a: None)

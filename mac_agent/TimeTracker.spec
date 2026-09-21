@@ -6,7 +6,6 @@ a = Analysis(
         ('notifications.py', '.'),
         ('timetracker_gui.py', '.'),
         ('agent_sync_integration.py', '.'),
-        ('quick_switcher.py', '.'),
         # The matching brain. Several of these are imported from inside
         # functions or behind try/except, which PyInstaller's analysis can
         # miss, and a module missing from the bundle fails silently at
@@ -23,12 +22,10 @@ a = Analysis(
         ('meeting_detector.py', '.'),
         ('update_checker.py', '.'),
         ('sync_manager.py', '.'),
-        ('native_picker.py', '.'),
         # Org-token pairing. Imported from inside run_agent, so the analysis
         # cannot see it; without this an IT-deployed Mac silently falls back
         # to asking the user to pair by hand.
         ('mdm_deploy.py', '.'),
-        ('picker_subprocess.py', '.'),
         ('version.py', '.'),
         ('inference', 'inference'),
     ],

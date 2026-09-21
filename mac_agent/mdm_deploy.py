@@ -15,9 +15,10 @@ WHAT THIS REPLACES. The Mac agent used to post to /agent/register/, which
 find-or-creates a user from the OS short name and invents an email like
 `dan@yourfirm.local`. That is a different identity namespace from the one
 Windows pairs into, so the same person on a Mac and a PC became two users. It
-also could not work as written: the view raises TypeError on
-`user.groups.add(org)` (Organization is not a Group), and the key it returns
-lives in AgentRegistration, which AgentKeyAuthentication never consults.
+also could not work as written: the view raised TypeError on
+`user.groups.add(org)` (Organization is not a Group), and the key it returned
+lived in AgentRegistration, which AgentKeyAuthentication never consulted.
+Both that view and AgentRegistration have since been deleted server-side.
 
 These three endpoints are shared with the Windows agent and are NOT modified.
 auto_pair_device already stores whatever `platform` string it is given and has

@@ -48,9 +48,10 @@ identity namespace as a PC. `mac_agent/mdm_deploy.py` is the counterpart to
 `windows_agent/mdm_deploy.py`; the header lists the five deliberate
 differences.
 
-The Mac used to post to `/agent/register/`, which invents a
-`…@yourorg.local` user from the OS short name. That is gone: it put Macs in a
-separate identity namespace, and it could not work regardless — see the
+The Mac used to post to `/agent/register/`, which invented a
+`…@yourorg.local` user from the OS short name. That is gone on both sides —
+the server route and view were deleted too — because it put Macs in a
+separate identity namespace, and it could not work regardless. See the
 "Known broken" section of `PROVISIONING.md`, which also records the
 `/api/api/` prefix bug that still stops the **Windows** MDM path from
 reaching any of these endpoints.

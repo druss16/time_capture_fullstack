@@ -21,7 +21,7 @@ import secrets
 
 from .models import (
     Organization, OrganizationMembership, Client, TaskType, 
-    OrgInstallToken, AuthToken, AgentRegistration, Invitation,
+    OrgInstallToken, AuthToken, AgentDevice, Invitation,
     BillingRate, DEFAULT_CPA_TASK_TYPES
 )
 
@@ -197,7 +197,16 @@ def onboarding_status(request):
         'integration_connected': Client.objects.filter(org=org).count() > 0,
         'team_invited': OrganizationMembership.objects.filter(organization=org).count() > 1,
         'rates_configured': BillingRate.objects.filter(org=org).exists() or org.billing_rate_default != Decimal('150.00'),
-        'agent_installed': AgentRegistration.objects.filter(org=org, is_active=True).exists(),
+        # Read from AgentDevice: it is the table an installed agent actually
+        # writes and authenticates against. This asked AgentRegistration,
+        # which never held a row, so this step read False for every firm no
+        # matter how many machines were running.
+        'agent_installed': AgentDevice.objects.filter(
+            user_id__in=OrganizationMembership.objects.filter(
+                organization=org
+            ).values('user_id'),
+            is_active=True,
+        ).exists(),
     }
     
     completed = sum(1 for v in steps.values() if v)

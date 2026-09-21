@@ -1,7 +1,7 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
-from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, AgentRegistration, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
 
 
 # ---- Helpers to be idempotent ----
@@ -104,14 +104,6 @@ class OrgInstallTokenAdmin(admin.ModelAdmin):
         if obj:  # Editing existing
             return ['token', 'org', 'created_at']
         return ['token', 'created_at']
-
-@admin.register(AgentRegistration)
-class AgentRegistrationAdmin(admin.ModelAdmin):
-    list_display = ['user', 'org', 'machine_name', 'os', 'last_seen', 'is_active']
-    list_filter = ['org', 'os', 'is_active']
-    search_fields = ['user__username', 'machine_name']
-    readonly_fields = ['agent_key', 'first_seen', 'last_seen']
-
 
 # Add this to tracker/admin.py (or create the file)
 

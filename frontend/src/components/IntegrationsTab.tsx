@@ -62,9 +62,11 @@ interface ProviderStatus {
   realm_id?: string | null;   // QuickBooks
   tenant_id?: string | null;  // Xero
   region?: string | null;     // Clio — tokens are not portable across regions
-  last_sync_status?: string | null;  // Clio: success / partial / failed
+  last_sync_status?: string | null;  // Clio: pending / success / partial / failed
   last_sync_error?: string | null;
   push_trigger?: 'approve' | 'submit' | null;  // Clio — when time is written
+  // Clio — are new clients arriving on their own, or only on the hourly sweep?
+  live_sync?: 'active' | 'partial' | 'pending' | 'failed' | 'off' | null;
 }
 
 interface IntegrationStatusResponse {
@@ -586,6 +588,36 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             </p>
           </div>
         )}
+
+        {/* How fresh the client list is. Worth saying out loud: "Connected"
+            has always been ambiguous here, and the honest answer has three
+            states, not two. None of them is an error — the hourly sweep is a
+            working state, just a slower one. */}
+        {connected && isClio && (
+          <div className="mt-3 flex items-start gap-2 text-xs">
+            <span
+              className={cn(
+                'mt-1 w-2 h-2 rounded-full flex-shrink-0',
+                status.live_sync === 'active' ? 'bg-emerald-500'
+                  : status.live_sync === 'partial' || status.live_sync === 'pending'
+                    ? 'bg-amber-400'
+                    : status.live_sync === 'failed' ? 'bg-rose-400'
+                      : 'bg-slate-300',
+              )}
+            />
+            <p className="text-slate-500">
+              {status.live_sync === 'active'
+                ? 'New clients and matters arrive within seconds of being created in Clio.'
+                : status.live_sync === 'pending'
+                  ? 'Waiting for Clio to confirm the live connection. Until it does, the client list refreshes hourly.'
+                  : status.live_sync === 'partial'
+                    ? 'Part of the live connection is down. Anything it misses is picked up by the hourly refresh.'
+                    : status.live_sync === 'failed'
+                      ? 'The live connection is down. The client list still refreshes every hour.'
+                      : 'The client list refreshes every hour. The live connection turns itself on after the next sync.'}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -960,6 +992,21 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
 
       {/* A failed Clio sync is otherwise invisible — it happens on a worker,
           long after the click that started it. */}
+      {clioStatus.connected && clioStatus.last_sync_status === 'pending' && (
+        <SettingsSection className="border-sky-200 bg-sky-50/60">
+          <div className="flex items-start gap-3">
+            <Loader2 className="w-5 h-5 text-sky-500 animate-spin flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-sky-900 text-sm">Importing from Clio…</p>
+              <p className="text-sky-800 text-sm mt-1">
+                Your clients and matters are being pulled in now. This usually takes
+                a few seconds. Refresh the page to see the count.
+              </p>
+            </div>
+          </div>
+        </SettingsSection>
+      )}
+
       {clioStatus.connected && clioStatus.last_sync_status === 'failed' && (
         <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />

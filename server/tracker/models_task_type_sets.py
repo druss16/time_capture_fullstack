@@ -40,6 +40,8 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 
+from tracker.crypto_fields import EncryptedTextField
+
 
 # ============================================================================
 # TaskType Sets — bundle TaskTypes for default lists / templates
@@ -515,3 +517,113 @@ class CategoryTaskTypeMapping(models.Model):
 
     def __str__(self):
         return f'{self.org_id}: "{self.category}" → {self.task_type.code}'
+
+# ============================================================================
+# Clio webhooks
+# ============================================================================
+
+class ClioWebhook(models.Model):
+    """
+    One Clio webhook subscription (one per watched model, per firm).
+
+    WHY A TABLE AND NOT A COUPLE OF FIELDS ON Integration
+    -----------------------------------------------------
+    Clio subscribes per MODEL — `contact` and `matter` are two independent
+    subscriptions with two ids, two secrets, and two expiry clocks. They also
+    fail independently: a firm can have a healthy matter hook and a dead
+    contact hook. One row per subscription is the only shape that can say so.
+
+    WHY THE SECRET IS PER-ROW AND NOT A SETTING
+    -------------------------------------------
+    The shared secret is what proves a callback is really Clio. A single
+    server-wide secret would mean any firm able to read it could forge
+    callbacks for any other firm. Each subscription gets its own random
+    secret, generated here and sent to Clio at creation.
+
+    WHY THE URL CARRIES A TOKEN
+    ---------------------------
+    Clio's callback body identifies the record but NOT the firm, and it
+    arrives unauthenticated. `url_token` is a random path segment that tells
+    us which Integration a callback belongs to — which is also what lets us
+    pick the right secret to verify the signature with. It is a routing hint,
+    never the authorization: the signature check is what authorizes.
+
+    EXPIRY IS THE FAILURE MODE TO DESIGN AROUND
+    -------------------------------------------
+    Clio webhooks expire — 3 days by default, 31 days maximum — and Clio does
+    NOT warn or retry when one lapses. Deliveries simply stop, silently. So
+    `expires_at` is stored, a nightly task renews well ahead of it, and the
+    scheduled sweep stays in place as the backstop that makes a missed
+    renewal a latency problem rather than a data-loss one.
+    """
+
+    MODEL_CHOICES = [
+        ('contact', 'Contact'),
+        ('matter', 'Matter'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending handshake'),
+        ('active', 'Active'),
+        ('failed', 'Failed'),
+        ('expired', 'Expired'),
+    ]
+
+    integration = models.ForeignKey(
+        'tracker.Integration',
+        on_delete=models.CASCADE,
+        related_name='clio_webhooks',
+    )
+    model = models.CharField(max_length=32, choices=MODEL_CHOICES)
+
+    # Clio's id for the subscription. Blank until creation succeeds, which is
+    # what distinguishes "we never registered" from "registered, not yet live".
+    external_id = models.CharField(max_length=64, blank=True, default='', db_index=True)
+
+    # Random path segment identifying this subscription in the callback URL.
+    url_token = models.CharField(max_length=64, unique=True, db_index=True)
+
+    # HMAC key for X-Hook-Signature, as supplied by US at creation time.
+    # Encrypted at rest alongside OAuth tokens — a leaked secret lets an
+    # attacker forge this firm's client records.
+    shared_secret = EncryptedTextField(blank=True, default='')
+
+    # HMAC key as supplied by CLIO during the X-Hook-Secret handshake.
+    #
+    # Two fields because Clio's documentation describes both mechanisms —
+    # a `shared_secret` sent with the subscription, and a secret Clio
+    # generates and hands over in the handshake — without stating which one
+    # actually signs the callbacks. Storing one and discarding the other is a
+    # coin flip, and losing it means every delivery fails signature checks
+    # with no way to tell that from an attack.
+    #
+    # So we keep both and accept a signature matching either. Both are
+    # high-entropy values known only to us and Clio, so accepting either
+    # weakens nothing; it just removes a guess we have no way to test against
+    # a live account. Once a real firm is connected, the logs say which one
+    # verifies and the other can be dropped.
+    handshake_secret = EncryptedTextField(blank=True, default='')
+
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default='pending', db_index=True,
+    )
+    expires_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When Clio stops delivering. Renewed nightly well ahead of this.',
+    )
+
+    last_event_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+    events_received = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['integration', 'model']]
+        indexes = [
+            models.Index(fields=['status', 'expires_at']),
+        ]
+
+    def __str__(self):
+        return f'ClioWebhook(org={self.integration.organization_id}, {self.model}, {self.status})'

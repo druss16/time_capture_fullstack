@@ -22,7 +22,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0166_encrypt_oauth_tokens'),
+        ('tracker', '0167_clio_webhook'),
     ]
 
     operations = [

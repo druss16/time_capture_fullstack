@@ -2583,7 +2583,7 @@ class OrgInstallToken(models.Model):
 # so a key issued here authenticated nothing and clearing is_active here
 # stopped nothing. Its one writer was /agent/register/, which crashed on
 # user.groups.add(org) before ever reaching the write, so the table held zero
-# rows in production for its entire life. Dropped in migration 0167.
+# rows in production for its entire life. Dropped in migration 0168.
 #
 # The cost of having two of these was not the dead table, it was that code
 # got pointed at the wrong one: Settings -> Devices' Deactivate button looked

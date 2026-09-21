@@ -33,7 +33,19 @@ export default function Devices() {
       // The endpoint returns a bare array; tolerate a wrapped shape too so this
       // does not silently render "no devices" if that ever changes.
       const data = await safeFetchJson<Device[] | { devices: Device[] }>(`${API_BASE}/devices/`);
-      setDevices(Array.isArray(data) ? data : data?.devices || []);
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { devices?: Device[] })?.devices)
+          ? (data as { devices: Device[] }).devices
+          : null;
+      // An answer we cannot read is not an answer of zero. /api/devices/ used
+      // to sit behind @login_required, which redirects a token-authenticated
+      // caller to a login page; the 200 HTML that came back parsed to nothing,
+      // and this page told people with working, paired laptops that they had
+      // none. Whatever goes wrong next, say we could not tell rather than
+      // inventing the most alarming possible reading.
+      if (!list) throw new Error("Couldn't read your devices just now — try Refresh.");
+      setDevices(list);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -59,6 +71,18 @@ export default function Devices() {
     if (diffDays < 7) return `${diffDays}d ago`;
     return date.toLocaleDateString();
   };
+
+  /**
+   * True when every linked machine has been quiet for a day or more. That is
+   * what a week off looks like from here, and it is worth saying out loud —
+   * otherwise a page full of grey dots reads as a fault.
+   */
+  const allQuiet =
+    devices.length > 0 &&
+    devices.every((d) => {
+      if (!d.last_seen_at) return true;
+      return Date.now() - new Date(d.last_seen_at).getTime() > 24 * 60 * 60 * 1000;
+    });
 
   const getStatusColor = (lastSeen: string | null) => {
     if (!lastSeen) return 'bg-slate-400';
@@ -105,6 +129,12 @@ export default function Devices() {
             <div>
               <h2 className="text-lg font-extrabold text-slate-900">Linked Devices</h2>
               <p className="text-sm text-slate-600 font-medium">{devices.length} device{devices.length !== 1 ? 's' : ''} connected</p>
+              {allQuiet && (
+                <p className="text-sm text-slate-500 mt-0.5">
+                  {devices.length === 1 ? "It hasn't" : "None have"} checked in today — normal
+                  if you've been away.
+                </p>
+              )}
             </div>
             <button
               onClick={fetchDevices}
@@ -137,7 +167,14 @@ export default function Devices() {
                 </div>
                 <p className="text-slate-900 font-bold">No devices linked yet</p>
                 <p className="text-sm text-slate-500 font-medium mt-1">
-                  Use the pairing code above to connect your first device
+                  {itDeployed === true
+                    // There is no pairing code on this page for an IT-rolled-out
+                    // firm, so pointing "above" at one sends them looking for a
+                    // control that was deliberately hidden from them.
+                    ? "Nothing has connected to your account yet. Your IT team's install links it on its own."
+                    : itDeployed === false
+                      ? "Use the pairing code above to connect your first device"
+                      : "Nothing has connected to your account yet."}
                 </p>
               </div>
             )}
@@ -188,7 +225,7 @@ export default function Devices() {
           <div className="flex items-center gap-6 text-sm text-slate-600 font-medium">
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-teal-500" />Active now</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500" />Active today</div>
-            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-400" />Inactive</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-slate-400" />Not seen today</div>
           </div>
         )}
       </div>

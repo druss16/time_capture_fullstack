@@ -879,19 +879,34 @@ def pair_start(request):
     return Response({"code": pc.code, "expires_at": pc.expires_at})
 
 
-# Optional: list & manage devices
-@login_required
+# List & manage devices.
+#
+# NOT @login_required. That decorator runs before DRF authentication, so it
+# judges a token-authenticated caller by the session cookie alone and redirects
+# them to a login page. The app and the API are on different origins, so that
+# cookie is absent whenever the browser withholds third-party cookies — every
+# incognito window, and any profile with them turned off. The redirect lands on
+# a 200 HTML page, the client parses no devices out of it, and the page tells
+# somebody with a working, paired laptop that they have none. Same reason
+# /api/capture-status/ exists: see views_capture_status.
+#
+# IsAuthenticated also means MavOps "View as" works here, since DRF swaps
+# request.user during authentication.
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def my_devices(request):
     q = AgentDevice.objects.filter(user=request.user).order_by("-last_seen_at", "-created_at")
     return Response([{
         "id": d.id, "hostname": d.hostname, "device_id": d.device_id,
+        # The client renders these two as columns; omitting them printed a
+        # table of dashes next to every real machine.
+        "platform": d.platform, "app_version": d.app_version,
         "is_active": d.is_active, "last_seen_at": d.last_seen_at, "created_at": d.created_at,
     } for d in q])
 
 
-@login_required
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def revoke_device(request, pk=None):
     try:
         d = AgentDevice.objects.get(id=pk, user=request.user)

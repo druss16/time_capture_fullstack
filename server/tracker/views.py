@@ -903,14 +903,36 @@ def pair_start(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def my_devices(request):
-    q = AgentDevice.objects.filter(user=request.user).order_by("-last_seen_at", "-created_at")
-    return Response([{
-        "id": d.id, "hostname": d.hostname, "device_id": d.device_id,
-        # The client renders these two as columns; omitting them printed a
-        # table of dashes next to every real machine.
-        "platform": d.platform, "app_version": d.app_version,
-        "is_active": d.is_active, "last_seen_at": d.last_seen_at, "created_at": d.created_at,
-    } for d in q])
+    # One row per physical computer. Agents used to mint a fresh device_id on
+    # every update, so a single laptop can own several AgentDevice rows, and
+    # this page counted them: somebody with one machine was shown two, the
+    # second frozen at whatever version it was running when it last renamed
+    # itself. settings_devices has always collapsed them for admins; the
+    # person's own page should not be the one place the churn shows through.
+    #
+    # nulls_last matters. Postgres sorts NULLs FIRST on a DESC order, so a row
+    # that has never checked in would otherwise win its hostname and report the
+    # machine as never seen.
+    q = AgentDevice.objects.filter(user=request.user).order_by(
+        F("last_seen_at").desc(nulls_last=True), "-created_at"
+    )
+
+    seen = set()
+    devices = []
+    for d in q:
+        # A blank hostname identifies nothing, so it cannot group rows.
+        key = ("host", d.hostname) if d.hostname else ("id", d.device_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        devices.append({
+            "id": d.id, "hostname": d.hostname, "device_id": d.device_id,
+            # The client renders these two as columns; omitting them printed a
+            # table of dashes next to every real machine.
+            "platform": d.platform, "app_version": d.app_version,
+            "is_active": d.is_active, "last_seen_at": d.last_seen_at, "created_at": d.created_at,
+        })
+    return Response(devices)
 
 
 # There is deliberately no self-service revoke. Unlinking a machine is an
@@ -8430,9 +8452,12 @@ def settings_devices(request):
         organization=org
     ).values_list('user_id', flat=True)
     
+    # nulls_last: Postgres sorts NULLs FIRST on a DESC order, so a row that has
+    # never checked in would otherwise win its hostname in the dedupe below and
+    # report a live machine as never seen.
     devices = AgentDevice.objects.filter(
         user_id__in=org_user_ids
-    ).select_related("user").order_by("-last_seen_at")
+    ).select_related("user").order_by(F("last_seen_at").desc(nulls_last=True))
     
     # Deduplicate: keep only the most recent per user+hostname
     seen = set()

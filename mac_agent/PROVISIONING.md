@@ -147,10 +147,12 @@ find-or-created a user from the OS short name and minted
   `user.groups.add(org)`, but `Organization` is a plain `models.Model`, not a
   `Group` — Django's `ManyRelatedManager.add` raises `TypeError` on a
   wrong-model instance, so the call 500s *after* creating the user. And the key
-  it returns lives in `AgentRegistration`, which `AgentKeyAuthentication` never
-  consults, so even past the crash it authenticates nothing.
+  it returned lived in `AgentRegistration`, which `AgentKeyAuthentication`
+  never consulted, so even past the crash it authenticated nothing.
 
-The server view is left in place; nothing calls it from either agent.
+The server view and its route are now gone too, and `AgentRegistration` was
+dropped with them (migration 0168) — it had held zero rows in production for
+its entire life. `AgentDevice` is the only installed-agent table.
 
 ---
 

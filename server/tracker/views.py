@@ -127,7 +127,6 @@ from tracker.models import (
     Suggestion,
     Task,
     TimecardEntry,
-    AgentRegistration, 
     OrgInstallToken,
     OrgProfile,
     Organization,
@@ -7485,88 +7484,20 @@ def split_block(request, block_id):
     })
 
 
-@api_view(["POST"])
-@permission_classes([AllowAny])  # No auth - uses org token
-def register_agent(request):
-    """
-    Register a new agent installation using org token.
-    Called by desktop agent on first launch.
-    
-    Body: {
-        "org_token": "tt_org_abc123...",
-        "machine_name": "LAPTOP-ABC",
-        "os": "windows" | "macos",
-        "os_version": "Windows 11" | "macOS 14.0",
-        "username": "jsmith"  # System username
-    }
-    
-    Returns:
-        - agent_key: For future API auth
-        - user_id: Created or matched user
-    """
-    data = request.data
-    org_token = data.get('org_token', '').strip()
-    machine_name = data.get('machine_name', '').strip()
-    os_type = data.get('os', '').strip()
-    os_version = data.get('os_version', '').strip()
-    username = data.get('username', '').strip().lower()
-    
-    if not org_token:
-        return Response({"error": "org_token is required"}, status=400)
-    if not username:
-        return Response({"error": "username is required"}, status=400)
-    
-    # Validate org token
-    try:
-        install_token = OrgInstallToken.objects.select_related('org').get(
-            token=org_token,
-            is_active=True
-        )
-    except OrgInstallToken.DoesNotExist:
-        return Response({"error": "Invalid or expired org token"}, status=401)
-    
-    org = install_token.org
-    
-    # Find or create user
-    user, user_created = User.objects.get_or_create(
-        username=username,
-        defaults={
-            'email': f'{username}@{org.name.lower().replace(" ", "")}.local',
-            'first_name': username.title(),
-        }
-    )
-    
-    # Add user to org if not already
-    if org not in user.groups.all():
-        user.groups.add(org)
-    
-    # Create or update agent registration
-    agent, agent_created = AgentRegistration.objects.update_or_create(
-        user=user,
-        machine_name=machine_name,
-        defaults={
-            'org': org,
-            'os': os_type,
-            'os_version': os_version,
-            'last_seen': timezone.now(),
-            'is_active': True,
-        }
-    )
-    
-    # Generate agent key if new
-    if agent_created or not agent.agent_key:
-        agent.agent_key = f"tt_agent_{secrets.token_urlsafe(32)}"
-        agent.save()
-    
-    return Response({
-        "success": True,
-        "agent_key": agent.agent_key,
-        "user_id": user.id,
-        "username": user.username,
-        "org_name": org.name,
-        "is_new_user": user_created,
-        "is_new_agent": agent_created,
-    }, status=201 if agent_created else 200)
+# register_agent() / POST /agent/register/ stood here: an AllowAny endpoint
+# that took an OrgInstallToken, find-or-created a User from the caller's OS
+# short name, and issued a key into AgentRegistration.
+#
+# It never worked. `user.groups.add(org)` raises TypeError, because
+# Organization is a plain models.Model and not a Group, so the view 500'd
+# before reaching its own write — AgentRegistration held zero rows in
+# production for its entire life. Past that crash the key would have been
+# useless anyway, since AgentKeyAuthentication only reads AgentDevice.
+#
+# Both agents now pair through /api/deploy/auto-pair/ -> claim -> confirm-user
+# (mdm_deploy.py on each side), which lands in AgentDevice and pairs to the
+# user DeviceProvisioningMap names rather than inventing one. See
+# mac_agent/PROVISIONING.md.
 
 
 

@@ -103,7 +103,6 @@ urlpatterns = [
     path("blocks/<int:block_id>/set-matter/", views.set_block_matter, name="set_block_matter"),
     path("blocks/<int:block_id>/split/", views.split_block, name="split_block"),
     path("time-entries/manual/", views.create_manual_time_entry, name="create_manual_time_entry"),
-    path("agent/register/", views.register_agent, name="register_agent"),
 
     # -------------------------------
     # Device Management

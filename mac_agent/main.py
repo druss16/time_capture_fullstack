@@ -469,10 +469,11 @@ def get_mdm_config() -> Optional[dict]:
 # dan@yourfirm.local — a different identity namespace from the one the
 # Windows agent pairs into, so one person on two machines became two users.
 #
-# It could not work in any case. The view raises TypeError on
+# It could not work in any case. The view raised TypeError on
 # `user.groups.add(org)` (Organization is not a Group), and the key it
-# returns lives in AgentRegistration, which AgentKeyAuthentication never
-# consults — so even past the crash the key authenticates nothing.
+# returned lived in AgentRegistration, which AgentKeyAuthentication never
+# consulted — so even past the crash the key authenticated nothing. The
+# endpoint and that table have since been deleted server-side.
 #
 # Replaced by mdm_deploy.do_org_token_claim, which walks the same
 # auto-pair -> claim -> confirm-user endpoints the Windows agent uses.
@@ -3171,9 +3172,10 @@ def run_agent():
         # /agent/register/ — an endpoint that find-or-creates a user from the
         # OS short name and invents an email like dan@yourfirm.local. That put
         # Mac users in a different identity namespace from the one Windows
-        # pairs into, and it could not work regardless: the view raises
-        # TypeError on user.groups.add(org), and the key it returns lives in
-        # AgentRegistration, which AgentKeyAuthentication never reads.
+        # pairs into, and it could not work regardless: the view raised
+        # TypeError on user.groups.add(org), and the key it returned lived in
+        # AgentRegistration, which AgentKeyAuthentication never read. Both
+        # have since been deleted server-side.
         #
         # mdm_deploy walks the same three endpoints the Windows agent does, so
         # a Mac now pairs to whoever the DeviceProvisioningMap says owns it.

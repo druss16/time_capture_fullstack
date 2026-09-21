@@ -641,6 +641,16 @@ from django.utils import timezone
 import secrets  # make sure this import exists
 
 class AgentDevice(models.Model):
+    """One installed desktop agent, and the only table that governs one.
+
+    AgentKeyAuthentication (tracker/auth.py) authenticates every agent request
+    off this row's api_key + is_active, and nothing else can stop an agent:
+    clearing is_active here is what revokes a machine. Anything that needs to
+    identify, list or switch off an installed agent belongs here — a second
+    table for it is how Deactivate ended up revoking nothing (see the
+    AgentRegistration tombstone further down this file).
+    """
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -2567,24 +2577,19 @@ class OrgInstallToken(models.Model):
         return f"{self.org.name} - {self.token[:20]}..."
 
 
-class AgentRegistration(models.Model):
-    """Track installed desktop agents"""
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='agents')
-    org = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='agents')
-    machine_name = models.CharField(max_length=255)
-    os = models.CharField(max_length=20)  # 'windows' or 'macos'
-    os_version = models.CharField(max_length=100, blank=True)
-    agent_key = models.CharField(max_length=100, unique=True, db_index=True)
-    agent_version = models.CharField(max_length=20, blank=True)
-    first_seen = models.DateTimeField(auto_now_add=True)
-    last_seen = models.DateTimeField(auto_now=True)
-    is_active = models.BooleanField(default=True)
-    
-    class Meta:
-        unique_together = ['user', 'machine_name']
-    
-    def __str__(self):
-        return f"{self.user.username} @ {self.machine_name}"
+# AgentRegistration was a second "installed agent" table that stood here. It
+# had its own agent_key / is_active / machine_name, none of which anything
+# read: AgentKeyAuthentication has always authenticated against AgentDevice,
+# so a key issued here authenticated nothing and clearing is_active here
+# stopped nothing. Its one writer was /agent/register/, which crashed on
+# user.groups.add(org) before ever reaching the write, so the table held zero
+# rows in production for its entire life. Dropped in migration 0168.
+#
+# The cost of having two of these was not the dead table, it was that code
+# got pointed at the wrong one: Settings -> Devices' Deactivate button looked
+# ids up here while the list feeding it returned AgentDevice ids, so revoking
+# a machine could only 404 while the machine kept tracking (fixed in #551).
+# If you need per-machine state, add it to AgentDevice.
 
 
 class OrgProfile(models.Model):

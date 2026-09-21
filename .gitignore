@@ -219,3 +219,14 @@ _scratch/
 server/tracker/utils/content_classifier_BACKUP.py
 server/tracker/utils/content_classifier_v2.py
 mac_agent/pkgroot_timetracker/
+
+# ============================================
+# Never commit these again
+# ============================================
+# Code-signing material. release.yml writes certificate.p12 / installer.p12
+# from repo secrets at build time; a real one must never be tracked.
+*.p12
+*.pfx
+# curl/libcurl session jars — these carry live sessionid + csrftoken values.
+cookies.txt
+cookies*.txt

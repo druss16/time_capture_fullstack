@@ -56,13 +56,24 @@ jobs:
           POSTGRES_PORT: '5432'
         run: python manage.py check
 
-      - name: Scheduled tasks are registered
+      - name: Celery tasks are registered
         working-directory: server
-        # tasks_mail.py spent four months scheduled and unregistered: beat sent
-        # sync_all_mail every five minutes and the worker discarded every one,
-        # because autodiscover_tasks() only walks each app's `tasks` module.
-        # Nothing in the app surfaced it. This compares the schedule against
-        # the task registry, which is a mismatch a machine can see.
+        # Two failure directions, same root cause: autodiscover_tasks() only
+        # walks each app's `tasks` module, so a @shared_task defined anywhere
+        # else is never registered on the worker.
+        #
+        # SCHEDULED BUT UNREGISTERED — beat sends it, the worker discards it.
+        # tasks_mail.py spent four months here: sync_all_mail went out every
+        # five minutes and nothing ran. Nothing in the app surfaced it.
+        #
+        # DECLARED BUT UNREGISTERED — nothing sends it yet, so nothing looks
+        # broken. sync_clio_full sat here for a month with a docstring claiming
+        # it ran on a schedule that did not exist, and the scheduled-vs-registry
+        # comparison could not see it: there was no schedule entry to compare.
+        # The audit that closes this immediately found a second one already in
+        # the tree (cch_axcess).
+        #
+        # Both are mismatches a machine can see in about ten seconds.
         env:
           DJANGO_SECRET_KEY: ci-not-a-real-secret
           POSTGRES_DB: ci

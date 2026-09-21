@@ -1954,6 +1954,16 @@ from tracker.integrations.clio.webhooks import (  # noqa: F401
     renew_clio_webhooks,
 )
 
+# CCH Axcess sync — found by the declared-task audit in verify_beat_tasks, not
+# by anything failing. Nothing schedules or calls it today, so it was never
+# visibly broken; it was a trap. Its own docstring tells the next person to add
+# a beat entry for it, and doing so without this line would have sent messages
+# to a worker that discards them. Re-exported here so it is runnable when
+# someone does schedule it. This does NOT schedule it.
+from tracker.integrations.cch_axcess.sync import (  # noqa: F401
+    sync_axcess_full,
+)
+
 # At the end of your existing tracker/tasks.py, add:
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)

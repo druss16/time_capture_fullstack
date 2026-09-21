@@ -109,7 +109,6 @@ urlpatterns = [
     # Device Management
     # -------------------------------
     path("devices/", views.my_devices, name="my_devices"),
-    path("devices/<int:pk>/revoke/", views.revoke_device, name="revoke_device"),
 
     # -------------------------------
     # Admin / Control
@@ -163,6 +162,7 @@ urlpatterns = [
     path("settings/clients/<int:client_id>/aliases/", views.add_client_alias, name="add_client_alias"),
     path("blocks/<int:block_id>/always-file/", views.always_file_block, name="always_file_block"),
     path("settings/devices/", views.settings_devices, name="settings_devices"),
+    path("settings/devices/<int:device_id>/", views.settings_device_set_active, name="settings_device_set_active"),
     path("settings/devices/<int:device_id>/deactivate/", views.settings_device_deactivate, name="settings_device_deactivate"),
     path("settings/install-token/", views.settings_install_token, name="settings_install_token"),
     path("settings/install-token/regenerate/", views.settings_install_token_regenerate, name="settings_install_token_regenerate"),

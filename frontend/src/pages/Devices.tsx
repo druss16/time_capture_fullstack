@@ -1,14 +1,18 @@
 // src/pages/Devices.tsx
 /**
  * Devices.tsx - My Devices page
- * Updated to match design system with teal colors
+ *
+ * Read-only on purpose. This page shows somebody their own machines; it does
+ * not let them unlink one. Disconnecting a computer is an IT decision, and it
+ * is made by an org admin on Settings → Devices, which is the only route to
+ * AgentDevice.is_active — the flag the agent authenticator actually reads.
  */
 
 import PairDeviceCard from "@/components/PairDeviceCard";
 import { useItDeployed } from "@/lib/useItDeployed";
 import { useEffect, useState } from "react";
 import { safeFetchJson, API_BASE } from '@/lib/api';
-import { Monitor, RefreshCw, Laptop, AlertCircle, Trash2 } from 'lucide-react';
+import { Monitor, RefreshCw, Laptop, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 
 type Device = {

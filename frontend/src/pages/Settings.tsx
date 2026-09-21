@@ -20,7 +20,6 @@ import TeamTab              from '@/pages/settings/TeamTab';
 import ClientsTab           from '@/pages/settings/ClientsTab';
 import EconomicsTab         from '@/pages/settings/EconomicsTab';
 import DevicesTab           from '@/pages/settings/DevicesTab';
-import TokenTab             from '@/pages/settings/TokenTab';
 import ClientAssignmentManager from '@/components/ClientAssignmentManager';
 import ClientGroupManager      from '@/components/ClientGroupManager';
 import IntegrationsTab         from '@/components/IntegrationsTab';
@@ -47,7 +46,7 @@ import {
 import type {
   PlanType, RoleType, Tab, TabConfig,
   OrgInfo, TeamMember, Client, Device,
-  InstallToken, BillingRate, EmployeeCostRate,
+  BillingRate, EmployeeCostRate,
 } from '@/pages/settings/types';
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7123/api';
@@ -87,7 +86,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','invoices','economics','devices','token','deployment','task-types','task-type-sets'];
+    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','invoices','economics','devices','deployment','task-types','task-type-sets'];
     return valid.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
 
@@ -105,7 +104,6 @@ export default function Settings() {
   const [teamMembers,       setTeamMembers]       = useState<TeamMember[]>([]);
   const [clients,           setClients]           = useState<Client[]>([]);
   const [devices,           setDevices]           = useState<Device[]>([]);
-  const [installToken,      setInstallToken]      = useState<InstallToken | null>(null);
   const [billingRates,      setBillingRates]      = useState<BillingRate[]>([]);
   const [employeeCostRates, setEmployeeCostRates] = useState<EmployeeCostRate[]>([]);
   const [currentUserId,     setCurrentUserId]     = useState<number | null>(null);
@@ -196,11 +194,6 @@ export default function Settings() {
         case 'devices': {
           const dl = await safeFetchJson<Device[]>(`${API_BASE}/settings/devices/`);
           setDevices(dl || []);
-          break;
-        }
-        case 'token': {
-          const t = await safeFetchJson<InstallToken>(`${API_BASE}/settings/install-token/`);
-          setInstallToken(t);
           break;
         }
         default: break;
@@ -449,13 +442,6 @@ export default function Settings() {
                 <DevicesTab
                   devices={devices}
                   onRefresh={() => loadTabData('devices')}
-                  onSuccess={showSuccess} onError={showError}
-                />
-              )}
-              {activeTab === 'token' && (
-                <TokenTab
-                  token={installToken}
-                  onRefresh={() => loadTabData('token')}
                   onSuccess={showSuccess} onError={showError}
                 />
               )}

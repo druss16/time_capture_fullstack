@@ -39,7 +39,6 @@ export interface SignupResponse {
   token: string;
   user: User;
   organization: Organization;
-  install_token: string;
   onboarding_step: number;
   errors?: Record<string, string>;
 }
@@ -408,7 +407,7 @@ export const skipRates = async (): Promise<{ ok: boolean; next_step: number }> =
 // STEP 5: COMPLETE
 // ============================================================================
 
-export const completeOnboarding = async (): Promise<{ ok: boolean; install_token: string | null; next_steps: string[] }> => {
+export const completeOnboarding = async (): Promise<{ ok: boolean; next_steps: string[] }> => {
   return apiFetch('/onboarding/complete/', {
     method: 'POST',
   });

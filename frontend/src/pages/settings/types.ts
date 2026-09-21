@@ -6,7 +6,7 @@ export type RoleType = 'owner' | 'admin' | 'manager' | 'member';
 
 export type Tab =
   | 'organization' | 'team' | 'clients' | 'assignments' | 'groups'
-  | 'integrations' | 'invoices' | 'economics' | 'billing' | 'costs' | 'devices' | 'token' | 'deployment'
+  | 'integrations' | 'invoices' | 'economics' | 'billing' | 'costs' | 'devices' | 'deployment'
   | 'task-types' | 'task-type-sets';
 
 export interface TabConfig {
@@ -66,12 +66,6 @@ export type Device = {
   agent_version: string;
   first_seen: string;
   last_seen: string;
-  is_active: boolean;
-};
-
-export type InstallToken = {
-  token: string;
-  created_at: string;
   is_active: boolean;
 };
 

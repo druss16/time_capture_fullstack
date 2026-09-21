@@ -45,7 +45,7 @@ This is what makes the pairing deliberate rather than a guess.
 
 ```json
 {
-  "org_token": "tt_org_...",
+  "org_token": "ODT-XXXX-XXXX",
   "api_base": "https://timetracker-api-k375.onrender.com/api"
 }
 ```
@@ -85,7 +85,7 @@ provisioning map is what avoids it.
 <plist version="1.0">
 <dict>
     <key>OrgToken</key>
-    <string>tt_org_...</string>
+    <string>ODT-XXXX-XXXX</string>
     <key>ApiEndpoint</key>
     <string>https://timetracker-api-k375.onrender.com/api</string>
 </dict>

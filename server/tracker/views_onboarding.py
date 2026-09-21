@@ -21,7 +21,7 @@ import secrets
 
 from .models import (
     Organization, OrganizationMembership, Client, TaskType, 
-    OrgInstallToken, AuthToken, AgentDevice, Invitation,
+    AuthToken, AgentDevice, Invitation,
     BillingRate, DEFAULT_CPA_TASK_TYPES
 )
 
@@ -136,14 +136,7 @@ def onboarding_signup(request):
                 sort_order=idx,
             )
         
-        # 5. Create Install Token
-        install_token = OrgInstallToken.objects.create(
-            org=org,
-            created_by=user,
-            is_active=True,
-        )
-        
-        # 6. Generate auth token
+        # 5. Generate auth token
         auth_token = secrets.token_urlsafe(32)
         AuthToken.objects.create(
             user=user,
@@ -170,7 +163,6 @@ def onboarding_signup(request):
             'industry_type': org.industry_type,  # ✅ Return industry type
             'trial_ends_at': org.trial_ends_at.isoformat() if org.trial_ends_at else None,
         },
-        'install_token': install_token.token,
         'onboarding_step': 1,
     }, status=201)
 
@@ -901,21 +893,24 @@ def complete_onboarding(request):
     membership = OrganizationMembership.objects.filter(user=request.user).first()
     if not membership:
         return Response({'error': 'No organization'}, status=404)
-    
-    install_token = OrgInstallToken.objects.filter(
-        org=membership.organization, 
-        is_active=True
-    ).first()
-    
+
+    # This used to hand back an OrgInstallToken, which nothing on the server
+    # would accept -- a firm that typed it anywhere got no device paired. A
+    # single machine signs in with the email and password created above; a
+    # firm rolling out to many machines gets a real, redeemable token from
+    # Settings -> MDM Deploy, which mints it on request rather than leaving
+    # an unlimited never-expiring credential lying on a welcome screen.
     return Response({
         'ok': True,
         'message': 'Onboarding complete!',
         'next_steps': [
             'Download the desktop app to start automatic time tracking',
+            'Sign in to the app with the email and password you just created',
             'Select your client from the menu bar when working',
             'Review your timesheet at the end of each week',
+            'Deploying to the whole firm? Settings -> MDM Deploy issues an '
+            'installer token for Intune',
         ],
-        'install_token': install_token.token if install_token else None,
         'download_url': '/download',
     })
 

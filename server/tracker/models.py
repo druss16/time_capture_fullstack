@@ -2560,21 +2560,17 @@ class AITrainingExample(models.Model):
         ordering = ["-created_at"]
 
 
-class OrgInstallToken(models.Model):
-    """Token for MDM/silent agent installation"""
-    org = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name='install_token')
-    token = models.CharField(max_length=64, unique=True, db_index=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
-    is_active = models.BooleanField(default=True)
-    
-    def save(self, *args, **kwargs):
-        if not self.token:
-            self.token = f"tt_org_{secrets.token_urlsafe(24)}"
-        super().save(*args, **kwargs)
-    
-    def __str__(self):
-        return f"{self.org.name} - {self.token[:20]}..."
+# OrgInstallToken stood here: a `tt_org_...` string minted at signup and shown
+# to the firm in Settings, described as the token that "links devices to your
+# organization automatically". It never did. Its only reader was
+# /agent/register/, which crashed before it validated anything (see the
+# AgentRegistration tombstone just below), so no machine has ever been paired
+# by one of these values.
+#
+# Bulk enrollment is OrgDeploymentToken: the `ODT-XXXX-XXXX` that the MSI
+# takes as /org_token=, that mdm_deploy.py sends to /api/deploy/auto-pair/ ->
+# claim -> confirm-user, and that Settings -> MDM Deploy issues, counts
+# claims against and revokes. Two token namespaces, one of them redeemable.
 
 
 # AgentRegistration was a second "installed agent" table that stood here. It

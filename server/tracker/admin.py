@@ -1,7 +1,7 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
-from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OrgInstallToken, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
+from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
 
 
 # ---- Helpers to be idempotent ----
@@ -93,17 +93,6 @@ class TaskPatternAdmin(admin.ModelAdmin):
     search_fields = ("task_category", "pattern")
 
 
-
-@admin.register(OrgInstallToken)
-class OrgInstallTokenAdmin(admin.ModelAdmin):
-    list_display = ['org', 'token', 'is_active', 'created_at']
-    list_filter = ['is_active', 'org']
-    readonly_fields = ['token', 'created_at']
-    
-    def get_readonly_fields(self, request, obj=None):
-        if obj:  # Editing existing
-            return ['token', 'org', 'created_at']
-        return ['token', 'created_at']
 
 # Add this to tracker/admin.py (or create the file)
 

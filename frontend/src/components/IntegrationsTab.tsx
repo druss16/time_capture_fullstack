@@ -67,6 +67,7 @@ interface ProviderStatus {
   push_trigger?: 'approve' | 'submit' | null;  // Clio — when time is written
   // Clio — are new clients arriving on their own, or only on the hourly sweep?
   live_sync?: 'active' | 'partial' | 'pending' | 'failed' | 'off' | null;
+  live_sync_error?: string | null;
 }
 
 interface IntegrationStatusResponse {
@@ -605,17 +606,26 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                       : 'bg-slate-300',
               )}
             />
-            <p className="text-slate-500">
-              {status.live_sync === 'active'
-                ? 'New clients and matters arrive within seconds of being created in Clio.'
-                : status.live_sync === 'pending'
-                  ? 'Waiting for Clio to confirm the live connection. Until it does, the client list refreshes hourly.'
-                  : status.live_sync === 'partial'
-                    ? 'Part of the live connection is down. Anything it misses is picked up by the hourly refresh.'
-                    : status.live_sync === 'failed'
-                      ? 'The live connection is down. The client list still refreshes every hour.'
-                      : 'The client list refreshes every hour. The live connection turns itself on after the next sync.'}
-            </p>
+            <div className="text-slate-500">
+              <p>
+                {status.live_sync === 'active'
+                  ? 'New clients and matters arrive within seconds of being created in Clio.'
+                  : status.live_sync === 'pending'
+                    ? 'Waiting for Clio to confirm the live connection. Until it does, the client list refreshes hourly.'
+                    : status.live_sync === 'partial'
+                      ? 'Part of the live connection is down. Anything it misses is picked up by the hourly refresh.'
+                      : status.live_sync === 'failed'
+                        ? 'Live updates are off. The client list still refreshes every hour, so nothing is missed — it just arrives slower.'
+                        : 'The client list refreshes every hour. The live connection turns itself on after the next sync.'}
+              </p>
+              {/* The reason, verbatim. Without it the line above is unactionable:
+                  it says something is wrong and gives no way to find out what,
+                  which is how a subscription sat broken looking like it was
+                  merely waiting. */}
+              {status.live_sync_error && (
+                <p className="mt-1 text-slate-400 break-words">{status.live_sync_error}</p>
+              )}
+            </div>
           </div>
         )}
       </div>

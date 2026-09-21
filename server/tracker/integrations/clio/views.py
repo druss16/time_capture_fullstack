@@ -424,17 +424,8 @@ def clio_status(request):
     # clients are arriving on their own. 'off' is an honest answer — it means
     # the hourly sweep is doing the work, which is a slower but working state,
     # not an error.
-    hooks = list(ClioWebhook.objects.filter(integration=integration))
-    if not hooks:
-        live_sync = 'off'
-    elif all(h.status == 'active' for h in hooks):
-        live_sync = 'active'
-    elif any(h.status == 'active' for h in hooks):
-        live_sync = 'partial'
-    elif any(h.status == 'pending' for h in hooks):
-        live_sync = 'pending'
-    else:
-        live_sync = 'failed'
+    from tracker.integrations.clio.webhooks import live_sync_error, live_sync_state
+    live_sync, live_sync_detail = live_sync_state(integration)
 
     return Response({
         'connected': integration.is_connected,
@@ -444,17 +435,8 @@ def clio_status(request):
         'last_sync_status': integration.last_sync_status or None,
         'last_sync_error': integration.last_sync_error or None,
         'live_sync': live_sync,
-        'live_sync_detail': [
-            {
-                'model': h.model,
-                'status': h.status,
-                'expires_at': h.expires_at,
-                'last_event_at': h.last_event_at,
-                'events_received': h.events_received,
-                'last_error': h.last_error or None,
-            }
-            for h in hooks
-        ],
+        'live_sync_error': live_sync_error(integration) or None,
+        'live_sync_detail': live_sync_detail,
         'push_trigger': org.clio_push_trigger,
         'push_trigger_choices': [
             {'value': v, 'label': label}

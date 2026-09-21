@@ -435,6 +435,14 @@ MS_GRAPH_MAIL_REDIRECT_URI = os.getenv(
 MS_GRAPH_MAIL_CLIENT_ID = os.getenv('MS_GRAPH_MAIL_CLIENT_ID', '')
 MS_GRAPH_MAIL_CLIENT_SECRET = os.getenv('MS_GRAPH_MAIL_CLIENT_SECRET', '')
 
+# When each Azure client secret expires, as YYYY-MM-DD, read off the Expires
+# column in Entra → Certificates & secrets. A Graph secret lapses silently:
+# sync stops firm-wide and the only symptom is invalid_client buried in worker
+# logs, with nothing in the UI saying why. tracker.W002/W003 turn that into a
+# warning on every management command while there is still time to rotate.
+MS_GRAPH_CLIENT_SECRET_EXPIRES = os.getenv('MS_GRAPH_CLIENT_SECRET_EXPIRES', '')
+MS_GRAPH_MAIL_CLIENT_SECRET_EXPIRES = os.getenv('MS_GRAPH_MAIL_CLIENT_SECRET_EXPIRES', '')
+
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
 

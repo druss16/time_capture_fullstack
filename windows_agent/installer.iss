@@ -362,6 +362,7 @@ var
   ConfigDir: String;
   ConfigPath: String;
   DeviceIdPath: String;
+  AppDataDeviceIdPath: String;
 begin
   if IsTaskSelected('cleaninstall') then begin
     Log('Clean install selected - skipping config restore');
@@ -372,6 +373,7 @@ begin
   ConfigDir := UserProfile + '\.timetracker';
   ConfigPath := ConfigDir + '\config.json';
   DeviceIdPath := ConfigDir + '\.device_id';
+  AppDataDeviceIdPath := ExpandConstant('{userappdata}') + '\TimeTracker\.device_id';
   ConfigBackupPath := UserProfile + '\.timetracker\.config_backup.json';
   DeviceIdBackupPath := UserProfile + '\.timetracker\.deviceid_backup.txt';
 
@@ -396,6 +398,22 @@ begin
         Log('WARNING: Failed to restore .device_id');
     end else
       Log('.device_id already exists - skipping restore');
+
+    { The agent reads its identity from %APPDATA%\TimeTracker\.device_id, not
+      from here: see DEVICE_ID_FILE in main.py. Restoring only to
+      ~\.timetracker left that file missing after every reinstall, so the agent
+      minted a fresh UUID and the server — which keys AgentDevice on device_id
+      alone, never on hostname — filed the same laptop as a brand new machine.
+      That is where the duplicate rows came from: one per reinstall, each
+      leaving the previous row's API key live behind it. }
+    if not FileExists(AppDataDeviceIdPath) then begin
+      ForceDirectories(ExpandConstant('{userappdata}') + '\TimeTracker');
+      if FileCopy(DeviceIdBackupPath, AppDataDeviceIdPath, False) then
+        Log('Restored .device_id to ' + AppDataDeviceIdPath)
+      else
+        Log('WARNING: Failed to restore .device_id to AppData');
+    end else
+      Log('AppData .device_id already exists - skipping restore');
   end;
 end;
 

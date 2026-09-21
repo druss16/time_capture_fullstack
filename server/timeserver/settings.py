@@ -422,6 +422,19 @@ MS_GRAPH_MAIL_REDIRECT_URI = os.getenv(
     ),
 )
 
+# Mail may also have its own Azure app registration, separate from the calendar
+# one above. Sharing a single registration is fine for the consent PROMPT — the
+# mail flow asks for Mail.ReadBasic + User.Read only — but the app object still
+# carries Calendars.Read, so a tenant admin granting consent for the app grants
+# both. A customer whose IT wants to consent to mail alone needs a registration
+# with nothing but the mail permissions on it.
+#
+# Leave blank to keep using the calendar registration. Set BOTH to switch: the
+# pair is resolved together in integrations/msgraph.py, so a client ID is never
+# paired with the other registration's secret.
+MS_GRAPH_MAIL_CLIENT_ID = os.getenv('MS_GRAPH_MAIL_CLIENT_ID', '')
+MS_GRAPH_MAIL_CLIENT_SECRET = os.getenv('MS_GRAPH_MAIL_CLIENT_SECRET', '')
+
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
 

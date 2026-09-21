@@ -99,9 +99,6 @@ jobs:
             --hidden-import=Quartz.CoreGraphics \
             --hidden-import=certifi \
             --collect-data=certifi \
-            --hidden-import=pynput \
-            --hidden-import=pynput.keyboard \
-            --hidden-import=pynput.keyboard._darwin \
             --hidden-import=UserNotifications \
             --hidden-import=objc \
             --hidden-import=Foundation \

@@ -111,9 +111,11 @@ launch:
     1.7.22 bundles customtkinter 6.0.0, so the real build machine always had
     it; the file simply never said so. There is now a shim so the module
     degrades instead of exploding, and the dependency is declared.
-  * `pynput` — no longer used. It backed the ⌃⌥T hotkey that opened the
-    Tk client picker; both were removed, and with them a system-wide
-    keyboard hook that needed Input Monitoring.
+  * `pynput` — removed after v1.9.7. It backed the ⌃⌥T hotkey that opened the
+    Tk client picker; both were removed, and with them a system-wide keyboard
+    hook that needed Input Monitoring. It is no longer in requirements.txt,
+    the spec, or release.yml — all three had to be edited, because the spec
+    and the workflow each carry their own hand-written import list.
   * `psutil` — both Mac meeting probes are gated on it.
 
 Two modules show up in PyInstaller's warn file as missing, and both are

@@ -17,11 +17,6 @@ pillow>=10.0.0
 # that died instantly on launch.
 customtkinter>=5.2.0
 
-# Global hotkey (⌃⌥T quick switcher). Guarded, so its absence costs only
-# that shortcut — but the feature is meant to exist, and the build spec
-# already lists pynput.keyboard._darwin as a hidden import.
-pynput>=1.7.6
-
 # Process table access. The Mac meeting probes (camera via lsof +
 # VDCAssistant, audio via coreaudiod) both cross-reference the running
 # process list to work out WHICH app owns the device; without psutil they

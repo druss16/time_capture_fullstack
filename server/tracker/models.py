@@ -923,22 +923,30 @@ class Client(models.Model):
         help_text='When this client first appeared here. NULL means "unknown" — '
                   'see the note below; never read a NULL as a date.'
     )
-    # WHY NULLABLE, AND WHY NOTHING IS BACKFILLED
-    # -------------------------------------------
+    # WHY NULLABLE, AND WHY OLD ROWS ARE NULL
+    # ---------------------------------------
     # This field exists to answer one question: was a block captured BEFORE we
     # knew the client existed? That is what decides whether a sync delay costs
     # anything real, or only costs latency.
     #
-    # Backfilling existing rows with now() would destroy the very measurement
-    # it is here to enable — every legacy client would claim to have been
-    # created today, so every historical block would appear to predate its own
-    # client, and the answer would come back as a catastrophe that never
-    # happened. A wrong date is far worse than no date, because it reads as
-    # evidence.
+    # A date invented for a legacy client destroys that measurement — every
+    # historical block would appear to predate its own client, and the answer
+    # would come back as a catastrophe that never happened. A wrong date is far
+    # worse than no date, because it reads as evidence.
     #
-    # So existing rows stay NULL, meaning "predates this field". Any query
+    # So pre-existing rows are NULL, meaning "predates this field". Any query
     # using it must EXCLUDE nulls rather than coalesce them, and should say how
     # many it excluded. Real dates accumulate from here.
+    #
+    # THE TRAP THIS ALREADY FELL INTO (0168, fixed by 0171)
+    # `null=True` governs what the COLUMN permits; it does NOT govern what
+    # AddField writes into existing rows. Django's schema editor fills those
+    # via effective_default(), which has an explicit branch returning
+    # datetime.now() for auto_now / auto_now_add fields. So adding this field
+    # with auto_now_add stamped all 408 existing clients with one identical
+    # timestamp, in direct contradiction of the comment that used to sit here.
+    # 0171 nulled them again. If a similar field is ever added to a populated
+    # table, add it plain-nullable FIRST and AlterField to auto_now_add second.
 
     email = models.EmailField(
         max_length=254,

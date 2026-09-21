@@ -127,7 +127,6 @@ from tracker.models import (
     Suggestion,
     Task,
     TimecardEntry,
-    OrgInstallToken,
     OrgProfile,
     Organization,
 
@@ -8518,57 +8517,15 @@ def settings_device_deactivate(request, device_id):
     })
 
 
-# ============================================================================
-# Install Token
-# ============================================================================
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def settings_install_token(request):
-    """Get the organization's install token"""
-    org = get_user_org(request.user)
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-    
-    try:
-        token = OrgInstallToken.objects.get(org=org, is_active=True)
-        return Response({
-            "token": token.token,
-            "created_at": token.created_at.isoformat(),
-            "is_active": token.is_active,
-        })
-    except OrgInstallToken.DoesNotExist:
-        return Response({
-            "token": None,
-            "created_at": None,
-            "is_active": False,
-        })
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated, IsOrgAdmin])
-def settings_install_token_regenerate(request):
-    """Regenerate the organization's install token"""
-    org = get_user_org(request.user)
-    if not org:
-        return Response({"error": "No organization found"}, status=404)
-    
-    # Deactivate existing token
-    OrgInstallToken.objects.filter(org=org).update(is_active=False)
-    
-    # Create new token
-    token = OrgInstallToken.objects.create(
-        org=org,
-        created_by=request.user,
-        is_active=True,
-    )
-    
-    return Response({
-        "success": True,
-        "token": token.token,
-        "created_at": token.created_at.isoformat(),
-        "is_active": token.is_active,
-    })
+# settings_install_token() / settings_install_token_regenerate() stood here,
+# behind GET+POST /api/settings/install-token/. They read and re-minted an
+# OrgInstallToken, a value no endpoint has ever validated, and the tab built
+# on them told the firm to "enter this install token when prompted" by an
+# installer that has never asked for one.
+#
+# Bulk enrollment lives on the MDM Deploy tab (views_deployment.py), which
+# issues the OrgDeploymentToken the MSI actually takes, shows its Intune
+# command line, counts devices claimed against it and can revoke it.
 
 # Add these NEW endpoints to tracker/views.py
 # These use your existing OrganizationMembership model

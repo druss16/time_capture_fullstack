@@ -57,6 +57,45 @@ def _fail(reason):
     return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={reason}")
 
 
+def _require_admin(request, action):
+    """
+    (org, None) if the caller may change the firm's Clio connection, else
+    (None, 403 response).
+
+    WHY CONNECT AND DISCONNECT ARE GATED
+    ------------------------------------
+    There is ONE Clio integration per firm — Integration is unique on
+    (organization, provider) — so these endpoints are not personal settings.
+    Any member hitting disconnect drops the firm's token, deletes its webhook
+    subscriptions, and silently stops the client list updating for everyone.
+    Connect is the same lever in reverse: whoever calls it binds the whole firm
+    to THEIR Clio account, and Clio applies that user's own role on top of our
+    app's scopes — so a junior connecting can hand the firm a partially
+    visible matter list with no error to explain it.
+
+    Odd as it stood: the push-trigger dropdown was protected while the
+    connection it depends on was not.
+
+    Sync is included because it is a write against every client and matter in
+    the firm, and because a firm-wide rate-limit budget is not a thing an
+    individual should be able to spend at will.
+    """
+    org = get_user_org(request.user)
+    if not org:
+        return None, error_response('No organization', 404)
+
+    membership = OrganizationMembership.objects.filter(
+        user=request.user, organization=org
+    ).first()
+    if not membership or membership.role not in ('owner', 'admin'):
+        return None, error_response(
+            f'Only an owner or admin can {action}. This is a firm-wide '
+            f'connection, not a personal setting.',
+            403, 'forbidden',
+        )
+    return org, None
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def clio_connect(request):
@@ -66,9 +105,9 @@ def clio_connect(request):
     Returns an auth_url for the frontend to open in a popup, mirroring the
     QBO/Xero connect endpoints.
     """
-    org = get_user_org(request.user)
-    if not org:
-        return error_response('No organization', 404)
+    org, denied = _require_admin(request, 'connect Clio')
+    if denied:
+        return denied
 
     if not (settings.CLIO_CLIENT_ID and settings.CLIO_REDIRECT_URI):
         return error_response(
@@ -222,7 +261,10 @@ def clio_sync(request):
     seconds; `sync_clio_full` remains for the scheduled sweep, where nobody is
     waiting on the answer.
     """
-    org = get_user_org(request.user)
+    org, denied = _require_admin(request, 'run a Clio sync')
+    if denied:
+        return denied
+
     integration, err = get_integration(org, 'clio')
     if err:
         return err
@@ -282,7 +324,16 @@ def clio_push_time(request):
     from datetime import datetime as _dt
     from tracker.integrations.clio.push import build_push_plan, execute_push
 
-    org = get_user_org(request.user)
+    # Gated for a reason beyond tidiness: `user_ids` is taken from the request
+    # body and never checked against the caller, so before this any member
+    # could push ANY colleague's time into the firm's billing system with
+    # dry_run false. Nothing in the app called it that way — the real push
+    # rides the timesheet state transition (_queue_clio_push) — which is
+    # exactly why it sat open without anyone noticing.
+    org, denied = _require_admin(request, 'push time to Clio')
+    if denied:
+        return denied
+
     integration, err = get_integration(org, 'clio')
     if err:
         return err
@@ -474,15 +525,9 @@ def clio_push_trigger(request):
     waiting for an approval that no one will give strands the time forever.
     Whether anyone reviews is a decision only the firm can state.
     """
-    org = get_user_org(request.user)
-    if not org:
-        return error_response('No organization', 404)
-
-    membership = OrganizationMembership.objects.filter(
-        user=request.user, organization=org
-    ).first()
-    if not membership or membership.role not in ['owner', 'admin']:
-        return error_response('Only an owner or admin can change this', 403)
+    org, denied = _require_admin(request, 'change when time is sent to Clio')
+    if denied:
+        return denied
 
     value = (request.data.get('push_trigger') or '').strip()
     valid = [v for v, _ in Organization.CLIO_PUSH_TRIGGER_CHOICES]
@@ -502,9 +547,9 @@ def clio_disconnect(request):
     Drop the grant. Tells Clio to invalidate the token first so we do not
     leave live credentials behind, then clears them locally regardless.
     """
-    org = get_user_org(request.user)
-    if not org:
-        return error_response('No organization', 404)
+    org, denied = _require_admin(request, 'disconnect Clio')
+    if denied:
+        return denied
 
     try:
         integration = Integration.objects.get(organization=org, provider='clio')

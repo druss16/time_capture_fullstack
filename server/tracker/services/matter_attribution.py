@@ -250,7 +250,7 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
     wrong outranks one that can.
     """
     anchor = (getattr(block, 'hints', None) or {}).get('clio_matter_id')
-    if anchor and project_by_external_id:
+    if anchor and project_by_external_id and is_browser_block(block):
         project_id = project_by_external_id.get(str(anchor).strip())
         if project_id:
             return project_id, 'clio_anchor', 'Clio had this matter open'
@@ -276,6 +276,34 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
             return agreed, 'temporal', 'bracketed by work on the same matter'
 
     return None, None, 'no matter identified'
+
+
+# Apps whose activity the Clio anchor is allowed to speak for.
+#
+# THE BUG THIS EXISTS TO STOP. The browser extension context rides along on
+# events even when the foreground app is NOT the browser — the agent forwards
+# the last reported tab — so a block spent in Claude or Terminal carries the
+# clio_matter_id of whatever Clio tab was open earlier. The anchor then fired
+# on it and claimed the matter.
+#
+# That was always wrong, but it used to cost only a stray project on an
+# unrelated block. Once the anchor began setting the CLIENT too, the same
+# stale hint started BILLING unrelated work to a law firm client: 18 blocks
+# of "Claude" and "Terminal — python manage.py runserver" booked to Ridgeline
+# Holdings, over the top of a classifier that had correctly called them
+# no-client and non-billable.
+#
+# tab_focused_at freshness is not sufficient and never was. It answers "was
+# that tab focused recently", not "is the user in the browser NOW" — and
+# alt-tabbing to another app leaves the tab timestamp perfectly fresh.
+BROWSER_APPS = ('chrome', 'edge', 'firefox', 'safari', 'brave', 'arc',
+                'opera', 'vivaldi')
+
+
+def is_browser_block(block) -> bool:
+    """True when this block activity actually happened in a browser."""
+    app = (getattr(block, 'app_name', '') or '').lower()
+    return any(name in app for name in BROWSER_APPS)
 
 
 # categorized_by values that mean A PERSON chose the client. A clio_anchor hit

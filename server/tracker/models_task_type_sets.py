@@ -583,16 +583,28 @@ class ClioWebhook(models.Model):
     # Random path segment identifying this subscription in the callback URL.
     url_token = models.CharField(max_length=64, unique=True, db_index=True)
 
-    # HMAC key for X-Hook-Signature, supplied by us when the subscription is
-    # created. Encrypted at rest alongside OAuth tokens — a leaked secret lets
-    # an attacker forge this firm's client records.
-    #
-    # There was briefly a second field here for the secret Clio hands over in
-    # the handshake, because Clio's docs describe both mechanisms without
-    # saying which one signs. The first real callback settled it: Clio signs
-    # with this one.
+    # HMAC key for X-Hook-Signature, as supplied by US at creation time.
+    # Encrypted at rest alongside OAuth tokens — a leaked secret lets an
+    # attacker forge this firm's client records.
     shared_secret = EncryptedTextField(blank=True, default='')
 
+    # HMAC key as supplied by CLIO during the X-Hook-Secret handshake.
+    #
+    # THIS IS THE ONE CLIO ACTUALLY SIGNS WITH. Measured, not assumed, and
+    # measured the hard way: 0174 dropped this field on the theory that the
+    # shared_secret we supply was the signing key, and the very next callback
+    # came back "signature did not match", breaking delivery until 0175 put it
+    # back.
+    #
+    # The misread worth remembering: the callback that seemed to prove
+    # shared_secret arrived when BOTH keys were stored and either was
+    # accepted. rejected_count at zero proved one matched — not which. A test
+    # that cannot distinguish two hypotheses is not evidence for either.
+    #
+    # Both are still kept and either is accepted, because the cost is nil and
+    # the failure mode — every delivery refused, indistinguishable from an
+    # attack in the logs — is expensive and was actually paid once already.
+    handshake_secret = EncryptedTextField(blank=True, default='')
 
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default='pending', db_index=True,

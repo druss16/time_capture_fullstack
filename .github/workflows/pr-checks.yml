@@ -56,6 +56,27 @@ jobs:
           POSTGRES_PORT: '5432'
         run: python manage.py check
 
+      - name: Migration graph is linear
+        working-directory: server
+        # Two PRs open at once, each adding a migration on the same parent,
+        # neither able to see the other. Django then refuses to run ANY
+        # migration — not just the new ones — so the next deploy that migrates
+        # is blocked until someone lands a merge migration. That happened
+        # three times in two days, and nothing caught it: `manage.py check`
+        # does not build the migration graph, and the app runs fine right up
+        # until something tries to migrate.
+        #
+        # Builds the graph from the files, asserts one leaf per app. No
+        # database needed, about a second.
+        env:
+          DJANGO_SECRET_KEY: ci-not-a-real-secret
+          POSTGRES_DB: ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: '5432'
+        run: python manage.py verify_migration_graph
+
       - name: Celery tasks are registered
         working-directory: server
         # Two failure directions, same root cause: autodiscover_tasks() only

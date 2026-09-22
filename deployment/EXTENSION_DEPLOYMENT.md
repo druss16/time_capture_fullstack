@@ -33,6 +33,32 @@ Decide based on where those PDFs actually come from.
 
 ---
 
+## Published IDs (both stores — DONE, verified 2026-09-22)
+
+| Browser | Extension ID | Update URL |
+|---|---|---|
+| Edge | `bnnifiompbeebhapoojlonamdghmlifh` | `https://edge.microsoft.com/extensionwebstorebase/v1/crx` |
+| Chrome | `ophdgbaogdhfdhmfnnjniegccekmgfok` | `https://clients2.google.com/service/update2/crx` |
+
+**The two IDs are unrelated.** The same source zip published to two stores gets
+two different IDs, so each policy must pair its own ID with its own update URL.
+Using the Edge ID in the Chrome policy fails SILENTLY — the key is written,
+Chrome finds no such extension, and nothing reports it.
+
+Both are wired into `install_timetracker_template.ps1`. Until Chrome was added,
+Chrome users fell back to title-only matching and the `clio_anchor` attribution
+tier — which reads the matter ID straight out of the tab URL — could not fire
+for them at all.
+
+Verify an ID before trusting it: `chromewebstore.google.com/detail/<id>` should
+resolve to "TimeTracker URL Reporter", publisher Mavops.
+
+**Store version lags the repo.** A freshly published version reaches installed
+copies on Chrome's own update poll (a few hours), not immediately. To force it:
+`chrome://extensions` → Developer mode → **Update**.
+
+Step 1 below is retained for reference and for any future extension.
+
 ## Step 1 — Get a stable extension ID + a place to serve it
 
 A force-install policy needs `<extensionID>;<updateURL>`. Pick ONE hosting route:

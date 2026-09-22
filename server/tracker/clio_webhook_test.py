@@ -104,20 +104,15 @@ if _ok:
     check("rejects when we hold no secret at all",
           not verify_signature(unsaved_hook(secret=''), BODY, sign(BODY)))
 
-    # Two secrets, either of which may be the one Clio signs with.
-    both = unsaved_hook()
-    both.handshake_secret = 'clio-generated-secret'
+    # ONE key now. Clio signs with the secret we supply at creation — proven
+    # by the first real callback verifying first try with rejected_count at
+    # zero — so the handshake secret is no longer stored or accepted.
     check("verifies against the secret we supplied",
-          verify_signature(both, BODY, sign(BODY)))
-    check("verifies against the secret Clio generated",
-          verify_signature(both, BODY, sign(BODY, 'clio-generated-secret')))
-    check("still rejects a third, unrelated secret",
-          not verify_signature(both, BODY, sign(BODY, 'neither-of-them')))
-
-    handshake_only = unsaved_hook(secret='')
-    handshake_only.handshake_secret = 'clio-generated-secret'
-    check("a handshake-only subscription still verifies",
-          verify_signature(handshake_only, BODY, sign(BODY, 'clio-generated-secret')))
+          verify_signature(unsaved_hook(), BODY, sign(BODY)))
+    check("a Clio-generated handshake secret is NOT accepted",
+          not verify_signature(unsaved_hook(), BODY, sign(BODY, 'clio-generated-secret')))
+    check("still rejects an unrelated secret",
+          not verify_signature(unsaved_hook(), BODY, sign(BODY, 'neither-of-them')))
 
     # The cross-tenant case: per-subscription secrets are the reason one
     # firm's captured callback cannot be replayed against another's URL.

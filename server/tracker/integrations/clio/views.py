@@ -358,18 +358,14 @@ def clio_webhook(request, url_token):
     # request has no signature to verify and no body worth reading.
     handshake_secret = request.headers.get('X-Hook-Secret')
     if handshake_secret:
-        # Stored ALONGSIDE the secret we supplied at creation, not over it.
-        # Clio's docs describe both mechanisms without saying which one signs
-        # the callbacks, so we keep both and verify against either — see
-        # ClioWebhook. Discarding ours here on a guess would make every later
-        # delivery fail its signature check, and a failing signature is
-        # indistinguishable from an attack in the logs.
-        hook.handshake_secret = handshake_secret
+        # The echo below is what activates the subscription, so this branch is
+        # load-bearing and stays. What is NOT kept is the secret itself: Clio
+        # signs with the secret we supplied at creation, proven by the first
+        # real callback verifying with rejected_count at zero. Storing a second
+        # key we never use would just be a second thing to leak.
         hook.status = 'active'
         hook.last_error = ''
-        hook.save(update_fields=[
-            'handshake_secret', 'status', 'last_error', 'updated_at',
-        ])
+        hook.save(update_fields=['status', 'last_error', 'updated_at'])
         logger.info('Clio webhook handshake completed: org %s, model %s',
                     hook.integration.organization_id, hook.model)
         response = HttpResponse(status=200)

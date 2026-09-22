@@ -379,8 +379,27 @@ def clio_webhook(request, url_token):
     # ── Signature ───────────────────────────────────────────────────────
     signature = request.headers.get('X-Hook-Signature', '')
     if not clio_hooks.verify_signature(hook, request.body, signature):
+        # RECORD IT. A rejected callback and a callback that never arrived are
+        # both "events_received == 0" with an empty last_error — identical from
+        # the outside, opposite in cause. One means Clio is not sending; the
+        # other means Clio IS sending and we are refusing, which is the far
+        # more urgent problem because it looks like silence.
+        #
+        # This is deliberately not an error the caller can probe with: the
+        # response stays a bare 401 either way, so a forged request learns
+        # nothing from the fact that we wrote a log row.
         logger.warning('Clio webhook: bad signature for org %s (%s)',
                        hook.integration.organization_id, hook.model)
+        ClioWebhook.objects.filter(pk=hook.pk).update(
+            last_error=(
+                'A callback arrived but its signature did not match either '
+                'stored secret, so it was rejected. Clio IS sending events; '
+                'we cannot verify them. Reconnecting Clio re-creates the '
+                'subscription with a fresh secret.'
+            ),
+            rejected_count=models.F('rejected_count') + 1,
+            last_rejected_at=timezone.now(),
+        )
         return HttpResponse(status=401)
 
     # ── Apply ───────────────────────────────────────────────────────────

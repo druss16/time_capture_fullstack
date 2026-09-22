@@ -613,6 +613,12 @@ class ClioWebhook(models.Model):
     )
 
     last_event_at = models.DateTimeField(null=True, blank=True)
+
+    # Callbacks we REFUSED. Separate from events_received because the two
+    # answer different questions, and the dangerous state is the one where
+    # both a healthy silence and an active rejection read as zero events.
+    rejected_count = models.PositiveIntegerField(default=0)
+    last_rejected_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default='')
     events_received = models.PositiveIntegerField(default=0)
 

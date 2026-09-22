@@ -410,27 +410,25 @@ def verify_signature(hook: ClioWebhook, raw_body: bytes, signature: str) -> bool
     hex, but both sides are normalized so a casing change upstream does not
     silently reject every callback.
 
-    Accepts a match against EITHER stored secret — the one we supplied at
-    creation or the one Clio handed us in the handshake. See ClioWebhook for
-    why both exist. Every candidate is compared in constant time and the
-    result is OR-ed at the end rather than returning early, so this does not
-    leak which secret matched through timing.
+    Keyed with the secret WE supply at creation.
+
+    This used to try a second key as well — the one Clio hands over in the
+    X-Hook-Secret handshake — because Clio's docs describe both mechanisms
+    without saying which one signs. That was a hedge against a question we
+    could not answer without a live account. We can now: the first real
+    callback verified against our own secret on the first try, with
+    rejected_count staying at zero. The hedge is dead code, and a second
+    accepted key is a second thing that can be wrong.
+
+    If that ever turns out to be wrong, it is no longer silent — a signature
+    we refuse increments rejected_count and writes the reason to the row.
     """
-    if not signature:
+    if not signature or not hook.shared_secret:
         return False
-
-    candidates = [sk for sk in (hook.shared_secret, hook.handshake_secret) if sk]
-    if not candidates:
-        return False
-
-    provided = signature.strip().lower()
-    matched = False
-    for secret in candidates:
-        expected = hmac.new(
-            secret.encode('utf-8'), raw_body, hashlib.sha256,
-        ).hexdigest()
-        matched |= hmac.compare_digest(expected.lower(), provided)
-    return matched
+    expected = hmac.new(
+        hook.shared_secret.encode('utf-8'), raw_body, hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected.lower(), signature.strip().lower())
 
 
 def handle_event(hook: ClioWebhook, raw_body: bytes) -> dict:

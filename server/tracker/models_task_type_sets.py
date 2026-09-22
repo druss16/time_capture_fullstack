@@ -583,26 +583,16 @@ class ClioWebhook(models.Model):
     # Random path segment identifying this subscription in the callback URL.
     url_token = models.CharField(max_length=64, unique=True, db_index=True)
 
-    # HMAC key for X-Hook-Signature, as supplied by US at creation time.
-    # Encrypted at rest alongside OAuth tokens — a leaked secret lets an
-    # attacker forge this firm's client records.
+    # HMAC key for X-Hook-Signature, supplied by us when the subscription is
+    # created. Encrypted at rest alongside OAuth tokens — a leaked secret lets
+    # an attacker forge this firm's client records.
+    #
+    # There was briefly a second field here for the secret Clio hands over in
+    # the handshake, because Clio's docs describe both mechanisms without
+    # saying which one signs. The first real callback settled it: Clio signs
+    # with this one.
     shared_secret = EncryptedTextField(blank=True, default='')
 
-    # HMAC key as supplied by CLIO during the X-Hook-Secret handshake.
-    #
-    # Two fields because Clio's documentation describes both mechanisms —
-    # a `shared_secret` sent with the subscription, and a secret Clio
-    # generates and hands over in the handshake — without stating which one
-    # actually signs the callbacks. Storing one and discarding the other is a
-    # coin flip, and losing it means every delivery fails signature checks
-    # with no way to tell that from an attack.
-    #
-    # So we keep both and accept a signature matching either. Both are
-    # high-entropy values known only to us and Clio, so accepting either
-    # weakens nothing; it just removes a guess we have no way to test against
-    # a live account. Once a real firm is connected, the logs say which one
-    # verifies and the other can be dropped.
-    handshake_secret = EncryptedTextField(blank=True, default='')
 
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default='pending', db_index=True,

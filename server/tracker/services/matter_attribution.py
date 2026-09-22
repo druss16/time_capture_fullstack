@@ -37,6 +37,7 @@ alias incident and the Sacred Heart collisions taught: a proposal a human
 confirms beats a confident wrong answer.
 """
 
+from celery import shared_task
 import logging
 import re
 from collections import defaultdict
@@ -277,6 +278,28 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
     return None, None, 'no matter identified'
 
 
+# categorized_by values that mean A PERSON chose the client. A clio_anchor hit
+# may correct a machine guess; it may never overrule somebody's decision.
+HUMAN_SET_CLIENT = ('manual', 'correction')
+
+
+def may_correct_client(categorized_by) -> bool:
+    """
+    True when a tier-0 anchor is allowed to rewrite this block's client.
+
+    Named and separate so the rule can be read and tested on its own. It is
+    one line, and it is the line that decides whether the system is permitted
+    to overrule a person — which is the sort of thing that should not be an
+    inline condition inside a loop.
+
+    Everything that is not an explicit human choice is a machine guess, and an
+    anchor is a better machine answer than the guess it replaces. Unknown or
+    future values therefore default to correctable; a new automated source
+    should not silently become immune to correction by virtue of being new.
+    """
+    return (categorized_by or '') not in HUMAN_SET_CLIENT
+
+
 def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dict:
     """
     Fill Block.project for recent blocks that have none.
@@ -296,13 +319,14 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         'org_id': org.id, 'matters': len(mappings), 'scanned': 0,
         'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0,
         'by_sole_matter': 0, 'by_temporal': 0,
-        'unmatched': 0, 'dry_run': dry_run,
+        'unmatched': 0, 'client_corrected': 0, 'dry_run': dry_run,
     }
     if not mappings:
         return stats
 
     index = build_matter_index(mappings)
     project_by_external_id = {str(m.external_id): m.project_id for m in mappings}
+    client_by_project_id = {m.project_id: m.project.client_id for m in mappings}
 
     since = timezone.now() - timedelta(days=days)
 
@@ -343,6 +367,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         qs = qs[:limit]
 
     updates = defaultdict(list)
+    client_fixes = defaultdict(list)
     for block in qs:
         stats['scanned'] += 1
         project_id, tier, _reason = attribute_block(
@@ -357,9 +382,94 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         stats[f'by_{tier}'] += 1
         updates[project_id].append(block.id)
 
+        # A clio_anchor hit knows the MATTER, and a matter has exactly one
+        # client — so it knows the client too. Previously only project was
+        # written, which left blocks internally contradictory: matter
+        # "00001-Ridgeline Holdings LLC" sitting on client "MAVOPS", because
+        # the classifier had guessed the client from a window title while the
+        # anchor knew the answer outright.
+        #
+        # ONLY tier 0. The tiers below are inferences about which matter a
+        # piece of work belongs to; letting a guessed matter rewrite a client
+        # would turn a matter-level mistake into a billing-level one. Tier 0
+        # is described in attribute_block as "knowledge, not inference", and
+        # that is exactly the bar for overwriting an existing client.
+        if tier != 'clio_anchor':
+            continue
+        want_client = client_by_project_id.get(project_id)
+        if not want_client or block.client_id == want_client:
+            continue
+        # Never overwrite a person. 'manual' and 'correction' mean somebody
+        # decided this; 'ai'/'pattern'/None mean the machine guessed, and the
+        # anchor is a better machine answer than the guess it replaces.
+        if not may_correct_client(block.categorized_by):
+            continue
+        client_fixes[want_client].append(block.id)
+
     if not dry_run:
         for project_id, block_ids in updates.items():
             Block.objects.filter(id__in=block_ids).update(project_id=project_id)
+        for client_id, block_ids in client_fixes.items():
+            # .update() deliberately, matching the project write above: it
+            # bypasses Block.save()'s guard on categorised blocks, which is
+            # the sanctioned path for a system correction of a machine guess.
+            Block.objects.filter(id__in=block_ids).update(client_id=client_id)
+    stats['client_corrected'] = sum(len(v) for v in client_fixes.values())
 
     logger.info('Matter attribution for org %s: %s', org.id, stats)
     return stats
+
+
+# ============================================================================
+# Scheduled entry point
+# ============================================================================
+
+@shared_task(name='tracker.attribute_matters_recent')
+def attribute_matters_recent(days: int = 2) -> dict:
+    """
+    Attribute recently-compacted blocks to matters, for every firm that syncs
+    a practice management system.
+
+    WHY THIS EXISTS SEPARATELY FROM THE POST-SYNC RUN
+    -------------------------------------------------
+    Attribution used to run in exactly one place: at the end of a Clio sync.
+    So a block's matter was decided on the SYNC's cadence, not the block's —
+    work captured at 19:17 waited for the 20:20 sweep, even though the matter
+    id was known at the moment of capture and was already sitting in
+    block.hints.
+
+    That made the feature impossible to evaluate by looking at it. A block
+    with a perfectly good anchor and no project is indistinguishable from a
+    broken tier, and the only way to tell was to know the sync schedule.
+
+    NARROW ON PURPOSE. `days=2` rather than the post-sync run's 30: this fires
+    every few minutes, and re-scanning a month of blocks each time would be
+    wasted work on a table that is large for exactly the firms that can least
+    afford it. The 30-day pass after each sync stays as the backstop that
+    catches anything this window missed.
+    """
+    from tracker.models import Organization
+    from tracker.models_task_type_sets import ExternalMatterMapping
+
+    org_ids = (
+        ExternalMatterMapping.objects
+        .values_list('integration__organization_id', flat=True)
+        .distinct()
+    )
+    totals = {'orgs': 0, 'scanned': 0, 'attributed': 0, 'client_corrected': 0}
+    for org in Organization.objects.filter(id__in=list(org_ids)):
+        try:
+            s = attribute_matters_for_org(org, days=days)
+        except Exception as e:
+            logger.warning('Matter attribution failed for org %s: %s',
+                           org.id, e, exc_info=True)
+            continue
+        totals['orgs'] += 1
+        totals['scanned'] += s.get('scanned', 0)
+        totals['attributed'] += sum(
+            v for k, v in s.items() if k.startswith('by_') and isinstance(v, int)
+        )
+        totals['client_corrected'] += s.get('client_corrected', 0)
+
+    logger.info('Matter attribution sweep: %s', totals)
+    return totals

@@ -1954,6 +1954,14 @@ from tracker.integrations.clio.webhooks import (  # noqa: F401
     renew_clio_webhooks,
 )
 
+# Matter attribution sweep. services/ is not a `tasks` module, so
+# autodiscover_tasks() never walks it — same gap that left sync_clio_full
+# unregistered. verify_beat_tasks now fails CI on this, which is how it was
+# caught before shipping rather than after.
+from tracker.services.matter_attribution import (  # noqa: F401
+    attribute_matters_recent,
+)
+
 # CCH Axcess sync — found by the declared-task audit in verify_beat_tasks, not
 # by anything failing. Nothing schedules or calls it today, so it was never
 # visibly broken; it was a trap. Its own docstring tells the next person to add

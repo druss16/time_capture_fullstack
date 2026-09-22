@@ -39,6 +39,7 @@ def check(label, cond, extra=''):
 try:
     from tracker.services.matter_attribution import (
         HUMAN_SET_CLIENT,
+        is_browser_block,
         may_correct_client,
     )
     _ok = True
@@ -74,5 +75,28 @@ if _ok:
 
     print("\ncase is significant (these are stored choice keys, not free text):")
     check("'Manual' is NOT treated as manual", may_correct_client('Manual'))
+
+    print("\nthe anchor may only speak for BROWSER activity:")
+
+    class _B:
+        def __init__(self, app):
+            self.app_name = app
+
+    # The stale-context bug: the extension's clio_matter_id rides along on
+    # events whose foreground app is not the browser, so these blocks carry a
+    # matter id they have no claim to. Letting the anchor fire on them billed
+    # 18 blocks of Claude and Terminal work to a law firm's client.
+    for app in ('Claude', 'Terminal', 'Slack', 'Microsoft Excel', 'Finder'):
+        check(f"{app!r} is not browser activity", not is_browser_block(_B(app)))
+
+    for app in ('Google Chrome', 'Microsoft Edge', 'Firefox', 'Safari',
+                'Brave Browser', 'Arc', 'Opera', 'Vivaldi'):
+        check(f"{app!r} is browser activity", is_browser_block(_B(app)))
+
+    print("\ndegenerate app names do not sneak through:")
+    check("empty app name", not is_browser_block(_B('')))
+    check("None app name", not is_browser_block(_B(None)))
+    check("a block with no app_name attribute at all",
+          not is_browser_block(object()))
 
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")

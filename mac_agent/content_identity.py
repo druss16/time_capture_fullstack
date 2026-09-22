@@ -40,6 +40,20 @@ from typing import Optional
 _ZW = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff"), None)
 
 # Browser chrome suffixes to strip before parsing.
+#
+# These are endswith() matches, which assumes the browser name is LAST. Chrome
+# breaks that assumption: when a profile is signed in it appends the profile
+# after its own name —
+#
+#   "00001-Ridgeline Holdings LLC - Dashboard | Clio - Google Chrome - dan@mavops.ai"
+#
+# so " - Google Chrome" is not a suffix, nothing is stripped, and the profile
+# reaches the client matcher. Measured on a live Mac: the firm had a client
+# named "MAVOPS", every Chrome window title carried "dan@mavops.ai", and the
+# agent pinned every tab to MAVOPS regardless of the page.
+#
+# The profile is user-controlled text, so it cannot be enumerated — it needs
+# the regex below rather than another entry in this tuple.
 _BROWSER_SUFFIXES = (
     " - Work - Microsoft Edge",
     " - Personal - Microsoft Edge",
@@ -48,6 +62,20 @@ _BROWSER_SUFFIXES = (
     " — Mozilla Firefox",
     " - Mozilla Firefox",
     " - Brave",
+)
+
+# "<browser> - <profile>" at the very end. Matched BEFORE the suffix tuple, so
+# what is left ends in the browser name and the tuple then handles it.
+#
+# Bounded and dash-free on purpose: the profile may not contain a dash, so this
+# can never reach back past the browser name into document text. Over-stripping
+# here would delete the client's own name — strictly worse than the noise it
+# removes, because the evidence is gone before anything can weigh it.
+_BROWSER_PROFILE_SUFFIX_RE = re.compile(
+    r"\s*[-–—]\s*"
+    r"(?:Google\s+Chrome|Microsoft\s*Edge|Mozilla\s+Firefox|Brave)"
+    r"\s*[-–—]\s*[^-–—]{0,60}$",
+    re.IGNORECASE,
 )
 
 # " and N more page(s)" multi-tab counter — the audit's #1 noise source.
@@ -66,6 +94,9 @@ def _clean_title(title: str) -> str:
     # after it other times depending on Edge build), then suffix, then re-strip
     # counter in case order was reversed.
     t = _MORE_PAGES_RE.sub("", t)
+    # Chrome's "<browser> - <profile>" tail first, so the tuple below still
+    # sees a title ending in the browser name.
+    t = _BROWSER_PROFILE_SUFFIX_RE.sub("", t).strip()
     for suf in _BROWSER_SUFFIXES:
         if t.endswith(suf):
             t = t[: -len(suf)].strip()

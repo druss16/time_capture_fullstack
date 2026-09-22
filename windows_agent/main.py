@@ -894,10 +894,35 @@ _BROWSER_TITLE_SUFFIXES = [
     " - Mozilla Firefox",
 ]
 
+# "<browser> - <profile>" at the very end. Chrome appends the signed-in profile
+# AFTER its own name, so the endswith() list above never matches:
+#
+#   "00001-Ridgeline Holdings LLC - Dashboard | Clio - Google Chrome - dan@mavops.ai"
+#
+# Nothing was stripped and the profile reached the client matcher. Measured on
+# a live account: the firm had a client named "MAVOPS", every Chrome window
+# title carried "dan@mavops.ai", and the agent pinned every tab to MAVOPS no
+# matter what was on screen. The profile is user-controlled text and cannot be
+# enumerated, so it needs a pattern rather than another list entry.
+#
+# Bounded and dash-free: the profile may not contain a dash, so this cannot
+# reach back past the browser name into document text. Over-stripping here
+# would delete the client's own name — worse than the noise it removes.
+_BROWSER_PROFILE_SUFFIX_RE = re.compile(
+    r"\s*[-\u2013\u2014]\s*"
+    r"(?:Google\s+Chrome|Microsoft\s*Edge|Mozilla\s+Firefox|Brave(?:\s+Browser)?)"
+    r"\s*[-\u2013\u2014]\s*[^-\u2013\u2014]{0,60}$",
+    re.IGNORECASE,
+)
+
+
 def normalize_window_title(title: str) -> str:
     """Strip browser app name suffixes that leak in via win32 GetWindowText."""
     if not title:
         return title
+    # Chrome's trailing profile first, so what remains ends in the browser name
+    # and the suffix list below still applies.
+    title = _BROWSER_PROFILE_SUFFIX_RE.sub("", title).strip()
     for suffix in _BROWSER_TITLE_SUFFIXES:
         if title.endswith(suffix):
             return title[:-len(suffix)].strip()

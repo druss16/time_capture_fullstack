@@ -207,6 +207,16 @@ def _ensure_subscription(api: ClioClient, integration: Integration, model: str) 
     if healthy:
         return 'skipped'
 
+    # A row that HAS an id but is still unconfirmed: ask Clio what it thinks.
+    #
+    # This is the blind spot that cost an afternoon. `status` here only records
+    # whether CLIO CALLED US — so a subscription Clio created and considers
+    # enabled, and one Clio created and left pending forever, are the same word
+    # on our side. They need completely different fixes, and nothing we stored
+    # could tell them apart. Clio knows; we just never asked.
+    if hook.external_id and hook.status == 'pending':
+        _record_clio_view(api, hook)
+
     if hook.external_id and hook.status in ('active', 'pending'):
         # Still registered with Clio — extend it rather than piling up a
         # second subscription delivering duplicate events to the same URL.
@@ -295,6 +305,51 @@ def _ensure_subscription(api: ClioClient, integration: Integration, model: str) 
     logger.info('Clio webhook created: org %s, model %s, id %s',
                 integration.organization_id, model, hook.external_id)
     return 'created'
+
+
+def _record_clio_view(api: ClioClient, hook: ClioWebhook):
+    """
+    Store what Clio reports about a subscription we have not heard from.
+
+    Best-effort and non-fatal: this is a diagnostic, and it must never be the
+    reason a registration pass fails. It writes into last_error because that is
+    what the Settings card already shows — the point is to put Clio's own
+    answer in front of whoever is trying to work out why nothing is arriving.
+    """
+    try:
+        payload = api.get(f'/webhooks/{hook.external_id}',
+                          fields='id,status,url,expires_at')
+        data = payload.get('data') or {}
+    except Exception as e:
+        hook.last_error = (
+            f'Unconfirmed, and asking Clio about it failed: {str(e)[:250]}'
+        )
+        hook.save(update_fields=['last_error', 'updated_at'])
+        return
+
+    clio_status = str(data.get('status') or 'unknown')
+
+    if clio_status.lower() in ('enabled', 'active'):
+        # Clio is delivering and we never noticed — the handshake either never
+        # happened or never needed to. Believe Clio: it is the side that
+        # decides whether events are sent.
+        hook.status = 'active'
+        hook.last_error = ''
+        hook.save(update_fields=['status', 'last_error', 'updated_at'])
+        logger.info('Clio webhook %s reported %s by Clio; marking active',
+                    hook.external_id, clio_status)
+        return
+
+    hook.last_error = (
+        f'Created at Clio (id {hook.external_id}) but Clio still reports '
+        f'status={clio_status!r}. Clio does not deliver events to a '
+        f'subscription in that state. Callback URL registered: '
+        f'{data.get("url") or "(not returned)"}'
+    )
+    hook.save(update_fields=['last_error', 'updated_at'])
+    logger.warning('Clio webhook %s still %s at Clio (org %s, %s)',
+                   hook.external_id, clio_status,
+                   hook.integration.organization_id, hook.model)
 
 
 def _renew_subscription(api: ClioClient, hook: ClioWebhook) -> str:
@@ -510,9 +565,21 @@ def renew_clio_webhooks() -> dict:
 # ============================================================================
 
 # How long a subscription may sit unconfirmed before we stop calling it
-# "waiting". Clio fires the handshake within seconds of creation, so anything
-# still pending after this is stuck, not in progress.
-HANDSHAKE_GRACE = timedelta(minutes=10)
+# "waiting".
+#
+# MEASURED, NOT ASSUMED. This was 10 minutes, written on the assumption —
+# repeated by several sources — that Clio handshakes "within seconds". On the
+# first real subscription Clio took NINE AND A HALF MINUTES. That healthy
+# subscription cleared the old threshold with about thirty seconds to spare;
+# a slightly slower day would have had the card declaring a perfectly good
+# webhook broken.
+#
+# The asymmetry decides the value: a stuck subscription is a latency problem
+# the hourly sweep already covers, so being slow to notice costs nearly
+# nothing. Crying wolf costs trust in every other thing this card says. So:
+# an hour, which is far past anything observed and still well inside the
+# window where the sweep has you covered anyway.
+HANDSHAKE_GRACE = timedelta(minutes=60)
 
 
 def live_sync_state(integration: Integration):
@@ -539,9 +606,13 @@ def live_sync_state(integration: Integration):
     now = timezone.now()
     detail = []
     for h in hooks:
+        # Unconfirmed past the grace window is stuck, WHETHER OR NOT it has an
+        # id. The first version of this required `not external_id`, aimed at
+        # rows never created at Clio — and then a row that WAS created sat
+        # pending indefinitely, invisible, because it had one. Same bug, one
+        # step further along the happy path.
         stuck = (
             h.status == 'pending'
-            and not h.external_id
             and (now - h.updated_at) > HANDSHAKE_GRACE
         )
         detail.append({
@@ -552,8 +623,11 @@ def live_sync_state(integration: Integration):
             'last_event_at': h.last_event_at,
             'events_received': h.events_received,
             'last_error': h.last_error or (
-                'Never confirmed by Clio. The subscription was not created — '
-                'the hourly sync is still running.' if stuck else None
+                ('Created at Clio but never confirmed — no events are '
+                 'arriving. The hourly sync still runs.'
+                 if h.external_id else
+                 'Never created at Clio. The hourly sync still runs.')
+                if stuck else None
             ),
         })
 

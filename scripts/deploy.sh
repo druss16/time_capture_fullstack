@@ -55,12 +55,15 @@ case "$target" in
   *) echo "usage: $0 [api|web|both]" >&2; exit 2 ;;
 esac
 
+fired=0
+
 fire() {
   local name="$1" url="${2:-}"
   if [[ -z "$url" ]]; then
     echo "  $name: no hook configured, skipping"
     return 0
   fi
+  fired=1
   # --fail so a 4xx is an error, and never print the URL: it contains the key.
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url") || true
@@ -80,6 +83,16 @@ echo "Triggering Render deploy(s) from $(git rev-parse --short HEAD) on $(git re
 rc=0
 [[ "$target" == "api" || "$target" == "both" ]] && { fire "api" "${RENDER_HOOK_API:-}" || rc=1; }
 [[ "$target" == "web" || "$target" == "both" ]] && { fire "web" "${RENDER_HOOK_WEB:-}" || rc=1; }
+
+# Deploying nothing is not success. A hooks file that exists but has every
+# line still commented out would otherwise print the trailer below and exit 0,
+# which reads as "deployed" to anyone who did not count the skips.
+if [[ "$fired" -eq 0 ]]; then
+  echo
+  echo "Nothing was deployed: no hook is set for the requested service(s)." >&2
+  echo "Edit $HOOKS and uncomment RENDER_HOOK_API / RENDER_HOOK_WEB." >&2
+  exit 1
+fi
 
 echo
 echo "A hook returns 200 as soon as the deploy is QUEUED — it does not report"

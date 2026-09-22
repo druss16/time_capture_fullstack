@@ -58,6 +58,19 @@ app.conf.beat_schedule = {
         'options': {'expires': 3000},
     },
 
+    # Every 10 minutes: give freshly-compacted blocks their matter.
+    # Attribution used to run ONLY at the end of a Clio sync, so a block's
+    # matter was decided on the sync's cadence rather than the block's — work
+    # captured at 19:17 waited for the 20:20 sweep even though the matter id
+    # was known at capture and already sitting in block.hints. Narrow window
+    # (2 days) because this is frequent; the 30-day pass after each sync stays
+    # as the backstop.
+    'attribute-matters-recent': {
+        'task': 'tracker.attribute_matters_recent',
+        'schedule': crontab(minute='*/10'),
+        'options': {'expires': 570},
+    },
+
     # Nightly 3:20 AM: extend Clio webhook subscriptions nearing expiry and
     # register any that are missing. Renews at 7 days remaining, so a run has
     # three weeks of nightly retries before anything actually lapses.

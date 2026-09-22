@@ -418,10 +418,46 @@ _APP_CHROME_RE = re.compile(r"\s*[-–]\s*QuickBooks\b[^-\[]*", re.I)
 # Only the unambiguous multi-word banners are listed. Bare "Safari" / "Opera" /
 # "Brave" are ordinary words that can legitimately end a document name, and a
 # wrong strip here silently deletes evidence.
+# The optional TRAILING group is Chrome's profile segment, which comes AFTER
+# the browser name rather than before it:
+#
+#   Edge:   "00001-Ridgeline … - Work - Microsoft Edge"
+#   Chrome: "00001-Ridgeline … - Google Chrome - dan@mavops.ai"
+#
+# Only Edge's shape was handled, so on Chrome NOTHING was stripped and the
+# profile reached the scorer. Measured on a live account: every Chrome window
+# title carried "dan@mavops.ai", the firm had a real client named "MAVOPS",
+# and that is an EXACT client-name match handed to the matcher on every page —
+# so the browser pinned every tab to MAVOPS no matter what was on screen.
+#
+# Worse than the Edge banner bug (PR #405), which only ever supplied a partial
+# decoy. This one WINS outright, and it wins on a firm's own name, which is
+# exactly the client most likely to exist in the roster.
 _BROWSER_CHROME_RE = re.compile(
     r"\s*[-–—]\s*(?:[^-–—]{0,40}\s*[-–—]\s*)?"
     r"(?:Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox)"
     r"\s*$",
+    re.I,
+)
+
+# Chrome's profile segment, which trails the browser name instead of preceding
+# it: "… - Google Chrome - dan@mavops.ai".
+#
+# Deliberately a SEPARATE pattern rather than an extra optional group on the
+# one above. Making that group optional there let the existing middle group
+# fire at the same time, so "Ridgeline … - Dashboard | Clio - Google Chrome -
+# dan@mavops.ai" lost "Dashboard | Clio" as well. Harmless on that title —
+# and on "Smith Estate - Ridgeline Holdings - Google Chrome - dan@x.com" it
+# would have deleted the client name itself. A strip that removes real
+# document text is worse than the noise it removes, because the evidence is
+# gone before anything can weigh it.
+#
+# This matches only the exact trailing pair and leaves everything before it,
+# after which the rule above handles any remaining banner.
+_BROWSER_PROFILE_SUFFIX_RE = re.compile(
+    r"\s*[-–—]\s*"
+    r"(?:Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox)"
+    r"\s*[-–—]\s*[^-–—]{0,60}\s*$",
     re.I,
 )
 
@@ -490,6 +526,7 @@ def strip_app_chrome(title: str) -> str:
     previous = None
     while previous != text:
         previous = text
+        text = _BROWSER_PROFILE_SUFFIX_RE.sub("", text)
         text = _BROWSER_CHROME_RE.sub("", text)
     return _APP_CHROME_RE.sub(" ", text)
 

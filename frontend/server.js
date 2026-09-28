@@ -16,7 +16,8 @@ app.use(express.static(path.join(__dirname, 'dist'), {
 app.get('/.well-known/microsoft-identity-association.json', (req, res) => {
   res.json({
     associatedApplications: [
-      { applicationId: '1178d566-16f1-4c70-b30a-a046c5879688' }
+      { applicationId: '1178d566-16f1-4c70-b30a-a046c5879688' }, // TimeTracker Calendar Integration
+      { applicationId: '6424c9a7-83f3-41ee-bd62-8e273a027ce6' }  // TimeTracker Mail
     ]
   });
 });

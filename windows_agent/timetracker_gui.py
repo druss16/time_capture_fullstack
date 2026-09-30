@@ -997,7 +997,12 @@ class TimeTrackerSystemTray:
             pystray.Menu.SEPARATOR,
             Item("Show Client Widget", on_show_widget, visible=_ticker_on),
             pystray.Menu.SEPARATOR,
-            Item("🔧 Repair Device...", on_repair, visible=_ticker_on),
+            # Repair is device RECOVERY, not a manual client control, so it is
+            # never gated on the ticker (matches the Mac's Re-link Device). A
+            # machine paired to the wrong account, or holding a key the server
+            # no longer honours, has no other way back: the pairing window only
+            # appears when there is no key at all.
+            Item("🔧 Repair Device...", on_repair),
             Item(f"v{APP_VERSION}", None, enabled=False),
             Item("Quit", on_quit),
         ])

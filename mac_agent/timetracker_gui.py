@@ -139,6 +139,28 @@ DAILY_REVIEW_URL = os.getenv("AGENT_DAILY_REVIEW_URL",
 # Switch Client shows this many most-used clients before the full A–Z list.
 RECENT_CLIENTS_SHOWN = 10
 
+
+def _bundled_file(name):
+    """Path to a file shipped with the agent (release.yml --add-data), or None.
+    PyInstaller puts data in Contents/Resources and links it from _MEIPASS;
+    from source it sits beside this module."""
+    candidates = []
+    if getattr(sys, "_MEIPASS", None):
+        candidates.append(sys._MEIPASS)
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(sys.executable), "..", "Resources"))
+    candidates.append(os.path.dirname(os.path.abspath(__file__)))
+    for base in candidates:
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+# Monochrome template image of the TimeTracker mark; macOS recolours it for
+# light and dark menu bars. Rendered at 40px for a 20pt Retina status item.
+MENUBAR_ICON = _bundled_file("menubar_icon.png")
+
 # ============================================================
 # PROFESSIONAL COLOR SCHEME
 # ============================================================
@@ -1313,7 +1335,18 @@ if RUMPS_AVAILABLE:
         """Professional menu bar app with username display and re-pair option"""
         
         def __init__(self, controller):
-            super().__init__("⏱", quit_button=None)
+            # The name is also what rumps shows when there is no icon and no
+            # title, so it doubles as the text fallback.
+            super().__init__("TimeTracker", quit_button=None)
+
+            self._icon_loaded = False
+            if MENUBAR_ICON:
+                try:
+                    self.template = True
+                    self.icon = MENUBAR_ICON
+                    self._icon_loaded = True
+                except Exception as e:
+                    print(f"[GUI] menu bar icon failed to load: {e}")
             
             # CRITICAL: Set activation policy to Accessory (menu bar only, no dock icon)
             try:
@@ -1348,9 +1381,10 @@ if RUMPS_AVAILABLE:
 
         # The status-bar title is written from six places (here, main.py, and
         # the shared ai_client_switcher), all as "⏱ <client>". Gating it here
-        # is the one choke point: hands-off orgs see only the clock, like the
-        # Windows tray, while the requested text is kept so a demo org's
-        # ticker flip can show it again without waiting for the next switch.
+        # is the one choke point. Hands-off orgs never see a client: just the
+        # TimeTracker icon, or the word "TimeTracker" if the icon is missing.
+        # The requested text is kept so a demo org's ticker flip can show the
+        # client again without waiting for the next switch.
         @property
         def title(self):
             return rumps.App.title.fget(self)
@@ -1358,8 +1392,12 @@ if RUMPS_AVAILABLE:
         @title.setter
         def title(self, value):
             self._requested_title = value
-            if value is not None and not getattr(self, "client_widget_enabled", False):
-                value = "⏱"
+            icon = getattr(self, "_icon_loaded", False)
+            if not getattr(self, "client_widget_enabled", False):
+                value = None if icon else "TimeTracker"
+            elif value is not None and icon:
+                # The icon already says "timer"; don't repeat it as ⏱.
+                value = value.replace("⏱", "", 1).strip() or None
             rumps.App.title.fset(self, value)
 
         def _start_keepalive(self):
@@ -1374,9 +1412,10 @@ if RUMPS_AVAILABLE:
                     except Exception as e:
                         print(f"[GUI] AppKit keepalive error: {e}")
                     
-                    # Force refresh the title if empty
+                    # Force refresh the title if empty — unless the icon is
+                    # showing, where an empty title is exactly what we want.
                     current = self.title
-                    if not current or current == "":
+                    if not current and not getattr(self, "_icon_loaded", False):
                         print(f"[GUI] ⚠️ Title was empty, restoring...")
                         client_name = self.controller.state.current_client_name
                         if client_name and client_name != "No Client":

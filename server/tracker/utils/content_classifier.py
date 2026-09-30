@@ -39,6 +39,8 @@ CLASSIFICATION ORDER (v2 — 2026-06-29, tuned to org-21 corpus)
 from urllib.parse import urlparse
 import re
 
+from tracker.industry_categories import is_platform_console_host, is_social_work_host
+
 
 # =============================================================================
 # WORK ALLOWLIST — checked FIRST. Protects billable work from false-personal.
@@ -221,7 +223,7 @@ _PERSONAL_TITLE_ENDINGS = (
 # CLASSIFIER
 # =============================================================================
 
-def classify_event_content(event) -> str:
+def classify_event_content(event, industry_type=None) -> str:
     """
     Classify a single RawEvent's content type for compaction grouping.
 
@@ -253,6 +255,16 @@ def classify_event_content(event) -> str:
         for wh in WORK_HOSTS:
             if host == wh or host.endswith('.' + wh) or wh in host:
                 return 'work'
+
+    # 0b'. An ad/business console is work in every vertical. The social
+    # platform itself, for a vertical that works inside it (an agency), is
+    # simply not evidence of personal browsing: 'unknown', so compaction keeps
+    # the client and review decides.
+    if host:
+        if is_platform_console_host(host):
+            return 'work'
+        if is_social_work_host(host, industry_type):
+            return 'unknown'
 
     # 0c. Open document (*.pdf) or scanner batch in the title = client work.
     if title and (_PDF_IN_TITLE_RE.search(title) or _SCAN_RE.search(title)):
@@ -349,7 +361,7 @@ def _looks_like_headline(title: str) -> bool:
     return True
 
 
-def is_high_confidence_personal(events) -> bool:
+def is_high_confidence_personal(events, industry_type=None) -> bool:
     """
     Return True if EVERY event in the list is classified as 'personal'.
 
@@ -360,7 +372,7 @@ def is_high_confidence_personal(events) -> bool:
     events = list(events)
     if not events:
         return False
-    return all(classify_event_content(ev) == 'personal' for ev in events)
+    return all(classify_event_content(ev, industry_type) == 'personal' for ev in events)
 
 
 # =============================================================================

@@ -5,6 +5,9 @@ a = Analysis(
     datas=[
         ('notifications.py', '.'),
         ('timetracker_gui.py', '.'),
+        # Menu bar template icon (TimeTrackerMenuBarApp). Without it the
+        # status item falls back to the word "TimeTracker".
+        ('menubar_icon.png', '.'),
         ('agent_sync_integration.py', '.'),
         # The matching brain. Several of these are imported from inside
         # functions or behind try/except, which PyInstaller's analysis can

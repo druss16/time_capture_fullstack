@@ -62,6 +62,9 @@ class Command(BaseCommand):
         client_forms = sp._build_client_forms(org_id)
         title_index = sp._build_title_index(org_id, since)
 
+        industry_type = (Organization.objects.filter(id=org_id)
+                         .values_list('industry_type', flat=True).first())
+
         pile = Block.objects.filter(
             org_id=org_id, deleted_at__isnull=True, start__date__gte=since,
             classification_state__in=['captured', 'proposed'], client_id__isnull=True,
@@ -75,7 +78,8 @@ class Command(BaseCommand):
             if b.categorized_by in ('manual', 'correction'):
                 continue
             action, cid, conf, reason = sp.classify_block(
-                b, client_forms, title_index, web_autofile=True)
+                b, client_forms, title_index, web_autofile=True,
+                industry_type=industry_type)
 
             verdict = None
             if action == 'llm_web_check':

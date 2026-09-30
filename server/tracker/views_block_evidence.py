@@ -1032,8 +1032,18 @@ def _looks_personal(block) -> bool:
     if not hay.strip():
         return False
     try:
-        from tracker.industry_categories import PERSONAL_SITE_DETECTION, detection_token_in
-        for grp in PERSONAL_SITE_DETECTION.values():
+        from tracker.industry_categories import (
+            detection_token_in, get_personal_site_detection, is_work_platform_host,
+        )
+        industry = getattr(getattr(block, 'org', None), 'industry_type', None)
+        raw_url = (getattr(block, 'url', '') or '').strip()
+        host = (urlparse(raw_url if '://' in raw_url else f'http://{raw_url}').hostname
+                or '').lower() if raw_url else ''
+        if host.startswith('www.'):
+            host = host[4:]
+        if host and is_work_platform_host(host, industry):
+            return False
+        for grp in get_personal_site_detection(industry).values():
             for tok in list(grp.get("keywords", [])) + list(grp.get("domains", [])):
                 if detection_token_in(tok, hay):
                     return True

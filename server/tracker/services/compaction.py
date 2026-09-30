@@ -899,7 +899,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
         for ev in session:
             app = _app_key(ev)
             client_id = ev.get("current_client_id") or 0
-            content_bucket = classify_event_content(ev["event"])
+            content_bucket = classify_event_content(
+                ev["event"], getattr(org, 'industry_type', None))
 
             # v1.3.62: for QB events, the COMPANY is the content identity —
             # not the modal/screen title. Compute content_id from the company
@@ -1034,7 +1035,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
             # the agent's client selection is stale — the user was reading news,
             # not working on any client. Mixed/ambiguous blocks keep the client.
             source_events = [e["event"] for e in app_events]
-            if is_high_confidence_personal(source_events):
+            if is_high_confidence_personal(source_events,
+                                           getattr(org, 'industry_type', None)):
                 if client_id:
                     logger.info(
                         f"[COMPACT] Dropped client_id={client_id} from pure-personal block: "

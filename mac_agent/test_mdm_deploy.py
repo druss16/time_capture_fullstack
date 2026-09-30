@@ -180,9 +180,21 @@ _main = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 _gui = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "timetracker_gui.py"), encoding="utf-8").read()
 
-check("Re-link sets a marker the next start can see",
-      'cfg["relink_requested"] = True' in _gui)
-check("...and main.py consumes it with pop(), so it fires once",
+# Re-link no longer removes the key at all: it pairs first and only clears the
+# old account's cache after a new key exists. A managed Mac therefore never
+# reaches the claim after a Re-link (a successful one holds the new key; a
+# cancelled one keeps the old). That also fixed the worse failure: cancelling
+# the window used to leave the Mac UNPAIRED, and the next restart stopped
+# tracking. The marker below is still honoured for configs older agents wrote.
+_relink = _gui[_gui.index("def do_relink():"):_gui.index("def _restart_app(")]
+check("Re-link shows the pairing window BEFORE clearing anything",
+      _relink.index("show_pairing_window(") < _relink.index("clear_account_cache("))
+check("...and returns untouched when pairing is cancelled",
+      _re.search(r"if not api_key:[^\n]*\n(?:\s*#[^\n]*\n|\s*print\([^\n]*\n)*\s*return\b", _relink) is not None)
+_cache = _gui[_gui.index("def clear_account_cache("):_gui.index("# STYLED COMPONENTS")]
+check("...and clearing the cache never removes the key",
+      'pop("api_key"' not in _cache and "api_key" not in _cache.split('"""')[-1])
+check("main.py still consumes a legacy relink marker with pop(), once",
       'config.pop("relink_requested"' in _main)
 check("...gating the MDM read itself, not just the claim",
       _re.search(r"mdm_config\s*=\s*None if relink else get_mdm_config\(\)",

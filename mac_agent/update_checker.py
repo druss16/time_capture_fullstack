@@ -234,8 +234,9 @@ _MAC_LABEL = "com.mavops.timetracker"
 _MAC_BUNDLE_ID = "TimeTracker"
 _MAC_STAGE_ROOT = os.path.expanduser("~/Library/Caches/TimeTracker/update")
 _MAC_SWAP_LOG = os.path.expanduser("~/Library/Logs/TimeTracker/update-swap.log")
-# Exit code for "restarting into an update". Non-zero, so the LaunchAgent's
-# KeepAlive(SuccessfulExit=false) relaunches us even if the helper dies.
+# Exit code for "restarting into an update". The LaunchAgent relaunches us on
+# any exit (KeepAlive=true since v1.9.14; non-zero also covered the older
+# SuccessfulExit=false plist), so the agent comes back even if the helper dies.
 _MAC_UPDATE_EXIT_CODE = 3
 
 

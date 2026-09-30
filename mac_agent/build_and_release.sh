@@ -189,10 +189,7 @@ cat > "${PKGROOT}/Library/LaunchAgents/${LAUNCH_LABEL}.plist" <<PLIST
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>ThrottleInterval</key>

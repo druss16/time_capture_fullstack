@@ -18,6 +18,7 @@ a = Analysis(
         ('tax_software_constants.py', '.'),
         ('content_identity.py', '.'),
         ('pdf_identity.py', '.'),
+        ('doc_capture.py', '.'),
         ('inference_cache.py', '.'),
         ('widget_state_tracker.py', '.'),
         ('tracking_health.py', '.'),
@@ -41,6 +42,7 @@ a = Analysis(
         'tax_software_constants',
         'content_identity',
         'pdf_identity',
+        'doc_capture',
         'inference_cache',
         'widget_state_tracker',
         'tracking_health',
@@ -116,4 +118,12 @@ app = BUNDLE(
     # titles start arriving empty, and attribution quietly falls back to file
     # paths and URLs alone. Continuity beats correct form here.
     bundle_identifier='TimeTracker',
+    # release.yml adds the same key with PlistBuddy; keep the two in step.
+    info_plist={
+        'NSAppleEventsUsageDescription': (
+            'TimeTracker reads which document or web page is in front (its '
+            'file path or URL) so your time is filed to the right client. '
+            'It never changes anything in the app.'
+        ),
+    },
 )

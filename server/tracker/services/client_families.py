@@ -33,6 +33,7 @@ from collections import defaultdict
 
 from django.core.cache import cache
 
+from tracker.utils.content_identity import strip_adobe_view_state
 from tracker.services.classification_service import (
     ALIAS_GENERIC_SUFFIXES,
     ALIAS_STOP_WORDS,
@@ -142,7 +143,9 @@ _PATH_SPLIT = re.compile(r'[\\/]+')
 
 def strip_app_chrome(title):
     """Drop trailing application chrome, repeatedly (" .xlsx - Read-Only - Excel")."""
-    out = ClassificationService._strip_qb_screen_bracket(title or '')
+    # Adobe zoom/layer/mode tail first — a text layer's words are not a name.
+    out = strip_adobe_view_state(title or '')
+    out = ClassificationService._strip_qb_screen_bracket(out)
     for _ in range(4):
         stripped = _APP_CHROME.sub('', out)
         if stripped == out:

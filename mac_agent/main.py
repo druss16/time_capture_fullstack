@@ -147,6 +147,14 @@ except Exception as _ci_import_err:  # pragma: no cover - import guard
     _content_identity = None
     print(f"[CONTENT-ID] Module not available: {_ci_import_err}", flush=True)
 
+# Adobe document paths, dialog carry-forward, AXDocument and Spotlight
+# file-name resolution. Must be listed in TimeTracker.spec AND release.yml.
+try:
+    import doc_capture as _doc_capture
+except Exception as _dc_import_err:  # pragma: no cover - import guard
+    _doc_capture = None
+    print(f"[DOC-CAPTURE] Module not available: {_dc_import_err}", flush=True)
+
 # Last computed inference result. The menu bar reads this (with decay
 # applied) to show the live client + confidence.
 _last_inference_lock = threading.Lock()
@@ -1922,23 +1930,71 @@ def _ax_ok(code: int) -> bool:
     except Exception:
         return False
 
+def _ax_copy(element, attribute):
+    """One AX attribute, or None. Handles both PyObjC calling conventions."""
+    if element is None:
+        return None
+    try:
+        err, value = AXUIElementCopyAttributeValue(element, attribute, None)
+    except Exception:
+        try:
+            value = AXUIElementCopyAttributeValue(element, attribute)
+            err = 0 if value is not None else 1
+        except Exception:
+            return None
+    if not _ax_ok(err):
+        return None
+    return value
+
+
 def get_window_title_via_ax(pid: int) -> Optional[str]:
+    """Title of the focused window, falling back to the app's MAIN window.
+
+    Adobe apps are full of floating panels (Photoshop had eight on-screen
+    floating-layer windows here). When a panel holds focus, the "focused
+    window" is that panel and its title is empty — 75 Photoshop and 59 Acrobat
+    events on this Mac arrived with no title at all. The main window is the
+    document window, so it is asked second.
+    """
     if not AX_AVAILABLE: return None
     try:
         app_ref = AXUIElementCreateApplication(pid)
-        try:
-            err, window = AXUIElementCopyAttributeValue(app_ref, kAXFocusedWindowAttribute, None)
-        except Exception:
-            window = AXUIElementCopyAttributeValue(app_ref, kAXFocusedWindowAttribute); err = 0 if window else 1
-        if not _ax_ok(err) or window is None: return None
-        try:
-            err2, title = AXUIElementCopyAttributeValue(window, kAXTitleAttribute, None)
-        except Exception:
-            title = AXUIElementCopyAttributeValue(window, kAXTitleAttribute); err2 = 0 if title else 1
-        if not _ax_ok(err2): return None
-        return str(title) if title else None
+        for attr in (kAXFocusedWindowAttribute, "AXMainWindow"):
+            window = _ax_copy(app_ref, attr)
+            if window is None:
+                continue
+            title = _ax_copy(window, kAXTitleAttribute)
+            if title:
+                return str(title)
+        return None
     except Exception as e:
         log(f"[WARN] AX read failed: {e}")
+        return None
+
+
+def get_window_document_via_ax(pid: Optional[int]) -> Optional[str]:
+    """The AXDocument file behind the focused/main window, as a POSIX path.
+
+    Cocoa document apps publish their file's URL on the window (Preview,
+    TextEdit, most NSDocument apps). It costs two AX reads — no AppleEvent, no
+    Automation prompt — so it is the app-agnostic fallback for any app with no
+    entry in _DOC_PATH_SCRIPTS. Browsers publish the PAGE url here, which
+    file_url_to_path refuses.
+    """
+    if not AX_AVAILABLE or not pid or _doc_capture is None:
+        return None
+    try:
+        app_ref = AXUIElementCreateApplication(pid)
+        for attr in (kAXFocusedWindowAttribute, "AXMainWindow"):
+            window = _ax_copy(app_ref, attr)
+            if window is None:
+                continue
+            path = _doc_capture.file_url_to_path(_ax_copy(window, "AXDocument"))
+            if path:
+                return path
+        return None
+    except Exception as e:
+        log(f"[WARN] AXDocument read failed: {e}")
         return None
 
 # Chromium browsers all answer the same AppleScript, differing only in the
@@ -2054,13 +2110,114 @@ _DOC_PATH_SCRIPTS = {
 _DOC_PATH_SCRIPTS["com.sublimetext.3"] = _DOC_PATH_SCRIPTS["com.sublimetext.4"]
 
 
-def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
+# Browsers: their titles are page titles and their AXDocument is a web URL, so
+# neither the AXDocument nor the Spotlight fallback applies to them.
+_NO_DOC_FALLBACK_BUNDLES = set(_CHROMIUM_APPS) | {
+    "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+    "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition",
+    "com.operasoftware.Opera",
+}
+
+_adobe_carry = _doc_capture.DocCarryForward() if _doc_capture else None
+_adobe_backoff = _doc_capture.ScriptBackoff() if _doc_capture else None
+_spotlight = _doc_capture.SpotlightResolver() if _doc_capture else None
+
+
+def _running_app_path(pid: Optional[int]) -> Optional[str]:
+    """Bundle path of the running process, so AppleScript targets THAT copy.
+
+    Photoshop 2024, 2025 and 2026 share one bundle id; `application id`
+    would let Launch Services pick a version — and launch it if it is not the
+    one running.
+    """
+    if not pid:
+        return None
+    try:
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        url = ra.bundleURL() if ra else None
+        return str(url.path()) if url is not None else None
+    except Exception:
+        return None
+
+
+def _path_found(path: Optional[str], source: str) -> Optional[str]:
+    if path and _doc_capture:
+        _doc_capture.remember_path_source(path, source)
+    return path or None
+
+
+def _spotlight_path(title: str, pid: Optional[int] = None) -> Optional[str]:
+    """Title names a file -> its path, via an exact-name Spotlight lookup.
+
+    Only a candidate the front app has open (lsof -p pid) or used in the last
+    few minutes is accepted; see doc_capture.SpotlightResolver.
+    """
+    if not (_spotlight and _doc_capture and title):
+        return None
+    try:
+        name = _doc_capture.extract_filename(title)
+        if not name:
+            return None
+        return _path_found(_spotlight.lookup(name, pid=pid), "spotlight")
+    except Exception as e:
+        log(f"[DOC-CAPTURE] spotlight lookup failed: {e}", "warning")
+        return None
+
+
+def _adobe_url_or_path(kind: str, bundle_id: str, pid: Optional[int],
+                       title: str) -> Dict[str, Optional[str]]:
+    """Document path + cleaned title for an Adobe app.
+
+    Returns {"url", "file_path", "title"}; "title" replaces the raw window
+    title for the signature, the matcher and the stored event.
+    """
+    dc = _doc_capture
+    if kind in dc.BACKGROUND_KINDS:
+        # Media Encoder / AE Render Engine: a render queue, not a document.
+        return {"url": None, "file_path": None, "title": title}
+
+    if kind in dc.PROJECT_TITLE_KINDS:
+        clean, path = dc.parse_project_title(kind, title)
+        path = _path_found(path, "title") or _path_found(
+            get_window_document_via_ax(pid), "axdocument")
+        return {"url": None, "file_path": path, "title": clean}
+
+    state = dc.classify_adobe_title(kind, title)
+    clean = dc.normalize_adobe_title(kind, title)
+    path = None
+    # Never script an app sitting in a dialog: a modal Adobe app can hold the
+    # AppleEvent to the timeout, and the carry-forward already knows the file.
+    if state in ("doc", "empty") and kind in dc.SCRIPTABLE_KINDS \
+            and not _adobe_backoff.blocked(pid):
+        script = dc.adobe_path_script(kind, bundle_id, _running_app_path(pid))
+        if script:
+            t0 = time.time()
+            path = osa(script) or None  # one try: "" is a real answer (unsaved)
+            _adobe_backoff.record(pid, time.time() - t0)
+            if path:
+                path = _path_found(path.rstrip("/"), "applescript")
+    if not path and state != "home":
+        path = _path_found(get_window_document_via_ax(pid), "axdocument")
+    if not path and state == "doc":
+        path = _spotlight_path(clean, pid)
+    clean, path, carried = _adobe_carry.apply(bundle_id, state, clean, path)
+    if carried and VERBOSE:
+        log(f"[DOC-CAPTURE] {kind}: '{title}' in front → carrying '{clean}'")
+    return {"url": None, "file_path": path, "title": clean}
+
+
+def try_get_url_or_path(bundle_id: str, pid: Optional[int] = None,
+                        title: str = "") -> Dict[str, Optional[str]]:
     """The URL or document path behind the frontmost window.
 
     This is the Mac's equivalent of the Windows agent reading Explorer's
     address bar and the browser address bar over UI Automation. Every app
     missing from these tables contributes a window title and nothing else,
     which for a document app means the client's own file is invisible.
+
+    Order: browsers -> Adobe apps -> per-app AppleScript -> AXDocument ->
+    Spotlight by file name. May also return "title" when the raw window title
+    is replaced (Adobe view state stripped, dialog carried forward).
     """
     if bundle_id == "com.apple.Safari":
         url = osa_retry(
@@ -2091,6 +2248,14 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
         # reads; there is nothing further to extract.
         return {"url": None, "file_path": None}
 
+    kind = _doc_capture.adobe_kind(bundle_id) if _doc_capture else None
+    if kind:
+        try:
+            return _adobe_url_or_path(kind, bundle_id, pid, title)
+        except Exception as e:
+            log(f"[DOC-CAPTURE] adobe capture failed for {bundle_id}: {e}", "warning")
+            return {"url": None, "file_path": None}
+
     script = _DOC_PATH_SCRIPTS.get(bundle_id)
     if script:
         path = osa_retry(script)
@@ -2100,9 +2265,23 @@ def try_get_url_or_path(bundle_id: str) -> Dict[str, Optional[str]]:
             # nothing for the very folder the user is looking at. finder_watcher
             # strips it too — the two channels must agree on the same path.
             path = path.rstrip("/") or "/"
-        return {"url": None, "file_path": path or None}
+            return {"url": None, "file_path": _path_found(path, "applescript")}
 
-    return {"url": None, "file_path": None}
+    # App-agnostic fallbacks, for every app the tables above do not name (and
+    # for a scripted app whose script came back empty — e.g. Automation denied).
+    if bundle_id in _NO_DOC_FALLBACK_BUNDLES:
+        return {"url": None, "file_path": None}
+    path = _path_found(get_window_document_via_ax(pid), "axdocument")
+    if not path and title:
+        clean = title
+        if _content_identity is not None:
+            try:
+                from content_identity import _clean_title as _ci_clean
+                clean = _ci_clean(title)
+            except Exception:
+                pass
+        path = _spotlight_path(clean, pid)
+    return {"url": None, "file_path": path}
 
 # ---------------- PID utils ----------------
 def write_pid():
@@ -3014,6 +3193,17 @@ def write_event(
         "agent_version": APP_VERSION,
         "inference": inference_dict,
     }
+
+    # Where the file path came from. "spotlight" is INFERRED from a file name
+    # in the title (unique match, or the only recently-used one); the others
+    # are the app stating its document. Rides in ctx, which the server stores
+    # verbatim, so the payload shape the server validates is unchanged.
+    if fpath and _doc_capture is not None:
+        src = _doc_capture.path_source(fpath)
+        if src:
+            if not isinstance(payload.get("ctx"), dict):
+                payload["ctx"] = {}
+            payload["ctx"]["file_path_source"] = src
 
     toolish, tool_reason, tool_host = looks_toolish(bundle_id, url)
     payload["toolish"] = bool(toolish)
@@ -4217,9 +4407,15 @@ def run_agent():
                     title_ax = get_window_title_via_ax(pid) or ""
                     title = title_ax or (fallback_title or "")
 
-                    extras = try_get_url_or_path(bundle_id)
+                    extras = try_get_url_or_path(bundle_id, pid=pid, title=title)
                     url, fpath = extras.get("url"), extras.get("file_path")
-                    
+                    # Adobe: view state stripped / dialog carried forward. The
+                    # cleaned title is what the signature, the matchers and the
+                    # stored event all see — a zoom click is not a new window,
+                    # and a text layer's words never reach the client matcher.
+                    if extras.get("title") is not None:
+                        title = extras["title"]
+
                     # FIX 3: Retry URL capture for potential meeting apps
                     # Critical for Chrome-based Teams/Meet where URL fetch can fail
                     if bundle_id in MEETING_BUNDLES and not url:

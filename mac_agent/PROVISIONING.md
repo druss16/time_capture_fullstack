@@ -116,6 +116,32 @@ endpoints the Windows agent does, in the same order:
 
 Steps 1 and 2 are silent. Only step 3 involves a human.
 
+**Privacy prompts (PPPC).** Push
+`pkgroot/Library/Application Support/MavOps/mavops-pppc-timetracker.mobileconfig`
+through the MDM. It pre-approves, for the shipped bundle id `TimeTracker`
+(team `P3KX4CDFN4`):
+
+* **Accessibility** — window titles. Without it every title arrives empty.
+* **Automation (AppleEvents)** of Photoshop, Acrobat Pro, Illustrator and
+  InDesign — the agent asks each one which document is in front, so the file
+  path (and the client folder above it) reaches the server. Without the
+  profile each Mac shows one "TimeTracker wants to control …" prompt per app,
+  the first time that app is frontmost; a "Don't Allow" there means that app
+  only ever contributes its window title.
+
+The Photoshop and Acrobat requirements were checked against the installed apps
+with `codesign --verify -R=`; Illustrator and InDesign follow Adobe's identical
+signing and are unverified. After Effects, Premiere and Media Encoder are not
+listed because the agent never sends them AppleEvents (After Effects' project
+path comes from its window title). Office, Chrome, Safari, Finder and System
+Events are scripted too and are NOT in this profile yet — those users see the
+prompts.
+
+A profile only grants TCC when an MDM delivers it; double-clicking it does
+nothing. The older `mavops-pppc-timetrackeragent.mobileconfig` beside it names
+`TimeTrackerAgent`, which is not the shipped bundle id, and has invalid
+PayloadUUIDs — do not use it.
+
 `device_id` is the one `main.py` already keeps, passed in — not a second one
 minted inside `mdm_deploy`, which is what the Windows copy does.
 

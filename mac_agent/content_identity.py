@@ -85,11 +85,77 @@ _MORE_PAGES_RE = re.compile(r"\s+and\s+\d+\s+more\s+pages?\s*$", re.IGNORECASE)
 _UNREAD_RE = re.compile(r"\s*\(\d+\)\s*$")
 
 
+# ---------------------------------------------------------------------------
+# Adobe document titles carry VIEW STATE, not identity.
+#
+# Photoshop titles its document window with the zoom, the selected layer, the
+# colour mode and an unsaved marker, all of which change while the user works
+# on one file (measured on a live Mac, 2026-09-30):
+#
+#   "D&F FB Cover Photo.psd @ 95.4% (Layer 3, RGB/8) *"
+#   "D&F FB Cover Photo.psd @ 178% (Rectangle 1 copy, RGB/8) *"
+#   "aurelia-cutout.png @ 66.7% (Layer 1, RGB/8) - Saving 10%"
+#
+# Every zoom or layer click was a new window signature, so one file became
+# dozens of events. Worse, a TEXT layer's name is its text:
+#
+#   "au text.psd @ 100% ( With over 15 years of experience in the beauty
+#    industry, Aurel, RGB/8) *"
+#
+# and that sentence reached the client matcher — a layer that mentions another
+# client would have filed the block to them. Everything from " @ <zoom>%" on is
+# view state, so it is cut; only the document name survives.
+#
+# Illustrator ("Logo.ai* @ 150 % (CMYK/Preview)") and InDesign
+# ("*Brochure.indd @ 75%") use the same shape with the unsaved marker in other
+# places. Those two are NOT installed on the machine this was built on — their
+# shapes come from Adobe's documented UI and are handled defensively.
+#
+# The " @ N%" must be followed by the end of the title or an opening bracket, so
+# an email subject like "Sale @ 50% off" is never touched.
+# ---------------------------------------------------------------------------
+_ADOBE_VIEW_STATE_RE = re.compile(
+    r"^(?P<doc>.*?\S)\*?\s+@\s+\d{1,4}(?:[.,]\d{1,3})?\s?%(?:\s*[(\[].*)?\s*$"
+)
+
+# Document types an Adobe title can name. Used to gate the strip when the
+# caller cannot say which application the title came from.
+_ADOBE_DOC_EXT_RE = re.compile(
+    r"\.(?:psd|psb|ai|ait|eps|pdf|indd|indt|idml|png|jpe?g|tiff?|gif|svg|webp|"
+    r"heic|bmp|dng|cr2|cr3|nef|arw|raw)$",
+    re.IGNORECASE,
+)
+_ADOBE_UNTITLED_RE = re.compile(r"^Untitled-\d+$", re.IGNORECASE)
+
+
+def strip_adobe_view_state(title: str, is_adobe: bool = False) -> str:
+    """'x.psd @ 95.4% (Layer 3, RGB/8) *' -> 'x.psd'. Anything else unchanged.
+
+    `is_adobe`: the caller knows the title came from an Adobe app. Without it
+    the strip only fires when what is left looks like an Adobe document name
+    (an image/design extension, or Photoshop's "Untitled-N"), so a title from
+    some other app that happens to contain " @ 50% (" keeps its text.
+    """
+    if not title or "@" not in title or "%" not in title:
+        return title or ""
+    m = _ADOBE_VIEW_STATE_RE.match(title.strip())
+    if not m:
+        return title
+    doc = m.group("doc").strip().lstrip("*").strip()
+    if not doc:
+        return title
+    if not is_adobe and not (_ADOBE_DOC_EXT_RE.search(doc)
+                             or _ADOBE_UNTITLED_RE.match(doc)):
+        return title
+    return doc
+
+
 def _clean_title(title: str) -> str:
     """Strip zero-width chars, browser suffix, and the multi-tab page counter."""
     if not title:
         return ""
     t = title.translate(_ZW).strip()
+    t = strip_adobe_view_state(t)
     # Strip page-counter first (it sits before the browser suffix sometimes,
     # after it other times depending on Edge build), then suffix, then re-strip
     # counter in case order was reversed.

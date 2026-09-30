@@ -1222,6 +1222,7 @@ from django.utils import timezone
 from tracker.auth import AgentKeyAuthentication
 from tracker.models import RawEvent, CurrentClient, Client
 from tracker.services import unobserved as unobs
+from tracker.utils.content_identity import normalize_ingested_title
 
 import logging
 logger = logging.getLogger(__name__)
@@ -1335,7 +1336,14 @@ def raw_events(request):
                 end_ts=end_dt,
                 app_name=item.get("app_name"),
                 bundle_id=item.get("bundle_id"),
-                window_title=item.get("window_title") or "",
+                # Adobe view state (zoom, selected layer — whose name is a text
+                # layer's TEXT — colour mode, unsaved marker) is cut before the
+                # title is stored; see content_identity.normalize_ingested_title.
+                window_title=normalize_ingested_title(
+                    item.get("window_title") or "",
+                    item.get("bundle_id"),
+                    item.get("app_name"),
+                ),
                 url=item.get("url"),
                 file_path=item.get("file_path"),
                 user=agent_user,

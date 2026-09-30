@@ -79,6 +79,32 @@ _CLIENT_ROOT_FOLDERS = (
 )
 
 
+# A Dropbox ROOT, where a firm keeps one top-level folder per client
+# (a marketing agency: Dropbox/<Client>/<Project>/file.psd). Recognised only in
+# the shapes Dropbox actually installs as — never any segment that merely
+# contains "dropbox":
+#
+#   macOS File Provider  ~/Library/CloudStorage/Dropbox/<Client>
+#                        ~/Library/CloudStorage/Dropbox-<Team Name>/<Client>
+#   legacy macOS/Linux   ~/Dropbox/<Client>,  ~/Dropbox (<Team Name>)/<Client>
+#   Windows              C:\Users\<x>\Dropbox\<Client>  (and "Dropbox (<Team>)")
+#
+# i.e. the segment sits directly in CloudStorage, or directly in a home folder.
+_DROPBOX_NAME_RE = re.compile(r"^dropbox(?:\s*\([^)]*\))?$")
+_DROPBOX_CLOUDSTORAGE_RE = re.compile(r"^dropbox(?:-.+|\s*\([^)]*\))?$")
+_HOME_PARENTS = ("users", "home")
+
+
+def _dropbox_root_index(low):
+    """Index of the Dropbox root segment in a lowercased path, or None."""
+    for i, s in enumerate(low):
+        if i >= 1 and low[i - 1] == "cloudstorage" and _DROPBOX_CLOUDSTORAGE_RE.match(s):
+            return i
+        if i >= 2 and low[i - 2] in _HOME_PARENTS and _DROPBOX_NAME_RE.match(s):
+            return i
+    return None
+
+
 def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
     """Return the client-level folder segment from a path, or '' if none.
 
@@ -90,7 +116,18 @@ def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
     collapsing into a single mixed block (block 54393: Divine Mercy + Our Lady
     of Hope files merged under one ``docs`` bucket).
 
-    Returns '' when the path has no recognized clients-root (e.g. a file under
+    A named clients-root anywhere in the path wins. Only when there is none is
+    a Dropbox ROOT used as the anchor, so ``Dropbox/Firm/Clients/Acme/...`` is
+    still ``acme``, and org 21's paths are unchanged. Under a Dropbox root the
+    segment below must be a FOLDER — a file saved straight into Dropbox names
+    no client.
+
+    GROUPING ONLY. The one caller is compaction._grouping_content_id, which
+    uses this to split "docs" blocks at a folder boundary. It never picks a
+    client. A top-level non-client Dropbox folder (Apps, Templates, Internal)
+    just gets its own block.
+
+    Returns '' when the path has no recognized root (e.g. a file under
     ``C:\\Users\\<name>\\OneDrive\\...``) — the caller then keeps the existing
     coarse ``docs`` bucket, so those paths are unaffected.
     """
@@ -103,6 +140,11 @@ def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
         if s in roots:
             anchor_idx = i
             break
+    if anchor_idx is None:
+        anchor_idx = _dropbox_root_index(low)
+        # Dropbox/<file> — the next segment must be a folder, not the file.
+        if anchor_idx is not None and anchor_idx + 2 >= len(low):
+            return ""
     if anchor_idx is None or anchor_idx + 1 >= len(low):
         return ""
     folder = re.sub(r"\s+", " ", low[anchor_idx + 1]).strip()

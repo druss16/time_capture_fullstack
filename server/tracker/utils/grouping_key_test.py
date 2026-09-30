@@ -67,6 +67,41 @@ def run():
         client_folder_bucket(R + r"\AB\file.xlsx"),
         ""))
 
+    # --- Dropbox root: one top-level folder per client (marketing agency) ---
+    for name, path, want in (
+        ("dropbox_cloudstorage",
+         "/Users/amy/Library/CloudStorage/Dropbox/D&F CPAs/Social/FB Cover.psd", "d&f cpas"),
+        ("dropbox_cloudstorage_team",
+         "/Users/amy/Library/CloudStorage/Dropbox-Bright Agency/Aurelia Salon/Web/hero.psd",
+         "aurelia salon"),
+        ("dropbox_legacy_home", "/Users/amy/Dropbox/Aurelia Salon/logo.ai", "aurelia salon"),
+        ("dropbox_legacy_team",
+         "/Users/amy/Dropbox (Bright Agency)/GrowU/EIN/GrowU_EIN_Doc.pdf", "growu"),
+        ("dropbox_windows", r"C:\Users\amy\Dropbox\Aurelia Salon\Proposal.pdf", "aurelia salon"),
+        ("dropbox_windows_team", r"C:\Users\amy\Dropbox (Bright Agency)\GrowU\a.docx", "growu"),
+        # A deeper NAMED clients-root still wins over the Dropbox root.
+        ("dropbox_inner_clients_root_wins",
+         "/Users/amy/Library/CloudStorage/Dropbox/Firm/Clients/Acme/2026/x.xlsx", "acme"),
+        ("dropbox_inner_client_file_notes_wins",
+         r"C:\Users\wayne\Dropbox\TL Wall\Client File Notes\Divine Mercy\x.xlsx", "divine mercy"),
+        # A file saved straight into Dropbox names no client folder.
+        ("dropbox_file_at_root", "/Users/amy/Library/CloudStorage/Dropbox/notes.pdf", ""),
+        ("dropbox_bare_root", "/Users/amy/Dropbox", ""),
+        # Only real Dropbox root shapes — not any segment containing "dropbox".
+        ("dropbox_word_in_folder", "/Users/amy/Documents/Old Dropbox Export/Acme/x.pdf", ""),
+        ("dropbox_nested_not_root", "/Users/amy/Documents/Dropbox/Acme/x.pdf", ""),
+        ("dropbox_dash_outside_cloudstorage", "/Users/amy/Dropbox-backup/Acme/x.pdf", ""),
+        ("dropbox_cloudstorage_other_provider",
+         "/Users/amy/Library/CloudStorage/OneDrive-Personal/Acme/x.pdf", ""),
+    ):
+        results.append(_check(name, client_folder_bucket(path), want))
+
+    # org 21's real shape is unchanged.
+    results.append(_check(
+        "org21_unchanged_by_dropbox_rule",
+        client_folder_bucket(R + r"\Divine Mercy\2025-2026\x.xlsx"),
+        "divine mercy"))
+
     # --- grouping_key still collapses generic docs to the coarse bucket
     #     (the folder refinement lives in compaction._grouping_content_id) ---
     results.append(_check("grouping_key_generic_doc", grouping_key("file=some account spreadsheet.xlsx"), "docs"))

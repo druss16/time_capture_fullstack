@@ -255,6 +255,12 @@ def _build_mail_evidence(block: Block, requesting_user) -> Optional[Dict[str, An
     and MavOps admins can read this endpoint for any block; mail is the one
     part they do not get. Debug someone else's mail attribution with
     `manage.py mail_domains --observed`, not by reading their inbox metadata.
+
+    Gmail raises the stakes: its rows store sender/recipient addresses, display
+    names and the full subject (product-owner decision; see MailSignal's
+    PRIVACY GUARANTEES). `messages` and `compose` expose those fields, so the
+    owner check above is now what keeps addresses away from managers and
+    admins — they must never be moved above it or into another builder.
     """
     from tracker.models import MailSignal
 
@@ -278,7 +284,11 @@ def _build_mail_evidence(block: Block, requesting_user) -> Optional[Dict[str, An
         .select_related('extracted_client')
         .order_by('occurred_at')
     )
-    if not signals:
+    # Gmail sends made DURING this block. Computed before the empty check: a
+    # send at the end of a long Gmail block falls outside Stage 7's window.
+    compose = _gmail_compose_lines(block)
+
+    if not signals and not compose:
         return None
 
     # Grouped the way Stage 7 groups them: by client, most signals wins.
@@ -328,6 +338,19 @@ def _build_mail_evidence(block: Block, requesting_user) -> Optional[Dict[str, An
             f"none from a domain mapped to a client"
         )
 
+    # ── Gmail detail (owner-only; we only get here for the block's own user) ──
+    # Gmail rows carry addresses, names and subject (MailSignal PRIVACY
+    # GUARANTEES); Outlook rows carry none of it and are not listed here.
+    messages = [
+        _serialize_gmail_message(s) for s in signals
+        if getattr(s, 'provider', '') == 'google'
+    ]
+
+    if compose:
+        summary = "; ".join(c["line"] for c in compose[:3]) + (
+            f" (+{len(compose) - 3} more)" if len(compose) > 3 else ""
+        )
+
     return {
         "summary": summary,
         "matched": matched,
@@ -335,6 +358,53 @@ def _build_mail_evidence(block: Block, requesting_user) -> Optional[Dict[str, An
         "signal_count": len(signals),
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
+        "messages": messages,
+        "compose": compose,
+    }
+
+
+def _gmail_compose_lines(block) -> List[Dict[str, Any]]:
+    """Owner-only: each Gmail send made in this block, with compose time.
+    "Emailed jane@acme.com — ~6 min composing". NEVER call for another user."""
+    compose: List[Dict[str, Any]] = []
+    try:
+        from tracker.services.mail_compose import fmt_minutes, sends_for_block
+        for att in sends_for_block(block):
+            sig = att.signal
+            to = [p.get("email") for p in (sig.to_recipients or []) if p.get("email")]
+            who = to[0] if to else (sig.other_party_domain or "someone")
+            if len(to) > 1:
+                who += f" +{len(to) - 1}"
+            mins = fmt_minutes(att.compose_seconds)
+            compose.append({
+                "signal_id": sig.id,
+                "sent_at": sig.occurred_at.isoformat(),
+                "to": to,
+                "subject": sig.subject or "",
+                "client_id": sig.extracted_client_id,
+                "client_name": sig.extracted_client.name if sig.extracted_client_id else None,
+                "compose_seconds": att.compose_seconds,
+                "line": f"Emailed {who}" + (f" — {mins} composing" if mins else ""),
+            })
+    except Exception as e:  # evidence is best-effort; never 500 the panel
+        logger.warning(f"[EVIDENCE] compose lookup failed for block {getattr(block, 'id', '?')}: {e}")
+    return compose
+
+
+def _serialize_gmail_message(sig) -> Dict[str, Any]:
+    """Owner-only view of one Gmail MailSignal. NEVER call for another user."""
+    return {
+        "id": sig.id,
+        "occurred_at": sig.occurred_at.isoformat(),
+        "direction": sig.direction,
+        "from": {"email": sig.from_address or "", "name": sig.from_name or ""},
+        "to": list(sig.to_recipients or []),
+        "cc": list(sig.cc_recipients or []),
+        "subject": sig.subject or "",
+        "other_party_domain": sig.other_party_domain,
+        "client_id": sig.extracted_client_id,
+        "client_name": sig.extracted_client.name if sig.extracted_client_id else None,
+        "compose_seconds": sig.compose_seconds,
     }
 
 

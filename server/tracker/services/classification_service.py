@@ -4198,6 +4198,13 @@ class ClassificationService:
         if not block.start:
             return
 
+        # Stage 7a — Gmail compose. When THIS block is the user writing in
+        # Gmail and a send landed in it, the recipient is far more specific
+        # evidence than the 2.5h window of surrounding mail below, so it
+        # replaces that window rather than competing with it.
+        if self._stage_7a_gmail_compose(block, decision):
+            return
+
         # Cache per (user, date) — same pattern as Stage 6 calendar
         cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
         if cache_key not in self._mail_signals_cache:
@@ -4315,6 +4322,107 @@ class ClassificationService:
         decision.detail['mail_proposed_confidence'] = strength
         decision.detail['mail_proposed_evidence'] = evidence
 
+    # Stage 7a strengths. Unambiguous compose is STRONG (can commit alone):
+    # the user was demonstrably writing to that client during this block.
+    # Ambiguous compose emits one MODERATE signal per client, which is exactly
+    # what _has_contradicting_signal / the moderate-agreement rule need to keep
+    # the block out of auto-commit.
+    GMAIL_COMPOSE_STRENGTH = 0.90
+    GMAIL_COMPOSE_AMBIGUOUS_STRENGTH = 0.70
+
+    def _stage_7a_gmail_compose(self, block, decision: 'ClassificationDecision') -> bool:
+        """Attribute a Gmail block from the mail the user SENT during it.
+
+        Returns True when it spoke (committed evidence or flagged ambiguity),
+        in which case the windowed Stage 7 is skipped.
+
+          * sends in this block -> exactly one client  -> one strong 'mail'
+            signal for that client, with the compose time in the evidence.
+          * sends -> 2+ different clients              -> no auto-attribution:
+            a moderate signal per client, needs_review, proposed at best.
+          * sends only to unmapped / public domains    -> says nothing.
+
+        PRIVACY: the Signal lands on Block.proposed_signals, which managers
+        and admins can read. Evidence therefore names the counterparty DOMAIN
+        and client only — never an address or subject (MailSignal docstring).
+        """
+        from tracker.services.mail_compose import (
+            fmt_minutes, is_gmail_block, sends_for_block,
+        )
+
+        if not is_gmail_block(block) or not getattr(block, 'pk', None):
+            return False
+        try:
+            sends = sends_for_block(block)
+        except Exception as e:
+            logger.warning(f"[STAGE-7A] compose lookup failed for block {block.pk}: {e}")
+            return False
+
+        by_client = {}
+        for att in sends:
+            sig = att.signal
+            if not sig.extracted_client_id:
+                continue
+            entry = by_client.setdefault(sig.extracted_client_id, {
+                'client': sig.extracted_client, 'sends': 0, 'seconds': 0, 'domains': [],
+            })
+            entry['sends'] += 1
+            entry['seconds'] += att.compose_seconds
+            if sig.other_party_domain and sig.other_party_domain not in entry['domains']:
+                entry['domains'].append(sig.other_party_domain)
+        if not by_client:
+            return False
+
+        def _evidence(e):
+            mins = fmt_minutes(e['seconds'])
+            return (
+                f"Gmail: composed and sent {e['sends']} email{'s' if e['sends'] != 1 else ''} "
+                f"to {', '.join(e['domains']) or 'a known contact'} → {e['client'].name}"
+                + (f" ({mins} composing)" if mins else '')
+            )
+
+        def _detail(cid, e, method):
+            return {
+                'client_id': cid,
+                'client_name': e['client'].name,
+                'match_method': method,
+                'send_count': e['sends'],
+                'compose_seconds': e['seconds'],
+                'other_party_domains': e['domains'],
+                'direction': 'out',
+            }
+
+        if len(by_client) == 1:
+            (cid, e), = by_client.items()
+            evidence = _evidence(e)
+            decision.matched_signals.append(Signal(
+                type='mail',
+                strength=self.GMAIL_COMPOSE_STRENGTH,
+                evidence=evidence,
+                detail=_detail(cid, e, 'gmail_compose'),
+            ))
+            decision.detail = getattr(decision, 'detail', {}) or {}
+            decision.detail['mail_proposed_client_id'] = cid
+            decision.detail['mail_proposed_client_name'] = e['client'].name
+            decision.detail['mail_proposed_confidence'] = self.GMAIL_COMPOSE_STRENGTH
+            decision.detail['mail_proposed_evidence'] = evidence
+            return True
+
+        names = sorted(e['client'].name for e in by_client.values())
+        for cid, e in by_client.items():
+            decision.matched_signals.append(Signal(
+                type='mail',
+                strength=self.GMAIL_COMPOSE_AMBIGUOUS_STRENGTH,
+                evidence=_evidence(e) + ' [one of several clients emailed in this block]',
+                detail=_detail(cid, e, 'gmail_compose_ambiguous'),
+            ))
+        decision.needs_review = True
+        decision.review_reason = (
+            f"Gmail block sent mail to {len(by_client)} clients "
+            f"({', '.join(names)}) — which one was this time for?"
+        )[:255]
+        return True
+
     @staticmethod
     def _is_outlook_or_email_block(block) -> bool:
             """
@@ -4330,6 +4438,11 @@ class ClassificationService:
             """
             app = (getattr(block, 'app_name', '') or '').lower()
             if 'outlook' in app or app == 'olk':
+                return True
+
+            # Gmail in a browser tab ("Inbox (3) - jane@acme.com - Gmail").
+            from tracker.services.mail_compose import is_gmail_block
+            if is_gmail_block(block):
                 return True
 
             # Title-based detection — catches abbreviated app names AND

@@ -174,9 +174,9 @@ def sync_user_calendar(self, integration_id):
                     or ''
                 )
                 
-                # Save / update
-                cal_event, _created = CalendarEvent.objects.update_or_create(
+                upsert_calendar_event(
                     user=user,
+                    org=org,
                     provider='microsoft',
                     external_id=external_id,
                     defaults={
@@ -191,27 +191,8 @@ def sync_user_calendar(self, integration_id):
                         'show_as': (evt.get('showAs') or '')[:16],
                         'attendees': attendees,
                     },
+                    categories=evt.get('categories', []) or [],
                 )
-
-                # Match to client (Strategy 1: direct rules, Strategy 2: fuzzy title)
-                try:
-                    from tracker.calendar_matching import find_best_match
-                    match_event = {
-                        'title': evt.get('subject', ''),
-                        'attendees': attendees,
-                        'categories': evt.get('categories', []) or [],
-                    }
-                    matched_client, confidence, method = find_best_match(match_event, org)
-                    if matched_client and confidence >= 0.70:
-                        cal_event.extracted_client = matched_client
-                        cal_event.extraction_confidence = confidence
-                        cal_event.save(update_fields=['extracted_client', 'extraction_confidence'])
-                        logger.info(
-                            f"[CAL-MATCH] '{cal_event.title[:40]}' → {matched_client.name} "
-                            f"({confidence:.2f}, {method})"
-                        )
-                except Exception as e:
-                    logger.warning(f"[CAL-MATCH] Match failed for {external_id}: {e}")
 
                 saved_count += 1
             except Exception as e:
@@ -244,3 +225,39 @@ def sync_user_calendar(self, integration_id):
         'saved': saved_count,
         'skipped': skipped_count,
     }
+
+
+def upsert_calendar_event(user, org, provider, external_id, defaults, categories=()):
+    """Save one event and pre-match it to a client. Shared by every provider.
+
+    Matching (tracker.calendar_matching.find_best_match: direct rules incl.
+    attendee_domain, then fuzzy title) runs identically for Microsoft and
+    Google events, so Stage 6 cannot tell them apart.
+    """
+    cal_event, _created = CalendarEvent.objects.update_or_create(
+        user=user,
+        provider=provider,
+        external_id=external_id,
+        defaults=defaults,
+    )
+
+    # Match to client (Strategy 1: direct rules, Strategy 2: fuzzy title)
+    try:
+        from tracker.calendar_matching import find_best_match
+        match_event = {
+            'title': defaults.get('title', ''),
+            'attendees': defaults.get('attendees') or [],
+            'categories': list(categories or []),
+        }
+        matched_client, confidence, method = find_best_match(match_event, org)
+        if matched_client and confidence >= 0.70:
+            cal_event.extracted_client = matched_client
+            cal_event.extraction_confidence = confidence
+            cal_event.save(update_fields=['extracted_client', 'extraction_confidence'])
+            logger.info(
+                f"[CAL-MATCH] '{cal_event.title[:40]}' → {matched_client.name} "
+                f"({confidence:.2f}, {method})"
+            )
+    except Exception as e:
+        logger.warning(f"[CAL-MATCH] Match failed for {external_id}: {e}")
+    return cal_event

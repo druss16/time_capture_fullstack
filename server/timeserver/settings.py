@@ -26,6 +26,11 @@ ALLOWED_HOSTS = [
     "timetracker-api-k375.onrender.com",
     "time-capture-fullstack-frontend.onrender.com",
     "timetracker-api-rebuild.onrender.com",   # NEW — for rebuild work
+    # Custom API domain (Render custom domain on timetracker-api). Google
+    # OAuth will not accept onrender.com as an authorized domain, so the
+    # Gmail/Calendar callbacks live here. Keep the onrender hosts: agents and
+    # the Outlook callbacks still use them.
+    "api.timetracker.mavops.ai",
 
     # Add your custom domain here when ready
 ]
@@ -302,6 +307,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://timetracker.mavops.ai",
     "https://timetracker-frontend-9y52.onrender.com",  # ← ADD
     "https://timetracker-api-k375.onrender.com",        # ← ADD (API itself)
+    "https://api.timetracker.mavops.ai",                # custom API domain
 ]
 
 # Optional: URLs that should be exempt from CSRF (like raw agent events)
@@ -442,6 +448,26 @@ MS_GRAPH_MAIL_CLIENT_SECRET = os.getenv('MS_GRAPH_MAIL_CLIENT_SECRET', '')
 # warning on every management command while there is still time to rotate.
 MS_GRAPH_CLIENT_SECRET_EXPIRES = os.getenv('MS_GRAPH_CLIENT_SECRET_EXPIRES', '')
 MS_GRAPH_MAIL_CLIENT_SECRET_EXPIRES = os.getenv('MS_GRAPH_MAIL_CLIENT_SECRET_EXPIRES', '')
+
+# Google (Gmail + Google Calendar, per-user OAuth). One OAuth client in Google
+# Cloud Console serves both flows; each flow has its OWN callback and its own
+# redirect URI, and both URIs must be registered on that client.
+#
+# The two redirect URIs are set independently, never derived from each other
+# or from the Microsoft ones. Deriving MS_GRAPH_MAIL_REDIRECT_URI from the
+# calendar URI by string replacement is how Outlook mail silently lost every
+# new connection for four months. Override per environment with the env vars.
+# See server/docs/GOOGLE_INTEGRATION_SETUP.md.
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_GMAIL_REDIRECT_URI = os.getenv(
+    'GOOGLE_GMAIL_REDIRECT_URI',
+    'https://api.timetracker.mavops.ai/api/google/gmail/auth/callback/',
+)
+GOOGLE_CALENDAR_REDIRECT_URI = os.getenv(
+    'GOOGLE_CALENDAR_REDIRECT_URI',
+    'https://api.timetracker.mavops.ai/api/google/calendar/auth/callback/',
+)
 
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 

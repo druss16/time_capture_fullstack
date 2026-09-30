@@ -8,7 +8,6 @@ Features:
 - Modern dialogs with CustomTkinter
 - Client switching with ROBUST WINDOWS FOCUS
 - AI client prompts
-- Today's time viewer
 - Clean menu without duplicates
 - Dark themed compact tray menu
 - User name display in menu
@@ -842,138 +841,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
 
 
 # ============================================================
-# Modern Today's Time Window
-# ============================================================
-class TodayTimeWindowModern:
-    """Beautiful window showing today's time"""
-    
-    def __init__(self, api_callback: Callable):
-        self.api_callback = api_callback
-        
-        ctk.set_appearance_mode("dark")
-        self.root = ctk.CTk()
-        self.root.title("Today's Time")
-        self.root.geometry("500x450")
-        self.root.resizable(False, False)
-        self.root.attributes('-topmost', True)
-        
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - 250
-        y = (self.root.winfo_screenheight() // 2) - 225
-        self.root.geometry(f"+{x}+{y}")
-        
-        self._setup_ui()
-    
-    def _setup_ui(self):
-        content = ctk.CTkFrame(self.root, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        header = ctk.CTkFrame(content, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 15))
-        
-        date_str = datetime.now().strftime("%A, %B %d")
-        date_label = ctk.CTkLabel(
-            header,
-            text=f"{date_str}",
-            font=ctk.CTkFont(size=20, weight="bold")
-        )
-        date_label.pack(side="left")
-        
-        self.total_label = ctk.CTkLabel(
-            header,
-            text="0.0 hrs",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=COLORS["primary"]
-        )
-        self.total_label.pack(side="right")
-        
-        self.entries_frame = ctk.CTkScrollableFrame(content, corner_radius=10)
-        self.entries_frame.pack(fill="both", expand=True, pady=(0, 15))
-        
-        btn_frame = ctk.CTkFrame(content, fg_color="transparent")
-        btn_frame.pack(fill="x")
-        
-        refresh_btn = ctk.CTkButton(
-            btn_frame,
-            text="Refresh",
-            command=self._on_refresh,
-            fg_color=COLORS["primary"],
-            hover_color=COLORS["primary_hover"],
-            height=40
-        )
-        refresh_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
-        
-        close_btn = ctk.CTkButton(
-            btn_frame,
-            text="Close",
-            command=self.root.destroy,
-            fg_color=COLORS["bg_card"],
-            hover_color=COLORS["bg_dark"],
-            height=40
-        )
-        close_btn.pack(side="right", expand=True, fill="x", padx=(5, 0))
-        
-        self.root.bind("<Escape>", lambda e: self.root.destroy())
-    
-    def _on_refresh(self):
-        if not self.api_callback:
-            return
-        
-        try:
-            data = self.api_callback()
-            
-            for widget in self.entries_frame.winfo_children():
-                widget.destroy()
-            
-            total_hours = 0.0
-            
-            if not data:
-                empty_label = ctk.CTkLabel(
-                    self.entries_frame,
-                    text="No time tracked yet today",
-                    font=ctk.CTkFont(size=14),
-                    text_color=COLORS["text_muted"]
-                )
-                empty_label.pack(pady=40)
-            else:
-                for entry in data:
-                    client = entry.get("client", "Unknown")
-                    hours = entry.get("hours", 0)
-                    total_hours += hours
-                    
-                    row = ctk.CTkFrame(self.entries_frame, corner_radius=8)
-                    row.pack(fill="x", pady=3, padx=5)
-                    
-                    row_inner = ctk.CTkFrame(row, fg_color="transparent")
-                    row_inner.pack(fill="x", padx=12, pady=10)
-                    
-                    client_label = ctk.CTkLabel(
-                        row_inner,
-                        text=client,
-                        font=ctk.CTkFont(size=14),
-                        anchor="w"
-                    )
-                    client_label.pack(side="left")
-                    
-                    hours_label = ctk.CTkLabel(
-                        row_inner,
-                        text=f"{hours:.1f} hrs",
-                        font=ctk.CTkFont(size=14, weight="bold"),
-                        text_color=COLORS["primary"]
-                    )
-                    hours_label.pack(side="right")
-            
-            self.total_label.configure(text=f"{total_hours:.1f} hrs")
-        
-        except Exception as e:
-            print(f"[GUI] Failed to fetch today's time: {e}")
-    
-    def show_and_refresh(self):
-        self._on_refresh()
-        self.root.mainloop()
-
-
-# ============================================================
 # System Tray Controller
 # ============================================================
 class TimeTrackerSystemTray:
@@ -1073,9 +940,6 @@ class TimeTrackerSystemTray:
         def on_search(icon, item):
             threading.Timer(0.05, self._show_client_picker).start()
         
-        def on_today(icon, item):
-            threading.Timer(0.05, self._on_today_time).start()
-
         def on_daily_review(icon, item):
             # Open the web Daily Review — the one surface a hands-off user should
             # use (confirm/correct their day). Always available, regardless of the
@@ -1130,7 +994,6 @@ class TimeTrackerSystemTray:
             Item("📋 Daily Review", on_daily_review),
             Item("Search Clients...    Alt+Ctrl+T", on_search, visible=_ticker_on),
             Item("Switch Client", pystray.Menu(*client_items), visible=_ticker_on),
-            Item("Today's Time...", on_today),
             pystray.Menu.SEPARATOR,
             Item("Show Client Widget", on_show_widget, visible=_ticker_on),
             pystray.Menu.SEPARATOR,
@@ -1254,6 +1117,15 @@ class TimeTrackerSystemTray:
         root.mainloop()
         print("[GUI] Repair dialog closed")
 
+
+    def _tooltip(self, client_label):
+        """Tray hover text. Hands-off orgs (ticker off, the default) never see
+        a client name — the same rule as the Mac menu bar, which shows only the
+        TimeTracker mark. The MavOps demo flag shows the live client again."""
+        base = f"TimeTracker ({self.user_name})" if self.user_name else "TimeTracker"
+        if not getattr(self, 'client_widget_enabled', False):
+            return base
+        return f"{base} - {client_label}"
 
     def set_client_widget_enabled(self, enabled):
         """Vendor gate from org_settings sync. When False (default), the client
@@ -1413,12 +1285,9 @@ class TimeTrackerSystemTray:
             self.state.set_client(client_id, client_name)
             print(f"[GUI] Switched to client: {client_name}")
         
-        # Update tray icon tooltip to show current client
+        # Update tray icon tooltip (client shown only in demo mode)
         if self.icon:
-            tooltip = f"TimeTracker - {client_name}"
-            if self.user_name:
-                tooltip = f"TimeTracker ({self.user_name}) - {client_name}"
-            self.icon.title = tooltip
+            self.icon.title = self._tooltip(client_name)
         
         if self.set_current_client_callback:
             try:
@@ -1449,10 +1318,7 @@ class TimeTrackerSystemTray:
                 else:
                     label = "No Client"
 
-                if self.user_name:
-                    tooltip = f"TimeTracker ({self.user_name}) - {label}"
-                else:
-                    tooltip = f"TimeTracker - {label}"
+                tooltip = self._tooltip(label)
 
                 if self.icon and self.icon.title != tooltip:
                     self.icon.title = tooltip
@@ -1460,12 +1326,6 @@ class TimeTrackerSystemTray:
                 # Never let the refresher kill itself
                 print(f"[GUI] Tooltip refresh error: {e}")
             self._tooltip_refresher_stop.wait(5.0)
-    
-    def _on_today_time(self):
-        """Show today's time window"""
-        if MODERN_UI:
-            window = TodayTimeWindowModern(self.get_today_time_callback)
-            window.show_and_refresh()
     
     def _on_quit(self):
         """Quit the application"""
@@ -1484,11 +1344,8 @@ class TimeTrackerSystemTray:
             print("[GUI] System tray not available")
             return
         
-        # Set tooltip with current client and user name
-        if self.user_name:
-            tooltip = f"TimeTracker ({self.user_name}) - {self.state.current_client_name}"
-        else:
-            tooltip = f"TimeTracker - {self.state.current_client_name}"
+        # Tooltip: client shown only in demo mode (see _tooltip)
+        tooltip = self._tooltip(self.state.current_client_name)
         
         # Use native pystray menu (right-click to open)
         self.icon = pystray.Icon(

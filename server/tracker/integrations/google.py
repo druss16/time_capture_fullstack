@@ -5,7 +5,7 @@ or google-auth dependency. Both flows share ONE OAuth client
 (GOOGLE_OAUTH_CLIENT_ID/SECRET) and differ by scope and redirect URI:
 
   gmail            openid email gmail.metadata          (headers only)
-  google_calendar  openid email calendar.readonly
+  google_calendar  openid email calendar.events.readonly
 
 PRIVACY — Gmail
   * `gmail.metadata` cannot return a message body or attachment at all; the
@@ -49,7 +49,7 @@ GMAIL_SCOPES = [
 CALENDAR_SCOPES = [
     'openid',
     'email',
-    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/calendar.events.readonly',
 ]
 
 # Headers we ask Gmail for. Nothing else is requested.

@@ -31,6 +31,19 @@ import math
 import re
 from collections import defaultdict
 
+try:
+    from tracker.utils.content_identity import strip_adobe_view_state
+except Exception:  # loaded off disk by the bare-python *_test.py scripts
+    import importlib.util as _ilu
+    import os as _os
+    _ci_spec = _ilu.spec_from_file_location(
+        "_content_identity_for_cnm",
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "content_identity.py"),
+    )
+    _ci_mod = _ilu.module_from_spec(_ci_spec)
+    _ci_spec.loader.exec_module(_ci_mod)
+    strip_adobe_view_state = _ci_mod.strip_adobe_view_state
+
 
 # Tokens that are never fingerprints on their own — legal/entity noise and the
 # ubiquitous religious-org words in this book of business. They still get a df
@@ -521,6 +534,11 @@ def _named_only_in_center(title: str, cid: int, index: dict) -> bool:
 def strip_app_chrome(title: str) -> str:
     """Remove application-banner noise so only document text is scored."""
     text = (title or "").translate(_ZERO_WIDTH)
+    # Adobe view state: " @ 95.4% (<layer name>, RGB/8) *". A text layer's
+    # name is its TEXT, so without this a Photoshop layer mentioning another
+    # client would be scored as the client. Ingestion strips it from new
+    # events; this covers titles stored before that.
+    text = strip_adobe_view_state(text)
     # Loop: a title may carry a banner behind a profile segment behind another
     # dash. Each pass must match a browser name, so this cannot run away.
     previous = None

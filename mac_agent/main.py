@@ -2382,6 +2382,92 @@ def _gui_pair_callback(code: str) -> dict:
     return _claim_pair(code, hostname)
 
 
+def run_unpaired_menu():
+    """Keep TimeTracker in the menu bar while this Mac has no device key.
+
+    Shows the TimeTracker mark with "⚠️ Pair" beside it and a menu to pair.
+    When a key appears — from this menu, or written by any other path — the
+    process exits non-zero and launchd (KeepAlive) starts it again, paired.
+    Never returns while unpaired.
+    """
+    PAIRED_EXIT = 75
+
+    def _has_key():
+        try:
+            return bool((load_config() or {}).get("api_key"))
+        except Exception:
+            return False
+
+    try:
+        import rumps
+        from timetracker_gui import MENUBAR_ICON, show_pairing_window
+    except Exception as e:
+        # No menu bar available (headless run): wait for a key to appear.
+        log(f"[PAIR] Menu bar unavailable ({e}); waiting for a pairing key")
+        while not _has_key():
+            time.sleep(30)
+        os._exit(PAIRED_EXIT)
+
+    try:
+        from AppKit import NSApp, NSApplication
+        NSApplication.sharedApplication()
+        NSApp.setActivationPolicy_(1)  # Accessory: menu bar only, no dock icon
+    except Exception:
+        pass
+
+    app = rumps.App("TimeTracker", quit_button=None)
+    if MENUBAR_ICON:
+        try:
+            app.template = True
+            app.icon = MENUBAR_ICON
+        except Exception:
+            pass
+    app.title = "⚠️ Pair"
+
+    busy = {"pairing": False}
+
+    def _pair(_=None):
+        if busy["pairing"]:
+            return
+        busy["pairing"] = True
+
+        def _run():
+            try:
+                if show_pairing_window():
+                    log("[PAIR] Paired from the menu bar — restarting into tracking")
+                    os._exit(PAIRED_EXIT)
+            finally:
+                busy["pairing"] = False
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _get_code(_):
+        import webbrowser
+        webbrowser.open("https://timetracker.mavops.ai/devices")
+
+    def _poll(_):
+        if _has_key():
+            log("[PAIR] A device key appeared — restarting into tracking")
+            os._exit(PAIRED_EXIT)
+
+    status = rumps.MenuItem("Not paired — tracking is off")
+    status.set_callback(None)
+    version = rumps.MenuItem(f"Version {APP_VERSION}")
+    version.set_callback(None)
+    app.menu = [
+        status,
+        None,
+        rumps.MenuItem("Pair this Mac…", callback=_pair),
+        rumps.MenuItem("Get a pairing code…", callback=_get_code),
+        None,
+        version,
+    ]
+    rumps.Timer(_poll, 30).start()
+    app.run()
+    # rumps only returns if the app is quit some other way; exit non-zero so
+    # launchd brings the agent straight back.
+    os._exit(PAIRED_EXIT)
+
+
 def ensure_api_key_interactive(hostname: str):
     """Ensure we have an API key; use GUI or terminal prompt if needed."""
     global API_KEY
@@ -3257,12 +3343,12 @@ def run_agent():
             key = ensure_api_key_interactive(hostname)
         
         if not key:
-            print("Exiting: no device key configured.")
-            print("Options:")
-            print("  1. Deploy MDM config to /Library/Application Support/TimeTracker/config.plist")
-            print("  2. Run the app to show the pairing window")
-            print("  3. Set AGENT_PAIR_CODE environment variable")
-            remove_pid()
+            # Never exit here. An unpaired agent that quit cleanly was never
+            # restarted (and its menu bar icon vanished with no explanation),
+            # so one cancelled pairing window stopped tracking until the next
+            # login. Stay in the menu bar until a key exists instead.
+            log("[PAIR] No device key — staying in the menu bar until paired")
+            run_unpaired_menu()
             return
 
     # After pairing, so a first-time user sees the pairing window before the

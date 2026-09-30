@@ -402,37 +402,28 @@ class GUIState:
         except Exception as e:
             print(f"[GUI] Failed to save username to config: {e}")
     
-    def clear_pairing(self):
-        """Clear ALL user data for re-linking to new account"""
-        self.username = None
-        self.org_name = None
+    def clear_account_cache(self):
+        """Drop the PREVIOUS account's cached data after a successful re-link.
+
+        Credentials are not touched: by the time this runs, the pairing window
+        has already written the new account's key, username and org to
+        config.json. It used to be the other way round — clear_pairing() wiped
+        the key BEFORE the pairing window opened, so closing that window left
+        the Mac unpaired. Tracking carried on with the key still in memory
+        until the next restart (a wake, an update), which then found no key and
+        stopped, taking the menu bar icon with it.
+        """
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+        self.username = cfg.get("username") or None
+        self.org_name = cfg.get("org_name") or None
         self.current_client_id = None
         self.current_client_name = "No Client"
         self.save()
-        
-        # Clear config file API key
-        try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r') as f:
-                    cfg = json.load(f)
-                cfg.pop("api_key", None)
-                cfg.pop("username", None)
-                cfg.pop("org_name", None)
-                # Re-link is a deliberate "put me somewhere else" request, so
-                # the next start must ASK rather than silently re-pair. On an
-                # MDM-managed Mac the org token lives in the plist under
-                # /Library, which the user cannot clear — without this marker
-                # the org-token claim runs on the very next start and lands
-                # the device straight back on whoever DeviceProvisioningMap
-                # names, with the pairing window never appearing. Re-link is
-                # the only route back from a wrong account; it has to survive
-                # MDM. main.py consumes and clears this.
-                cfg["relink_requested"] = True
-                with open(CONFIG_FILE, 'w') as f:
-                    json.dump(cfg, f, indent=2)
-        except Exception:
-            pass
-        
+
         # Clear cached clients (old user's clients!)
         try:
             if os.path.exists(CLIENTS_FILE):
@@ -1388,9 +1379,13 @@ if RUMPS_AVAILABLE:
 
             self.menu.add(None)
 
-            quit_item = rumps.MenuItem("Quit TimeTracker")
-            quit_item.set_callback(rumps.quit_application)
-            self.menu.add(quit_item)
+            # No Quit: the LaunchAgent is KeepAlive=true, so TimeTracker is
+            # always running, as on Windows, and a quit would be back in 5s.
+            # Say what actually happens instead.
+            restart_item = rumps.MenuItem("Restart TimeTracker")
+            restart_item.set_callback(lambda _: threading.Thread(
+                target=self._restart_app, daemon=True).start())
+            self.menu.add(restart_item)
 
         def _on_daily_review(self, _):
             """Open the web Daily Review."""
@@ -1450,22 +1445,21 @@ if RUMPS_AVAILABLE:
         def _on_relink_device(self, _):
             """Show re-pairing dialog and restart app after success"""
             def do_relink():
-                # Clear existing pairing AND all cached data
-                self.controller.state.clear_pairing()
-                
-                # Clear in-memory client list too!
-                self.controller.client_mgr.clear()
-                
-                # Show pairing window
+                # Pair FIRST. The existing key stays in place until a new one
+                # has actually been issued, so cancelling (or a failed code)
+                # leaves this Mac paired and tracking exactly as before.
                 api_key = show_pairing_window()
-                
-                if api_key:
-                    print(f"[GUI] Re-paired successfully, restarting app...")
-                    
-                    # Restart the app to fully reinitialize with new credentials
-                    self._restart_app()
-                else:
-                    print("[GUI] Re-pairing cancelled")
+
+                if not api_key:
+                    print("[GUI] Re-pairing cancelled — keeping the current pairing")
+                    return
+
+                # New account is in config.json; only now drop the old
+                # account's cached clients and history, then restart into it.
+                self.controller.state.clear_account_cache()
+                self.controller.client_mgr.clear()
+                print(f"[GUI] Re-paired successfully, restarting app...")
+                self._restart_app()
         
             threading.Thread(target=do_relink, daemon=True).start()
         

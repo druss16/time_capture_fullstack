@@ -53,6 +53,12 @@ import logging
 logger = logging.getLogger("timetracker")
 
 # ── Heartbeat state ──────────────────────────────────────────────────────────
+# Ages are measured on time.monotonic(), which on macOS is mach_absolute_time
+# and does NOT advance while the Mac sleeps. The wall clock does, so a 15-min
+# sleep read as a 15-min freeze: every wake past 90s of sleep killed and
+# restarted a perfectly healthy agent (nine times in one day on Dan's Mac,
+# 2026-09-30). A real freeze still ages here, because the awake clock runs
+# while the tracking thread is stuck.
 _heartbeat_lock = threading.Lock()
 _last_heartbeat: float = 0.0
 _heartbeat_started: float = 0.0
@@ -66,14 +72,14 @@ WATCHDOG_GRACE_PERIOD     = 120  # Don't fire during first 2 min of startup
 def heartbeat_touch() -> float:
     """
     Call this at the TOP of every tracking loop iteration.
-    Returns current time so callers can use it (e.g. for _last_detect_heartbeat).
+    Returns current WALL time so callers can use it (e.g. for
+    _last_detect_heartbeat); the watchdog's own bookkeeping is awake-time.
     Takes <1ms. Thread-safe.
     """
     global _last_heartbeat
-    now = time.time()
     with _heartbeat_lock:
-        _last_heartbeat = now
-    return now
+        _last_heartbeat = time.monotonic()
+    return time.time()
 
 
 def heartbeat_age() -> float:
@@ -81,7 +87,7 @@ def heartbeat_age() -> float:
     with _heartbeat_lock:
         if _last_heartbeat == 0.0:
             return 0.0
-        return time.time() - _last_heartbeat
+        return time.monotonic() - _last_heartbeat
 
 
 def start_watchdog(
@@ -105,7 +111,7 @@ def start_watchdog(
     It calls os._exit(1) on freeze/death — LaunchAgent restarts cleanly.
     """
     global _heartbeat_started
-    _heartbeat_started = time.time()
+    _heartbeat_started = time.monotonic()
 
     def _watchdog():
         log_fn("[WATCHDOG] ✅ Started watchdog thread")
@@ -114,7 +120,7 @@ def start_watchdog(
             time.sleep(WATCHDOG_CHECK_INTERVAL)
 
             thread = tracking_thread_ref[0]
-            uptime = time.time() - _heartbeat_started
+            uptime = time.monotonic() - _heartbeat_started
             age    = heartbeat_age()
 
             # ── Grace period: don't fire during startup ────────────────────

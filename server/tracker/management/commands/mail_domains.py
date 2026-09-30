@@ -201,13 +201,14 @@ class Command(BaseCommand):
         # transaction pooler (see tracker/utils/db_iter.py).
         for page in keyset_chunks(signals.select_related('extracted_client')):
             for sig in page:
-                # The stored subject is only ever populated for an already-matched
-                # signal, so a previously unmatched row has no subject to re-read.
-                # Domain rules are what this pass can newly apply.
+                # Outlook stores a subject only for an already-matched signal,
+                # so a previously unmatched Outlook row has no subject to
+                # re-read; domain rules are what this pass can newly apply.
+                # Gmail rows keep the full subject, so they re-match on both.
                 client, conf, method, _subj = find_mail_match(
                     mail_dict={
                         'other_party_domain': sig.other_party_domain,
-                        'subject': sig.subject_extract or '',
+                        'subject': sig.subject or sig.subject_extract or '',
                         'direction': 'in' if sig.direction == 'in' else 'out',
                     },
                     org=org,

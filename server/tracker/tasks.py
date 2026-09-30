@@ -1933,6 +1933,14 @@ from tracker.tasks_mail import (  # noqa: F401
     prune_mail_signals,
 )
 
+# Google (Gmail + Google Calendar) sync tasks — same autodiscovery gap: they
+# must be imported here or the worker discards beat's messages.
+from tracker.tasks_gmail import sync_all_gmail, sync_user_gmail  # noqa: F401
+from tracker.tasks_google_calendar import (  # noqa: F401
+    sync_all_google_calendars,
+    sync_user_google_calendar,
+)
+
 # Analytics v2 rollup tasks — the same autodiscovery gap, found by
 # manage.py verify_beat_tasks: nothing imported this package at worker
 # startup, so the nightly client/staff rollups and the hourly WIP snapshot

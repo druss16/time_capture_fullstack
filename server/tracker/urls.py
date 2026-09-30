@@ -11,7 +11,7 @@ from . import views_capture_status
 from . import views_review_misfiled
 from . import views_outstanding_weeks
 from . import views_readiness
-from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
+from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_google, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
 # Router for ViewSet-based endpoints
@@ -512,6 +512,17 @@ urlpatterns = [
     path('mail/status/',         views_mail.microsoft_mail_status,        name='mail_status'),
     path('mail/disconnect/',     views_mail.microsoft_mail_disconnect,    name='mail_disconnect'),
     path('mail/webhook/',        views_mail.microsoft_mail_webhook,       name='mail_webhook'),
+
+    # Google — per-user Gmail + Google Calendar. Each callback path is
+    # registered as its own redirect URI on the Google OAuth client.
+    path('google/gmail/auth/start/',        views_google.gmail_auth_start,              name='google_gmail_auth_start'),
+    path('google/gmail/auth/callback/',     views_google.gmail_auth_callback,           name='google_gmail_auth_callback'),
+    path('google/gmail/status/',            views_google.gmail_status,                  name='google_gmail_status'),
+    path('google/gmail/disconnect/',        views_google.gmail_disconnect,              name='google_gmail_disconnect'),
+    path('google/calendar/auth/start/',     views_google.google_calendar_auth_start,    name='google_calendar_auth_start'),
+    path('google/calendar/auth/callback/',  views_google.google_calendar_auth_callback, name='google_calendar_auth_callback'),
+    path('google/calendar/status/',         views_google.google_calendar_status,        name='google_calendar_status'),
+    path('google/calendar/disconnect/',     views_google.google_calendar_disconnect,    name='google_calendar_disconnect'),
 
     path('task-management/', include('tracker.api.task_type_urls')),
 

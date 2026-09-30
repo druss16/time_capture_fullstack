@@ -19,7 +19,7 @@ import { CheckCircle2, AlertCircle, AlertTriangle, Loader2, RefreshCw } from 'lu
 import { cn } from '@/lib/design-system';
 
 export interface IntegrationHealth {
-  state: 'ok' | 'never_connected' | 'paused' | 'expired' | 'disconnected' | 'stale';
+  state: 'ok' | 'never_connected' | 'paused' | 'expired' | 'disconnected' | 'stale' | 'permission_denied';
   label: string;
   guidance: string;
   detail: string;

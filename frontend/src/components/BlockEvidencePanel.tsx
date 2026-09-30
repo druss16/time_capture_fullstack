@@ -101,6 +101,38 @@ interface MailMatch {
   subject: string;
 }
 
+// Gmail sends made during this block — owner-only (the server omits `mail`
+// entirely for anyone but the block's own user).
+interface MailCompose {
+  signal_id: number;
+  sent_at: string;
+  to: string[];
+  subject: string;
+  client_id: number | null;
+  client_name: string | null;
+  compose_seconds: number;
+  line: string;
+}
+
+interface MailPerson {
+  email: string;
+  name: string;
+}
+
+interface GmailMessage {
+  id: number;
+  occurred_at: string;
+  direction: "in" | "out";
+  from: MailPerson;
+  to: MailPerson[];
+  cc: MailPerson[];
+  subject: string;
+  other_party_domain: string;
+  client_id: number | null;
+  client_name: string | null;
+  compose_seconds: number | null;
+}
+
 interface MailEvidence {
   summary: string;
   matched: MailMatch[];
@@ -108,6 +140,9 @@ interface MailEvidence {
   signal_count: number;
   window_start: string;
   window_end: string;
+  // Older API builds omit these.
+  compose?: MailCompose[] | undefined;
+  messages?: GmailMessage[] | undefined;
 }
 
 interface EvidenceResponse {
@@ -229,6 +264,44 @@ function MailEvidenceSection({ mail }: { mail: MailEvidence }) {
               {mail.unmapped_domains.map((u) => u.domain).join(", ")}
               {!top && " — mail from these can't point at a client until someone maps them."}
             </p>
+          )}
+
+          {/* Gmail sends in this block: "Emailed jane@acme.com — ~6 min composing". */}
+          {(mail.compose?.length ?? 0) > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {mail.compose!.map((c) => (
+                <li key={c.signal_id} className="text-slate-600">
+                  {c.line}
+                  {c.client_name && <span className="text-slate-500"> → {c.client_name}</span>}
+                  {c.subject && <span className="text-slate-400"> · “{c.subject}”</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Other Gmail messages around this time (only visible to you). */}
+          {(mail.messages?.length ?? 0) > 0 && (
+            <details className="mt-1.5">
+              <summary className="text-slate-500 cursor-pointer select-none">
+                {mail.messages!.length} Gmail message{mail.messages!.length !== 1 ? "s" : ""} around this time
+                <span className="text-slate-400"> · only you can see these</span>
+              </summary>
+              <ul className="mt-1 space-y-0.5">
+                {mail.messages!.map((m) => {
+                  const who = m.direction === "in"
+                    ? `From ${m.from.name || m.from.email}`
+                    : `To ${m.to.map((p) => p.email).join(", ") || m.other_party_domain}`;
+                  return (
+                    <li key={m.id} className="text-slate-600 truncate">
+                      {new Date(m.occurred_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}{" "}
+                      {who}
+                      {m.subject && <span className="text-slate-400"> · “{m.subject}”</span>}
+                      {m.client_name && <span className="text-slate-500"> → {m.client_name}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
           )}
         </div>
       </div>

@@ -4653,11 +4653,39 @@ class MailSignal(models.Model):
     """
     Lightweight metadata about email activity. Used as Stage 7 classification signal.
 
-    PRIVACY GUARANTEES (CRITICAL — DO NOT relax):
-      - NEVER stores message body
-      - NEVER stores attachment contents or names
-      - NEVER stores email addresses (only domain extracted)
-      - Subject ONLY stored if cleanly matches a known client (extraction_confidence >= 0.85)
+    PRIVACY GUARANTEES (CRITICAL — DO NOT relax without a product-owner decision).
+    They differ by provider, deliberately:
+
+      ALL providers:
+        - NEVER stores message body, snippet/preview, or attachment names or
+          contents. Neither sync requests them: Outlook asks Graph for a
+          header-only $select under Mail.ReadBasic; Gmail asks for
+          format=metadata with a `fields` mask under gmail.metadata, which
+          cannot return a body at all.
+        - Internal mail (the user and every counterparty in the user's own
+          identity) is dropped at sync and never stored.
+        - `other_party_domain` and `extracted_client` are the ONLY mail facts
+          anyone other than the mailbox owner may see (managers, org admins,
+          MavOps admins). Signal evidence written onto Block.proposed_signals
+          therefore names a domain and a client, never an address or a
+          subject that was not already client-matched.
+
+      provider='microsoft' (Outlook) — unchanged, the behaviour a customer's IT
+      signed off on:
+        - NEVER stores email addresses (only the counterparty domain).
+        - Subject ONLY stored (subject_extract) if it cleanly matched a known
+          client at extraction_confidence >= 0.85.
+        - from_address / from_name / to_recipients / cc_recipients / subject /
+          compose_seconds are always NULL.
+
+      provider='google' (Gmail) — product-owner decision 2026-09:
+        - Stores the sender address + display name, To and Cc addresses +
+          display names, and the full subject line.
+        - Those fields are shown ONLY to the owning user (their own blocks /
+          evidence). Enforced in views_block_evidence._build_mail_evidence —
+          every other reader gets domain + matched client, nothing more.
+        - compose_seconds: for SENT mail, the contiguous time spent in Gmail
+          before the send (derived from the user's own blocks, not from Gmail).
     """
     PROVIDER_CHOICES = [
         ('google',    'Gmail'),
@@ -4713,6 +4741,38 @@ class MailSignal(models.Model):
         null=True, blank=True,
         on_delete=models.SET_NULL,
         related_name='mail_signals',
+    )
+
+    # ── Gmail-only, owner-only fields (see PRIVACY GUARANTEES) ──────────────
+    # NULL for every Outlook row. Never serialize these to anyone but the
+    # mailbox owner.
+    from_address = models.CharField(
+        max_length=254, null=True, blank=True,
+        help_text='Gmail only, owner-only. Sender address from the From header.',
+    )
+    from_name = models.CharField(
+        max_length=255, null=True, blank=True,
+        help_text='Gmail only, owner-only. Sender display name.',
+    )
+    to_recipients = models.JSONField(
+        null=True, blank=True,
+        help_text='Gmail only, owner-only. [{"email": str, "name": str}] from To.',
+    )
+    cc_recipients = models.JSONField(
+        null=True, blank=True,
+        help_text='Gmail only, owner-only. [{"email": str, "name": str}] from Cc.',
+    )
+    subject = models.TextField(
+        null=True, blank=True,
+        help_text='Gmail only, owner-only. Full subject line.',
+    )
+    compose_seconds = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text=(
+            'Outbound Gmail only: seconds spent contiguously in Gmail before '
+            'this send, derived from the user\'s own blocks. NULL = not '
+            'computed / sent from somewhere we did not capture (e.g. a phone).'
+        ),
     )
 
     class Meta:
@@ -4781,6 +4841,16 @@ class UserIntegration(models.Model):
         ),
     )
 
+    # Google incremental-sync cursor. Gmail: the mailbox historyId that
+    # users.history.list resumes from. Google Calendar: events.list
+    # nextSyncToken. Empty = next sync is a full (windowed) sync. Unused by
+    # the Microsoft providers, which keep their cursor in mail_delta_link.
+    sync_cursor = models.TextField(blank=True, default='')
+    sync_cursor_set_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the last FULL sync established sync_cursor.',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -4832,6 +4902,10 @@ class UserIntegration(models.Model):
         self.scopes = []
         self.last_sync_error = ''
         self.sync_failure_count = 0
+        # A reconnect must start from a full sync: the derived rows the cursor
+        # pointed past were deleted above.
+        self.sync_cursor = ''
+        self.sync_cursor_set_at = None
         self.save()
 
 

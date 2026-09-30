@@ -324,6 +324,20 @@ app.conf.beat_schedule = {
         'task':     'tracker.sync_all_mail',
         'schedule': 300.0,  # 5 minutes
     },
+    # Google (per-user Gmail + Google Calendar). Beat runs DatabaseScheduler:
+    # these entries reach the live schedule when beat restarts and copies
+    # beat_schedule into django_celery_beat PeriodicTask rows. Verify with
+    # `manage.py verify_beat_tasks` after deploy.
+    'sync-all-gmail-every-5-min': {
+        'task':     'tracker.sync_all_gmail',
+        'schedule': 300.0,  # 5 minutes, same as Outlook mail
+        'options':  {'expires': 290},
+    },
+    'sync-google-calendars': {
+        'task': 'tracker.sync_all_google_calendars',
+        'schedule': crontab(minute='*/15'),  # same cadence as Microsoft calendar
+        'options': {'expires': 600},
+    },
     'prune-mail-signals-nightly': {
         'task':     'tracker.prune_mail_signals',
         'schedule': 86400.0,  # 24 hours

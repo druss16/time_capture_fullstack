@@ -4,10 +4,14 @@
  * Account → Connections page. Hosts per-user OAuth integrations.
  * Each tab handles its own status, OAuth flow, and rendering;
  * this page just stacks them with a shared page header.
+ *
+ * Microsoft (Outlook) and Google (Workspace) are listed side by side: a firm
+ * uses one or the other, and each person connects their own account.
  */
 
 import CalendarConnectionTab from '@/components/CalendarConnectionTab';
 import MailConnectionTab from '@/components/MailConnectionTab';
+import GoogleConnectionTab from '@/components/GoogleConnectionTab';
 
 export default function ConnectionsPage() {
   return (
@@ -24,6 +28,14 @@ export default function ConnectionsPage() {
       <div className="border-t border-slate-200" />
 
       <MailConnectionTab />
+
+      <div className="border-t border-slate-200" />
+
+      <GoogleConnectionTab product="calendar" />
+
+      <div className="border-t border-slate-200" />
+
+      <GoogleConnectionTab product="gmail" />
     </div>
   );
 }

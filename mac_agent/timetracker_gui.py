@@ -136,6 +136,9 @@ APP_VERSION = "dev"
 DAILY_REVIEW_URL = os.getenv("AGENT_DAILY_REVIEW_URL",
                              "https://timetracker.mavops.ai/daily")
 
+# Switch Client shows this many most-used clients before the full A–Z list.
+RECENT_CLIENTS_SHOWN = 10
+
 # ============================================================
 # PROFESSIONAL COLOR SCHEME
 # ============================================================
@@ -1343,6 +1346,22 @@ if RUMPS_AVAILABLE:
             
             self._rebuild_menu()
 
+        # The status-bar title is written from six places (here, main.py, and
+        # the shared ai_client_switcher), all as "⏱ <client>". Gating it here
+        # is the one choke point: hands-off orgs see only the clock, like the
+        # Windows tray, while the requested text is kept so a demo org's
+        # ticker flip can show it again without waiting for the next switch.
+        @property
+        def title(self):
+            return rumps.App.title.fget(self)
+
+        @title.setter
+        def title(self, value):
+            self._requested_title = value
+            if value is not None and not getattr(self, "client_widget_enabled", False):
+                value = "⏱"
+            rumps.App.title.fset(self, value)
+
         def _start_keepalive(self):
             """Periodic keepalive to prevent icon from disappearing"""
             def tick(_):
@@ -1420,32 +1439,37 @@ if RUMPS_AVAILABLE:
             switch_menu.add(None)
             
             clients = sort_clients_by_usage(self.controller.client_mgr.get_all())
-            
-            for idx, client in enumerate(clients[:15]):
-                client_id = client["id"]
-                client_name = client["name"]
-                is_current = client_id == self.controller.state.current_client_id
-                
-                prefix = "● " if is_current else ""
-                
-                callback_key = f"client_{client_id}"
-                
-                def make_callback(cid, cname):
-                    def callback(_):
-                        self._switch_client(cid, cname)
-                    return callback
-                
-                self._client_callbacks[callback_key] = make_callback(client_id, client_name)
-                
-                item = rumps.MenuItem(f"{prefix}{client_name}")
-                item.set_callback(self._client_callbacks[callback_key])
-                switch_menu.add(item)
-            
-            if len(clients) > 15:
-                more_item = rumps.MenuItem(f"... {len(clients) - 15} more (use Search)")
-                more_item.set_callback(None)
-                switch_menu.add(more_item)
-            
+            current_id = self.controller.state.current_client_id
+
+            def make_callback(cid, cname):
+                def callback(_):
+                    self._switch_client(cid, cname)
+                return callback
+
+            def client_item(client):
+                cid, cname = client["id"], client["name"]
+                key = f"client_{cid}"
+                if key not in self._client_callbacks:
+                    self._client_callbacks[key] = make_callback(cid, cname)
+                prefix = "● " if cid == current_id else ""
+                item = rumps.MenuItem(f"{prefix}{cname}")
+                item.set_callback(self._client_callbacks[key])
+                return item
+
+            # Most-used first, then EVERY client A–Z. The list used to stop at
+            # 15 and point at a Search that no longer exists, so any client
+            # past the top 15 could not be picked by hand at all.
+            recent = clients[:RECENT_CLIENTS_SHOWN]
+            for client in recent:
+                switch_menu.add(client_item(client))
+
+            if len(clients) > len(recent):
+                switch_menu.add(None)
+                all_menu = rumps.MenuItem(f"All Clients ({len(clients)})")
+                for client in sorted(clients, key=lambda c: (c["name"] or "").lower()):
+                    all_menu.add(client_item(client))
+                switch_menu.add(all_menu)
+
             self.menu.add(switch_menu)
             self.menu.add(None)
 
@@ -1501,6 +1525,8 @@ if RUMPS_AVAILABLE:
                 return
             self.client_widget_enabled = enabled
             print(f"[GUI] client widget {'enabled' if enabled else 'disabled'}")
+            # Re-render the status-bar title under the new gate.
+            self.title = getattr(self, "_requested_title", "⏱")
             try:
                 self._rebuild_menu()
             except Exception as e:

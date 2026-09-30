@@ -1419,6 +1419,53 @@ def _fresh_clio_matter_id(event) -> str:
     return cand if (observed - stamped).total_seconds() <= CLIO_ANCHOR_TTL_SECONDS else ""
 
 
+# The QBO company id rides the same never-expiring context bus as the Clio
+# anchor, and becomes a 0.95 client signal in Stage 8 — so it needs the same
+# ageing, and more. Someone who opened QuickBooks Online once and then spent the
+# afternoon in Slack or Figma had every one of those blocks carry that company's
+# realm. A realm only describes what is on screen while the screen IS QBO, so
+# the event's own URL must be a QBO page as well as the hint being fresh.
+QBO_HINT_TTL_SECONDS = CLIO_ANCHOR_TTL_SECONDS
+_QBO_HOST = 'qbo.intuit.com'
+
+
+def _is_qbo_url(url) -> bool:
+    from urllib.parse import urlparse
+    raw = str(url or '').strip()
+    if not raw:
+        return False
+    try:
+        host = (urlparse(raw if '://' in raw else f'https://{raw}').hostname or '').lower()
+    except ValueError:
+        return False
+    return host == _QBO_HOST or host.endswith('.' + _QBO_HOST)
+
+
+def _fresh_qbo_company(event) -> tuple:
+    """
+    (realm id, company name) from `event`'s browser context — only when the
+    event itself is on a QBO page and the extension saw it recently. Returns
+    ("", "") otherwise; a missing timestamp is refused, as for Clio.
+    """
+    bx = (getattr(event, 'ctx', {}) or {}).get('browser_extension') or {}
+    cand = bx.get('qbo_company_id')
+    cand = str(cand).strip() if cand is not None else ""
+    if not cand or not _is_qbo_url(getattr(event, 'url', None)):
+        return "", ""
+
+    stamped = _parse_ctx_timestamp(bx.get('tab_focused_at'))
+    observed = getattr(event, 'end_ts', None) or getattr(event, 'start_ts', None)
+    if stamped is None or observed is None:
+        return "", ""
+    if timezone.is_naive(observed):
+        observed = observed.replace(tzinfo=dt_timezone.utc)
+    if (observed - stamped).total_seconds() > QBO_HINT_TTL_SECONDS:
+        return "", ""
+
+    name = bx.get('qbo_company_name')
+    return cand, (str(name).strip() if name is not None else "")
+
+
 def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block]:
     """Create a new block. Work pattern detection, idle classification, billing rate resolution unchanged."""
     app_name = (block_data.get("app_name") or "").lower()
@@ -1523,17 +1570,13 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
         # Carry the QuickBooks Online active-company id (realmId) forward from the
         # browser extension's context onto the block, so the classifier can
         # attribute QBO work to the right client (the working URL never names the
-        # company). Prefer the most recent source event that carries one.
+        # company). Prefer the most recent source event that carries a CURRENT
+        # one — see _fresh_qbo_company for why stale or off-QBO hints are dropped.
         _qbo_company_id = ""
         _qbo_company_name = ""
         for _ev in reversed(block_data.get('source_events', []) or []):
-            _bx = (getattr(_ev, 'ctx', {}) or {}).get('browser_extension') or {}
-            _cand = _bx.get('qbo_company_id')
-            _cand = str(_cand).strip() if _cand is not None else ""
-            if _cand:
-                _qbo_company_id = _cand
-                _nm = _bx.get('qbo_company_name')
-                _qbo_company_name = str(_nm).strip() if _nm is not None else ""
+            _qbo_company_id, _qbo_company_name = _fresh_qbo_company(_ev)
+            if _qbo_company_id:
                 break
         # Same idea for Clio: a lawyer's working documents never name the matter,
         # but Clio states it exactly whenever they are looking at it. Carried

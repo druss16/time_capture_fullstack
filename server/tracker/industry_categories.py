@@ -14,6 +14,8 @@ UNIVERSAL categories added to ALL industries:
 - "Personal/Non-Billable" (social media, personal browsing, etc.)
 """
 
+import re
+
 # =============================================================================
 # INDUSTRY TYPES
 # =============================================================================
@@ -1393,6 +1395,38 @@ RULE 3 — BILLING
 """
 
     return ""
+
+
+# =============================================================================
+# MATCHING HELPERS for the tool/personal maps below
+# =============================================================================
+
+def host_matches(host: str, domain: str) -> bool:
+    """`host` is `domain` or one of its subdomains. Never a bare substring:
+    'dropbox.com' contains 'x.com', which filed every Dropbox block as
+    Personal/Non-Billable social media."""
+    host = (host or '').lower().rstrip('.')
+    domain = (domain or '').lower()
+    return bool(host and domain) and (host == domain or host.endswith('.' + domain))
+
+
+def detection_token_in(token: str, text: str) -> bool:
+    """Whether a detection keyword occurs in lowercased `text`.
+
+    A dotted token ('x.com', 'threads.net') is a hostname, so it must not be
+    glued to a letter/digit/hyphen on either side — otherwise 'x.com' fires
+    inside 'dropbox.com'. A leading dot is fine: 'mobile.twitter.com' is still
+    twitter.com. Plain words keep the old substring behaviour, which several
+    entries rely on (app names, partial titles).
+    """
+    token = (token or '').lower()
+    if not token or not text:
+        return False
+    if '.' not in token:
+        return token in text
+    return re.search(
+        r'(?<![a-z0-9\-])' + re.escape(token) + r'(?![a-z0-9\-])', text
+    ) is not None
 
 
 # =============================================================================

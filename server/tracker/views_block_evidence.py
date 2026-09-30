@@ -1032,10 +1032,10 @@ def _looks_personal(block) -> bool:
     if not hay.strip():
         return False
     try:
-        from tracker.industry_categories import PERSONAL_SITE_DETECTION
+        from tracker.industry_categories import PERSONAL_SITE_DETECTION, detection_token_in
         for grp in PERSONAL_SITE_DETECTION.values():
             for tok in list(grp.get("keywords", [])) + list(grp.get("domains", [])):
-                if tok and tok.lower() in hay:
+                if detection_token_in(tok, hay):
                     return True
     except Exception:
         pass

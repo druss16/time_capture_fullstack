@@ -508,7 +508,11 @@ def _get(name, default=None, env=None):
     if env and os.getenv(env) is not None: return os.getenv(env)
     return default
 
-API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "http://localhost:7123/api").rstrip("/")
+# Default to production, as Windows does. The URLs below are computed once, at
+# import, and pairing only writes api_base to config.json — the running process
+# never re-reads it. A localhost default therefore meant a freshly hand-paired
+# Mac posted every event to localhost until the agent happened to restart.
+API_BASE = (_get("api_base", os.getenv("AGENT_API_BASE")) or "https://timetracker-api-k375.onrender.com/api").rstrip("/")
 POST_URL    = _get("post_url", None) or f"{API_BASE}/raw-events/"
 HELLO_URL   = _get("hello_url", None) or f"{API_BASE}/agents/hello2/"
 CONTROL_URL = _get("control_url", None) or f"{API_BASE}/agent/control/"
@@ -1403,6 +1407,33 @@ if not DISABLE_AX:
         AX_AVAILABLE = True
     except Exception:
         AX_AVAILABLE = False
+
+
+def ensure_accessibility_prompt() -> bool:
+    """Ask macOS for Accessibility once per launch, while it isn't granted.
+
+    Window titles come only from AX. A failed AX read never makes macOS prompt
+    by itself, so without this call a fresh install silently records every
+    window with an empty title — no Figma file, no Slack channel, no document
+    name — and nobody is ever asked. The prompt is a no-op once trusted.
+    """
+    if DISABLE_AX:
+        return False
+    try:
+        from ApplicationServices import (
+            AXIsProcessTrustedWithOptions,
+            kAXTrustedCheckOptionPrompt,
+        )
+        trusted = bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
+    except Exception as e:
+        log(f"[AX] trust check unavailable: {e}")
+        return False
+    if trusted:
+        log("[AX] Accessibility granted")
+    else:
+        log("[AX] ⚠️ Accessibility NOT granted — window titles will be empty. "
+              "System Settings → Privacy & Security → Accessibility → TimeTracker")
+    return trusted
 
 from Quartz import (
     CGWindowListCopyWindowInfo,
@@ -3234,7 +3265,10 @@ def run_agent():
             remove_pid()
             return
 
-    # Hello (with key)
+    # After pairing, so a first-time user sees the pairing window before the
+    # system Accessibility dialog rather than two dialogs racing.
+    ensure_accessibility_prompt()
+
     # Hello (with key)
     if not hello(HELLO_URL, os_user, hostname, device_id):
         log("[HELLO] First hello failed - retrying with backoff...")

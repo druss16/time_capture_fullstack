@@ -5056,7 +5056,9 @@ class ClassificationService:
             return
 
         try:
-            from tracker.industry_categories import get_combined_tool_detection
+            from tracker.industry_categories import (
+                detection_token_in, get_combined_tool_detection, host_matches,
+            )
         except ImportError:
             return
 
@@ -5086,17 +5088,14 @@ class ClassificationService:
 
             # Domain match (strongest, most specific)
             for d in spec.get('domains', []):
-                if d and domain and (domain == d or domain.endswith('.' + d) or d in domain):
+                if host_matches(domain, d):
                     matched = True
                     break
 
             # Keyword match against app name + haystack
             if not matched:
                 for kw in spec.get('keywords', []):
-                    if not kw:
-                        continue
-                    k = kw.lower()
-                    if k in app_lower or k in haystack:
+                    if detection_token_in(kw, app_lower) or detection_token_in(kw, haystack):
                         matched = True
                         break
 

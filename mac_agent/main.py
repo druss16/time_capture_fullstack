@@ -2146,15 +2146,19 @@ def _path_found(path: Optional[str], source: str) -> Optional[str]:
     return path or None
 
 
-def _spotlight_path(title: str) -> Optional[str]:
-    """Title names a file -> its path, via an exact-name Spotlight lookup."""
+def _spotlight_path(title: str, pid: Optional[int] = None) -> Optional[str]:
+    """Title names a file -> its path, via an exact-name Spotlight lookup.
+
+    Only a candidate the front app has open (lsof -p pid) or used in the last
+    few minutes is accepted; see doc_capture.SpotlightResolver.
+    """
     if not (_spotlight and _doc_capture and title):
         return None
     try:
         name = _doc_capture.extract_filename(title)
         if not name:
             return None
-        return _path_found(_spotlight.lookup(name), "spotlight")
+        return _path_found(_spotlight.lookup(name, pid=pid), "spotlight")
     except Exception as e:
         log(f"[DOC-CAPTURE] spotlight lookup failed: {e}", "warning")
         return None
@@ -2195,7 +2199,7 @@ def _adobe_url_or_path(kind: str, bundle_id: str, pid: Optional[int],
     if not path and state != "home":
         path = _path_found(get_window_document_via_ax(pid), "axdocument")
     if not path and state == "doc":
-        path = _spotlight_path(clean)
+        path = _spotlight_path(clean, pid)
     clean, path, carried = _adobe_carry.apply(bundle_id, state, clean, path)
     if carried and VERBOSE:
         log(f"[DOC-CAPTURE] {kind}: '{title}' in front → carrying '{clean}'")
@@ -2276,7 +2280,7 @@ def try_get_url_or_path(bundle_id: str, pid: Optional[int] = None,
                 clean = _ci_clean(title)
             except Exception:
                 pass
-        path = _spotlight_path(clean)
+        path = _spotlight_path(clean, pid)
     return {"url": None, "file_path": path}
 
 # ---------------- PID utils ----------------

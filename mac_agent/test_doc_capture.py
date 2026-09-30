@@ -305,11 +305,12 @@ def test_mdquery_escaping():
 
 
 class FakeRunner:
-    """Stands in for subprocess.run for mdfind / mdls."""
+    """Stands in for subprocess.run for mdfind / mdls / lsof."""
 
-    def __init__(self, mdfind_out="", mdls=None, raise_timeout=False):
+    def __init__(self, mdfind_out="", mdls=None, open_files=None, raise_timeout=False):
         self.mdfind_out = mdfind_out
         self.mdls = mdls or {}
+        self.open_files = open_files or {}   # pid -> [paths]
         self.raise_timeout = raise_timeout
         self.calls = []
 
@@ -324,6 +325,11 @@ class FakeRunner:
             paths = cmd[4:]
             return subprocess.CompletedProcess(
                 cmd, 0, "\0".join(self.mdls.get(p, "(null)") for p in paths), "")
+        if cmd[0] == "lsof":
+            pid = int(cmd[cmd.index("-p") + 1])
+            out = "p%d\nfcwd\nn/\n" % pid + "".join(
+                f"f{i}\nn{p}\n" for i, p in enumerate(self.open_files.get(pid, [])))
+            return subprocess.CompletedProcess(cmd, 0, out, "")
         raise AssertionError(cmd)
 
 
@@ -332,63 +338,125 @@ def _md(ts):
 
 
 ROOTS = lambda: ["/Users/a/Library/CloudStorage/Dropbox", "/Users/a/Documents"]  # noqa: E731
+NOW = 1_800_000_000.0
+A = "/Users/a/Library/CloudStorage/Dropbox/ClientA/Banner.psd"
+B = "/Users/a/Library/CloudStorage/Dropbox/ClientB/Banner.psd"
 
 
-def test_single_match_resolves_and_query_is_scoped_and_escaped():
-    run = FakeRunner("/Users/a/Library/CloudStorage/Dropbox/ClientX/Cover*.psd\n")
-    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock())
-    assert sr.resolve_now("Cover*.psd") == \
-        "/Users/a/Library/CloudStorage/Dropbox/ClientX/Cover*.psd"
+def test_query_is_scoped_escaped_and_case_sensitive():
+    p = "/Users/a/Library/CloudStorage/Dropbox/ClientX/Cover*.psd"
+    run = FakeRunner(p + "\n", open_files={7: [p]})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Cover*.psd", pid=7) == p
     cmd = run.calls[0]
     assert cmd.count("-onlyin") == 2
-    assert cmd[-1] == 'kMDItemFSName == "Cover\\*.psd"c'
+    # Escaped wildcard, and NO `c` modifier: the match is case-sensitive.
+    assert cmd[-1] == 'kMDItemFSName == "Cover\\*.psd"'
 
 
-def test_results_are_cached_including_misses():
-    run = FakeRunner("")
-    clk = Clock()
-    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk, miss_ttl=300)
-    assert sr.lookup("Nope.psd", wait=1.0) is None
-    assert sr.lookup("Nope.psd", wait=1.0) is None
-    assert len(run.calls) == 1
-    clk.t += 301
-    sr.lookup("Nope.psd", wait=1.0)
-    assert len(run.calls) == 2
+def test_a_different_case_is_a_different_file():
+    # The live case: title "pepsi logo.psd", only "Pepsi Logo.psd" indexed.
+    other = "/Users/a/Desktop/Pepsi/Pepsi Logo.psd"
+    run = FakeRunner(other + "\n", open_files={7: [other]},
+                     mdls={other: _md(NOW - 30)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("pepsi logo.psd", pid=7) is None
+    assert sr.last_outcome["pepsi logo.psd"] == "miss"
 
 
-def test_multiple_matches_take_the_only_recently_used_one():
-    clk = Clock(1_800_000_000.0)
-    a = "/Users/a/Library/CloudStorage/Dropbox/ClientA/Banner.psd"
-    b = "/Users/a/Library/CloudStorage/Dropbox/ClientB/Banner.psd"
-    run = FakeRunner(f"{a}\n{b}\n", mdls={a: _md(clk.t - 3600 * 24), b: _md(clk.t - 60)})
-    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk)
-    assert sr.resolve_now("Banner.psd") == b
+def test_a_single_match_alone_is_not_enough():
+    # One indexed file of that name, but nothing says it is the one in use:
+    # the index can miss the real file.
+    run = FakeRunner(A + "\n", mdls={A: _md(NOW - 3 * 86400)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=7) is None
+    assert sr.last_outcome["Banner.psd"] == "unconfirmed"
+
+
+def test_single_match_confirmed_by_recent_use():
+    run = FakeRunner(A + "\n", mdls={A: _md(NOW - 120)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=None) == A
+
+
+def test_single_match_confirmed_by_the_app_holding_it_open():
+    run = FakeRunner(A + "\n", open_files={7: [A]})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=7) == A
+
+
+def test_open_file_via_private_prefix_counts():
+    # lsof reports /private/tmp/... for a file Spotlight lists as /tmp/...
+    p = "/tmp/x/ClientX/Banner.psd"
+    run = FakeRunner(p + "\n", open_files={7: ["/private" + p]})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=7) == p
+
+
+def test_open_by_ANOTHER_process_does_not_count():
+    run = FakeRunner(A + "\n", open_files={99: [A]})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=7) is None
+
+
+def test_multiple_matches_take_the_only_confirmed_one():
+    run = FakeRunner(f"{A}\n{B}\n", open_files={7: [B]})
+    assert dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW)) \
+        .resolve_now("Banner.psd", pid=7) == B
+    run = FakeRunner(f"{A}\n{B}\n", mdls={A: _md(NOW - 86400), B: _md(NOW - 60)})
+    assert dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW)) \
+        .resolve_now("Banner.psd") == B
 
 
 def test_multiple_matches_abstain_when_in_doubt():
-    clk = Clock(1_800_000_000.0)
-    a = "/Users/a/Library/CloudStorage/Dropbox/ClientA/Banner.psd"
-    b = "/Users/a/Library/CloudStorage/Dropbox/ClientB/Banner.psd"
-    # Both recent.
-    run = FakeRunner(f"{a}\n{b}\n", mdls={a: _md(clk.t - 30), b: _md(clk.t - 60)})
-    assert dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk).resolve_now("Banner.psd") is None
-    # Neither recent.
-    run = FakeRunner(f"{a}\n{b}\n", mdls={a: _md(clk.t - 9000), b: _md(clk.t - 8000)})
-    assert dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk).resolve_now("Banner.psd") is None
-    # No usage dates at all (what this Mac's Spotlight reported for .psd files).
-    run = FakeRunner(f"{a}\n{b}\n")
-    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk)
+    # Both confirmed.
+    run = FakeRunner(f"{A}\n{B}\n", mdls={A: _md(NOW - 30), B: _md(NOW - 60)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
     assert sr.resolve_now("Banner.psd") is None
-    assert sr.last_outcome["banner.psd"] == "ambiguous"
+    assert sr.last_outcome["Banner.psd"] == "ambiguous"
+    # Neither confirmed (what this Mac's Spotlight reported for its files).
+    run = FakeRunner(f"{A}\n{B}\n")
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd", pid=7) is None
+    assert sr.last_outcome["Banner.psd"] == "unconfirmed"
+
+
+def test_unconfirmed_is_rechecked_soon_but_misses_are_cached():
+    clk = Clock(NOW)
+    run = FakeRunner(A + "\n")
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk, unconfirmed_ttl=30)
+    assert sr.lookup("Banner.psd", pid=7, wait=1.0) is None
+    n = len(run.calls)
+    assert sr.lookup("Banner.psd", pid=7, wait=1.0) is None
+    assert len(run.calls) == n, "cached within the TTL"
+    clk.t += 31
+    run.open_files = {7: [A]}   # the user has now opened it
+    assert sr.lookup("Banner.psd", pid=7, wait=1.0) == A
+
+    run = FakeRunner("")
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW), miss_ttl=300)
+    sr.lookup("Nope.psd", wait=1.0)
+    sr.lookup("Nope.psd", wait=1.0)
+    assert len(run.calls) == 1
 
 
 def test_near_names_and_hidden_copies_do_not_count():
     a = "/Users/a/Documents/ClientA/Banner.psd"
     run = FakeRunner(
         f"{a}\n/Users/a/Documents/ClientB/Banner.psd.bak\n"
-        "/Users/a/Library/CloudStorage/Dropbox/.dropbox.cache/Banner.psd\n")
-    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock())
-    assert sr.resolve_now("banner.PSD") == a
+        "/Users/a/Library/CloudStorage/Dropbox/.dropbox.cache/Banner.psd\n",
+        mdls={a: _md(NOW - 10)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now("Banner.psd") == a
+
+
+def test_unicode_normalization_does_not_block_a_match():
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", "Café Menu.pdf")
+    p = "/Users/a/Documents/Cafe Co/" + nfd
+    run = FakeRunner(p + "\n", mdls={p: _md(NOW - 10)})
+    sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
+    assert sr.resolve_now(unicodedata.normalize("NFC", "Café Menu.pdf")) == p
 
 
 def test_timeout_abstains_and_retries_soon():
@@ -396,7 +464,7 @@ def test_timeout_abstains_and_retries_soon():
     run = FakeRunner(raise_timeout=True)
     sr = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=clk, error_ttl=30)
     assert sr.resolve_now("Cover.psd") is None
-    assert sr.last_outcome["cover.psd"] == "timeout"
+    assert sr.last_outcome["Cover.psd"] == "timeout"
     clk.t += 31
     assert sr.cached("Cover.psd") == (False, None)
 
@@ -404,13 +472,17 @@ def test_timeout_abstains_and_retries_soon():
 def test_lookup_never_waits_long():
     def slow(cmd, **kw):
         time.sleep(0.6)
-        return subprocess.CompletedProcess(cmd, 0, "/Users/a/Documents/x/Slow.psd\n", "")
+        if cmd[0] == "mdfind":
+            return subprocess.CompletedProcess(cmd, 0, "/Users/a/Documents/x/Slow.psd\n", "")
+        if cmd[0] == "lsof":
+            return subprocess.CompletedProcess(cmd, 0, "n/Users/a/Documents/x/Slow.psd\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "(null)", "")
     sr = dc.SpotlightResolver(roots=ROOTS, runner=slow)
     t0 = time.time()
-    assert sr.lookup("Slow.psd", wait=0.1) is None
+    assert sr.lookup("Slow.psd", pid=7, wait=0.1) is None
     assert time.time() - t0 < 0.4
-    time.sleep(0.8)
-    assert sr.lookup("Slow.psd", wait=0) == "/Users/a/Documents/x/Slow.psd"
+    time.sleep(2.2)
+    assert sr.lookup("Slow.psd", pid=7, wait=0) == "/Users/a/Documents/x/Slow.psd"
 
 
 def test_no_roots_no_query():
@@ -483,8 +555,9 @@ def test_unknown_app_falls_back_to_axdocument_then_spotlight():
         assert dc.path_source("/Users/a/Docs/Plan.key") == "axdocument"
 
         main.get_window_document_via_ax = lambda pid: None
-        run = FakeRunner("/Users/a/Documents/ClientZ/Estimate.pdf\n")
-        main._spotlight = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock())
+        est = "/Users/a/Documents/ClientZ/Estimate.pdf"
+        run = FakeRunner(est + "\n", open_files={9: [est]})
+        main._spotlight = dc.SpotlightResolver(roots=ROOTS, runner=run, clock=Clock(NOW))
         r = main.try_get_url_or_path("com.example.viewer", pid=9, title="Estimate.pdf")
         assert r["file_path"] == "/Users/a/Documents/ClientZ/Estimate.pdf"
         assert dc.path_source(r["file_path"]) == "spotlight"

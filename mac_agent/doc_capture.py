@@ -32,6 +32,7 @@ import re
 import subprocess
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -460,19 +461,36 @@ def _hidden(path: str) -> bool:
     return any(part.startswith(".") for part in path.split("/") if part)
 
 
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s or "")
+
+
 class SpotlightResolver:
     """File name -> one path, or None. Never blocks the caller for long.
 
-    A lookup runs mdfind in a worker thread with a hard subprocess timeout; the
-    caller waits at most `wait` seconds for it and otherwise gets None now and
-    the answer from the cache on a later poll. Hits, misses and abstentions are
-    all cached per name.
+    A lookup runs in a worker thread with hard subprocess timeouts; the caller
+    waits at most `wait` seconds and otherwise gets None now and the cached
+    answer on a later poll.
 
-    MULTIPLE MATCHES: a marketing agency's Dropbox holds "Banner.psd" in a
-    dozen client folders. Picking one at random files the time to a random
-    client, which is worse than filing it to none. So with several matches we
-    take the one whose kMDItemLastUsedDate is within `recent_window` ONLY if it
-    is the sole such file; otherwise we abstain.
+    THE RULE — a candidate is used only when it is PROVEN in use now:
+      1. its name matches the title EXACTLY, case included ("pepsi logo.psd"
+         does not resolve to "Pepsi Logo.psd": APFS is case-insensitive, but
+         a different case is a different file as far as a person is
+         concerned, and Spotlight's index had only the other one here);
+      2. and it is confirmed by one of
+           a. the frontmost app's process has that exact path OPEN (lsof -p):
+              verified for Acrobat, which holds its PDFs open (0.04s);
+           b. kMDItemLastUsedDate within `recent_window` (10 min);
+      3. and exactly ONE candidate is confirmed.
+    Anything else abstains — a wrong client folder is worse than none.
+
+    WHY NOT "a single match is enough": the index can miss the real file (here
+    ~/Documents/pepsi logo.psd was not indexed while a Desktop copy was), so a
+    lone hit is not proof. WHY NOT kMDItemLastUsedDate alone: measured
+    2026-09-30, Acrobat opening a PDF — by its own `open` AND through Launch
+    Services (`open -a`) — never moved it; the only timestamps on the test
+    files were their creation/save times. Photoshop could not be measured (it
+    hung on relaunch). Leaning on it alone would mean the fallback never fires.
     """
 
     def __init__(self,
@@ -481,7 +499,7 @@ class SpotlightResolver:
                  clock: Callable[[], float] = time.time,
                  hit_ttl: float = 300.0,
                  miss_ttl: float = 300.0,
-                 ambiguous_ttl: float = 60.0,
+                 unconfirmed_ttl: float = 30.0,
                  error_ttl: float = 30.0,
                  timeout: float = 1.0,
                  recent_window: float = 600.0,
@@ -491,122 +509,155 @@ class SpotlightResolver:
         self.clock = clock
         self.hit_ttl = hit_ttl
         self.miss_ttl = miss_ttl
-        self.ambiguous_ttl = ambiguous_ttl
+        self.unconfirmed_ttl = unconfirmed_ttl
         self.error_ttl = error_ttl
         self.timeout = timeout
         self.recent_window = recent_window
         self.max_candidates = max_candidates
-        self._cache: Dict[str, Tuple[Optional[str], float]] = {}
-        self._inflight: Dict[str, threading.Thread] = {}
+        self._cache: Dict[Tuple[str, Optional[int]], Tuple[Optional[str], float]] = {}
+        self._inflight: Dict[Tuple[str, Optional[int]], threading.Thread] = {}
         self._lock = threading.Lock()
         self.last_outcome: Dict[str, str] = {}
 
     # -- cache ---------------------------------------------------------------
-    def cached(self, name: str) -> Tuple[bool, Optional[str]]:
+    @staticmethod
+    def _key(name: str, pid: Optional[int]) -> Tuple[str, Optional[int]]:
+        return (_nfc(name), pid)
+
+    def cached(self, name: str, pid: Optional[int] = None) -> Tuple[bool, Optional[str]]:
+        key = self._key(name, pid)
         with self._lock:
-            hit = self._cache.get(name.lower())
+            hit = self._cache.get(key)
             if not hit:
                 return False, None
             path, expires = hit
             if self.clock() >= expires:
-                self._cache.pop(name.lower(), None)
+                self._cache.pop(key, None)
                 return False, None
             return True, path
 
-    def _store(self, name: str, path: Optional[str], ttl: float, outcome: str):
+    def _store(self, name, pid, path, ttl, outcome):
         with self._lock:
-            self._cache[name.lower()] = (path, self.clock() + ttl)
-            self.last_outcome[name.lower()] = outcome
+            self._cache[self._key(name, pid)] = (path, self.clock() + ttl)
+            self.last_outcome[_nfc(name)] = outcome
 
     # -- lookup --------------------------------------------------------------
-    def lookup(self, name: str, wait: float = 0.25) -> Optional[str]:
+    def lookup(self, name: str, pid: Optional[int] = None,
+               wait: float = 0.25) -> Optional[str]:
         if not name:
             return None
-        found, path = self.cached(name)
+        found, path = self.cached(name, pid)
         if found:
             return path
-        key = name.lower()
+        key = self._key(name, pid)
         with self._lock:
             t = self._inflight.get(key)
             if t is None or not t.is_alive():
-                t = threading.Thread(target=self._run, args=(name,), daemon=True)
+                t = threading.Thread(target=self._run, args=(name, pid), daemon=True)
                 self._inflight[key] = t
                 t.start()
         if wait > 0:
             t.join(wait)
-        found, path = self.cached(name)
+        found, path = self.cached(name, pid)
         return path if found else None
 
-    def resolve_now(self, name: str) -> Optional[str]:
+    def resolve_now(self, name: str, pid: Optional[int] = None) -> Optional[str]:
         """Synchronous resolve (tests / one-off); still honours the timeouts."""
-        self._run(name)
-        return self.cached(name)[1]
+        self._run(name, pid)
+        return self.cached(name, pid)[1]
 
-    def _run(self, name: str) -> None:
+    def _run(self, name: str, pid: Optional[int]) -> None:
         try:
-            path, ttl, outcome = self._resolve(name)
+            path, ttl, outcome = self._resolve(name, pid)
         except Exception:
             path, ttl, outcome = None, self.error_ttl, "error"
-        self._store(name, path, ttl, outcome)
+        self._store(name, pid, path, ttl, outcome)
         with self._lock:
-            self._inflight.pop(name.lower(), None)
+            self._inflight.pop(self._key(name, pid), None)
 
-    def _resolve(self, name: str) -> Tuple[Optional[str], float, str]:
+    def _candidates(self, name: str):
+        """(paths, outcome-if-failed). Exact, case-sensitive name matches."""
         roots = [r for r in (self.roots() or []) if r]
         if not roots:
-            return None, self.miss_ttl, "no-roots"
+            return None, "no-roots"
         cmd = ["mdfind"]
         for r in roots:
             cmd += ["-onlyin", r]
-        cmd.append(f'kMDItemFSName == "{mdquery_escape(name)}"c')
+        # No `c` modifier: the comparison is case-sensitive.
+        cmd.append(f'kMDItemFSName == "{mdquery_escape(name)}"')
         try:
             out = self.runner(cmd, capture_output=True, text=True,
                               timeout=self.timeout)
         except subprocess.TimeoutExpired:
             # Spotlight is cold (a first query took 4.5s here). Retry soon.
-            return None, self.error_ttl, "timeout"
+            return None, "timeout"
         if getattr(out, "returncode", 0) not in (0, None):
-            return None, self.error_ttl, "error"
-        want = name.lower()
-        paths = []
+            return None, "error"
+        want = _nfc(name)
+        paths = set()
         for line in (out.stdout or "").splitlines():
             p = line.strip()
             if not p or _hidden(p):
                 continue
-            # mdfind's `c` makes the comparison case-insensitive; the
-            # basename must still BE the name, not merely contain it.
-            if os.path.basename(p).lower() != want:
+            # The basename must BE the name — exactly, case included.
+            if _nfc(os.path.basename(p)) != want:
                 continue
-            paths.append(p)
-        paths = sorted(set(paths))
+            paths.add(p)
+        return sorted(paths), None
+
+    def _resolve(self, name: str, pid: Optional[int]) -> Tuple[Optional[str], float, str]:
+        paths, failed = self._candidates(name)
+        if paths is None:
+            ttl = self.miss_ttl if failed == "no-roots" else self.error_ttl
+            return None, ttl, failed
         if not paths:
             return None, self.miss_ttl, "miss"
-        if len(paths) == 1:
-            return paths[0], self.hit_ttl, "hit"
         if len(paths) > self.max_candidates:
-            return None, self.ambiguous_ttl, "ambiguous"
-        chosen = self._only_recent(paths)
-        if chosen:
-            return chosen, self.ambiguous_ttl, "hit-recent"
-        return None, self.ambiguous_ttl, "ambiguous"
+            return None, self.unconfirmed_ttl, "ambiguous"
+        confirmed = set(self._open_by(pid, paths)) | set(self._recently_used(paths))
+        if len(confirmed) == 1:
+            return confirmed.pop(), self.hit_ttl, "hit"
+        if len(confirmed) > 1:
+            return None, self.unconfirmed_ttl, "ambiguous"
+        return None, self.unconfirmed_ttl, "unconfirmed"
 
-    def _only_recent(self, paths: List[str]) -> Optional[str]:
+    def _open_by(self, pid: Optional[int], paths: List[str]) -> List[str]:
+        """Candidates the app process has open right now (lsof)."""
+        if not pid:
+            return []
+        try:
+            out = self.runner(["lsof", "-n", "-P", "-p", str(int(pid)), "-Fn"],
+                              capture_output=True, text=True, timeout=self.timeout)
+        except (subprocess.TimeoutExpired, ValueError, TypeError):
+            return []
+        open_paths = set()
+        for line in (out.stdout or "").splitlines():
+            if line.startswith("n/"):
+                p = _nfc(line[1:])
+                open_paths.add(p)
+                # lsof reports /tmp as /private/tmp and the like.
+                if p.startswith("/private/"):
+                    open_paths.add(p[len("/private"):])
+        return [p for p in paths if _nfc(p) in open_paths
+                or _nfc(os.path.realpath(p)) in open_paths]
+
+    def _recently_used(self, paths: List[str]) -> List[str]:
         try:
             out = self.runner(["mdls", "-name", "kMDItemLastUsedDate", "-raw"]
                               + paths, capture_output=True, text=True,
                               timeout=self.timeout)
         except subprocess.TimeoutExpired:
-            return None
+            return []
         values = (out.stdout or "").split("\0")
         if len(values) < len(paths):
-            return None
+            return []
         now = self.clock()
         recent = []
         for p, v in zip(paths, values):
             ts = _parse_md_date(v)
-            if ts is not None and now - ts <= self.recent_window:
+            if ts is not None and 0 <= now - ts <= self.recent_window:
                 recent.append(p)
-        return recent[0] if len(recent) == 1 else None
+        return recent
 
 
 # ---------------------------------------------------------------------------

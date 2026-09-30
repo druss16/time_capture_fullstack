@@ -5058,6 +5058,7 @@ class ClassificationService:
         try:
             from tracker.industry_categories import (
                 detection_token_in, get_combined_tool_detection, host_matches,
+                is_work_platform_host,
             )
         except ImportError:
             return
@@ -5077,11 +5078,16 @@ class ClassificationService:
         best_category = None
         best_confidence = 0.0
         best_tool = ''
+        # An ad/business console (or, for an agency, the social platform itself)
+        # is never personal, whatever brand word its title carries.
+        on_work_platform = bool(domain) and is_work_platform_host(domain, industry)
 
         for tool_name, spec in tool_map.items():
             category = spec.get('category')
             conf = spec.get('confidence', 0.0)
             if not category or conf <= best_confidence:
+                continue
+            if on_work_platform and category == 'Personal/Non-Billable':
                 continue
 
             matched = False

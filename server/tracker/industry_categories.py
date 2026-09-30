@@ -675,8 +675,9 @@ AI_CONSULTING_TOOL_DETECTION = {
         "confidence": 0.85
     },
     "hootsuite": {
-        "keywords": ["hootsuite", "buffer", "sprout social", "later"],
-        "domains": ["hootsuite.com", "buffer.com", "sproutsocial.com"],
+        # Not the bare word "later": it matched any title containing it.
+        "keywords": ["hootsuite", "buffer", "sprout social", "later.com"],
+        "domains": ["hootsuite.com", "buffer.com", "sproutsocial.com", "later.com"],
         "category": "Social Media Management",
         "confidence": 0.90
     },
@@ -783,8 +784,9 @@ MARKETING_TOOL_DETECTION = {
         "confidence": 0.92
     },
     "social": {
-        "keywords": ["hootsuite", "buffer", "sprout social", "later"],
-        "domains": ["hootsuite.com", "buffer.com", "sproutsocial.com"],
+        # Not the bare word "later": it matched any title containing it.
+        "keywords": ["hootsuite", "buffer", "sprout social", "later.com"],
+        "domains": ["hootsuite.com", "buffer.com", "sproutsocial.com", "later.com"],
         "category": "Social Media Management",
         "confidence": 0.90
     },
@@ -1430,6 +1432,97 @@ def detection_token_in(token: str, text: str) -> bool:
 
 
 # =============================================================================
+# SOCIAL / AD PLATFORMS AS A WORKPLACE
+# =============================================================================
+
+# The business consoles of consumer platforms. Nobody opens Ads Manager or
+# YouTube Studio to unwind, so these are work in EVERY vertical — yet every
+# personal sweep keyed on the parent domain (facebook.com, youtube.com) caught
+# them by subdomain and filed them non-billable.
+PLATFORM_CONSOLE_HOSTS = (
+    'business.facebook.com', 'adsmanager.facebook.com', 'developers.facebook.com',
+    'studio.youtube.com',
+    'ads.tiktok.com', 'business.tiktok.com',
+    'ads.linkedin.com', 'business.linkedin.com',
+    'ads.pinterest.com', 'business.pinterest.com', 'analytics.pinterest.com',
+    'ads.x.com', 'ads.twitter.com', 'analytics.twitter.com',
+    'ads.snapchat.com', 'business.snapchat.com', 'forbusiness.snapchat.com',
+    'ads.reddit.com',
+)
+
+# Consumer social/video platforms a vertical works INSIDE. For a CPA firm
+# facebook.com is someone's feed; for an agency it is where the client's page,
+# posts and comments live. For a listed vertical these hosts are never
+# auto-filed personal: they go to review, where a person says which client (or
+# that it really was personal), and tool detection files them under `category`
+# instead of Personal/Non-Billable. Configuration only — the sweeps consult it,
+# none of them branch on the industry.
+INDUSTRY_SOCIAL_WORK = {
+    'marketing': {
+        'hosts': (
+            'facebook.com', 'instagram.com', 'threads.net', 'x.com', 'twitter.com',
+            'tiktok.com', 'pinterest.com', 'linkedin.com', 'youtube.com',
+            'snapchat.com', 'bsky.app',
+        ),
+        'category': 'Social Media Management',
+    },
+}
+
+
+def get_social_work_hosts(industry_type) -> tuple:
+    cfg = INDUSTRY_SOCIAL_WORK.get((industry_type or '').lower()) or {}
+    return tuple(cfg.get('hosts') or ())
+
+
+def social_work_brands(industry_type) -> frozenset:
+    """Brand words for the vertical's social hosts ('facebook', 'youtube',
+    'twitter'), for personal lists matched against titles with no URL. Labels
+    under four letters ('x') are skipped — too short to be a word match."""
+    labels = (h.split('.')[0] for h in get_social_work_hosts(industry_type))
+    return frozenset(l for l in labels if len(l) >= 4)
+
+
+def is_platform_console_host(host) -> bool:
+    return any(host_matches(host, d) for d in PLATFORM_CONSOLE_HOSTS)
+
+
+def is_social_work_host(host, industry_type) -> bool:
+    return any(host_matches(host, d) for d in get_social_work_hosts(industry_type))
+
+
+def is_work_platform_host(host, industry_type=None) -> bool:
+    """A console in any vertical, or a social platform this vertical works in."""
+    return is_platform_console_host(host) or is_social_work_host(host, industry_type)
+
+
+def _is_social_token(token, social_hosts, brands) -> bool:
+    tok = (token or '').lower()
+    if tok in brands:
+        return True
+    base = tok.split('/')[0]
+    return '.' in base and any(host_matches(base, h) for h in social_hosts)
+
+
+def get_personal_site_detection(industry_type=None) -> dict:
+    """PERSONAL_SITE_DETECTION with the vertical's social platforms taken out,
+    so neither their domains nor their brand keywords read as personal."""
+    social = get_social_work_hosts(industry_type)
+    if not social:
+        return PERSONAL_SITE_DETECTION
+    brands = social_work_brands(industry_type)
+    filtered = {}
+    for key, spec in PERSONAL_SITE_DETECTION.items():
+        filtered[key] = dict(
+            spec,
+            keywords=[k for k in spec.get('keywords', [])
+                      if not _is_social_token(k, social, brands)],
+            domains=[d for d in spec.get('domains', [])
+                     if not _is_social_token(d, social, brands)],
+        )
+    return filtered
+
+
+# =============================================================================
 # COMBINED TOOL DETECTION (for pre-classification / compaction)
 # =============================================================================
 
@@ -1440,7 +1533,7 @@ def get_combined_tool_detection(industry_type: str) -> dict:
     2. Universal work patterns (Zoom, Gmail, Google Ads, etc.)
     3. Industry-specific patterns (highest priority - overrides above)
     """
-    combined = dict(PERSONAL_SITE_DETECTION)
+    combined = dict(get_personal_site_detection(industry_type))
 
     # Universal communication tools
     combined.update({
@@ -1544,7 +1637,26 @@ def get_combined_tool_detection(industry_type: str) -> dict:
     industry_patterns = get_tool_detection_for_industry(industry_type)
     combined.update(industry_patterns)
 
-    return combined
+    # A vertical that works inside social platforms files them as that work.
+    # Below the industry's own ad-console entries (Meta Ads 0.93), so Ads
+    # Manager stays Paid Advertising rather than becoming Social Media.
+    social_cfg = INDUSTRY_SOCIAL_WORK.get((industry_type or '').lower())
+    if social_cfg:
+        combined['social_platforms_work'] = {
+            'keywords': [],
+            'domains': list(social_cfg['hosts']),
+            'category': social_cfg['category'],
+            'confidence': 0.85,
+        }
+
+    # Drop any detection whose category this vertical doesn't have. The
+    # universal entries name CPA/consulting categories ("Marketing/Advertising",
+    # "SEO/Analytics", "Document Management"); in another vertical they outbid
+    # its own entries (meta_ads_universal 0.94 > marketing's Paid Advertising
+    # 0.93), then map to no billing code and pre-empt Stage 10 from choosing a
+    # category that exists.
+    allowed = set(get_categories_for_industry(industry_type))
+    return {k: v for k, v in combined.items() if v.get('category') in allowed}
 
 def validate_and_fix_ai_response(ai_results: list, industry_type: str) -> list:
     """

@@ -20,7 +20,8 @@ from collections import defaultdict
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
-from tracker.models import Block, Client
+from tracker.models import Block, Client, Organization
+from tracker.industry_categories import is_work_platform_host, social_work_brands
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +353,13 @@ def _build_title_index(org_id, since):
     return idx
 
 
-def classify_block(block, client_forms, title_index, web_autofile=False):
+def _drop_brands(tokens, brands):
+    """A personal keyword list minus the vertical's social brand words."""
+    return tuple(t for t in tokens if t not in brands) if brands else tokens
+
+
+def classify_block(block, client_forms, title_index, web_autofile=False,
+                   industry_type=None):
     """Return (action, client_id, confidence, reasoning).
     action in: 'commit_nb', 'propose_high', 'propose_needs', 'llm_web_check', 'skip'.
 
@@ -395,6 +402,15 @@ def classify_block(block, client_forms, title_index, web_autofile=False):
     if _is_browser(block.app_name) and any(wt in hay for wt in WORK_TOOL_HINT):
         return ('propose_needs', None, 0.30, 'second-pass: work tool, needs client')
 
+    # Ad/business consoles in any vertical, and the social platforms an agency
+    # works inside, are client work waiting for a client — never swept. Must
+    # precede the consumer-domain sweep, which matches them by subdomain
+    # (business.facebook.com ends in facebook.com). This used to commit them
+    # non-billable as 'correction', which nothing ever revisits.
+    if _is_browser(block.app_name) and is_work_platform_host(_url_host(block), industry_type):
+        return ('propose_needs', None, 0.30, 'second-pass: social/ad platform, needs client')
+    brands = social_work_brands(industry_type)
+
     # Known consumer domain in the captured URL -> commit non-billable. This is
     # the deterministic half of web auto-file and runs UNFLAGGED, same as the
     # PERSONAL_LOW rule below: the host is hard evidence, not a guess, so it does
@@ -406,12 +422,12 @@ def classify_block(block, client_forms, title_index, web_autofile=False):
         return ('commit_nb', None, 0.0, 'second-pass: consumer site (%s)' % _url_host(block))
 
     # Affirmatively personal -> commit non-billable
-    if any(p in tl for p in PERSONAL_LOW) and not any(w in tl for w in WORKHINT):
+    if any(p in tl for p in _drop_brands(PERSONAL_LOW, brands)) and not any(w in tl for w in WORKHINT):
         return ('commit_nb', None, 0.0, 'second-pass: personal browsing')
 
     # Expanded consumer news / leisure detection (title+url). Gated so flag-off
     # behavior is unchanged. WORKHINT guard keeps anything work-like out.
-    if web_autofile and any(p in hay for p in (NEWS_HINT + PERSONAL_EXTRA)) and not any(w in tl for w in WORKHINT):
+    if web_autofile and any(p in hay for p in (NEWS_HINT + _drop_brands(PERSONAL_EXTRA, brands))) and not any(w in tl for w in WORKHINT):
         return ('commit_nb', None, 0.0, 'second-pass: personal/news browsing')
 
     # Work-like but no client match -> flag needs-client
@@ -437,6 +453,8 @@ def run_second_pass(org_id, days=14, dry_run=True):
     client_forms = _build_client_forms(org_id)
     title_index = _build_title_index(org_id, since)
     web_autofile = web_autofile_enabled(org_id)
+    industry_type = (Organization.objects.filter(id=org_id)
+                     .values_list('industry_type', flat=True).first())
     # Bound LLM calls per run so the unbounded nightly all-orgs loop can't fan out
     # into a large OpenAI bill; verdicts are cached so steady-state calls are only
     # genuinely-new browser blocks anyway.
@@ -456,7 +474,8 @@ def run_second_pass(org_id, days=14, dry_run=True):
             continue
 
         action, cid, conf, reason = classify_block(b, client_forms, title_index,
-                                                    web_autofile=web_autofile)
+                                                    web_autofile=web_autofile,
+                                                    industry_type=industry_type)
 
         # Resolve the LLM handoff for residual unrecognized browser blocks. The
         # verdict may ONLY move a block to non-billable ('personal'); 'work' and

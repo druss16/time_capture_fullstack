@@ -57,6 +57,7 @@ jobs:
             --osx-bundle-identifier TimeTracker \
             --add-data "version.py:." \
             --add-data "timetracker_gui.py:." \
+            --add-data "menubar_icon.png:." \
             --add-data "notifications.py:." \
             --add-data "agent_sync_integration.py:." \
             --add-data "ai_client_switcher.py:." \

@@ -237,6 +237,12 @@ jobs:
           LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
           LOGGED_IN_UID=$(id -u "$LOGGED_IN_USER" 2>/dev/null || echo "")
           if [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" != "root" ] && [ -n "$LOGGED_IN_UID" ]; then
+              # Hand the app to the person who installed it, as a drag-install
+              # would. The agent can then replace its own bundle on update
+              # (update_checker._mac_self_update) without an admin password;
+              # a root-owned bundle left Standard users unable to update ever.
+              chown -R "$LOGGED_IN_USER" /Applications/TimeTracker.app \
+                  && echo "bundle owned by $LOGGED_IN_USER"
               PLIST_SRC="/Applications/TimeTracker.app/Contents/Resources/com.mavops.timetracker.plist"
               PLIST_DST="/Users/$LOGGED_IN_USER/Library/LaunchAgents/com.mavops.timetracker.plist"
               sudo -u "$LOGGED_IN_USER" launchctl bootout "gui/$LOGGED_IN_UID" "$PLIST_DST" 2>/dev/null || true

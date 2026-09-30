@@ -5,7 +5,8 @@ Features:
   - Startup blocking check for forced updates
   - Background polling every 5 minutes
   - Windows: zip download + bat script extraction (bypasses RedirectionGuard)
-  - Mac: AppleScript password prompt, then automatic pkg install (unchanged)
+  - Mac: replaces its own bundle with no password when the user owns it
+    (installs from v1.9.11 on); otherwise an admin-prompted pkg install
   - Network readiness checks before downloads (prevents post-sleep crashes)
   - Timeout-aware downloads (no more hanging on flaky WiFi)
 
@@ -204,16 +205,225 @@ def _auto_update_windows(download_url: str, latest_version: str, zip_url: str = 
         return False
 
 
-def _auto_update_mac(download_url: str, latest_version: str) -> bool:
-    """Download and install update on macOS via AppleScript elevated installer."""
-    import subprocess, tempfile
+# ============================================================
+# MAC: UPDATE WITHOUT AN ADMIN PASSWORD
+# ============================================================
+#
+# An update needed an admin password only because installer(8) writes into
+# /Applications/TimeTracker.app, which the pkg leaves owned by root. A Standard
+# user could never approve it, so their Mac froze on whatever version it was
+# installed with. The postinstall now hands the bundle to the person who
+# installed it — the same ownership a drag-installed app has — and from then
+# on the agent replaces its own Contents:
+#
+#   1. download the same signed, notarized TimeTracker.pkg;
+#   2. `pkgutil --expand-full` it (no root needed) and take Payload/*.app;
+#   3. refuse unless the pkg AND the app are signed by the SAME Apple team as
+#      the running copy, and the app is TimeTracker and passes a strict check;
+#   4. copy the new Contents into a staging dir on the same volume, then a
+#      detached helper waits for this process to exit, swaps Contents with two
+#      renames (rolling back if the second fails), and relaunches the agent.
+#
+# Anything outside that — a root-owned bundle from an older install, a
+# signature mismatch, a previous swap that failed for this version — falls
+# back to the admin-prompt install below, so nothing is worse than before.
+# The root-only parts of the pkg (browser-extension drop files, the staged
+# profile) are identical across versions and are not redone here.
+
+_MAC_LABEL = "com.mavops.timetracker"
+_MAC_BUNDLE_ID = "TimeTracker"
+_MAC_STAGE_ROOT = os.path.expanduser("~/Library/Caches/TimeTracker/update")
+_MAC_SWAP_LOG = os.path.expanduser("~/Library/Logs/TimeTracker/update-swap.log")
+# Exit code for "restarting into an update". Non-zero, so the LaunchAgent's
+# KeepAlive(SuccessfulExit=false) relaunches us even if the helper dies.
+_MAC_UPDATE_EXIT_CODE = 3
+
+
+def _mac_running_bundle():
+    """/Applications/TimeTracker.app (or wherever we run from), or None."""
+    if not getattr(sys, "frozen", False):
+        return None
+    contents = os.path.dirname(os.path.dirname(os.path.realpath(sys.executable)))
+    bundle = os.path.dirname(contents)
+    if os.path.basename(contents) != "Contents" or not bundle.endswith(".app"):
+        return None
+    return bundle
+
+
+def _mac_owns_bundle(bundle: str) -> bool:
+    """We can swap Contents only if we own the bundle and everything in it."""
+    uid = os.getuid()
+    try:
+        for root, dirs, _files in os.walk(bundle):
+            if os.lstat(root).st_uid != uid or not os.access(root, os.W_OK):
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def _mac_team_id(signature_output: str) -> str:
+    """TeamIdentifier from `codesign -dv`, or the (TEAMID) of a Developer ID
+    certificate line from `pkgutil --check-signature`."""
+    import re
+    m = re.search(r"TeamIdentifier=([A-Z0-9]{10})\b", signature_output)
+    if m:
+        return m.group(1)
+    m = re.search(r"Developer ID \w+: .*\(([A-Z0-9]{10})\)", signature_output)
+    return m.group(1) if m else ""
+
+
+def _mac_codesign_info(path: str) -> str:
+    import subprocess
+    r = subprocess.run(["codesign", "-dv", "--verbose=2", path],
+                       capture_output=True, text=True, timeout=60)
+    return r.stdout + r.stderr
+
+
+def _mac_swap_failed_before(version: str) -> bool:
+    try:
+        with open(_MAC_SWAP_LOG) as f:
+            return f"SWAP FAILED {version}" in f.read()
+    except OSError:
+        return False
+
+
+_MAC_SWAP_HELPER = r'''#!/bin/bash
+# Written by update_checker._mac_self_update. Swaps TimeTracker.app/Contents
+# once the old agent has exited, then relaunches it.
+BUNDLE="$1"; STAGE="$2"; PID="$3"; VERSION="$4"; LABEL="$5"
+exec >>"$6" 2>&1
+echo "== $(date) swap to $VERSION: waiting for pid $PID"
+for _ in $(seq 1 300); do kill -0 "$PID" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$PID" 2>/dev/null; then
+    echo "SWAP FAILED $VERSION (agent still running after 30s)"
+    rm -rf "$STAGE"
+    exit 1
+fi
+if mv "$BUNDLE/Contents" "$STAGE/Contents.old"; then
+    if mv "$STAGE/Contents" "$BUNDLE/Contents"; then
+        echo "swapped in $VERSION"
+        rm -rf "$STAGE/Contents.old"
+    else
+        mv "$STAGE/Contents.old" "$BUNDLE/Contents"
+        echo "SWAP FAILED $VERSION (rolled back)"
+    fi
+else
+    echo "SWAP FAILED $VERSION (could not move old Contents)"
+fi
+# Keep the LaunchAgent in step with the version now installed.
+SRC="$BUNDLE/Contents/Resources/$LABEL.plist"
+DST="$HOME/Library/LaunchAgents/$LABEL.plist"
+if [ -f "$SRC" ] && ! cmp -s "$SRC" "$DST"; then
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+    cp "$SRC" "$DST" && launchctl bootstrap "gui/$(id -u)" "$DST"
+    echo "LaunchAgent refreshed"
+else
+    launchctl kickstart "gui/$(id -u)/$LABEL" 2>/dev/null
+fi
+rm -rf "$STAGE"
+echo "done"
+'''
+
+
+def _mac_self_update(pkg_path: str, latest_version: str) -> bool:
+    """Install `pkg_path` over the running bundle without admin rights.
+
+    Returns False (caller falls back to the admin installer) whenever a check
+    fails. On success it does not return: the helper is launched and this
+    process exits so the helper can swap Contents underneath it.
+    """
+    import shutil, subprocess
+
+    bundle = _mac_running_bundle()
+    if not bundle:
+        _log("[UPDATE] Not running from an app bundle - no self-update")
+        return False
+    if not _mac_owns_bundle(bundle):
+        _log(f"[UPDATE] {bundle} is not owned by this user (installed by an "
+             "older pkg) - needs the admin installer this once")
+        return False
+    if _mac_swap_failed_before(latest_version):
+        _log(f"[UPDATE] A swap to v{latest_version} failed before - using the admin installer")
+        return False
+
+    running_team = _mac_team_id(_mac_codesign_info(bundle))
+    if not running_team:
+        _log("[UPDATE] Running copy has no Team ID - refusing self-update")
+        return False
+
+    pkg_sig = subprocess.run(["pkgutil", "--check-signature", pkg_path],
+                             capture_output=True, text=True, timeout=60)
+    if pkg_sig.returncode != 0 or _mac_team_id(pkg_sig.stdout) != running_team:
+        _log(f"[UPDATE] Package signature does not match team {running_team} - refusing")
+        return False
+
+    stage = os.path.join(_MAC_STAGE_ROOT, latest_version)
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage)
+    expanded = os.path.join(stage, "expanded")
+    try:
+        r = subprocess.run(["pkgutil", "--expand-full", pkg_path, expanded],
+                           capture_output=True, text=True, timeout=300)
+        new_app = os.path.join(expanded, "Payload", os.path.basename(bundle))
+        if r.returncode != 0 or not os.path.isdir(os.path.join(new_app, "Contents")):
+            _log(f"[UPDATE] Could not expand the package: {r.stderr.strip()[:200]}")
+            return False
+
+        info = _mac_codesign_info(new_app)
+        if (_mac_team_id(info) != running_team
+                or f"Identifier={_MAC_BUNDLE_ID}\n" not in info + "\n"):
+            _log("[UPDATE] New app is not TimeTracker signed by our team - refusing")
+            return False
+        strict = subprocess.run(["codesign", "--verify", "--deep", "--strict", new_app],
+                                capture_output=True, text=True, timeout=300)
+        if strict.returncode != 0:
+            _log(f"[UPDATE] New app fails signature check: {strict.stderr.strip()[:200]}")
+            return False
+
+        # The swap is two renames, so the staging dir must share a volume with
+        # the bundle; ditto preserves the symlinks and signatures PyInstaller
+        # bundles depend on.
+        if os.stat(stage).st_dev != os.stat(bundle).st_dev:
+            _log("[UPDATE] Staging dir is on another volume - using the admin installer")
+            return False
+        staged_contents = os.path.join(stage, "Contents")
+        subprocess.run(["ditto", os.path.join(new_app, "Contents"), staged_contents],
+                       check=True, capture_output=True, timeout=300)
+        shutil.rmtree(expanded, ignore_errors=True)
+
+        helper = os.path.join(stage, "swap.sh")
+        with open(helper, "w") as f:
+            f.write(_MAC_SWAP_HELPER)
+        os.chmod(helper, 0o755)
+        os.makedirs(os.path.dirname(_MAC_SWAP_LOG), exist_ok=True)
+        # A new session, so launchd's clean-up of our process group when we
+        # exit cannot take the helper with it.
+        subprocess.Popen(
+            ["/bin/bash", helper, bundle, stage, str(os.getpid()),
+             latest_version, _MAC_LABEL, _MAC_SWAP_LOG],
+            start_new_session=True, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+        )
+    except Exception as e:
+        _log(f"[UPDATE] Self-update staging failed: {e}")
+        shutil.rmtree(stage, ignore_errors=True)
+        return False
+
+    _cleanup_file(pkg_path)
+    _log(f"[UPDATE] ✅ v{latest_version} staged - restarting into it (no password needed)")
+    os._exit(_MAC_UPDATE_EXIT_CODE)
+
+
+def _download_mac_pkg(download_url: str, latest_version: str):
+    """Download the release pkg to a temp path; None on any failure."""
+    import tempfile
 
     pkg_path = os.path.join(tempfile.gettempdir(), f"TimeTracker-{latest_version}.pkg")
-
     try:
         # Wait for network before downloading
         if not _wait_for_network(download_url):
-            return False
+            return None
 
         _log(f"[UPDATE] Downloading v{latest_version}...")
 
@@ -225,7 +435,30 @@ def _auto_update_mac(download_url: str, latest_version: str) -> bool:
         if file_size < 5 * 1024 * 1024:
             _log(f"[UPDATE] Download too small ({file_size} bytes) - aborting")
             _cleanup_file(pkg_path)
-            return False
+            return None
+        return pkg_path
+    except Exception as e:
+        _log(f"[UPDATE] Download failed: {e}")
+        _cleanup_file(pkg_path)
+        return None
+
+
+def _auto_update_mac(download_url: str, latest_version: str) -> bool:
+    """Download and install an update on macOS.
+
+    Tries the no-password self-update first; falls back to installer(8) behind
+    an AppleScript admin prompt when the bundle isn't ours to replace.
+    """
+    import subprocess
+
+    pkg_path = _download_mac_pkg(download_url, latest_version)
+    if not pkg_path:
+        return False
+
+    try:
+        # No password needed when the bundle is ours to replace. On success
+        # this exits the process; on any refusal it returns False.
+        _mac_self_update(pkg_path, latest_version)
 
         # Use AppleScript to run installer with admin privileges
         _log(f"[UPDATE] Installing v{latest_version} (will prompt for password)...")
@@ -460,6 +693,20 @@ def _show_blocking_dialog(latest_version: str, download_url: str):
             os._exit(0)
 
 
+def _forced_update_mac(download_url: str, latest_version: str):
+    """A forced update installs in place when the bundle is ours (the
+    self-update exits into the new version); otherwise the old behaviour — a
+    blocking dialog that sends the person to the download — is all there is,
+    since a Standard user cannot complete the admin installer anyway."""
+    bundle = _mac_running_bundle()
+    if bundle and _mac_owns_bundle(bundle):
+        pkg_path = _download_mac_pkg(download_url, latest_version)
+        if pkg_path:
+            _mac_self_update(pkg_path, latest_version)  # exits on success
+            _cleanup_file(pkg_path)
+    _show_blocking_dialog(latest_version, download_url)
+
+
 # ============================================================
 # STARTUP CHECK (blocking for forced updates only)
 # ============================================================
@@ -513,7 +760,7 @@ def check_for_update_blocking(api_base: str, current_version: str):
                         os._exit(0)
                 threading.Thread(target=_bg_forced, daemon=True).start()
             else:
-                _show_blocking_dialog(latest, url)
+                _forced_update_mac(url, latest)
 
         else:
             # Non-forced: silent background install
@@ -622,7 +869,7 @@ def start_background_checker(api_base: str, current_version: str):
                             _mark_nagged(latest, download_ok=True)
                             os._exit(0)
                     else:
-                        _show_blocking_dialog(latest, url)
+                        _forced_update_mac(url, latest)
 
                 # -- Silent background install --
                 else:

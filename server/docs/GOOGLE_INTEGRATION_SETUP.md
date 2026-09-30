@@ -9,7 +9,7 @@ counterpart of the Outlook mail and calendar integrations. Code:
 | Connect / callback / status / disconnect views | `server/tracker/views_google.py` |
 | Gmail sync (Celery) | `server/tracker/tasks_gmail.py` |
 | Calendar sync (Celery) | `server/tracker/tasks_google_calendar.py` |
-| Compose-time attribution | `server/tracker/services/mail_compose.py`, Stage 7a in `services/classification_service.py` |
+| Compose-time attribution | `server/tracker/services/mail_compose.py`, Stage 7a in `services/classification_service.py` — strong (auto-files) only when composing to one client covers ≥50% of the Gmail block's active time; otherwise a weak contributing signal; sends to 2+ clients in one block are flagged for review |
 | Connections page cards | `frontend/src/components/GoogleConnectionTab.tsx` |
 | Migration | `server/tracker/migrations/0176_google_mail_calendar.py` |
 

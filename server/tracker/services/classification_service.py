@@ -4198,10 +4198,12 @@ class ClassificationService:
         if not block.start:
             return
 
-        # Stage 7a — Gmail compose. When THIS block is the user writing in
-        # Gmail and a send landed in it, the recipient is far more specific
-        # evidence than the 2.5h window of surrounding mail below, so it
-        # replaces that window rather than competing with it.
+        # Stage 7a — Gmail compose. When most of THIS block was the user
+        # writing to one client in Gmail, that is far more specific evidence
+        # than the 2.5h window of surrounding mail below, so it replaces the
+        # window. Only that STRONG path (or a 2+ client flag) replaces it; a
+        # send covering a small part of the block adds a weak signal and the
+        # window still runs.
         if self._stage_7a_gmail_compose(block, decision):
             return
 
@@ -4322,22 +4324,39 @@ class ClassificationService:
         decision.detail['mail_proposed_confidence'] = strength
         decision.detail['mail_proposed_evidence'] = evidence
 
-    # Stage 7a strengths. Unambiguous compose is STRONG (can commit alone):
-    # the user was demonstrably writing to that client during this block.
-    # Ambiguous compose emits one MODERATE signal per client, which is exactly
-    # what _has_contradicting_signal / the moderate-agreement rule need to keep
-    # the block out of auto-commit.
+    # Stage 7a strengths.
+    #
+    # STRONG (0.90, can commit alone) only when the measured compose time for
+    # that client covers at least GMAIL_COMPOSE_MIN_COVERAGE of the block's
+    # active time. The block is the unit the classifier commits, so the whole
+    # block gets one client: at >= 50% the compose client is by definition the
+    # majority use of the block and labelling all of it mis-files at most the
+    # minority; below 50%, most of the block was something else (a 40-min
+    # inbox triage with a 2-min reply to Acme is 5% Acme) and a strong signal
+    # would bill the triage to Acme.
+    #
+    # Below the threshold the send is a WEAK contributor (0.60): under the
+    # 0.65 moderate floor, so it never commits alone, never counts toward the
+    # "2 moderates agree" rule on its own, and cannot veto another client.
+    #
+    # 2+ clients in one block: one MODERATE signal per client, which
+    # _has_contradicting_signal / the moderate-agreement rule turn into a
+    # proposal plus the review flag.
     GMAIL_COMPOSE_STRENGTH = 0.90
+    GMAIL_COMPOSE_WEAK_STRENGTH = 0.60
     GMAIL_COMPOSE_AMBIGUOUS_STRENGTH = 0.70
+    GMAIL_COMPOSE_MIN_COVERAGE = 0.50
 
     def _stage_7a_gmail_compose(self, block, decision: 'ClassificationDecision') -> bool:
         """Attribute a Gmail block from the mail the user SENT during it.
 
-        Returns True when it spoke (committed evidence or flagged ambiguity),
-        in which case the windowed Stage 7 is skipped.
+        Returns True only when it emitted the STRONG signal or flagged
+        ambiguity; the windowed Stage 7 is skipped only then. A weak signal
+        returns False so the surrounding-mail window still runs.
 
-          * sends in this block -> exactly one client  -> one strong 'mail'
-            signal for that client, with the compose time in the evidence.
+          * sends in this block -> exactly one client, compose time inside
+            this block >= 50% of its active time -> one strong 'mail' signal.
+          * one client but compose time < 50% -> one weak (0.60) signal.
           * sends -> 2+ different clients              -> no auto-attribution:
             a moderate signal per client, needs_review, proposed at best.
           * sends only to unmapped / public domains    -> says nothing.
@@ -4347,7 +4366,7 @@ class ClassificationService:
         and client only — never an address or subject (MailSignal docstring).
         """
         from tracker.services.mail_compose import (
-            fmt_minutes, is_gmail_block, sends_for_block,
+            block_active_seconds, fmt_minutes, is_gmail_block, sends_for_block,
         )
 
         if not is_gmail_block(block) or not getattr(block, 'pk', None):
@@ -4364,10 +4383,12 @@ class ClassificationService:
             if not sig.extracted_client_id:
                 continue
             entry = by_client.setdefault(sig.extracted_client_id, {
-                'client': sig.extracted_client, 'sends': 0, 'seconds': 0, 'domains': [],
+                'client': sig.extracted_client, 'sends': 0, 'seconds': 0,
+                'in_block': 0, 'domains': [],
             })
             entry['sends'] += 1
             entry['seconds'] += att.compose_seconds
+            entry['in_block'] += att.seconds_within(block)
             if sig.other_party_domain and sig.other_party_domain not in entry['domains']:
                 entry['domains'].append(sig.other_party_domain)
         if not by_client:
@@ -4388,18 +4409,34 @@ class ClassificationService:
                 'match_method': method,
                 'send_count': e['sends'],
                 'compose_seconds': e['seconds'],
+                'compose_seconds_in_block': e['in_block'],
                 'other_party_domains': e['domains'],
                 'direction': 'out',
             }
 
         if len(by_client) == 1:
             (cid, e), = by_client.items()
+            active = block_active_seconds(block)
+            coverage = (e['in_block'] / active) if active else 0.0
+            if coverage < self.GMAIL_COMPOSE_MIN_COVERAGE:
+                detail = _detail(cid, e, 'gmail_compose_partial')
+                detail['compose_coverage'] = round(coverage, 2)
+                decision.matched_signals.append(Signal(
+                    type='mail',
+                    strength=self.GMAIL_COMPOSE_WEAK_STRENGTH,
+                    evidence=_evidence(e) + (
+                        f" [{int(coverage * 100)}% of this block — rest was other Gmail use]"
+                    ),
+                    detail=detail,
+                ))
+                return False   # let the windowed Stage 7 weigh in as well
             evidence = _evidence(e)
             decision.matched_signals.append(Signal(
                 type='mail',
                 strength=self.GMAIL_COMPOSE_STRENGTH,
                 evidence=evidence,
-                detail=_detail(cid, e, 'gmail_compose'),
+                detail={**_detail(cid, e, 'gmail_compose'),
+                        'compose_coverage': round(coverage, 2)},
             ))
             decision.detail = getattr(decision, 'detail', {}) or {}
             decision.detail['mail_proposed_client_id'] = cid

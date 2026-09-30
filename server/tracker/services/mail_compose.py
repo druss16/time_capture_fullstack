@@ -76,6 +76,17 @@ class SendAttribution:
     signal: object
     block: object
     compose_seconds: int
+    # When composing began (chain start or previous send). With the send time
+    # this is the compose WINDOW, which may start in an earlier Gmail block.
+    compose_start: object = None
+
+    def seconds_within(self, block) -> int:
+        """Compose seconds that fall inside `block` itself."""
+        if self.compose_start is None or not block.start or not block.end:
+            return 0
+        lo = max(self.compose_start, block.start)
+        hi = min(self.signal.occurred_at, block.end)
+        return max(0, int((hi - lo).total_seconds()))
 
 
 def attribute_sends(gmail_blocks, sends) -> Dict[int, SendAttribution]:
@@ -107,7 +118,9 @@ def attribute_sends(gmail_blocks, sends) -> Dict[int, SendAttribution]:
         begin = max(ch.start, last_send_in_chain.get(ci, ch.start))
         end = min(t, ch.end)
         secs = max(0, int((end - begin).total_seconds()))
-        out[sig.id] = SendAttribution(signal=sig, block=owner, compose_seconds=secs)
+        out[sig.id] = SendAttribution(
+            signal=sig, block=owner, compose_seconds=secs, compose_start=begin,
+        )
         last_send_in_chain[ci] = t
     return out
 
@@ -182,3 +195,13 @@ def fmt_minutes(seconds: Optional[int]) -> str:
     if seconds < 60:
         return '<1 min'
     return f'~{round(seconds / 60)} min'
+
+
+def block_active_seconds(block) -> int:
+    """The block's measured (active) duration: Block.minutes when recorded,
+    else wall-clock end - start. Denominator of the compose-coverage test."""
+    if getattr(block, 'minutes', None):
+        return int(block.minutes) * 60
+    if block.start and block.end:
+        return max(0, int((block.end - block.start).total_seconds()))
+    return 0

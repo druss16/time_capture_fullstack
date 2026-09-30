@@ -579,6 +579,43 @@ class ComposeAttributionTests(ComposeBase):
         self.assertEqual(d.client_id, self.acme.id)
         self.assertEqual(d.recommended_state, 'committed')
 
+    def test_inbox_triage_with_short_reply_is_not_auto_committed(self):
+        """40-min Gmail block of triage; one 2-min reply to Acme at minute 20.
+        5% coverage: a weak contributor, never a commit."""
+        from tracker.services.classification_service import ClassificationService
+        b = self.block(0, 40)
+        # A Gmail block elsewhere earlier resets nothing; the 2-min compose is
+        # measured from the previous send in the same session.
+        self.sent('s0', 18, 'noreply@unmapped.org', None, 'unmapped.org')
+        self.sent('s1', 20, 'jane@acme.com', self.acme, 'acme.com')
+        d7 = self.stage7(b)
+        compose = [s for s in d7.matched_signals
+                   if (s.detail or {}).get('match_method', '').startswith('gmail_compose')]
+        self.assertEqual(len(compose), 1)
+        self.assertLessEqual(compose[0].strength, 0.70)
+        self.assertEqual(compose[0].detail['match_method'], 'gmail_compose_partial')
+        self.assertEqual(compose[0].detail['compose_seconds_in_block'], 120)
+        d = ClassificationService(org=self.org, user=self.user).classify(b, skip_ai=True)
+        self.assertNotEqual(d.recommended_state, 'committed')
+
+    def test_ten_min_block_mostly_composing_commits_to_that_client(self):
+        from tracker.services.classification_service import ClassificationService
+        b = self.block(0, 10)
+        self.sent('s1', 8, 'jane@acme.com', self.acme, 'acme.com')
+        d = ClassificationService(org=self.org, user=self.user).classify(b, skip_ai=True)
+        self.assertEqual(d.client_id, self.acme.id)
+        self.assertEqual(d.recommended_state, 'committed')
+
+    def test_owner_still_sees_compose_line_for_partial_block(self):
+        b = self.block(0, 40)
+        self.sent('s0', 18, 'noreply@unmapped.org', None, 'unmapped.org')
+        self.sent('s1', 20, 'jane@acme.com', self.acme, 'acme.com')
+        c = APIClient()
+        c.force_authenticate(self.user)
+        mail = c.get(f'/api/blocks/{b.id}/evidence/').json()['mail']
+        self.assertIn('Emailed jane@acme.com — ~2 min composing',
+                      [x['line'] for x in mail['compose']])
+
     def test_annotator_persists_compose_seconds(self):
         from tracker.services.mail_compose import annotate_compose_seconds
         self.block(0, 8)

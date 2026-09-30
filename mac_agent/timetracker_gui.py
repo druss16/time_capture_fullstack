@@ -7,7 +7,6 @@ Features:
 - Sharp, professional UI with refined aesthetics
 - Searchable client picker with usage-based ranking
 - AI client prompts with confidence indicators
-- Today's time viewer with detailed breakdown
 - Username display and re-pairing support
 """
 import os
@@ -749,131 +748,6 @@ def show_client_prompt_modern(client_id: int, client_name: str, confidence: floa
         callback(False, None, None, {})
 
 
-# ============================================================
-# MULTIPROCESSING HELPERS FOR DIALOG WINDOWS
-# ============================================================
-
-def _run_today_time_process(data_json: str):
-    """Run Today's Time window in separate process"""
-    import json
-    from datetime import datetime
-    import customtkinter as ctk
-    
-    # Re-define colors locally for subprocess - TimeTracker teal theme
-    colors = {
-        "primary": "#14B8A6",
-        "primary_muted": "#134E4A",
-        "bg_base": "#1C1C1E",
-        "bg_surface": "#2C2C2E",
-        "bg_hover": "#3A3A3A",
-        "border": "#38383A",
-        "text_primary": "#FFFFFF",
-        "text_tertiary": "#636366",
-    }
-    
-    raw_data = json.loads(data_json) if data_json else {}
-    
-    # Handle both formats: dict with "clients" key OR direct list
-    if isinstance(raw_data, dict):
-        clients_data = raw_data.get("clients", [])
-        total_hours = raw_data.get("global_hours", 0)
-    elif isinstance(raw_data, list):
-        clients_data = raw_data
-        total_hours = sum(e.get("hours", e.get("total_hours", 0)) for e in clients_data)
-    else:
-        clients_data = []
-        total_hours = 0
-    
-    ctk.set_appearance_mode("dark")
-    root = ctk.CTk()
-    root.title("Today's Time")
-    root.geometry("480x500")
-    root.resizable(False, False)
-    root.configure(fg_color=colors["bg_base"])
-    
-    # Prevent flash: hide window, position, then show
-    root.withdraw()
-    root.update_idletasks()
-    x = (root.winfo_screenwidth() // 2) - 240
-    y = (root.winfo_screenheight() // 2) - 250
-    root.geometry(f"+{x}+{y}")
-    root.attributes('-topmost', True)
-    root.deiconify()
-    root.lift()
-    root.focus_force()
-    
-    container = ctk.CTkFrame(root, fg_color="transparent")
-    container.pack(fill="both", expand=True, padx=20, pady=20)
-    
-    # Header
-    header = ctk.CTkFrame(container, fg_color="transparent")
-    header.pack(fill="x", pady=(0, 8))
-    
-    date_str = datetime.now().strftime("%A, %B %d")
-    date_label = ctk.CTkLabel(header, text=date_str,
-                              font=ctk.CTkFont(family="SF Pro Display", size=20, weight="bold"),
-                              text_color=colors["text_primary"])
-    date_label.pack(side="left")
-    
-    total_frame = ctk.CTkFrame(header, fg_color=colors["primary_muted"], corner_radius=8)
-    total_frame.pack(side="right")
-    
-    total_label = ctk.CTkLabel(total_frame, text=f"{total_hours:.1f} hrs",
-                               font=ctk.CTkFont(family="SF Pro Text", size=15, weight="bold"),
-                               text_color=colors["primary"])
-    total_label.pack(padx=12, pady=6)
-    
-    # Divider
-    divider = ctk.CTkFrame(container, fg_color=colors["border"], height=1)
-    divider.pack(fill="x", pady=(0, 16))
-    
-    # Entries
-    entries_frame = ctk.CTkScrollableFrame(container, fg_color="transparent", 
-                                           corner_radius=0, border_width=0)
-    entries_frame.pack(fill="both", expand=True, pady=(0, 16))
-    
-    if not clients_data:
-        empty_frame = ctk.CTkFrame(entries_frame, fg_color="transparent")
-        empty_frame.pack(fill="both", expand=True, pady=60)
-        
-        empty_icon = ctk.CTkLabel(empty_frame, text="📊", font=ctk.CTkFont(size=36))
-        empty_icon.pack()
-        
-        empty_label = ctk.CTkLabel(empty_frame, text="No time tracked yet today",
-                                   font=ctk.CTkFont(family="SF Pro Text", size=14),
-                                   text_color=colors["text_tertiary"])
-        empty_label.pack(pady=(8, 0))
-    else:
-        for entry in clients_data:
-            client = entry.get("client", entry.get("client_name", "Unknown"))
-            hours = entry.get("total_hours", entry.get("hours", 0))
-            
-            row = ctk.CTkFrame(entries_frame, fg_color=colors["bg_surface"], corner_radius=10)
-            row.pack(fill="x", pady=3, padx=2)
-            
-            row_inner = ctk.CTkFrame(row, fg_color="transparent")
-            row_inner.pack(fill="x", padx=14, pady=12)
-            
-            client_label = ctk.CTkLabel(row_inner, text=client,
-                                        font=ctk.CTkFont(family="SF Pro Text", size=14),
-                                        text_color=colors["text_primary"])
-            client_label.pack(side="left")
-            
-            hours_label = ctk.CTkLabel(row_inner, text=f"{hours:.2f} hrs",
-                                       font=ctk.CTkFont(family="SF Mono", size=14, weight="bold"),
-                                       text_color=colors["primary"])
-            hours_label.pack(side="right")
-    
-    # Close button
-    close_btn = ctk.CTkButton(container, text="Close", command=root.destroy,
-                              fg_color=colors["bg_surface"], hover_color=colors["bg_hover"],
-                              height=42, corner_radius=8,
-                              font=ctk.CTkFont(family="SF Pro Text", size=14, weight="bold"))
-    close_btn.pack(fill="x")
-    
-    root.mainloop()
-
-
 # The searchable client picker window used to live here. It was removed:
 # it ran as a spawned copy of the whole frozen app just to draw a Tk
 # window, and when the parent terminated it on timeout, Tk's signal
@@ -883,31 +757,6 @@ def _run_today_time_process(data_json: str):
 # Client window on screen while the real agent kept tracking fine.
 # Manual client switching now lives in the native menu bar submenu, which
 # needs no subprocess and no Tk.
-
-# ============================================================
-# TODAY'S TIME WINDOW (WRAPPER)
-# ============================================================
-
-class TodayTimeWindowModern:
-    """Professional window showing today's time breakdown (subprocess wrapper)"""
-    
-    def __init__(self, api_callback: Callable):
-        self.api_callback = api_callback
-    
-    def show_and_refresh(self):
-        """Fetch data and show window in subprocess"""
-        data = []
-        if self.api_callback:
-            try:
-                data = self.api_callback() or []
-            except Exception as e:
-                print(f"[GUI] Failed to fetch today's time: {e}")
-        
-        # Run in subprocess to avoid Tkinter threading issues
-        data_json = json.dumps(data)
-        p = multiprocessing.Process(target=_run_today_time_process, args=(data_json,))
-        p.start()
-
 
 # ============================================================
 # PAIRING WINDOW - with username capture
@@ -1516,12 +1365,10 @@ if RUMPS_AVAILABLE:
 
         def _add_tail_menu_items(self):
             """The items every user gets, hands-off or not."""
-            today_item = rumps.MenuItem("Today's Time...")
-            today_item.set_callback(self._on_today_time)
-            self.menu.add(today_item)
-
-            self.menu.add(None)
-
+            # No "Today's Time" item: it was a read-only popup of the day's
+            # top clients whose "Open Dashboard" button did nothing, and it
+            # put client names back on screen for hands-off orgs. Daily
+            # Review (above) is where the day is seen AND corrected.
             # Re-link is device RECOVERY, not a manual client control, so it
             # is never gated. A machine paired to the wrong account — or with
             # a key the server no longer honours — has no other way back:
@@ -1575,10 +1422,6 @@ if RUMPS_AVAILABLE:
         # were removed with the picker itself. Clients are switched from the
         # native Switch Client submenu built in _rebuild_menu.
 
-        def _show_today_time(self):
-            window = TodayTimeWindowModern(self.controller.get_today_time_callback)
-            window.show_and_refresh()
-        
         def _on_clear_client(self, _):
             self._switch_client(0, "No Client")
         
@@ -1603,25 +1446,6 @@ if RUMPS_AVAILABLE:
                     print(f"[GUI] Sync failed: {e}")
             
             self._rebuild_menu()
-        
-        def _on_today_time(self, _):
-            """Show today's time summary"""
-            try:
-                if self.controller.get_today_time_callback:
-                    data = self.controller.get_today_time_callback()
-                    if data:
-                        total = sum(entry.get('hours', 0) for entry in data)
-                        lines = [f"• {entry.get('client', 'Unknown')}: {entry.get('hours', 0):.1f}h" for entry in data[:5]]
-                        message = "\n".join(lines) + f"\n\nTotal: {total:.1f} hours"
-                        rumps.alert(title="Today's Time", message=message, ok="Open Dashboard", cancel="Close")
-                    else:
-                        rumps.alert(title="Today's Time", message="No time tracked yet today")
-            except Exception as e:
-                print(f"[GUI] Today's time error: {e}")
-                # Fallback to browser
-                import webbrowser
-                webbrowser.open("https://timetracker.mavops.ai/daily")
-                
         
         def _on_relink_device(self, _):
             """Show re-pairing dialog and restart app after success"""

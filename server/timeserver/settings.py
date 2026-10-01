@@ -116,12 +116,17 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     'retry_on_timeout': True,
 }
 
-CELERY_BROKER_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_NONE
-}
-CELERY_RESULT_BACKEND_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_NONE
-}
+# TLS only for rediss:// (e.g. an external/managed Redis). Render Key Value's
+# internal URL is plain redis:// on the private network — kombu and the redis
+# result backend both force an SSL connection whenever these are set, whatever
+# the URL scheme, so setting them unconditionally breaks a redis:// broker.
+if _redis_url.startswith("rediss://"):
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE
+    }
+    CELERY_RESULT_BACKEND_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE
+    }
 
 import warnings
 warnings.filterwarnings('ignore', message='.*ssl_cert_reqs.*CERT_NONE.*')

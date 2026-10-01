@@ -583,6 +583,77 @@ def test_payload_says_where_the_path_came_from():
     assert ok, reason
 
 
+# ---------------------------------------------------------------------------
+# Bundle id fallback (NSRunningApplication intermittently answers nil)
+# ---------------------------------------------------------------------------
+
+def _fake_bundle(root, name, bid, nested_in=None):
+    import plistlib
+    base = os.path.join(nested_in or root, name)
+    os.makedirs(os.path.join(base, "Contents", "MacOS"), exist_ok=True)
+    if bid is not None:
+        with open(os.path.join(base, "Contents", "Info.plist"), "wb") as f:
+            plistlib.dump({"CFBundleIdentifier": bid}, f)
+    exe = os.path.join(base, "Contents", "MacOS", name.split(".")[0])
+    open(exe, "w").close()
+    return base, exe
+
+
+def test_bundle_id_read_from_the_executables_info_plist():
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        app, exe = _fake_bundle(root, "Adobe Photoshop 2026.app", "com.adobe.Photoshop")
+        assert dc.app_bundle_for_executable(exe) == ("com.adobe.Photoshop", app)
+
+
+def test_chrome_code_sign_clone_bundle_is_recognised():
+    # Chrome relaunches from ".../Google Chrome.app.bundle/Contents/MacOS/..."
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        app, exe = _fake_bundle(root, "Google Chrome.app.bundle", "com.google.Chrome")
+        assert dc.app_bundle_for_executable(exe) == ("com.google.Chrome", app)
+
+
+def test_nested_helper_reports_its_own_bundle():
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        outer, _ = _fake_bundle(root, "Host.app", "com.example.host")
+        helper, exe = _fake_bundle(root, "Helper.app", "com.example.helper",
+                                   nested_in=os.path.join(outer, "Contents", "Frameworks"))
+        assert dc.app_bundle_for_executable(exe) == ("com.example.helper", helper)
+
+
+def test_non_bundle_executables_and_missing_ids_give_nothing():
+    import tempfile
+    assert dc.app_bundle_for_executable(None) == ("", "")
+    assert dc.app_bundle_for_executable("/usr/bin/python3") == ("", "")
+    with tempfile.TemporaryDirectory() as root:
+        _, exe = _fake_bundle(root, "NoId.app", None)
+        assert dc.app_bundle_for_executable(exe) == ("", "")
+
+
+def test_bundle_cache_is_revalidated_when_a_pid_is_recycled():
+    import tempfile
+    dc._BUNDLE_CACHE.clear()
+    with tempfile.TemporaryDirectory() as root:
+        _, exe_a = _fake_bundle(root, "A.app", "com.example.a")
+        _, exe_b = _fake_bundle(root, "B.app", "com.example.b")
+        current = {"exe": exe_a}
+        lookup = lambda pid: current["exe"]
+        assert dc.bundle_info_for_pid(4242, lookup)[0] == "com.example.a"
+        current["exe"] = exe_b          # same pid, different process
+        assert dc.bundle_info_for_pid(4242, lookup)[0] == "com.example.b"
+        current["exe"] = None           # process gone
+        assert dc.bundle_info_for_pid(4242, lookup) == ("", "")
+    dc._BUNDLE_CACHE.clear()
+
+
+def test_bundle_info_for_this_python_process_does_not_raise():
+    # Live syscall: whatever python this is, the call must answer, not throw.
+    bid, app = dc.bundle_info_for_pid(os.getpid())
+    assert isinstance(bid, str) and isinstance(app, str)
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(n, f) for n, f in sorted(globals().items())

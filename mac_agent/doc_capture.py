@@ -680,3 +680,89 @@ def path_source(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
     return _PATH_SOURCE.get(path)
+
+
+# ---------------------------------------------------------------------------
+# Bundle id for a pid, when NSRunningApplication says nothing.
+#
+# The frontmost app is found by pid, and its bundle id read from
+# NSRunningApplication. That lookup intermittently returns nil for a live,
+# frontmost process (measured on one Mac over 7 days: 8% of Chrome events,
+# 14% of Claude, 6 of 17 Photoshop). An empty bundle id silently switches off
+# everything keyed on it: browser URL capture, the Office/iWork path scripts,
+# Adobe document capture and its title cleanup. And because the bundle id is
+# part of the window signature, the blank and real ids alternate as two
+# "different" windows for the same document.
+#
+# The fallback asks the kernel for the process's executable path
+# (proc_pidpath) and reads CFBundleIdentifier from the enclosing .app's
+# Info.plist. Results are cached per pid and re-validated against the
+# executable path, so a recycled pid can never inherit another app's id.
+# ---------------------------------------------------------------------------
+_BUNDLE_CACHE: Dict[int, Tuple[str, str, str]] = {}  # pid -> (exe, bundle_id, app_path)
+_BUNDLE_CACHE_MAX = 256
+_libproc = None
+
+
+def proc_executable_path(pid: int) -> Optional[str]:
+    """The executable path of a running process, or None."""
+    global _libproc
+    if not pid or pid <= 0:
+        return None
+    try:
+        import ctypes
+        if _libproc is None:
+            _libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+        buf = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+        n = _libproc.proc_pidpath(int(pid), buf, ctypes.sizeof(buf))
+        if n <= 0:
+            return None
+        return buf.value.decode("utf-8", "replace") or None
+    except Exception:
+        return None
+
+
+def app_bundle_for_executable(exe: Optional[str]) -> Tuple[str, str]:
+    """(bundle_id, bundle_path) of the bundle whose executable is `exe`.
+
+    That is the innermost bundle, so a helper app nested inside another one
+    reports its own id, the same answer NSRunningApplication gives. ("", "")
+    when `exe` is not a bundle executable or its Info.plist has no id.
+    """
+    if not exe:
+        return "", ""
+    import plistlib
+    # The executable lives at <bundle>/Contents/MacOS/<name>. Don't require the
+    # bundle dir to end in ".app": Chrome relaunches from a code-sign clone,
+    # ".../code_sign_clone.xXcofX/Google Chrome.app.bundle/Contents/MacOS/...".
+    macos = os.path.dirname(exe)
+    contents = os.path.dirname(macos)
+    if os.path.basename(macos) != "MacOS" or os.path.basename(contents) != "Contents":
+        return "", ""
+    bundle = os.path.dirname(contents)
+    try:
+        with open(os.path.join(contents, "Info.plist"), "rb") as f:
+            bid = str(plistlib.load(f).get("CFBundleIdentifier") or "")
+    except Exception:
+        bid = ""
+    return (bid, bundle) if bid else ("", "")
+
+
+def bundle_info_for_pid(pid: Optional[int],
+                        exe_lookup: Callable[[int], Optional[str]] = proc_executable_path
+                        ) -> Tuple[str, str]:
+    """(bundle_id, app_path) for a pid via its executable; cached per pid."""
+    if not pid:
+        return "", ""
+    exe = exe_lookup(pid)
+    if not exe:
+        return "", ""
+    hit = _BUNDLE_CACHE.get(pid)
+    if hit and hit[0] == exe:
+        return hit[1], hit[2]
+    bid, app = app_bundle_for_executable(exe)
+    if bid:
+        if len(_BUNDLE_CACHE) >= _BUNDLE_CACHE_MAX:
+            _BUNDLE_CACHE.clear()
+        _BUNDLE_CACHE[pid] = (exe, bid, app)
+    return bid, app

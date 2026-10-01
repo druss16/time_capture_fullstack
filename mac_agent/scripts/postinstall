@@ -9,7 +9,7 @@ PLIST="/Library/LaunchAgents/$LABEL.plist"
 AGENT_DIR="/usr/local/mavops"
 AGENT="$AGENT_DIR/TimeTrackerAgent"
 PPPC_DIR="/Library/Application Support/MavOps"
-PPPC_FILE="$PPPC_DIR/mavops-pppc-timetrackeragent.mobileconfig"
+PPPC_FILE="$PPPC_DIR/mavops-pppc-timetracker.mobileconfig"
 
 # Permissions (existence-guarded)
 [[ -f "$PLIST"     ]] && { chown root:wheel "$PLIST" || true; chmod 644 "$PLIST" || true; }

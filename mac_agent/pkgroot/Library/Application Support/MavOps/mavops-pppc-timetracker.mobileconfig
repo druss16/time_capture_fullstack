@@ -20,98 +20,458 @@
 				<key>Accessibility</key>
 				<array>
 					<dict>
-						<key>Allowed</key>
-						<true/>
-						<key>CodeRequirement</key>
-						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
 						<key>Identifier</key>
 						<string>TimeTracker</string>
 						<key>IdentifierType</key>
 						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
 						<key>StaticCode</key>
 						<false/>
+						<key>Allowed</key>
+						<true/>
 					</dict>
 				</array>
 				<key>AppleEvents</key>
 				<array>
 					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.google.Chrome</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
 						<key>AEReceiverCodeRequirement</key>
-						<string>identifier "com.adobe.Photoshop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD</string>
+						<string>(identifier "com.google.Chrome" or identifier "com.google.Chrome.beta" or identifier "com.google.Chrome.dev" or identifier "com.google.Chrome.canary") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = EQHXZ8M8AV</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.google.Chrome.beta</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(identifier "com.google.Chrome" or identifier "com.google.Chrome.beta" or identifier "com.google.Chrome.dev" or identifier "com.google.Chrome.canary") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = EQHXZ8M8AV</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.google.Chrome.canary</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(identifier "com.google.Chrome" or identifier "com.google.Chrome.beta" or identifier "com.google.Chrome.dev" or identifier "com.google.Chrome.canary") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = EQHXZ8M8AV</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.microsoft.edgemac</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.microsoft.edgemac" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.microsoft.edgemac.Beta</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.microsoft.edgemac.Beta" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.brave.Browser</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.brave.Browser" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = KL8N8XSYF4</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>company.thebrowser.Browser</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "company.thebrowser.Browser" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = S6N382Y83G</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.vivaldi.Vivaldi</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.vivaldi.Vivaldi" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = 4XF3XNRN6Y</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.Safari</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.apple.Safari" and anchor apple</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.systemevents</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.apple.systemevents" and anchor apple</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.finder</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.apple.finder" and anchor apple</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.Preview</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.apple.Preview" and anchor apple</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.TextEdit</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.apple.TextEdit" and anchor apple</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.microsoft.Excel</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9) and identifier "com.microsoft.Excel"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.microsoft.Word</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9) and identifier "com.microsoft.Word"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.microsoft.Powerpoint</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9) and identifier "com.microsoft.Powerpoint"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.iWork.Numbers</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = K36BKF7T3D) and identifier "com.apple.iWork.Numbers"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.iWork.Pages</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = K36BKF7T3D) and identifier "com.apple.iWork.Pages"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.apple.iWork.Keynote</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>(anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = K36BKF7T3D) and identifier "com.apple.iWork.Keynote"</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
+						<key>AEReceiverIdentifier</key>
+						<string>com.sublimetext.4</string>
+						<key>AEReceiverIdentifierType</key>
+						<string>bundleID</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.sublimetext.4" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = Z6D26JE4Y4</string>
+					</dict>
+					<dict>
+						<key>Identifier</key>
+						<string>TimeTracker</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>StaticCode</key>
+						<false/>
+						<key>Allowed</key>
+						<true/>
 						<key>AEReceiverIdentifier</key>
 						<string>com.adobe.Photoshop</string>
 						<key>AEReceiverIdentifierType</key>
 						<string>bundleID</string>
-						<key>Allowed</key>
-						<true/>
-						<key>CodeRequirement</key>
-						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.adobe.Photoshop" and anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD)</string>
+					</dict>
+					<dict>
 						<key>Identifier</key>
 						<string>TimeTracker</string>
 						<key>IdentifierType</key>
 						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
 						<key>StaticCode</key>
 						<false/>
-					</dict>
-					<dict>
-						<key>AEReceiverCodeRequirement</key>
-						<string>identifier "com.adobe.Acrobat.Pro" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD</string>
+						<key>Allowed</key>
+						<true/>
 						<key>AEReceiverIdentifier</key>
 						<string>com.adobe.Acrobat.Pro</string>
 						<key>AEReceiverIdentifierType</key>
 						<string>bundleID</string>
-						<key>Allowed</key>
-						<true/>
-						<key>CodeRequirement</key>
-						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.adobe.Acrobat.Pro" and anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD)</string>
+					</dict>
+					<dict>
 						<key>Identifier</key>
 						<string>TimeTracker</string>
 						<key>IdentifierType</key>
 						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
 						<key>StaticCode</key>
 						<false/>
-					</dict>
-					<dict>
-						<key>AEReceiverCodeRequirement</key>
-						<string>identifier "com.adobe.illustrator" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD</string>
+						<key>Allowed</key>
+						<true/>
 						<key>AEReceiverIdentifier</key>
 						<string>com.adobe.illustrator</string>
 						<key>AEReceiverIdentifierType</key>
 						<string>bundleID</string>
-						<key>Allowed</key>
-						<true/>
-						<key>CodeRequirement</key>
-						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.adobe.illustrator" and anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD)</string>
+					</dict>
+					<dict>
 						<key>Identifier</key>
 						<string>TimeTracker</string>
 						<key>IdentifierType</key>
 						<string>bundleID</string>
+						<key>CodeRequirement</key>
+						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
 						<key>StaticCode</key>
 						<false/>
-					</dict>
-					<dict>
-						<key>AEReceiverCodeRequirement</key>
-						<string>identifier "com.adobe.InDesign" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD</string>
+						<key>Allowed</key>
+						<true/>
 						<key>AEReceiverIdentifier</key>
 						<string>com.adobe.InDesign</string>
 						<key>AEReceiverIdentifierType</key>
 						<string>bundleID</string>
-						<key>Allowed</key>
-						<true/>
-						<key>CodeRequirement</key>
-						<string>identifier TimeTracker and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = P3KX4CDFN4</string>
-						<key>Identifier</key>
-						<string>TimeTracker</string>
-						<key>IdentifierType</key>
-						<string>bundleID</string>
-						<key>StaticCode</key>
-						<false/>
+						<key>AEReceiverCodeRequirement</key>
+						<string>identifier "com.adobe.InDesign" and anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JQ525L2MZD)</string>
 					</dict>
 				</array>
 			</dict>
 		</dict>
 	</array>
 	<key>PayloadDescription</key>
-	<string>Pre-approves the TimeTracker agent (bundle id TimeTracker) for Accessibility (window titles) and Automation of Adobe apps (which document is in front). Must be delivered by MDM; a user-installed profile cannot grant TCC.</string>
+	<string>Pre-approves the TimeTracker agent (bundle id TimeTracker, team P3KX4CDFN4) for Accessibility (window titles) and Automation (Apple Events) of the browsers, Adobe, Office, iWork and Apple apps it reads the current page or document from. Read-only: the agent asks which page or file is in front and never changes anything. Must be delivered by a user-approved MDM; installing it by hand grants nothing. Screen Recording, Camera and Microphone are not requested.</string>
 	<key>PayloadDisplayName</key>
 	<string>MavOps PPPC - TimeTracker</string>
 	<key>PayloadIdentifier</key>

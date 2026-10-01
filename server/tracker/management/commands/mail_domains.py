@@ -5,17 +5,16 @@ Mail matching has two strategies (tracker/mail_matching.py):
   1. domain rule  — OrgCalendarRule(match_type='attendee_domain'), conf 0.95
   2. subject text — fuzzy match of a client name inside the subject, conf 0.80
 
-Strategy 1 is the reliable one, and it reads a table with no API, no admin and
-no UI anywhere in the product — so in practice it held ZERO rows and never
-fired for anyone. Every mail signal that lacked a client name spelled out in
-its subject line stored with extracted_client=NULL, and the Stage 7 classifier
-filters those out (extracted_client__isnull=False), so the mail integration
-could sync perfectly and still attribute nothing. This command is the way in
-until that table gets a real settings screen.
+Strategy 1 is the reliable one. For a long time it read a table with no API, no
+admin and no UI, so it held ZERO rows and never fired for anyone. Settings →
+Email domains is now the way in for firms; this command is the operator's way
+in, and both go through tracker/services/mail_domains.py so they apply the same
+validation (no public domains, no firm-own domain) and the same rematch.
 
-Mail sync uses a Graph DELTA query: once a message is synced it is never sent
-again. So a new rule only affects FUTURE mail unless you also re-run matching
-over the rows already stored — that is what --rematch is for.
+Mail sync uses a DELTA query: once a message is synced it is never sent again.
+So a new rule only affects FUTURE mail unless the rows already stored are
+re-matched. The settings screen queues that automatically; here it is
+--rematch, so an operator can dry-run it first.
 
 Usage:
   python manage.py mail_domains --org 21 --observed        # what domains do we see?
@@ -28,13 +27,10 @@ Usage:
 --observed and --list are read-only. --map/--unmap write one rule row.
 --rematch needs --apply before it writes anything.
 """
-from collections import Counter
-
 from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Count
 
-from tracker.models import Client, MailSignal, OrgCalendarRule, Organization
-from tracker.tasks_mail import PUBLIC_EMAIL_DOMAINS
+from tracker.models import Organization
+from tracker.services import mail_domains as svc
 
 
 class Command(BaseCommand):
@@ -43,11 +39,11 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--org', type=int, required=True)
         parser.add_argument('--observed', action='store_true',
-                            help='List domains seen in MailSignal with volume and current mapping')
+                            help='List domains seen in mail + calendar with volume and current mapping')
         parser.add_argument('--list', action='store_true',
                             help='List the attendee_domain rules this org has')
         parser.add_argument('--map', nargs=2, metavar=('DOMAIN', 'CLIENT_ID'),
-                            help='Map a domain to a client id')
+                            help='Map a domain to a client id (re-points an existing mapping)')
         parser.add_argument('--unmap', metavar='DOMAIN',
                             help='Remove the rule for a domain')
         parser.add_argument('--rematch', action='store_true',
@@ -55,8 +51,8 @@ class Command(BaseCommand):
                                  'never resends old mail, so new rules need this)')
         parser.add_argument('--apply', action='store_true',
                             help='Actually write during --rematch')
-        parser.add_argument('--days', type=int, default=90,
-                            help='Window for --observed and --rematch (default 90)')
+        parser.add_argument('--days', type=int, default=svc.DEFAULT_WINDOW_DAYS,
+                            help=f'Window for --observed and --rematch (default {svc.DEFAULT_WINDOW_DAYS})')
 
     def handle(self, *args, **opts):
         try:
@@ -89,46 +85,38 @@ class Command(BaseCommand):
     # ─── read-only ────────────────────────────────────────────────────────────
 
     def _observed(self, org, days):
-        from django.utils import timezone
-        from datetime import timedelta
-
-        since = timezone.now() - timedelta(days=days)
-        rows = (MailSignal.objects
-                .filter(org=org, occurred_at__gte=since)
-                .values('other_party_domain')
-                .annotate(n=Count('id'))
-                .order_by('-n'))
-
-        mapped = {
-            (r.match_value or '').lower().lstrip('@'): r.target_client
-            for r in OrgCalendarRule.objects.filter(
-                org=org, match_type='attendee_domain', is_active=True,
-            ).select_related('target_client')
-        }
+        activity = svc.domain_activity(org, days)
+        mapped = {svc._rule_domain(r): r.target_client for r in svc.list_mappings(org)}
+        own = svc.org_own_domains(org)
+        ignored = {i.domain for i in svc.ignored_domains(org)}
+        ctx = svc.SuggestionContext.for_org(org)
 
         self.stdout.write(f"\nDomains seen in the last {days} days (org {org.id}):\n")
-        if not rows:
-            self.stdout.write("  (none — is a mailbox connected, and is sync running?)")
+        if not activity:
+            self.stdout.write("  (none — is a mailbox or calendar connected, and is sync running?)")
             return
 
-        self.stdout.write(f"  {'domain':40s} {'seen':>5s}  status")
-        for r in rows:
-            d = (r['other_party_domain'] or '').lower()
+        self.stdout.write(f"  {'domain':40s} {'mail':>5s} {'cal':>5s}  status")
+        rows = sorted(activity.items(), key=lambda kv: -(kv[1]['messages'] + kv[1]['events']))
+        for d, a in rows:
             if d in mapped:
                 status = f"→ {mapped[d].name}"
-            elif d in PUBLIC_EMAIL_DOMAINS:
+            elif d in svc.PUBLIC_DOMAINS:
                 status = "public domain — cannot be mapped"
+            elif d in own:
+                status = "your firm's own domain"
+            elif d in ignored:
+                status = "ignored"
             else:
-                status = "unmapped"
-            self.stdout.write(f"  {d:40s} {r['n']:5d}  {status}")
+                s = svc.suggest_client(d, ctx)
+                status = (f"unmapped — suggest {s['client_name']} (#{s['client_id']})"
+                          if s else "unmapped")
+            self.stdout.write(f"  {d:40s} {a['messages']:5d} {a['events']:5d}  {status}")
         self.stdout.write("")
 
     def _list(self, org):
-        rules = (OrgCalendarRule.objects
-                 .filter(org=org, match_type='attendee_domain')
-                 .select_related('target_client')
-                 .order_by('match_value'))
-        self.stdout.write(f"\nDomain rules for org {org.id}: {rules.count()}\n")
+        rules = svc.list_mappings(org, include_inactive=True)
+        self.stdout.write(f"\nDomain rules for org {org.id}: {len(rules)}\n")
         for r in rules:
             flag = '' if r.is_active else '  (inactive)'
             client = r.target_client.name if r.target_client else '(no client)'
@@ -138,103 +126,29 @@ class Command(BaseCommand):
     # ─── writes ───────────────────────────────────────────────────────────────
 
     def _map(self, org, domain, client_id):
-        domain = (domain or '').strip().lower().lstrip('@')
-        if not domain or '.' not in domain:
-            raise CommandError(f"{domain!r} does not look like a domain")
-        if domain in PUBLIC_EMAIL_DOMAINS:
-            # match_by_domain_rule refuses these at match time, so a rule here
-            # would be silently dead. Say so instead of writing a no-op row.
-            raise CommandError(
-                f"{domain} is a public email domain — matching refuses it, so the rule "
-                f"would never fire. Everyone shares that domain; it identifies nobody."
-            )
         try:
-            client = Client.objects.get(id=int(client_id), org=org)
-        except (Client.DoesNotExist, ValueError):
-            raise CommandError(f"No client {client_id} in org {org.id}")
-
-        rule, created = OrgCalendarRule.objects.update_or_create(
-            org=org,
-            match_type='attendee_domain',
-            match_value=domain,
-            defaults={'target_client': client, 'is_active': True},
-        )
-        verb = 'Created' if created else 'Updated'
-        self.stdout.write(self.style.SUCCESS(f"{verb}: {domain} → {client.name}"))
+            change = svc.map_domain(org, domain, client_id)
+        except svc.DomainError as e:
+            raise CommandError(str(e))
+        verb = 'Created' if change.created else 'Updated'
+        self.stdout.write(self.style.SUCCESS(
+            f"{verb}: {change.domain} → {change.rule.target_client.name}"))
         self.stdout.write("  Applies to mail synced from now on. For mail already "
                           "stored, run --rematch --apply.")
 
     def _unmap(self, org, domain):
-        domain = (domain or '').strip().lower().lstrip('@')
-        deleted, _ = OrgCalendarRule.objects.filter(
-            org=org, match_type='attendee_domain', match_value=domain,
-        ).delete()
-        if deleted:
-            self.stdout.write(self.style.SUCCESS(f"Removed rule for {domain}"))
+        change = svc.unmap_domain(org, domain)
+        if change:
+            self.stdout.write(self.style.SUCCESS(f"Removed rule for {change.domain}"))
         else:
-            self.stdout.write(self.style.WARNING(f"No rule for {domain}"))
+            self.stdout.write(self.style.WARNING(f"No rule for {domain.strip().lower()}"))
 
     def _rematch(self, org, days, apply):
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from tracker.mail_matching import find_mail_match
-        from tracker.utils.db_iter import keyset_chunks
-
-        since = timezone.now() - timedelta(days=days)
-        clients_cache = list(
-            Client.objects.filter(org=org, is_active=True).only('id', 'name', 'code', 'aliases')
-        )
-        rules_cache = list(
-            OrgCalendarRule.objects.filter(
-                org=org, is_active=True, match_type='attendee_domain',
-            ).select_related('target_client').order_by('-priority', 'id')
-        )
-
-        signals = MailSignal.objects.filter(org=org, occurred_at__gte=since)
-        changed = Counter()
-        examples = []
-
-        # keyset_chunks, not .iterator(): this loop writes to the rows it walks,
-        # and a named server-side cursor dies on the first write under Neon's
-        # transaction pooler (see tracker/utils/db_iter.py).
-        for page in keyset_chunks(signals.select_related('extracted_client')):
-            for sig in page:
-                # Outlook stores a subject only for an already-matched signal,
-                # so a previously unmatched Outlook row has no subject to
-                # re-read; domain rules are what this pass can newly apply.
-                # Gmail rows keep the full subject, so they re-match on both.
-                client, conf, method, _subj = find_mail_match(
-                    mail_dict={
-                        'other_party_domain': sig.other_party_domain,
-                        'subject': sig.subject or sig.subject_extract or '',
-                        'direction': 'in' if sig.direction == 'in' else 'out',
-                    },
-                    org=org,
-                    clients_cache=clients_cache,
-                    rules_cache=rules_cache,
-                )
-                new_client = client if (client and conf >= 0.70) else None
-                if (new_client.id if new_client else None) == sig.extracted_client_id:
-                    continue
-
-                changed[(sig.other_party_domain,
-                         new_client.name if new_client else None)] += 1
-                if len(examples) < 10:
-                    examples.append(
-                        f"  {sig.occurred_at:%Y-%m-%d} {sig.other_party_domain:30s} "
-                        f"{(sig.extracted_client.name if sig.extracted_client else 'none')} "
-                        f"→ {new_client.name if new_client else 'none'}"
-                    )
-                if apply:
-                    sig.extracted_client = new_client
-                    sig.save(update_fields=['extracted_client'])
-
-        total = sum(changed.values())
+        result = svc.rematch_mail(org, days=days, apply=apply)
+        total = sum(result['changed'].values())
         mode = "APPLIED" if apply else "DRY RUN — nothing written"
         self.stdout.write(f"\n{mode}: {total} signal(s) would change ({days}d, org {org.id})\n")
-        for line in examples:
+        for line in result['examples']:
             self.stdout.write(line)
         if total and not apply:
             self.stdout.write("\nRe-run with --apply to write.")

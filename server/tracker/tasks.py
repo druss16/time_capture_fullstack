@@ -1941,6 +1941,10 @@ from tracker.tasks_google_calendar import (  # noqa: F401
     sync_user_google_calendar,
 )
 
+# Re-match stored mail/calendar after a Settings → Email domains map/unmap.
+# Lives in services/, which autodiscover_tasks() never walks — same gap.
+from tracker.services.mail_domains import rematch_mail_domain  # noqa: F401
+
 # Analytics v2 rollup tasks — the same autodiscovery gap, found by
 # manage.py verify_beat_tasks: nothing imported this package at worker
 # startup, so the nightly client/staff rollups and the hourly WIP snapshot

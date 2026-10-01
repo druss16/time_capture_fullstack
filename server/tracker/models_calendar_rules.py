@@ -1,4 +1,5 @@
 """Direct mapping rules for calendar events → clients."""
+from django.conf import settings
 from django.db import models
 
 
@@ -44,3 +45,35 @@ class OrgCalendarRule(models.Model):
     
     def __str__(self):
         return f"{self.org} | {self.match_type}={self.match_value!r} → {self.target_client}"
+
+
+class IgnoredEmailDomain(models.Model):
+    """
+    A counterparty email domain a firm has said is NOT a client (a bank, a
+    payroll provider, a software vendor).
+
+    Its only effect is that the domain stops appearing under "Seen but not
+    mapped" on Settings → Email domains. It changes no matching: an ignored
+    domain has no attendee_domain rule, exactly like any other unmapped one.
+    """
+    org = models.ForeignKey(
+        'tracker.Organization',
+        on_delete=models.CASCADE,
+        related_name='ignored_email_domains',
+    )
+    domain = models.CharField(max_length=255)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'tracker_ignored_email_domain'
+        unique_together = [['org', 'domain']]
+        ordering = ['domain']
+
+    def __str__(self):
+        return f"org {self.org_id} ignores {self.domain}"

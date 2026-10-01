@@ -11,6 +11,7 @@ from . import views_capture_status
 from . import views_review_misfiled
 from . import views_outstanding_weeks
 from . import views_readiness
+from . import views_mail_domains
 from . import views_billing, views_settings, views_integrations, views_bulk_assignments, views_sync, views_client_groups, views_notifications, views_deployment, views_ai_classify, views_analytics, views_ai_analysis, views_mavops, views_analytics_tax_returns, views_onboarding, views_routing_rules, views_rule_templates, views_disagreements, views_calendar, views_mail, views_google, views_block_evidence,views_analytics_v2, views_reports, views_reports_matrix, views_work_summary, views_engagements, views_accuracy
 
 # ========================================
@@ -523,6 +524,15 @@ urlpatterns = [
     path('google/calendar/auth/callback/',  views_google.google_calendar_auth_callback, name='google_calendar_auth_callback'),
     path('google/calendar/status/',         views_google.google_calendar_status,        name='google_calendar_status'),
     path('google/calendar/disconnect/',     views_google.google_calendar_disconnect,    name='google_calendar_disconnect'),
+
+    # Settings → Email domains: counterparty domain → client (OrgCalendarRule
+    # attendee_domain). Owners/admins only — see views_mail_domains.py.
+    path('settings/email-domains/',                     views_mail_domains.email_domains,               name='email_domains'),
+    path('settings/email-domains/observed/',            views_mail_domains.email_domains_observed,      name='email_domains_observed'),
+    path('settings/email-domains/bulk/',                views_mail_domains.email_domains_bulk,          name='email_domains_bulk'),
+    path('settings/email-domains/ignored/',             views_mail_domains.email_domains_ignored,       name='email_domains_ignored'),
+    path('settings/email-domains/ignored/<int:ignore_id>/', views_mail_domains.email_domain_ignored_detail, name='email_domain_ignored_detail'),
+    path('settings/email-domains/<int:rule_id>/',       views_mail_domains.email_domain_detail,         name='email_domain_detail'),
 
     path('task-management/', include('tracker.api.task_type_urls')),
 

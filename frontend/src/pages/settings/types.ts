@@ -7,7 +7,7 @@ export type RoleType = 'owner' | 'admin' | 'manager' | 'member';
 export type Tab =
   | 'organization' | 'team' | 'clients' | 'assignments' | 'groups'
   | 'integrations' | 'invoices' | 'economics' | 'billing' | 'costs' | 'devices' | 'deployment'
-  | 'task-types' | 'task-type-sets';
+  | 'task-types' | 'task-type-sets' | 'email-domains';
 
 export interface TabConfig {
   id: Tab;

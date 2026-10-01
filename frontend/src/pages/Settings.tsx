@@ -8,7 +8,7 @@ import {
   Building2, Users, Briefcase, Monitor, Key,
   DollarSign, Lock, Shield, Sparkles,
   CheckCircle2, AlertCircle, RefreshCw,
-  Folder, Link2, Tag, Layers, Receipt,
+  Folder, Link2, Tag, Layers, Receipt, AtSign,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -38,6 +38,7 @@ import IntegrationPushPanel    from '@/components/IntegrationPushPanel';
 import DeploymentTab           from '@/components/DeploymentTab';
 import TaskTypesTab        from '@/pages/settings/TaskTypesTab';
 import TaskTypeSetsTab     from '@/pages/settings/TaskTypeSetsTab';
+import EmailDomainsTab     from '@/pages/settings/EmailDomainsTab';
 
 // Types
 import {
@@ -86,7 +87,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','invoices','economics','devices','deployment','task-types','task-type-sets'];
+    const valid: Tab[] = ['organization','team','clients','assignments','groups','integrations','invoices','economics','devices','deployment','task-types','task-type-sets','email-domains'];
     return valid.includes(tab as Tab) ? (tab as Tab) : 'organization';
   });
 
@@ -216,6 +217,9 @@ export default function Settings() {
     { id: 'task-types',     label: terms.task_types,             icon: <Tag className="w-4 h-4" />,    requiredRole: ['owner','admin'] },
     { id: 'task-type-sets', label: `${terms.task_type} Sets`,     icon: <Layers className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     { id: 'integrations', label: 'Integrations',  icon: <Link2 className="w-4 h-4" />, requiredRole: ['owner','admin'] },
+    // Owner/admin, matching the API (views_mail_domains.py): org-wide config,
+    // and the observed list is a roll-up of every mailbox's counterparties.
+    { id: 'email-domains', label: 'Email Domains', icon: <AtSign className="w-4 h-4" />, requiredRole: ['owner','admin'] },
     // Role-gated like Integrations, not plan-gated: orgPlan is only fetched by
     // the Organization and Economics tabs and defaults to 'professional', so a
     // requiredPlan here would flash a false "upgrade" at an executive org that
@@ -233,7 +237,7 @@ export default function Settings() {
     { label: 'General',     ids: ['organization', 'team'] },
     { label: 'Clients',     ids: ['clients', 'assignments', 'groups'] },
     { label: 'Work Types',  ids: ['task-types', 'task-type-sets'] },
-    { label: 'Connections', ids: ['integrations', 'invoices', 'devices', 'deployment'] },
+    { label: 'Connections', ids: ['integrations', 'email-domains', 'invoices', 'devices', 'deployment'] },
     { label: 'Billing',     ids: ['economics'] },
   ];
 
@@ -416,6 +420,9 @@ export default function Settings() {
                   <IntegrationsTab onSuccess={showSuccess} onError={showError} />
                   <IntegrationPushPanel />
                 </div>
+              )}
+              {activeTab === 'email-domains' && (
+                <EmailDomainsTab onSuccess={showSuccess} onError={showError} />
               )}
               {activeTab === 'invoices' && (
                 <div className="space-y-6">

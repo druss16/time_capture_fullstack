@@ -219,15 +219,21 @@ jobs:
           # entitlements.plist: com.apple.security.automation.apple-events.
           # Under the hardened runtime, Apple requires it for an app that
           # asks AEDeterminePermissionToAutomateTarget about Automation
-          # (permissions.py, the setup checklist). The bundle sign below
-          # re-signs the main executable, so it must carry them too or they
-          # are dropped. The designated requirement is unchanged, so existing
-          # TCC grants and the MDM PPPC profile still match.
+          # (permissions.py, the setup checklist).
+          #
+          # Entitlements go on the MAIN executable only. `--deep
+          # --entitlements` stamped them onto every nested binary (the Python
+          # runtime and every library), which Apple advises against. So: one
+          # --deep pass WITHOUT entitlements makes sure every nested item is
+          # signed, then the main executable and the bundle itself (not
+          # --deep) are re-signed WITH them. The designated requirement is
+          # unchanged, so existing TCC grants and the MDM PPPC profile match.
+          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
           codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app/Contents/MacOS/TimeTracker
-          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app
+          codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app
           codesign -d --entitlements - dist/TimeTracker.app | grep -q "com.apple.security.automation.apple-events" \
             || { echo "ERROR: apple-events entitlement missing from the signed app"; exit 1; }
-          codesign --verify --verbose dist/TimeTracker.app
+          codesign --verify --deep --strict --verbose=2 dist/TimeTracker.app
       
       - name: Create signed pkg installer
         env:
@@ -363,7 +369,10 @@ jobs:
             --output-format json > submit_result.json
           SUBMISSION_ID=$(cat submit_result.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
           echo "Submission ID: $SUBMISSION_ID"
-          for i in $(seq 1 20); do
+          # Up to 20 minutes. Apple usually answers in about a minute, but on
+          # 2026-10-01 one v1.9.18 submission sat "In Progress" past the old
+          # 10-minute limit and failed the release; a re-run then took 68s.
+          for i in $(seq 1 40); do
             sleep 30
             RESULT=$(xcrun notarytool info "$SUBMISSION_ID" \
               --apple-id "$APPLE_ID" \

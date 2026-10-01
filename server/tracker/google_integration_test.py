@@ -510,6 +510,40 @@ class GmailBackfillTests(Base):
         self.assertIn('new1', self.ids())
         self.assertEqual(__import__('json').loads(self.integ.sync_cursor)['h'], '9100')
 
+    def test_dropped_connection_is_retried_inside_the_call(self):
+        import requests as _rq
+        real = self.router.get
+        drops = {'n': 0}
+
+        def flaky(url, **kw):
+            if '/users/me/messages/' in url and drops['n'] < 2:
+                drops['n'] += 1
+                raise _rq.ConnectionError('Remote end closed connection without response')
+            return real(url, **kw)
+
+        from tracker import tasks_gmail
+        with mock.patch.object(google, 'NETWORK_BACKOFF', (0, 0)), \
+                mock.patch.object(google.requests, 'get', side_effect=flaky):
+            tasks_gmail.run_gmail_sync(self.integ)
+        self.integ.refresh_from_db()
+        self.assertEqual(self.integ.sync_cursor, '9000')
+        self.assertEqual(len(self.ids()), 8)
+
+    def test_persistent_network_failure_is_transient_and_not_counted(self):
+        import requests as _rq
+        from tracker.tasks_gmail import sync_user_gmail
+        with mock.patch.object(google, 'NETWORK_BACKOFF', (0, 0)), \
+                mock.patch.object(google.requests, 'get',
+                                  side_effect=_rq.ConnectionError('down')), \
+                mock.patch.object(sync_user_gmail, 'retry',
+                                  side_effect=sync_user_gmail.MaxRetriesExceededError):
+            res = sync_user_gmail.apply(args=[self.integ.id]).get()
+        self.assertEqual(res['status'], 'transient')
+        self.integ.refresh_from_db()
+        self.assertEqual(self.integ.sync_failure_count, 0)
+        self.assertIn('Temporary network error', self.integ.last_sync_error)
+        self.assertTrue(self.integ.is_connected)
+
     def test_legacy_bare_cursor_and_garbage_cursor(self):
         from tracker.tasks_gmail import _load_state, _dump_state
         self.assertEqual(_load_state('12345'), {'h': '12345', 'bf': {}})

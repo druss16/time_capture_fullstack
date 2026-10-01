@@ -108,6 +108,17 @@ def sync_user_gmail(self, integration_id):
     except google.GoogleAuthError as e:
         logger.warning(f"[GMAIL-SYNC] Auth error for {user.username}: {e}")
         return {'status': 'auth_error', 'error': str(e)}
+    except google.GoogleTransientError as e:
+        # A dropped connection is not the account's fault. Note it, retry, and
+        # do NOT count it toward MAX_FAILURE_COUNT — that cutoff stops syncing
+        # for good. Pages committed before the drop are kept (resumable cursor).
+        logger.warning(f"[GMAIL-SYNC] Transient network error for {user.username}: {e}")
+        integration.last_sync_error = f"Temporary network error (will retry): {str(e)[:160]}"
+        integration.save(update_fields=['last_sync_error'])
+        try:
+            raise self.retry(exc=e, countdown=60)
+        except self.MaxRetriesExceededError:
+            return {'status': 'transient', 'error': str(e)}
     except google.GoogleAPIError as e:
         logger.error(f"[GMAIL-SYNC] API error for {user.username}: {e}")
         _record_failure(integration, f"API error: {str(e)[:200]}")

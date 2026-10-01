@@ -75,6 +75,35 @@ class GoogleCursorExpired(GoogleAPIError):
     """Gmail historyId (404) or Calendar syncToken (410) no longer valid."""
 
 
+class GoogleTransientError(GoogleAPIError):
+    """Network-level failure (connection dropped, timeout) that survived the
+    in-call retries. Worth retrying later; never a reason to stop syncing."""
+
+
+NETWORK_RETRIES = 3          # attempts per HTTP call on a dropped connection/timeout
+NETWORK_BACKOFF = (0.5, 2.0)  # seconds slept before attempts 2 and 3
+
+
+def _http_get(url, **kwargs):
+    """requests.get that retries a dropped connection or timeout.
+
+    Google closes idle keep-alive connections and occasionally drops one
+    mid-response ("RemoteDisconnected"). Uncaught, that killed a whole Gmail
+    sync run as an 'Unexpected' error and counted toward the failure cutoff
+    that stops syncing for good.
+    """
+    import time
+    last = None
+    for attempt in range(NETWORK_RETRIES):
+        try:
+            return requests.get(url, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last = e
+            if attempt < NETWORK_RETRIES - 1:
+                time.sleep(NETWORK_BACKOFF[min(attempt, len(NETWORK_BACKOFF) - 1)])
+    raise GoogleTransientError(f'network: {type(last).__name__}: {str(last)[:160]}')
+
+
 PROVIDER_CONFIG = {
     'gmail': {
         'scopes': GMAIL_SCOPES,
@@ -313,7 +342,7 @@ def _get(integration, url, params=None, what='request'):
     """
     token = get_valid_token(integration)
     for attempt in (1, 2):
-        resp = requests.get(url, params=params, headers={'Authorization': f'Bearer {token}'}, timeout=30)
+        resp = _http_get(url, params=params, headers={'Authorization': f'Bearer {token}'}, timeout=30)
         try:
             return resp, _check(resp, integration, what)
         except _Unauthorized:
@@ -354,7 +383,7 @@ def gmail_get_messages(integration, message_ids):
     params = _metadata_params()
 
     def fetch(mid):
-        r = requests.get(
+        r = _http_get(
             f'{GMAIL_BASE}/messages/{mid}',
             params=params,
             headers={'Authorization': f'Bearer {token}'},
@@ -413,7 +442,7 @@ def gmail_list_history(integration, start_history_id, max_pages=50):
         if page_token:
             params.append(('pageToken', page_token))
         token = get_valid_token(integration)
-        resp = requests.get(
+        resp = _http_get(
             f'{GMAIL_BASE}/history', params=params,
             headers={'Authorization': f'Bearer {token}'}, timeout=30,
         )
@@ -469,7 +498,7 @@ def calendar_list_events(integration, sync_token='', time_min=None, time_max=Non
         if page_token:
             params['pageToken'] = page_token
         token = get_valid_token(integration)
-        resp = requests.get(
+        resp = _http_get(
             f'{CALENDAR_BASE}/calendars/primary/events', params=params,
             headers={'Authorization': f'Bearer {token}'}, timeout=30,
         )

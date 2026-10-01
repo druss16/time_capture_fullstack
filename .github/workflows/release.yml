@@ -214,8 +214,43 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         working-directory: mac_agent
         run: |
-          find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
-          find dist/TimeTracker.app -type f -name "Python*" -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
+          # Every signature carries a secure timestamp from Apple's timestamp
+          # server, and that server has outages: on 2026-10-01 the v1.9.20
+          # build failed with "The timestamp service is not available" on
+          # every file, an hour after the same step had passed. So:
+          #   1. wait (up to ~5 min) until the server answers a probe;
+          #   2. retry any single codesign that still hits a timestamp error.
+          # Other codesign errors are not retried.
+          probe=$(mktemp -d)/probe && cp /usr/bin/true "$probe"
+          for i in $(seq 1 10); do
+            if out=$(codesign --force --sign "$IDENTITY" --timestamp "$probe" 2>&1); then
+              echo "Timestamp service OK (probe $i)"; break
+            fi
+            echo "$out"
+            if [ "$i" = 10 ]; then echo "::error::Apple timestamp service still unavailable after 10 probes"; exit 1; fi
+            echo "::warning::Timestamp probe $i failed; waiting 30s"; sleep 30
+          done
+          cs() {
+            local out attempt
+            for attempt in 1 2 3; do
+              if out=$(codesign "$@" 2>&1); then [ -n "$out" ] && echo "$out"; return 0; fi
+              echo "$out"
+              case "$out" in
+                *"timestamp service is not available"*)
+                  echo "::warning::timestamp unavailable (attempt $attempt/3), retrying in 20s"
+                  sleep 20 ;;
+                *) return 1 ;;
+              esac
+            done
+            return 1
+          }
+          # Per-file passes stay non-fatal (find -exec never failed the step);
+          # the --deep pass below signs anything missed and IS fatal.
+          find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" -o -name "Python*" \) -print0 |
+            while IFS= read -r -d '' f; do
+              cs --force --sign "$IDENTITY" --options runtime --timestamp "$f" \
+                || echo "::warning::could not sign $f (left to the --deep pass)"
+            done
           # entitlements.plist: com.apple.security.automation.apple-events.
           # Under the hardened runtime, Apple requires it for an app that
           # asks AEDeterminePermissionToAutomateTarget about Automation
@@ -228,9 +263,9 @@ jobs:
           # signed, then the main executable and the bundle itself (not
           # --deep) are re-signed WITH them. The designated requirement is
           # unchanged, so existing TCC grants and the MDM PPPC profile match.
-          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
-          codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app/Contents/MacOS/TimeTracker
-          codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app
+          cs --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
+          cs --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app/Contents/MacOS/TimeTracker
+          cs --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app
           codesign -d --entitlements - dist/TimeTracker.app | grep -q "com.apple.security.automation.apple-events" \
             || { echo "ERROR: apple-events entitlement missing from the signed app"; exit 1; }
           codesign --verify --deep --strict --verbose=2 dist/TimeTracker.app
@@ -351,7 +386,20 @@ jobs:
             --install-location /Applications \
             --scripts scripts \
             unsigned.pkg
-          productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg
+          # productsign timestamps too; same retry as the Sign app step.
+          for attempt in 1 2 3 4; do
+            rm -f TimeTracker.pkg
+            if out=$(productsign --sign "$IDENTITY" unsigned.pkg TimeTracker.pkg 2>&1); then
+              echo "$out"; break
+            fi
+            echo "$out"
+            case "$out" in
+              *imestamp*) if [ "$attempt" = 4 ]; then exit 1; fi
+                          echo "::warning::productsign timestamp failure (attempt $attempt/4), retrying in 30s"
+                          sleep 30 ;;
+              *) exit 1 ;;
+            esac
+          done
           rm unsigned.pkg
           ls -la TimeTracker.pkg
       

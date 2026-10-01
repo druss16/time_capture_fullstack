@@ -84,6 +84,7 @@ class GoogleRouter:
         self.profile_history_id = '9000'
         self.calendar_pages = []     # list of FakeResp, consumed in order
         self.calls = []
+        self.fail_list_at = None     # page offset at which messages.list returns 500
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append((url, params))
@@ -91,7 +92,16 @@ class GoogleRouter:
             return FakeResp(200, {'emailAddress': 'me@agency.com', 'historyId': self.profile_history_id})
         if url.endswith('/users/me/messages'):
             label = params['labelIds']
-            return FakeResp(200, {'messages': [{'id': i} for i in self.label_ids.get(label, [])]})
+            ids = self.label_ids.get(label, [])
+            start = int(params.get('pageToken') or 0)
+            if self.fail_list_at is not None and start >= self.fail_list_at:
+                return FakeResp(500, {'error': {'code': 500}})
+            size = int(params.get('maxResults') or 500)
+            page = ids[start:start + size]
+            body = {'messages': [{'id': i} for i in page]}
+            if start + size < len(ids):
+                body['nextPageToken'] = str(start + size)
+            return FakeResp(200, body)
         if '/users/me/messages/' in url:
             mid = url.rsplit('/', 1)[-1]
             if mid not in self.messages:
@@ -409,6 +419,137 @@ class GmailSyncTests(Base):
         self.integ.disconnect()
         self.assertFalse(MailSignal.objects.filter(user=self.user).exists())
         self.assertEqual(self.integ.sync_cursor, '')
+
+
+@override_settings(**GOOGLE_SETTINGS)
+class GmailBackfillTests(Base):
+    """The 30-day window is walked a page at a time across runs, each page
+    committed as it lands, so no run can outlive the Celery time limit and a
+    run that is cut short loses at most one page."""
+
+    def setUp(self):
+        super().setUp()
+        self.integ = self.gmail_integration()
+        self.now = timezone.now()
+        self.router = GoogleRouter()
+        msgs = {}
+        inbox = []
+        for i in range(7):   # newest first, all inside the window
+            mid = f'in{i}'
+            msgs[mid] = gmail_msg(mid, self.now - timedelta(hours=i + 1), ['INBOX'],
+                                  f'p{i}@acme.com', to='me@agency.com', subject=f's{i}')
+            inbox.append(mid)
+        msgs['old'] = gmail_msg('old', self.now - timedelta(days=40), ['INBOX'],
+                                'x@acme.com', to='me@agency.com', subject='ancient')
+        inbox.append('old')
+        msgs['out0'] = gmail_msg('out0', self.now - timedelta(hours=1), ['SENT'],
+                                 'me@agency.com', to='bob@betafoods.com', subject='hi')
+        self.router.messages = msgs
+        self.router.label_ids = {'INBOX': inbox, 'SENT': ['out0']}
+        self.router.history = {'history': [], 'historyId': '9000'}
+
+    def run_sync(self, pages_allowed):
+        """Run with a clock that allows exactly `pages_allowed` backfill pages."""
+        from tracker import tasks_gmail
+        ticks = iter([0.0] + [0.0] * pages_allowed + [10_000.0] * 100)
+        with mock.patch.object(tasks_gmail, 'BACKFILL_PAGE_SIZE', 2), \
+                mock.patch.object(google.requests, 'get', side_effect=self.router.get):
+            res = tasks_gmail.run_gmail_sync(self.integ, budget_seconds=1,
+                                             clock=lambda: next(ticks))
+        self.integ.refresh_from_db()
+        return res
+
+    def ids(self):
+        return set(MailSignal.objects.filter(user=self.user).values_list('external_id', flat=True))
+
+    def test_backfill_resumes_across_runs_and_finishes_with_a_plain_history_id(self):
+        r1 = self.run_sync(pages_allowed=2)
+        self.assertEqual(r1['mode'], 'full')
+        self.assertEqual(r1['backfill_pages'], 2)
+        self.assertEqual(self.ids(), {'in0', 'in1', 'in2', 'in3'})
+        self.assertTrue(self.integ.sync_cursor.startswith('{'))   # still walking
+        self.assertIsNotNone(self.integ.last_synced_at)           # progress is visible
+
+        r2 = self.run_sync(pages_allowed=2)
+        self.assertEqual(r2['mode'], 'backfill')
+        r3 = self.run_sync(pages_allowed=5)
+        self.assertEqual(r3['backfill_remaining'], [])
+        self.assertEqual(self.ids(), {f'in{i}' for i in range(7)} | {'out0'})  # 'old' excluded
+        self.assertEqual(self.integ.sync_cursor, '9000')
+
+    def test_zero_budget_still_establishes_the_cursor(self):
+        res = self.run_sync(pages_allowed=0)
+        self.assertEqual(res['backfill_pages'], 0)
+        self.assertEqual(res['backfill_remaining'], ['INBOX', 'SENT'])
+        state = __import__('json').loads(self.integ.sync_cursor)
+        self.assertEqual(state['h'], '9000')
+        self.assertIsNotNone(self.integ.sync_cursor_set_at)
+
+    def test_error_mid_backfill_keeps_committed_pages_and_position(self):
+        self.router.fail_list_at = 4          # third INBOX page fails
+        with self.assertRaises(google.GoogleAPIError):
+            self.run_sync(pages_allowed=10)
+        self.assertEqual(self.ids(), {'in0', 'in1', 'in2', 'in3'})
+        self.integ.refresh_from_db()
+        state = __import__('json').loads(self.integ.sync_cursor)
+        self.assertEqual(state['bf']['INBOX'], '4')   # resumes at the failed page
+        self.router.fail_list_at = None
+        self.run_sync(pages_allowed=10)
+        self.assertEqual(self.integ.sync_cursor, '9000')
+        self.assertEqual(len(self.ids()), 8)
+
+    def test_new_mail_is_read_from_history_while_backfill_is_still_running(self):
+        self.run_sync(pages_allowed=1)
+        self.router.messages['new1'] = gmail_msg('new1', self.now, ['INBOX'],
+                                                 'ops@acme.com', to='me@agency.com', subject='new')
+        self.router.history = {
+            'history': [{'messagesAdded': [{'message': {'id': 'new1', 'labelIds': ['INBOX']}}]}],
+            'historyId': '9100',
+        }
+        self.run_sync(pages_allowed=0)
+        self.assertIn('new1', self.ids())
+        self.assertEqual(__import__('json').loads(self.integ.sync_cursor)['h'], '9100')
+
+    def test_dropped_connection_is_retried_inside_the_call(self):
+        import requests as _rq
+        real = self.router.get
+        drops = {'n': 0}
+
+        def flaky(url, **kw):
+            if '/users/me/messages/' in url and drops['n'] < 2:
+                drops['n'] += 1
+                raise _rq.ConnectionError('Remote end closed connection without response')
+            return real(url, **kw)
+
+        from tracker import tasks_gmail
+        with mock.patch.object(google, 'NETWORK_BACKOFF', (0, 0)), \
+                mock.patch.object(google.requests, 'get', side_effect=flaky):
+            tasks_gmail.run_gmail_sync(self.integ)
+        self.integ.refresh_from_db()
+        self.assertEqual(self.integ.sync_cursor, '9000')
+        self.assertEqual(len(self.ids()), 8)
+
+    def test_persistent_network_failure_is_transient_and_not_counted(self):
+        import requests as _rq
+        from tracker.tasks_gmail import sync_user_gmail
+        with mock.patch.object(google, 'NETWORK_BACKOFF', (0, 0)), \
+                mock.patch.object(google.requests, 'get',
+                                  side_effect=_rq.ConnectionError('down')), \
+                mock.patch.object(sync_user_gmail, 'retry',
+                                  side_effect=sync_user_gmail.MaxRetriesExceededError):
+            res = sync_user_gmail.apply(args=[self.integ.id]).get()
+        self.assertEqual(res['status'], 'transient')
+        self.integ.refresh_from_db()
+        self.assertEqual(self.integ.sync_failure_count, 0)
+        self.assertIn('Temporary network error', self.integ.last_sync_error)
+        self.assertTrue(self.integ.is_connected)
+
+    def test_legacy_bare_cursor_and_garbage_cursor(self):
+        from tracker.tasks_gmail import _load_state, _dump_state
+        self.assertEqual(_load_state('12345'), {'h': '12345', 'bf': {}})
+        self.assertEqual(_load_state(''), {})
+        self.assertEqual(_load_state('{not json'), {})
+        self.assertEqual(_dump_state({'h': '7', 'bf': {}}), '7')
 
 
 class GmailDirectionTests(SimpleTestCase):

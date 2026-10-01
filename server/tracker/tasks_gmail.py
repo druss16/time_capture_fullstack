@@ -2,10 +2,18 @@
 Gmail sync Celery tasks — the Google counterpart of tasks_mail.py.
 
   - sync_all_gmail:  master, every 5 min, dispatches staggered per-user syncs
-  - sync_user_gmail: per-user. First run (no cursor) walks the last
-                     INITIAL_WINDOW_DAYS of INBOX + SENT; later runs read
-                     users.history.list from the stored historyId. A 404 on
-                     the historyId (too old) falls back to a full window sync.
+  - sync_user_gmail: per-user. Every run reads users.history.list from the
+                     stored historyId (new mail), then spends what is left of
+                     a fixed time budget backfilling the last
+                     INITIAL_WINDOW_DAYS of INBOX + SENT one page at a time.
+                     A 404 on the historyId (too old) restarts the backfill.
+
+Why the backfill is paged and resumable: a busy mailbox's 30-day window is
+thousands of messages, one metadata GET each. Walking it in a single run
+outlived the Celery time limit, so the run was killed before it saved
+anything — and the next run started over, forever, with last_synced_at never
+set. Now each page is committed as it lands and the position is kept in
+sync_cursor (see _load_state), so a run that is cut short loses one page.
 
 Direction, internal-mail dropping, public-domain handling and domain→client
 matching are the Outlook code paths verbatim (_classify_direction and
@@ -23,7 +31,9 @@ names and the full subject, readable ONLY by the owning user. Never the body,
 snippet, or attachment names — the fetch mask in integrations/google.py keeps
 them from ever being transmitted.
 """
+import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone as dt_timezone
 from email.utils import getaddresses, parseaddr
 
@@ -44,7 +54,8 @@ from tracker.tasks_mail import (
 logger = logging.getLogger(__name__)
 
 INITIAL_WINDOW_DAYS = 30          # mirrors fetch_mail_delta(initial_window_days=30)
-MAX_INITIAL_PER_LABEL = 1500      # bound one run; see gmail_list_recent
+BACKFILL_PAGE_SIZE = 100          # message ids per backfill page (one metadata GET each)
+RUN_BUDGET_SECONDS = 120          # well inside task_soft_time_limit (240s)
 COMPOSE_ANNOTATE_WINDOW = timedelta(hours=24)
 SYNC_LABELS = ('INBOX', 'SENT')
 SKIP_LABELS = {'DRAFT', 'SPAM', 'TRASH'}
@@ -97,6 +108,17 @@ def sync_user_gmail(self, integration_id):
     except google.GoogleAuthError as e:
         logger.warning(f"[GMAIL-SYNC] Auth error for {user.username}: {e}")
         return {'status': 'auth_error', 'error': str(e)}
+    except google.GoogleTransientError as e:
+        # A dropped connection is not the account's fault. Note it, retry, and
+        # do NOT count it toward MAX_FAILURE_COUNT — that cutoff stops syncing
+        # for good. Pages committed before the drop are kept (resumable cursor).
+        logger.warning(f"[GMAIL-SYNC] Transient network error for {user.username}: {e}")
+        integration.last_sync_error = f"Temporary network error (will retry): {str(e)[:160]}"
+        integration.save(update_fields=['last_sync_error'])
+        try:
+            raise self.retry(exc=e, countdown=60)
+        except self.MaxRetriesExceededError:
+            return {'status': 'transient', 'error': str(e)}
     except google.GoogleAPIError as e:
         logger.error(f"[GMAIL-SYNC] API error for {user.username}: {e}")
         _record_failure(integration, f"API error: {str(e)[:200]}")
@@ -119,38 +141,61 @@ def _record_failure(integration, msg):
     integration.save(update_fields=['sync_failure_count', 'last_sync_error'])
 
 
-def run_gmail_sync(integration):
-    """Fetch + persist. Raises google.* errors for the task to classify."""
-    org, user = integration.org, integration.user
-    mode = 'incremental'
-    deleted_ids = []
+# sync_cursor holds either a bare historyId (backfill finished — the shape
+# every earlier version wrote) or, while the window is still being walked, a
+# JSON object: {"h": historyId, "since": ms, "bf": {label: pageToken | ""}}.
+# A label leaves "bf" once its pages reach past "since".
 
-    if integration.sync_cursor:
+def _load_state(cursor):
+    cursor = (cursor or '').strip()
+    if not cursor:
+        return {}
+    if cursor.startswith('{'):
         try:
-            added, deleted_ids, new_cursor = google.gmail_list_history(
-                integration, integration.sync_cursor,
-            )
-            wanted = [
-                a['id'] for a in added
-                if set(a.get('labelIds') or []) & set(SYNC_LABELS)
-                and not set(a.get('labelIds') or []) & SKIP_LABELS
-            ]
-            messages = google.gmail_get_messages(integration, wanted)
-        except google.GoogleCursorExpired:
-            logger.warning(f"[GMAIL-SYNC] historyId expired for {user.username} — full resync")
-            integration.sync_cursor = ''
-            messages, new_cursor = _full_window(integration)
-            mode = 'full_resync'
-    else:
-        messages, new_cursor = _full_window(integration)
-        mode = 'full'
+            state = json.loads(cursor)
+            if isinstance(state, dict) and state.get('h'):
+                state.setdefault('bf', {})
+                return state
+        except ValueError:
+            pass
+        return {}
+    return {'h': cursor, 'bf': {}}
 
-    ctx = _matching_context(integration)
+
+def _dump_state(state):
+    if state.get('bf'):
+        return json.dumps(state, separators=(',', ':'))
+    return str(state['h'])
+
+
+def _fresh_state(integration):
+    """The historyId is read FIRST, so mail arriving while the window is
+    walked is picked up by the history read rather than falling in a gap."""
+    profile = google.gmail_get_profile(integration)
+    since = timezone.now() - timedelta(days=INITIAL_WINDOW_DAYS)
+    return {
+        'h': str(profile.get('historyId') or ''),
+        'since': int(since.timestamp() * 1000),
+        'bf': {label: '' for label in SYNC_LABELS},
+    }
+
+
+def _save_cursor(integration, state, established=False):
+    integration.sync_cursor = _dump_state(state)
+    fields = ['sync_cursor']
+    if established:
+        integration.sync_cursor_set_at = timezone.now()
+        fields.append('sync_cursor_set_at')
+    integration.save(update_fields=fields)
+
+
+def _persist(messages, integration, ctx, deleted_ids=()):
+    """Save one batch in its own transaction. Returns (saved, matched, skipped)."""
     saved = matched = skipped = 0
     with transaction.atomic():
         if deleted_ids:
             MailSignal.objects.filter(
-                user=user, provider='google', external_id__in=deleted_ids,
+                user=integration.user, provider='google', external_id__in=list(deleted_ids),
             ).delete()
         for msg in messages:
             try:
@@ -165,19 +210,69 @@ def run_gmail_sync(integration):
             saved += 1
             if sig.extracted_client_id:
                 matched += 1
+    return saved, matched, skipped
+
+
+def run_gmail_sync(integration, budget_seconds=RUN_BUDGET_SECONDS, clock=time.monotonic):
+    """Fetch + persist within a time budget. Raises google.* errors for the
+    task to classify; everything committed before an error is kept."""
+    user = integration.user
+    deadline = clock() + budget_seconds
+    ctx = _matching_context(integration)
+    totals = [0, 0, 0]  # saved, matched, skipped
+    deleted_ids = []
+
+    def add(counts):
+        for i, n in enumerate(counts):
+            totals[i] += n
+
+    state = _load_state(integration.sync_cursor)
+    if not state:
+        mode = 'full'
+        state = _fresh_state(integration)
+        _save_cursor(integration, state, established=True)
+    else:
+        mode = 'incremental'
+        try:
+            added, deleted_ids, new_h = google.gmail_list_history(integration, state['h'])
+            wanted = [
+                a['id'] for a in added
+                if set(a.get('labelIds') or []) & set(SYNC_LABELS)
+                and not set(a.get('labelIds') or []) & SKIP_LABELS
+            ]
+            add(_persist(google.gmail_get_messages(integration, wanted),
+                         integration, ctx, deleted_ids))
+            state['h'] = str(new_h or state['h'])
+            _save_cursor(integration, state)
+        except google.GoogleCursorExpired:
+            logger.warning(f"[GMAIL-SYNC] historyId expired for {user.username} — full resync")
+            mode = 'full_resync'
+            state = _fresh_state(integration)
+            _save_cursor(integration, state, established=True)
+
+    pages = 0
+    while state['bf'] and clock() < deadline:
+        label = next(iter(state['bf']))
+        ids, next_token = google.gmail_list_page(
+            integration, label, state['bf'][label] or None, BACKFILL_PAGE_SIZE,
+        )
+        msgs = google.gmail_get_messages(integration, ids)
+        in_window = [m for m in msgs if int(m.get('internalDate') or 0) >= state['since']]
+        add(_persist(in_window, integration, ctx))
+        pages += 1
+        if not ids or not next_token or len(in_window) < len(msgs):
+            del state['bf'][label]       # reached past the window, or the end
+        else:
+            state['bf'][label] = next_token
+        _save_cursor(integration, state)
+    if mode == 'incremental' and pages:
+        mode = 'backfill'
 
     now = timezone.now()
     integration.last_synced_at = now
     integration.last_sync_error = ''
     integration.sync_failure_count = 0
-    fields = ['last_synced_at', 'last_sync_error', 'sync_failure_count']
-    if new_cursor:
-        integration.sync_cursor = str(new_cursor)
-        fields.append('sync_cursor')
-        if mode != 'incremental':
-            integration.sync_cursor_set_at = now
-            fields.append('sync_cursor_set_at')
-    integration.save(update_fields=fields)
+    integration.save(update_fields=['last_synced_at', 'last_sync_error', 'sync_failure_count'])
 
     # Compose durations need the user's Gmail BLOCKS, which may land after the
     # mail does — so recompute the last day's sends on every sync.
@@ -188,24 +283,12 @@ def run_gmail_sync(integration):
     except Exception as e:
         logger.warning(f"[GMAIL-SYNC] compose annotation failed for {user.username}: {e}")
 
+    saved, matched, skipped = totals
     return {
         'mode': mode, 'saved': saved, 'matched': matched, 'skipped': skipped,
         'deleted': len(deleted_ids), 'composed': composed,
+        'backfill_pages': pages, 'backfill_remaining': sorted(state['bf']),
     }
-
-
-def _full_window(integration):
-    """INBOX + SENT for the initial window. The historyId is read FIRST, so
-    anything arriving while the window is walked is picked up by the next
-    incremental run rather than falling in a gap."""
-    profile = google.gmail_get_profile(integration)
-    cursor = str(profile.get('historyId') or '')
-    since = timezone.now() - timedelta(days=INITIAL_WINDOW_DAYS)
-    by_id = {}
-    for label in SYNC_LABELS:
-        for m in google.gmail_list_recent(integration, label, since, MAX_INITIAL_PER_LABEL):
-            by_id[m['id']] = m
-    return list(by_id.values()), cursor
 
 
 def _matching_context(integration):

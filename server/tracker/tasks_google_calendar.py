@@ -78,6 +78,16 @@ def sync_user_google_calendar(self, integration_id):
     except google.GoogleAuthError as e:
         logger.warning(f"[GCAL-SYNC] Auth error for {user.username}: {e}")
         return {'status': 'auth_error', 'error': str(e)}
+    except google.GoogleTransientError as e:
+        # Dropped connection: retry, but never count it toward the cutoff that
+        # stops syncing for good (same rule as Gmail).
+        logger.warning(f"[GCAL-SYNC] Transient network error for {user.username}: {e}")
+        integration.last_sync_error = f"Temporary network error (will retry): {str(e)[:160]}"
+        integration.save(update_fields=['last_sync_error'])
+        try:
+            raise self.retry(exc=e)
+        except self.MaxRetriesExceededError:
+            return {'status': 'transient', 'error': str(e)}
     except google.GoogleAPIError as e:
         logger.error(f"[GCAL-SYNC] API error for {user.username}: {e}")
         integration.sync_failure_count = (integration.sync_failure_count or 0) + 1

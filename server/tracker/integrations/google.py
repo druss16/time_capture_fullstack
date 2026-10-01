@@ -60,7 +60,8 @@ GMAIL_MESSAGE_FIELDS = 'id,threadId,labelIds,internalDate,payload/mimeType,paylo
 # Refresh this long before the recorded expiry, so a token never lapses mid-sync.
 EXPIRY_SKEW = timedelta(seconds=60)
 DISCONNECT_THRESHOLD = 3
-METADATA_WORKERS = 8
+# Kept low: these threads run inside a forked celery child on a 512MB worker.
+METADATA_WORKERS = 4
 
 
 class GoogleAuthError(Exception):
@@ -360,21 +361,28 @@ def gmail_get_messages(integration, message_ids):
             headers={'Authorization': f'Bearer {token}'},
             timeout=30,
         )
-        return mid, r
+        # Reduce to the parsed dict here: keeping 500 Response objects (each
+        # with its own session, adapter and TLS state) alive until the whole
+        # page is fetched is what a 512MB worker cannot afford.
+        if r.status_code == 200:
+            return r.status_code, r.json()
+        return r.status_code, r
 
     results = []
     with ThreadPoolExecutor(max_workers=min(METADATA_WORKERS, len(ids))) as pool:
-        responses = list(pool.map(fetch, ids))
-    for mid, r in responses:
-        if r.status_code == 404:
-            continue
-        try:
-            results.append(_check(r, integration, 'gmail message'))
-        except _Unauthorized:
-            integration.is_connected = False
-            integration.last_sync_error = 'Google access revoked or expired'
-            integration.save(update_fields=['is_connected', 'last_sync_error'])
-            raise GoogleAuthError('Access revoked')
+        for status, data in pool.map(fetch, ids):
+            if status == 404:
+                continue
+            if status == 200:
+                results.append(data)
+                continue
+            try:
+                _check(data, integration, 'gmail message')
+            except _Unauthorized:
+                integration.is_connected = False
+                integration.last_sync_error = 'Google access revoked or expired'
+                integration.save(update_fields=['is_connected', 'last_sync_error'])
+                raise GoogleAuthError('Access revoked')
     return results
 
 

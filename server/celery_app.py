@@ -379,9 +379,17 @@ app.conf.update(
     task_reject_on_worker_lost=True,  # Reject task if worker dies
 
     # Memory hygiene (512MB Render worker).
+    # Without --concurrency, celery forks one child per os.cpu_count(), and on
+    # Render that is the HOST's core count, not the instance's share. Each
+    # child is a full Django process (~120-150MB), so the default alone can
+    # exceed 512MB. A --concurrency / --max-memory-per-child flag on the start
+    # command still wins over these; these are the floor when it is absent.
+    worker_concurrency=int(os.environ.get('CELERY_WORKER_CONCURRENCY', '2')),
+    # KiB. A child whose RSS passes this is replaced after its current task,
+    # so slow creep is shed before the container hits its limit.
+    worker_max_memory_per_child=int(os.environ.get('CELERY_MAX_MEMORY_PER_CHILD_KB', '180000')),
     # Recycle each forked child after 50 tasks so slow per-child RSS creep
-    # can't accumulate into an overnight OOM. Pair with --max-memory-per-child
-    # on the Render start command as a hard backstop.
+    # can't accumulate into an overnight OOM.
     worker_max_tasks_per_child=50,
     # Pull exactly one task at a time. Prevents an idle-but-prefetched child
     # from holding a task's working set in memory ahead of running it.

@@ -1209,7 +1209,8 @@ if RUMPS_AVAILABLE:
                 getattr(controller, "client_widget_enabled", False)
             )
             self._start_keepalive()
-            
+            self._start_setup_timers()
+
             # Set initial title from state
             client_name = self.controller.state.current_client_name
             if client_name and client_name != "No Client":
@@ -1238,7 +1239,52 @@ if RUMPS_AVAILABLE:
             elif value is not None and icon:
                 # The icon already says "timer"; don't repeat it as ⏱.
                 value = value.replace("⏱", "", 1).strip() or None
+            # A required permission is missing: a warning badge next to the
+            # icon for EVERY org (hands-off too) — it is the one thing on the
+            # menu bar that says capture is degraded.
+            if self._permission_warning():
+                value = "⚠️" if not value or value == "TimeTracker" else f"⚠️ {value}"
             rumps.App.title.fset(self, value)
+
+        def _permission_warning(self) -> bool:
+            mon = getattr(getattr(self, "controller", None), "permissions", None)
+            try:
+                return bool(mon is not None and mon.needs_attention())
+            except Exception:
+                return False
+
+        def _start_setup_timers(self):
+            """Open the setup checklist shortly after launch when a required
+            permission is missing (or right after pairing), and again when a
+            "Remind me later" runs out."""
+            def first(timer):
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+                ctl = self.controller
+                mon = getattr(ctl, "permissions", None)
+                if mon is not None and (getattr(ctl, "show_setup_after_launch", False)
+                                        or mon.should_show_checklist()):
+                    ctl.open_setup_checklist()
+
+            def periodic(_):
+                ctl = self.controller
+                mon = getattr(ctl, "permissions", None)
+                try:
+                    if mon is not None and mon.should_show_checklist() \
+                            and not ctl.setup_checklist_open():
+                        ctl.open_setup_checklist()
+                except Exception as e:
+                    print(f"[SETUP] periodic check failed: {e}")
+
+            self._setup_first_timer = rumps.Timer(first, 3)
+            self._setup_first_timer.start()
+            self._setup_periodic_timer = rumps.Timer(periodic, 60)
+            self._setup_periodic_timer.start()
+
+        def _on_open_setup(self, _):
+            self.controller.open_setup_checklist()
 
         def _start_keepalive(self):
             """Periodic keepalive to prevent icon from disappearing"""
@@ -1271,7 +1317,23 @@ if RUMPS_AVAILABLE:
         def _rebuild_menu(self):
             self.menu.clear()
             self._client_callbacks.clear()
-            
+
+            # ============================================================
+            # FINISH SETUP — top of the menu while a required permission is
+            # missing. Opens the setup checklist.
+            # ============================================================
+            mon = getattr(self.controller, "permissions", None)
+            label = None
+            try:
+                label = mon.menu_label() if mon is not None else None
+            except Exception:
+                label = None
+            if label:
+                setup_item = rumps.MenuItem(label)
+                setup_item.set_callback(self._on_open_setup)
+                self.menu.add(setup_item)
+                self.menu.add(None)
+
             # ============================================================
             # USER INFO SECTION (if paired)
             # ============================================================
@@ -1370,6 +1432,12 @@ if RUMPS_AVAILABLE:
             relink_item = rumps.MenuItem("Re-link Device...")
             relink_item.set_callback(self._on_relink_device)
             self.menu.add(relink_item)
+
+            # Always reachable, so a person can re-check permissions any time.
+            if getattr(self.controller, "permissions", None) is not None:
+                perms_item = rumps.MenuItem("Permissions & Setup…")
+                perms_item.set_callback(self._on_open_setup)
+                self.menu.add(perms_item)
 
             self.menu.add(None)
 
@@ -1539,7 +1607,66 @@ class TimeTrackerSystemTray:
         self.get_current_client_callback = None
         
         self.app = None
+        # permissions.PermissionMonitor, set by main.py after the launch check.
+        self.permissions = None
+        self.show_setup_after_launch = False
+        self._checklist = None
         self._start_ai_timer()
+
+    # ---- Permissions / setup checklist ---------------------------------
+    def set_permission_monitor(self, monitor, show_after_launch: bool = False):
+        """show_after_launch: just paired — show the checklist once even if
+        nothing required is missing, so the person sees what is on."""
+        self.permissions = monitor
+        self.show_setup_after_launch = bool(show_after_launch)
+
+    def on_permissions_changed(self):
+        """Any thread. Re-draws the menu (Finish setup item) and the warning
+        badge on the main thread."""
+        if not RUMPS_AVAILABLE:
+            return
+        try:
+            from setup_checklist import call_on_main
+        except Exception as e:
+            print(f"[SETUP] cannot schedule redraw: {e}")
+            return
+        call_on_main(self._apply_permission_state)
+
+    def _apply_permission_state(self):
+        app = self.app
+        if app is None:
+            return
+        try:
+            app._rebuild_menu()
+            app.title = getattr(app, "_requested_title", app.title)
+        except Exception as e:
+            print(f"[SETUP] menu redraw failed: {e}")
+
+    def setup_checklist_open(self) -> bool:
+        return self._checklist is not None and self._checklist.is_open()
+
+    def open_setup_checklist(self):
+        """Main thread only (menu callbacks and rumps timers are)."""
+        if self.permissions is None:
+            return
+        try:
+            from setup_checklist import SetupChecklist
+            if self._checklist is None:
+                self._checklist = SetupChecklist(
+                    self.permissions, on_change=self._on_checklist_change)
+            self._checklist.show()
+            self.show_setup_after_launch = False
+        except Exception as e:
+            print(f"[SETUP] could not open the setup checklist: {e}")
+
+    def _on_checklist_change(self):
+        self._apply_permission_state()
+        cb = getattr(self, "permissions_changed_callback", None)
+        if cb:
+            try:
+                cb()
+            except Exception as e:
+                print(f"[SETUP] report callback failed: {e}")
     
     def _start_ai_timer(self):
         def ai_tick():

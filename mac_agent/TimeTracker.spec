@@ -25,6 +25,11 @@ a = Analysis(
         ('finder_watcher.py', '.'),
         ('meeting_detector.py', '.'),
         ('update_checker.py', '.'),
+        # Permission state, the setup checklist, and titles without
+        # Accessibility. Keep in step with .github/workflows/release.yml.
+        ('permissions.py', '.'),
+        ('title_fallback.py', '.'),
+        ('setup_checklist.py', '.'),
         ('sync_manager.py', '.'),
         # Org-token pairing. Imported from inside run_agent, so the analysis
         # cannot see it; without this an IT-deployed Mac silently falls back
@@ -49,6 +54,9 @@ a = Analysis(
         'finder_watcher',
         'meeting_detector',
         'update_checker',
+        'permissions',
+        'title_fallback',
+        'setup_checklist',
         'mdm_deploy',
         'version',
         'inference',
@@ -94,7 +102,7 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
-    entitlements_file=None,
+    entitlements_file='entitlements.plist',  # apple-events; see release.yml "Sign app"
 )
 coll = COLLECT(
     exe,

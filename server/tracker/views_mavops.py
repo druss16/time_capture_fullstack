@@ -8,13 +8,14 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated, BasePermission, AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db.models import Count, Max, Sum, Q
+from django.db.models import Count, F, Max, Sum, Q
 from collections import defaultdict
 from datetime import timedelta
 
 import logging
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
+from tracker.agent_permissions import permission_issues
 from tracker.models import (
     AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag,
     QboCompanyMapping
@@ -193,6 +194,23 @@ def mavops_orgs(request):
             user__memberships__organization=org
         ).order_by('-last_seen_at').first()
 
+        # Active Macs whose last check-in reported a privacy permission off.
+        # One per (user, hostname), the latest row — as device_count counts.
+        perm_red = perm_amber = 0
+        perm_seen = set()
+        for uid, host, st in AgentDevice.objects.filter(
+            user__memberships__organization=org, is_active=True,
+        ).order_by(F('last_seen_at').desc(nulls_last=True)).values_list(
+                'user_id', 'hostname', 'permission_status'):
+            if (uid, host) in perm_seen:
+                continue
+            perm_seen.add((uid, host))
+            sev = {i['severity'] for i in permission_issues(st)}
+            if 'red' in sev:
+                perm_red += 1
+            elif 'amber' in sev:
+                perm_amber += 1
+
         seat_count = getattr(org, 'seat_count', 0) or 0
         plan = getattr(org, 'plan', 'unknown') or 'unknown'
         seat_grace_deadline = getattr(org, 'seat_grace_deadline', None)
@@ -204,6 +222,8 @@ def mavops_orgs(request):
             deactivated_devices=deactivated_devices,
             seat_grace_deadline=seat_grace_deadline,
             now=timezone.now(),
+            permission_blocked_devices=perm_red,
+            limited_capture_devices=perm_amber,
         )
         if getattr(org, 'mavops_archived', False):
             archived_count += 1
@@ -237,7 +257,8 @@ def mavops_orgs(request):
 
 
 def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_devices,
-                seat_grace_deadline=None, now=None):
+                seat_grace_deadline=None, now=None,
+                permission_blocked_devices=0, limited_capture_devices=0):
     """
     Derive a health signal for the MavOps org row.
 
@@ -281,6 +302,13 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
         )
     if no_active_but_members:
         reasons.append("no active devices")
+    # macOS permissions (never 'critical': the agent still captures).
+    if permission_blocked_devices:
+        n = permission_blocked_devices
+        reasons.append(f"{n} Mac{'s' if n != 1 else ''} with Automation/extension off")
+    if limited_capture_devices:
+        n = limited_capture_devices
+        reasons.append(f"{n} Mac{'s' if n != 1 else ''} without Accessibility (limited capture)")
 
     # Critical = actively blocked. An overage is only critical once its grace
     # has expired; while inside the grace window it stays a warning.
@@ -338,6 +366,8 @@ def mavops_devices(request):
             'machine_name': device.hostname or device.device_id,
             'os': device.platform or '',
             'agent_version': device.app_version or '',
+            'permission_status': device.permission_status,
+            'permission_issues': permission_issues(device.permission_status),
             'first_seen': device.created_at.isoformat() if device.created_at else '',
             'last_seen': device.last_seen_at.isoformat() if device.last_seen_at else '',
             'is_active': device.is_active,

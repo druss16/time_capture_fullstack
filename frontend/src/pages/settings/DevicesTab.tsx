@@ -1,5 +1,5 @@
 // src/pages/settings/DevicesTab.tsx
-import { Monitor, RefreshCw, Check, X } from 'lucide-react';
+import { Monitor, RefreshCw, Check, X, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
 import type { Device } from './types';
@@ -59,6 +59,11 @@ export default function DevicesTab({ devices, onRefresh, onSuccess, onError }: P
     return date.toLocaleDateString();
   };
 
+  // Active Macs whose agent reported a privacy permission off.
+  const needAttention = devices.filter(
+    d => d.is_active && (d.permission_issues ?? []).length > 0
+  ).length;
+
   const getOSIcon = (os: string) => {
     const l = os.toLowerCase();
     if (l.includes('mac') || l.includes('darwin')) return '🍎';
@@ -70,7 +75,8 @@ export default function DevicesTab({ devices, onRefresh, onSuccess, onError }: P
   return (
     <SettingsPage
       title="Devices"
-      subtitle={`${devices.length} registered device${devices.length !== 1 ? 's' : ''}`}
+      subtitle={`${devices.length} registered device${devices.length !== 1 ? 's' : ''}${
+        needAttention ? ` · ${needAttention} need${needAttention === 1 ? 's' : ''} attention` : ''}`}
       actions={
         <button onClick={onRefresh} className={secondaryBtnClass}>
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
@@ -118,6 +124,26 @@ export default function DevicesTab({ devices, onRefresh, onSuccess, onError }: P
                   )}>
                     {device.is_active ? 'Active' : 'Inactive'}
                   </span>
+                  {device.is_active && (device.permission_issues ?? []).length > 0 && (
+                    <div className="mt-1.5 flex flex-col items-start gap-1">
+                      {(device.permission_issues ?? []).map(issue => (
+                        <span
+                          key={issue.code}
+                          title={device.permission_status?.checked_at
+                            ? `Reported by the agent ${formatLastSeen(device.permission_status.checked_at)}`
+                            : undefined}
+                          className={cn('inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border',
+                            issue.severity === 'red'
+                              ? 'bg-red-50 text-red-700 border-red-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-200'
+                          )}
+                        >
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                          {issue.message}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right">
                   {device.is_active ? (

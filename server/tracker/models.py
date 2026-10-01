@@ -4965,7 +4965,7 @@ class MismatchFlag(models.Model):
 
 
 # Calendar matching rules
-from tracker.models_calendar_rules import OrgCalendarRule  # noqa: F401, E402
+from tracker.models_calendar_rules import OrgCalendarRule, IgnoredEmailDomain  # noqa: F401, E402
 from tracker.models_task_type_sets import (
     TaskTypeSet, TaskTypeSetMember, ClientTaskType,
     ExternalClientMapping, ExternalTaskTypeMapping, ExternalStaffMapping,

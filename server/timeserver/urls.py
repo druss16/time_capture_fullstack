@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt  # ← Add this
-from django.views.generic import TemplateView
+from django.views.generic import RedirectView, TemplateView
 from django.http import JsonResponse
 from tracker import views as tracker_views
 from rest_framework.routers import DefaultRouter
@@ -34,7 +34,9 @@ urlpatterns = [
     path(".well-known/microsoft-identity-association.json", ms_identity_association),
 
     path('eula/', TemplateView.as_view(template_name='legal/eula.html'), name='eula'),
-    path('privacy/', TemplateView.as_view(template_name='legal/privacy.html'), name='privacy'),
+    # One privacy policy: the frontend's public/privacy.html. This old template
+    # copy had drifted (wrong company, no Google section), so redirect to it.
+    path('privacy/', RedirectView.as_view(url='https://timetracker.mavops.ai/privacy.html', permanent=False), name='privacy'),
     path('api/deploy/', include('tracker.urls_deployment')),
     path('api/mobile/', include('mobile.urls')),  # ← add this
     # path('api/events/', include('django_eventstream.urls'), name='events'),   # disabled until ASGI — SSE kills sync gunicorn workers

@@ -1790,6 +1790,29 @@ def get_frontmost_via_quartz() -> Optional[Tuple[str, int, Optional[str]]]:
         return None
 
 
+def _bundle_id_for_pid(pid: Optional[int]) -> str:
+    """Bundle id of a running process; never blank for a running app bundle.
+
+    NSRunningApplication intermittently answers nil for a live, frontmost
+    pid. A blank id switches off URL capture, the document-path scripts and
+    Adobe capture for that sample, so fall back to the executable's own
+    Info.plist (doc_capture.bundle_info_for_pid).
+    """
+    if not pid:
+        return ""
+    try:
+        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        bid = str(ra.bundleIdentifier() or "") if ra else ""
+    except Exception:
+        bid = ""
+    if bid or not _doc_capture:
+        return bid
+    bid, _ = _doc_capture.bundle_info_for_pid(pid)
+    if bid and VERBOSE:
+        log(f"[DETECT] bundle id for pid={pid} from Info.plist: {bid}")
+    return bid
+
+
 def get_frontmost_app() -> Optional[Tuple[str, str, int, Optional[str]]]:
     """
     Get frontmost application with method logging.
@@ -1806,8 +1829,7 @@ def get_frontmost_app() -> Optional[Tuple[str, str, int, Optional[str]]]:
     se = get_frontmost_via_system_events()
     if se:
         name, pid = se
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["system_events"] += 1
         if VERBOSE:
             log(f"[DETECT] SystemEvents → {name} (pid={pid})")
@@ -1817,8 +1839,7 @@ def get_frontmost_app() -> Optional[Tuple[str, str, int, Optional[str]]]:
     ws = get_frontmost_via_nsworkspace()
     if ws:
         name, pid = ws
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["nsworkspace"] += 1
         log(f"[DETECT] ⚠️ NSWorkspace fallback → {name} (pid={pid})")
         return (name, bid, pid, None)
@@ -1827,8 +1848,7 @@ def get_frontmost_app() -> Optional[Tuple[str, str, int, Optional[str]]]:
     q = get_frontmost_via_quartz()
     if q:
         name, pid, qtitle = q
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["quartz"] += 1
         log(f"[DETECT] ⚠️⚠️ QUARTZ fallback → {name} (pid={pid}, title={qtitle[:50] if qtitle else 'None'})")
         log(f"[DETECT] WARNING: Quartz detection may have returned a BACKGROUND window!")
@@ -1881,32 +1901,28 @@ def get_frontmost_app_validated() -> Optional[Tuple[str, str, int, Optional[str]
         
         # If they agree, we're good
         if se_pid == ws_pid:
-            ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(se_pid)
-            bid = str(ra.bundleIdentifier() or "") if ra else ""
+            bid = _bundle_id_for_pid(se_pid)
             _DETECTION_STATS["system_events"] += 1
             return (se_name, bid, se_pid, None)
         
         # They disagree! Log this and trust NSWorkspace (it's more direct)
         log(f"[DETECT] ⚠️ MISMATCH: SystemEvents says {se_name}(pid={se_pid}) but NSWorkspace says {ws_name}(pid={ws_pid})")
         log(f"[DETECT] Trusting NSWorkspace result")
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(ws_pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(ws_pid)
         _DETECTION_STATS["nsworkspace"] += 1
         return (ws_name, bid, ws_pid, None)
     
     # If System Events succeeded alone
     if se:
         name, pid = se
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["system_events"] += 1
         return (name, bid, pid, None)
     
     # If NSWorkspace succeeded alone  
     if ws:
         name, pid = ws
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["nsworkspace"] += 1
         log(f"[DETECT] ⚠️ NSWorkspace only → {name}")
         return (name, bid, pid, None)
@@ -1915,8 +1931,7 @@ def get_frontmost_app_validated() -> Optional[Tuple[str, str, int, Optional[str]
     q = get_frontmost_via_quartz()
     if q:
         name, pid, qtitle = q
-        ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
-        bid = str(ra.bundleIdentifier() or "") if ra else ""
+        bid = _bundle_id_for_pid(pid)
         _DETECTION_STATS["quartz"] += 1
         log(f"[DETECT] ⚠️⚠️ QUARTZ FALLBACK (unreliable!) → {name}")
         return (name, bid, pid, qtitle)
@@ -2135,9 +2150,13 @@ def _running_app_path(pid: Optional[int]) -> Optional[str]:
     try:
         ra = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
         url = ra.bundleURL() if ra else None
-        return str(url.path()) if url is not None else None
+        if url is not None:
+            return str(url.path())
     except Exception:
-        return None
+        pass
+    if _doc_capture:
+        return _doc_capture.bundle_info_for_pid(pid)[1] or None
+    return None
 
 
 def _path_found(path: Optional[str], source: str) -> Optional[str]:

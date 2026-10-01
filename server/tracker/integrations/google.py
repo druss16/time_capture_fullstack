@@ -378,32 +378,20 @@ def gmail_get_messages(integration, message_ids):
     return results
 
 
-def gmail_list_recent(integration, label_id, since, max_messages=1500):
-    """Messages under one label received at/after `since`, newest first.
+def gmail_list_page(integration, label_id, page_token=None, max_results=100):
+    """One page of message ids under a label, newest first.
 
-    messages.list cannot filter by date under gmail.metadata (no `q`), but it
-    returns newest first, so page until a page reaches past the cutoff.
-    Returns fully-fetched metadata dicts, already filtered to >= since.
+    Returns (ids, next_page_token or None). messages.list cannot filter by
+    date under gmail.metadata (no `q`), so the caller pages until a page
+    reaches past its cutoff. One page per call keeps every sync run small
+    enough to finish inside the Celery time limit and persist its progress.
     """
-    since_ms = int(since.timestamp() * 1000)
-    out = []
-    page_token = None
-    while len(out) < max_messages:
-        params = {'labelIds': label_id, 'maxResults': 500}
-        if page_token:
-            params['pageToken'] = page_token
-        _, data = _get(integration, f'{GMAIL_BASE}/messages', params=params, what='gmail list')
-        ids = [m['id'] for m in data.get('messages', []) if m.get('id')]
-        if not ids:
-            break
-        msgs = gmail_get_messages(integration, ids)
-        in_window = [m for m in msgs if int(m.get('internalDate') or 0) >= since_ms]
-        out.extend(in_window)
-        crossed = len(in_window) < len(msgs)
-        page_token = data.get('nextPageToken')
-        if crossed or not page_token:
-            break
-    return out[:max_messages]
+    params = {'labelIds': label_id, 'maxResults': max_results}
+    if page_token:
+        params['pageToken'] = page_token
+    _, data = _get(integration, f'{GMAIL_BASE}/messages', params=params, what='gmail list')
+    ids = [m['id'] for m in (data.get('messages') or []) if m.get('id')]
+    return ids, data.get('nextPageToken') or None
 
 
 def gmail_list_history(integration, start_history_id, max_pages=50):

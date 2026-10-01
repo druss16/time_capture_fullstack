@@ -73,6 +73,9 @@ jobs:
             --add-data "meeting_detector.py:." \
             --add-data "media_capture.py:." \
             --add-data "update_checker.py:." \
+            --add-data "permissions.py:." \
+            --add-data "title_fallback.py:." \
+            --add-data "setup_checklist.py:." \
             --add-data "inference:inference" \
             --hidden-import=timetracker_gui \
             --hidden-import=notifications \
@@ -89,6 +92,10 @@ jobs:
             --hidden-import=finder_watcher \
             --hidden-import=meeting_detector \
             --hidden-import=media_capture \
+            --hidden-import=permissions \
+            --hidden-import=title_fallback \
+            --hidden-import=setup_checklist \
+            --hidden-import=ApplicationServices \
             --hidden-import=CoreMediaIO \
             --hidden-import=inference \
             --hidden-import=inference.collectors \
@@ -209,8 +216,17 @@ jobs:
         run: |
           find dist/TimeTracker.app -type f \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
           find dist/TimeTracker.app -type f -name "Python*" -exec codesign --force --sign "$IDENTITY" --options runtime --timestamp {} \;
-          codesign --force --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app/Contents/MacOS/TimeTracker
-          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp dist/TimeTracker.app
+          # entitlements.plist: com.apple.security.automation.apple-events.
+          # Under the hardened runtime, Apple requires it for an app that
+          # asks AEDeterminePermissionToAutomateTarget about Automation
+          # (permissions.py, the setup checklist). The bundle sign below
+          # re-signs the main executable, so it must carry them too or they
+          # are dropped. The designated requirement is unchanged, so existing
+          # TCC grants and the MDM PPPC profile still match.
+          codesign --force --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app/Contents/MacOS/TimeTracker
+          codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp --entitlements entitlements.plist dist/TimeTracker.app
+          codesign -d --entitlements - dist/TimeTracker.app | grep -q "com.apple.security.automation.apple-events" \
+            || { echo "ERROR: apple-events entitlement missing from the signed app"; exit 1; }
           codesign --verify --verbose dist/TimeTracker.app
       
       - name: Create signed pkg installer

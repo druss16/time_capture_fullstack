@@ -701,6 +701,12 @@ class AgentDevice(models.Model):
 
     kill_requested = models.BooleanField(default=False)
 
+    # macOS privacy permissions as the agent last reported them in hello2
+    # (Accessibility / Automation per app / browser extension / capture
+    # mode). Sanitised by tracker.agent_permissions; NULL = never reported
+    # (Windows agents, and Mac agents released before this field existed).
+    permission_status = models.JSONField(null=True, blank=True)
+
     def rotate_key(self):
         import secrets
         self.api_key = secrets.token_hex(16)

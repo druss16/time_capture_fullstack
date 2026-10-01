@@ -209,5 +209,76 @@ _i_flag = _main.index('config.pop("relink_requested"')
 _i_claim = _main.index("key = do_org_token_claim(")
 check("...read before the claim runs, not after", _i_flag < _i_claim)
 
+# ---------------------------------------------------------------------------
+# The MDM PPPC profile — the zero-touch path for managed Macs.
+# ---------------------------------------------------------------------------
+import plistlib as _plistlib  # noqa: E402
+import subprocess as _sp  # noqa: E402
+import uuid as _uuid  # noqa: E402
+
+_PPPC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pkgroot", "Library", "Application Support", "MavOps")
+_PPPC = os.path.join(_PPPC_DIR, "mavops-pppc-timetracker.mobileconfig")
+with open(_PPPC, "rb") as _f:
+    _profile = _plistlib.load(_f)
+_TT_REQ = ("identifier TimeTracker and anchor apple generic and certificate "
+           "1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate "
+           "leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate "
+           "leaf[subject.OU] = P3KX4CDFN4")
+
+
+def _is_uuid(s):
+    try:
+        return str(_uuid.UUID(s)).upper() == s.upper()
+    except Exception:
+        return False
+
+
+if sys.platform == "darwin":
+    _lint = _sp.run(["plutil", "-lint", _PPPC], capture_output=True, text=True)
+    check("PPPC profile passes plutil -lint", _lint.returncode == 0)
+check("PPPC profile: every PayloadUUID is a real UUID",
+      _is_uuid(_profile["PayloadUUID"])
+      and all(_is_uuid(p["PayloadUUID"]) for p in _profile["PayloadContent"]))
+_tcc = [p for p in _profile["PayloadContent"]
+        if p["PayloadType"] == "com.apple.TCC.configuration-profile-policy"]
+check("PPPC profile carries exactly one TCC payload", len(_tcc) == 1)
+_svc = _tcc[0]["Services"] if _tcc else {}
+_ax = _svc.get("Accessibility") or []
+check("PPPC grants Accessibility to bundle id TimeTracker with our team's requirement",
+      len(_ax) == 1 and _ax[0].get("Identifier") == "TimeTracker"
+      and _ax[0].get("IdentifierType") == "bundleID"
+      and _ax[0].get("Allowed") is True and _ax[0].get("CodeRequirement") == _TT_REQ)
+check("PPPC requests nothing beyond Accessibility + Automation "
+      "(no Screen Recording, Camera, Microphone)",
+      set(_svc) == {"Accessibility", "AppleEvents"})
+_ae = {e.get("AEReceiverIdentifier"): e for e in _svc.get("AppleEvents") or []}
+_AGENT_RECEIVERS = {
+    # browsers (main._CHROMIUM_APPS + Safari)
+    "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
+    "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.brave.Browser",
+    "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.apple.Safari",
+    # Adobe (doc_capture.SCRIPTABLE_KINDS)
+    "com.adobe.Photoshop", "com.adobe.illustrator", "com.adobe.InDesign",
+    "com.adobe.Acrobat.Pro",
+    # main._DOC_PATH_SCRIPTS + frontmost-app detection
+    "com.microsoft.Excel", "com.microsoft.Word", "com.microsoft.Powerpoint",
+    "com.apple.Preview", "com.apple.iWork.Numbers", "com.apple.iWork.Pages",
+    "com.apple.iWork.Keynote", "com.apple.finder", "com.apple.TextEdit",
+    "com.sublimetext.4", "com.apple.systemevents",
+}
+check("PPPC pre-approves every app the agent sends Apple Events to "
+      f"(missing: {sorted(_AGENT_RECEIVERS - set(_ae))})",
+      _AGENT_RECEIVERS <= set(_ae))
+check("...each entry: TimeTracker as sender, Allowed, receiver pinned by requirement",
+      all(e.get("Identifier") == "TimeTracker" and e.get("CodeRequirement") == _TT_REQ
+          and e.get("Allowed") is True and e.get("AEReceiverIdentifierType") == "bundleID"
+          and f'"{bid}"' in e.get("AEReceiverCodeRequirement", "")
+          for bid, e in _ae.items()))
+import permissions as _perm_mod  # noqa: E402
+check("every Automation target on the setup checklist is in the PPPC profile",
+      {t.bundle_id for t in _perm_mod.AUTOMATION_TARGETS} <= set(_ae))
+check("the broken TimeTrackerAgent profile is gone",
+      not os.path.exists(os.path.join(_PPPC_DIR, "mavops-pppc-timetrackeragent.mobileconfig")))
+
 print(f"\n  {_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

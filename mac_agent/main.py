@@ -1361,6 +1361,10 @@ def log_error(msg: str, exc_info=True):
 # ---------------- Context bus ----------------
 from http.server import BaseHTTPRequestHandler, HTTPServer
 _CONTEXT: Dict[str, dict] = {}
+# When each source last posted. Kept apart from _CONTEXT so the ctx payload
+# sent to the server is unchanged. Read by the setup checklist ("is the
+# browser extension on?") and the no-Accessibility title path.
+_CONTEXT_SEEN: Dict[str, float] = {}
 
 class _CtxHandler(BaseHTTPRequestHandler):
     def log_message(self, *a, **kw): pass
@@ -1373,6 +1377,7 @@ class _CtxHandler(BaseHTTPRequestHandler):
             data = json.loads(raw or b"{}")
             src = (data.get("source") or "unknown").lower()
             _CONTEXT[src] = data
+            _CONTEXT_SEEN[src] = time.time()
             self.send_response(200); self.end_headers()
         except Exception:
             self.send_response(400); self.end_headers()
@@ -1417,31 +1422,140 @@ if not DISABLE_AX:
         AX_AVAILABLE = False
 
 
-def ensure_accessibility_prompt() -> bool:
-    """Ask macOS for Accessibility once per launch, while it isn't granted.
+# ---------------- Permissions (Accessibility / Automation) ----------------
+# permissions.PermissionMonitor owns the live state; the setup checklist, the
+# menu-bar warning and the server report all read it. None until run_agent
+# creates it (and in the test harness, which stubs the frameworks).
+try:
+    import permissions as _perms
+except Exception as _e:  # pragma: no cover - shipped with the app
+    _perms = None
+    print(f"[WARN] permissions.py not available: {_e}")
+try:
+    import title_fallback as _tf
+except Exception as _e:  # pragma: no cover
+    _tf = None
+    print(f"[WARN] title_fallback.py not available: {_e}")
 
-    Window titles come only from AX. A failed AX read never makes macOS prompt
-    by itself, so without this call a fresh install silently records every
-    window with an empty title — no Figma file, no Slack channel, no document
-    name — and nobody is ever asked. The prompt is a no-op once trusted.
-    """
-    if DISABLE_AX:
+PERMISSIONS = None
+_VERSION_CHANGED = False
+# Per-poll title/URL/path cost by capture mode, logged every 5 min.
+_capture_cost = _tf.PollCostMeter(lambda m: log(m)) if _tf is not None else None
+_PERMS_STATE_PATH = os.path.expanduser("~/.timetracker/permissions_state.json")
+_ORPHAN_STATE_PATH = os.path.expanduser("~/.timetracker/orphan_restarts.json")
+
+
+def ax_trusted_now() -> bool:
+    """Is Accessibility usable right now? The monitor re-checks every 12s
+    while it is missing, so a grant is picked up without a restart. Before
+    the monitor exists (or in tests) assume yes: the AX calls fail softly."""
+    if DISABLE_AX or not AX_AVAILABLE:
         return False
+    mon = PERMISSIONS
+    if mon is None or mon.ax_granted is None:
+        return True
+    return bool(mon.ax_granted)
+
+
+def restart_if_orphaned() -> None:
+    """Exit for a clean relaunch if this process's executable was deleted
+    under it. See permissions.executable_orphaned: an update swap raced
+    launchd's KeepAlive respawn, and macOS then denied this process every
+    privacy permission while Settings still showed them on. Exiting non-zero
+    makes the LaunchAgent start the real, swapped-in binary.
+
+    Only under launchd (parent pid 1), and at most 3 times in 10 minutes."""
+    if _perms is None or not getattr(sys, "frozen", False):
+        return
     try:
-        from ApplicationServices import (
-            AXIsProcessTrustedWithOptions,
-            kAXTrustedCheckOptionPrompt,
-        )
-        trusted = bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
+        if not _perms.executable_orphaned():
+            return
+    except Exception:
+        return
+    if os.getppid() != 1:
+        log("[ORPHAN] ⚠️ Executable is gone from disk but not launched by launchd "
+            "— not restarting; macOS will deny privacy permissions until a restart")
+        return
+    if not _perms.orphan_restart_allowed(_ORPHAN_STATE_PATH):
+        log("[ORPHAN] ⚠️ Executable is gone from disk; restart limit reached — staying up")
+        return
+    log("[ORPHAN] Executable was replaced on disk under this process (update swap "
+        "raced the LaunchAgent respawn). macOS cannot attribute it to TimeTracker, so "
+        "Accessibility and Automation are denied. Exiting for a clean relaunch.")
+    os._exit(3)
+
+
+def _record_automation(bundle_id: Optional[str], status: str) -> None:
+    """A real capture script's outcome, for the setup checklist."""
+    mon = PERMISSIONS
+    if mon is None or not bundle_id:
+        return
+    try:
+        if mon.record_observed(bundle_id, status):
+            _permissions_changed()
+    except Exception:
+        pass
+
+
+_permissions_listeners = []
+
+
+def start_permission_monitor(version_changed: bool):
+    """Create the monitor, do the launch check (and the one automatic
+    Accessibility prompt), and keep it ticking on a background thread.
+
+    Accessibility no longer gates capture (titles fall back to the extension
+    and AppleScript), so a missing grant only changes capture_mode. The
+    setup checklist is opened later, by the GUI, once the menu bar exists.
+    """
+    global PERMISSIONS
+    if _perms is None or sys.platform != "darwin":
+        return None
+    if DISABLE_AX:
+        log("[AX] disabled by config (disable_ax) — not checking permissions")
+        return None
+    mon = _perms.PermissionMonitor(
+        _perms.MacProbes(), _PERMS_STATE_PATH, log=log, version=APP_VERSION,
+        extension_last_seen=lambda: _CONTEXT_SEEN.get("browser_extension"))
+    try:
+        mon.startup(version_changed)
     except Exception as e:
-        log(f"[AX] trust check unavailable: {e}")
-        return False
-    if trusted:
+        log(f"[PERMS] startup check failed: {e}")
+    PERMISSIONS = mon
+    if mon.ax_granted:
         log("[AX] Accessibility granted")
     else:
-        log("[AX] ⚠️ Accessibility NOT granted — window titles will be empty. "
-              "System Settings → Privacy & Security → Accessibility → TimeTracker")
-    return trusted
+        log("[AX] ⚠️ Accessibility NOT granted — capture continues without it: browser "
+            "titles from the extension/AppleScript, document names from AppleScript; "
+            "other apps' window titles are empty until it is granted "
+            "(System Settings → Privacy & Security → Accessibility → TimeTracker)")
+    missing = mon.missing_required()
+    log(f"[PERMS] capture_mode={mon.capture_mode()} required_missing={missing or 'none'}")
+
+    def _loop():
+        while True:
+            time.sleep(3)
+            try:
+                if mon.tick():
+                    log(f"[PERMS] changed: {mon.report(include_time=False)}")
+                    _permissions_changed()
+            except Exception as e:
+                log(f"[PERMS] tick failed: {e}")
+            try:
+                restart_if_orphaned()
+            except Exception:
+                pass
+
+    threading.Thread(target=_loop, daemon=True, name="PermissionMonitor").start()
+    return mon
+
+
+def _permissions_changed() -> None:
+    for fn in list(_permissions_listeners):
+        try:
+            fn()
+        except Exception as e:
+            log(f"[PERMS] listener failed: {e}")
 
 from Quartz import (
     CGWindowListCopyWindowInfo,
@@ -1473,24 +1587,37 @@ def ensure_db():
     return conn
 
 # ---------------- AppleScript helpers ----------------
-def osa(script: str) -> str:
+def osa(script: str, bundle_id: Optional[str] = None) -> str:
+    """Run one AppleScript. With `bundle_id`, the outcome also tells the
+    setup checklist whether Automation of that app is allowed: success means
+    granted, error -1743 means denied (macOS never re-asks after a denial,
+    so the checklist is the only way the person finds out)."""
     try:
-        out = subprocess.check_output(
-            ["osascript", "-e", script], 
-            text=True, 
-            stderr=subprocess.DEVNULL,
+        r = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
             timeout=5
-        ).strip()
-        return out
+        )
     except subprocess.TimeoutExpired:
         log("[DETECT] ⚠️ osascript timed out (System Events hung after sleep)", "warning")
         return ""
     except Exception:
         return ""
+    if bundle_id and _perms is not None:
+        if r.returncode == 0:
+            _record_automation(bundle_id, _perms.GRANTED)
+        elif _perms.osascript_denied(r.returncode, r.stderr):
+            _record_automation(bundle_id, _perms.DENIED)
+            return ""
+    if r.returncode != 0:
+        return ""
+    return (r.stdout or "").strip()
 
-def osa_retry(script: str, tries: int = 2, delay: float = 0.15) -> str:
+def osa_retry(script: str, tries: int = 2, delay: float = 0.15,
+              bundle_id: Optional[str] = None) -> str:
     for _ in range(tries):
-        out = osa(script)
+        out = osa(script, bundle_id=bundle_id)
         if out:
             return out
         time.sleep(delay)
@@ -2225,8 +2352,88 @@ def _adobe_url_or_path(kind: str, bundle_id: str, pid: Optional[int],
     return {"url": None, "file_path": path, "title": clean}
 
 
+# The browser scripts swallow every error EXCEPT -1743 ("not authorized to
+# send Apple events"), which they re-raise so osa() can tell the setup
+# checklist that Automation of this browser was denied. Swallowing it too
+# (as before) made a denial look exactly like "no window open".
+_RERAISE_DENIED = ('on error errMsg number errNum\n'
+                   'if errNum is -1743 then error errMsg number errNum\n'
+                   'return ""\nend try')
+
+
+def _browser_script(bundle_id: str, want_title: bool) -> Optional[str]:
+    """One AppleScript that returns the front tab's URL, and with want_title
+    "URL<0x1F>title" — one osascript either way."""
+    sep = 'character id 31'
+    if bundle_id == "com.apple.Safari":
+        expr = ('(URL of current tab of front window) & ' + sep +
+                ' & (name of current tab of front window)') if want_title \
+            else 'URL of current tab of front window'
+        return ('tell application "Safari" to try\n'
+                f'return {expr}\n' + _RERAISE_DENIED)
+    app = _CHROMIUM_APPS.get(bundle_id)
+    if not app:
+        return None
+    expr = ('(URL of active tab of window 1) & ' + sep +
+            ' & (title of active tab of window 1)') if want_title \
+        else 'URL of active tab of window 1'
+    return (f'tell application "{app}"\n'
+            'try\n'
+            'if (count of windows) > 0 then\n'
+            f'return {expr}\n'
+            'end if\n'
+            'return ""\n'
+            + _RERAISE_DENIED + '\n'
+            'end tell')
+
+
+def capture_window(bundle_id: str, pid: Optional[int],
+                   fallback_title: Optional[str] = None):
+    """(title, url, file_path, capture_mode) for the frontmost window.
+
+    With Accessibility ("full"): exactly as before — the AX title, and
+    AppleScript only for the URL/path.
+
+    Without it ("no_accessibility"): no AX call (it would only fail). A
+    browser's title comes from the extension while its post is fresh, else
+    from the same AppleScript that reads the URL; a document app's title is
+    its document's file name; anything else gets an empty title (the app
+    name is still recorded). Adobe needs nothing special: an empty title is
+    classified "empty", its path script runs and DocCarryForward reports the
+    file name — the same cleanup and dialog carry-forward as with AX.
+    """
+    t0 = time.time()
+    ext = None
+    if ax_trusted_now():
+        mode = "full"
+        title = get_window_title_via_ax(pid) or (fallback_title or "")
+        extras = try_get_url_or_path(bundle_id, pid=pid, title=title)
+    else:
+        mode = "no_accessibility"
+        title = fallback_title or ""
+        if _tf is not None:
+            src = "browser_extension"
+            ext = _tf.extension_page(_CONTEXT.get(src), _CONTEXT_SEEN.get(src), bundle_id)
+            if ext and not title:
+                title = ext.get("title") or ""
+        extras = try_get_url_or_path(bundle_id, pid=pid, title=title,
+                                     want_title=not title)
+    url, fpath = extras.get("url"), extras.get("file_path")
+    # Adobe: view state stripped / dialog carried forward. The cleaned title
+    # is what the signature, the matchers and the stored event all see — a
+    # zoom click is not a new window, and a text layer's words never reach
+    # the client matcher.
+    if extras.get("title") is not None:
+        title = extras["title"]
+    if mode == "no_accessibility" and _tf is not None:
+        title, url = _tf.resolve_no_ax_title(bundle_id, title, url, fpath, ext)
+    if _capture_cost is not None:
+        _capture_cost.add(mode, time.time() - t0)
+    return title or "", url, fpath, mode
+
+
 def try_get_url_or_path(bundle_id: str, pid: Optional[int] = None,
-                        title: str = "") -> Dict[str, Optional[str]]:
+                        title: str = "", want_title: bool = False) -> Dict[str, Optional[str]]:
     """The URL or document path behind the frontmost window.
 
     This is the Mac's equivalent of the Windows agent reading Explorer's
@@ -2236,30 +2443,21 @@ def try_get_url_or_path(bundle_id: str, pid: Optional[int] = None,
 
     Order: browsers -> Adobe apps -> per-app AppleScript -> AXDocument ->
     Spotlight by file name. May also return "title" when the raw window title
-    is replaced (Adobe view state stripped, dialog carried forward).
+    is replaced (Adobe view state stripped, dialog carried forward), and —
+    want_title, used only without Accessibility — a browser's tab title.
     """
-    if bundle_id == "com.apple.Safari":
-        url = osa_retry(
-            'tell application "Safari" to try\n'
-            'set u to URL of current tab of front window\n'
-            'return u\non error\nreturn ""\nend try'
-        )
-        return {"url": url or None, "file_path": None}
-
-    app = _CHROMIUM_APPS.get(bundle_id)
-    if app:
-        script = f'''tell application "{app}"
-            try
-                if (count of windows) > 0 then
-                    return URL of active tab of window 1
-                end if
-                return ""
-            on error
-                return ""
-            end try
-        end tell'''
-        url = osa_retry(script, tries=3, delay=0.1)
-        return {"url": url or None, "file_path": None}
+    if bundle_id == "com.apple.Safari" or bundle_id in _CHROMIUM_APPS:
+        script = _browser_script(bundle_id, want_title)
+        is_chromium = bundle_id in _CHROMIUM_APPS
+        out = osa_retry(script, tries=3 if is_chromium else 2,
+                        delay=0.1 if is_chromium else 0.15, bundle_id=bundle_id)
+        if want_title and _tf is not None:
+            url, tab_title = _tf.split_url_title(out)
+            res = {"url": url, "file_path": None}
+            if tab_title:
+                res["title"] = tab_title
+            return res
+        return {"url": out or None, "file_path": None}
 
     if bundle_id == "org.mozilla.firefox":
         # Firefox exposes no scripting dictionary for the address bar. Its
@@ -2277,7 +2475,7 @@ def try_get_url_or_path(bundle_id: str, pid: Optional[int] = None,
 
     script = _DOC_PATH_SCRIPTS.get(bundle_id)
     if script:
-        path = osa_retry(script)
+        path = osa_retry(script, bundle_id=bundle_id)
         if path:
             # Finder hands back a directory with a trailing slash. Left on,
             # the basename is the empty string, so content_identity yields
@@ -2731,6 +2929,13 @@ def hello(server_url: str, user: str, host: str, device_id: str):
         "device_id": device_id,
         "os_username": user,
     }
+    # Accessibility / Automation / extension status, so the Devices page can
+    # say which Mac needs attention. Re-sent whenever it changes.
+    if PERMISSIONS is not None and PERMISSIONS.checked_at:
+        try:
+            payload["permissions"] = PERMISSIONS.report()
+        except Exception as e:
+            log(f"[PERMS] report failed: {e}")
     try:
         raw = http_post_json(server_url, payload, headers)
         data = json.loads(raw or b"{}")
@@ -3353,6 +3558,8 @@ def run_agent():
     global notif_manager
     global ai_switcher
     global gui_menu_bar
+    global PERMISSIONS
+    global _VERSION_CHANGED
 
         # === Set macOS activation policy (MUST be in run_agent, never at module level) ===
     if sys.platform == 'darwin':
@@ -3445,8 +3652,15 @@ def run_agent():
     except Exception as e:
         print(f"[SLEEP] Could not register wake handler: {e}")
 
+    # === ORPHANED EXECUTABLE (update swap raced the LaunchAgent respawn) ===
+    # Before the version bookkeeping below, so the relaunched process does
+    # not see a "version change" and reset a perfectly good Accessibility
+    # grant as stale.
+    restart_if_orphaned()
+
     # === CHECK FOR VERSION UPGRADE ===
     cached_version = config.get("last_app_version")
+    _VERSION_CHANGED = bool(cached_version and cached_version != APP_VERSION)
     if cached_version and cached_version != APP_VERSION:
         log(f"[UPGRADE] Version changed {cached_version} → {APP_VERSION}")
         sync_cache = os.path.expanduser("~/.timetracker/sync_cache.json")
@@ -3490,7 +3704,8 @@ def run_agent():
 
     # Ensure we have a device key (MDM → GUI → pair code → interactive terminal)
     key = config.get("api_key") or API_KEY
-    
+    _just_paired = False
+
     if not key:
         # Try the org token IT deployed, before asking a human anything.
         #
@@ -3550,7 +3765,10 @@ def run_agent():
         # Fallback to interactive pairing (GUI or terminal)
         if not key:
             key = ensure_api_key_interactive(hostname)
-        
+            # Paired by hand just now: show the setup checklist once, right
+            # after, even if nothing required is missing.
+            _just_paired = bool(key)
+
         if not key:
             # Never exit here. An unpaired agent that quit cleanly was never
             # restarted (and its menu bar icon vanished with no explanation),
@@ -3562,7 +3780,7 @@ def run_agent():
 
     # After pairing, so a first-time user sees the pairing window before the
     # system Accessibility dialog rather than two dialogs racing.
-    ensure_accessibility_prompt()
+    start_permission_monitor(_VERSION_CHANGED)
 
     # Hello (with key)
     if not hello(HELLO_URL, os_user, hostname, device_id):
@@ -3580,6 +3798,13 @@ def run_agent():
         if not hello_success:
             log("[HELLO] All retries failed — running in offline mode (key preserved)")
             # DON'T drop key. Server may be temporarily down.
+
+    # Re-send the check-in whenever a permission changes (granted, revoked,
+    # an Automation denial seen in capture), so the Devices page is current.
+    def _report_permissions():
+        threading.Thread(target=lambda: hello(HELLO_URL, os_user, hostname, device_id),
+                         daemon=True, name="PermsReport").start()
+    _permissions_listeners.append(_report_permissions)
 
 
     # === SYNC INITIALIZATION ===
@@ -3859,7 +4084,15 @@ def run_agent():
                 sync=sync,
             )
             log("[GUI] Menu bar initialized")
-            
+
+            # Setup checklist + "Finish setup" menu item + warning badge.
+            if gui_menu_bar and PERMISSIONS is not None \
+                    and hasattr(gui_menu_bar, "set_permission_monitor"):
+                gui_menu_bar.set_permission_monitor(PERMISSIONS,
+                                                    show_after_launch=_just_paired)
+                gui_menu_bar.permissions_changed_callback = _permissions_changed
+                _permissions_listeners.append(gui_menu_bar.on_permissions_changed)
+
             # Register GUI with sync
             if sync and gui_menu_bar:
                 sync.gui_menu_bar = gui_menu_bar
@@ -4423,17 +4656,8 @@ def run_agent():
                         consecutive_errors = 0
                         continue
 
-                    title_ax = get_window_title_via_ax(pid) or ""
-                    title = title_ax or (fallback_title or "")
-
-                    extras = try_get_url_or_path(bundle_id, pid=pid, title=title)
-                    url, fpath = extras.get("url"), extras.get("file_path")
-                    # Adobe: view state stripped / dialog carried forward. The
-                    # cleaned title is what the signature, the matchers and the
-                    # stored event all see — a zoom click is not a new window,
-                    # and a text layer's words never reach the client matcher.
-                    if extras.get("title") is not None:
-                        title = extras["title"]
+                    title, url, fpath, _capture_mode = capture_window(
+                        bundle_id, pid, fallback_title)
 
                     # FIX 3: Retry URL capture for potential meeting apps
                     # Critical for Chrome-based Teams/Meet where URL fetch can fail

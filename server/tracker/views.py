@@ -1060,9 +1060,19 @@ def agents_hello2(request):
         dev.last_seen_at = timezone.now()
         # optional: record platform from header for quick visibility
         plat_hdr = (request.headers.get("X-Agent-Platform") or "").strip()
+        fields = ["hostname", "app_version", "is_active", "last_seen_at"]
         if hasattr(dev, "platform") and plat_hdr:
             dev.platform = plat_hdr[:128]
-        dev.save(update_fields=["hostname", "app_version", "is_active", "last_seen_at", "platform"] if plat_hdr else ["hostname", "app_version", "is_active", "last_seen_at"])
+            fields.append("platform")
+        # macOS Accessibility / Automation status (Mac agent only). Absent =
+        # keep what we had: older agents and Windows never send it.
+        if "permissions" in request.data:
+            from tracker.agent_permissions import normalize_permission_status
+            status = normalize_permission_status(request.data.get("permissions"))
+            if status is not None:
+                dev.permission_status = status
+                fields.append("permission_status")
+        dev.save(update_fields=fields)
 
     # upsert AgentSession for dashboards/fallbacks
     AgentSession.objects.update_or_create(
@@ -8380,7 +8390,8 @@ def always_file_block(request, block_id):
 def settings_devices(request):
     """List all registered devices/agents for the organization"""
     from tracker.models import AgentDevice, OrganizationMembership
-    
+    from tracker.agent_permissions import permission_issues
+
     org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
@@ -8417,7 +8428,9 @@ def settings_devices(request):
             "last_seen": device.last_seen_at.isoformat() if device.last_seen_at else "",
             "is_active": device.is_active,
             "device_id": device.device_id,  # ← make sure this line exists
-
+            # macOS permissions (Mac agent): raw status + the badges to show.
+            "permission_status": device.permission_status,
+            "permission_issues": permission_issues(device.permission_status),
         })
     
     return Response(result)

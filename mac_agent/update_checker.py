@@ -315,12 +315,19 @@ fi
 # Keep the LaunchAgent in step with the version now installed.
 SRC="$BUNDLE/Contents/Resources/$LABEL.plist"
 DST="$HOME/Library/LaunchAgents/$LABEL.plist"
+# ALWAYS a fresh process from the swapped-in binary. launchd's KeepAlive
+# respawns the agent the instant the old one exits — racing the two renames
+# above. A copy spawned before them runs the OLD (now deleted) executable;
+# macOS then cannot attribute it to TimeTracker and denies it Accessibility
+# and Automation while Settings still shows both on (v1.9.15 -> v1.9.17).
+# Plain `kickstart` does nothing to a running copy; `-k` kills it first.
 if [ -f "$SRC" ] && ! cmp -s "$SRC" "$DST"; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
     cp "$SRC" "$DST" && launchctl bootstrap "gui/$(id -u)" "$DST"
     echo "LaunchAgent refreshed"
 else
-    launchctl kickstart "gui/$(id -u)/$LABEL" 2>/dev/null
+    launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null
+    echo "agent restarted"
 fi
 rm -rf "$STAGE"
 echo "done"

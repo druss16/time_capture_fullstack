@@ -116,31 +116,107 @@ endpoints the Windows agent does, in the same order:
 
 Steps 1 and 2 are silent. Only step 3 involves a human.
 
-**Privacy prompts (PPPC).** Push
-`pkgroot/Library/Application Support/MavOps/mavops-pppc-timetracker.mobileconfig`
-through the MDM. It pre-approves, for the shipped bundle id `TimeTracker`
-(team `P3KX4CDFN4`):
+### Privacy permissions (PPPC) — zero clicks on a managed Mac
 
-* **Accessibility** — window titles. Without it every title arrives empty.
-* **Automation (AppleEvents)** of Photoshop, Acrobat Pro, Illustrator and
-  InDesign — the agent asks each one which document is in front, so the file
-  path (and the client folder above it) reaches the server. Without the
-  profile each Mac shows one "TimeTracker wants to control …" prompt per app,
-  the first time that app is frontmost; a "Don't Allow" there means that app
-  only ever contributes its window title.
+**What the MDM admin uploads:** one file,
+`pkgroot/Library/Application Support/MavOps/mavops-pppc-timetracker.mobileconfig`,
+as a custom configuration profile scoped to the Macs that get TimeTracker
+(Jamf Pro: *Configuration Profiles → Upload*; Kandji: *Library → Custom
+Profile*; Intune: *Devices → macOS → Configuration → Templates → Custom*;
+Mosyle: *Management → Custom Commands/Profiles → Custom Profile*). Push it
+before or with the pkg; order doesn't matter, it applies the moment both are
+there. Nobody on the Mac clicks anything.
 
-The Photoshop and Acrobat requirements were checked against the installed apps
-with `codesign --verify -R=`; Illustrator and InDesign follow Adobe's identical
-signing and are unverified. After Effects, Premiere and Media Encoder are not
-listed because the agent never sends them AppleEvents (After Effects' project
-path comes from its window title). Office, Chrome, Safari, Finder and System
-Events are scripted too and are NOT in this profile yet — those users see the
-prompts.
+**What it grants**, to the shipped bundle id `TimeTracker`, pinned to our
+Developer ID (team `P3KX4CDFN4`) by code requirement — another app calling
+itself TimeTracker gets nothing:
 
-A profile only grants TCC when an MDM delivers it; double-clicking it does
-nothing. The older `mavops-pppc-timetrackeragent.mobileconfig` beside it names
-`TimeTrackerAgent`, which is not the shipped bundle id, and has invalid
-PayloadUUIDs — do not use it.
+* **Accessibility** — window titles of every app. Without it TimeTracker
+  still captures (see *Without Accessibility* below) but apps with no
+  scripting — Slack desktop, Figma, Canva — arrive with an empty title.
+* **Automation (Apple Events)**, read-only, of exactly the apps the agent asks
+  "which page/document is in front?":
+  * browsers — Google Chrome (+ Beta, Canary), Microsoft Edge (+ Beta), Safari,
+    Brave, Arc, Vivaldi: the front tab's URL and title;
+  * Adobe — Photoshop, Illustrator, InDesign, Acrobat Pro: the open file's path;
+  * Microsoft Excel, Word, PowerPoint; Numbers, Pages, Keynote; Preview,
+    TextEdit, Sublime Text, Finder: the open file / folder;
+  * System Events: which app is in front.
+
+**What it does NOT do:** no Screen Recording, Camera, Microphone, Full Disk
+Access or Input Monitoring — the agent never asks for them. Nothing in the
+profile lets TimeTracker change anything in those apps.
+
+**Requirements.** PPPC payloads only take effect when delivered by an MDM the
+Mac is enrolled in with **user-approved (or Automated Device Enrollment) MDM**;
+double-clicking the file, or `profiles install`, grants nothing on macOS 11+.
+Check on a Mac with `sudo profiles show -type configuration | grep -A3 pppc`
+and, once TimeTracker runs, in Settings → Devices (no amber/red badge).
+
+**Verification of the receiver requirements.** Checked with
+`codesign --verify -R=<requirement> <app>` against the installed apps on
+2026-09-30: Chrome, Safari, System Events, Finder, Preview, TextEdit, Excel,
+Word, PowerPoint, Numbers, Sublime Text 4, Photoshop 2026, Acrobat DC.
+**Unverified** (not installed there; written from the vendor's bundle id and
+Apple team id): Chrome Beta/Canary (same requirement as Chrome, which names
+them), Edge and Edge Beta (Microsoft, `UBF8T346G9`), Brave (`KL8N8XSYF4`),
+Arc (`S6N382Y83G`), Vivaldi (`4XF3XNRN6Y`), Pages and Keynote (Apple iWork,
+`K36BKF7T3D`), Illustrator and InDesign (Adobe, `JQ525L2MZD`). If one of those
+is wrong, that one app still shows its normal one-time macOS prompt — nothing
+else is affected. To check one: `codesign -d -r- "/Applications/<App>.app"`.
+After Effects, Premiere and Media Encoder are not listed: the agent never
+sends them Apple Events.
+
+The older `mavops-pppc-timetrackeragent.mobileconfig` (wrong bundle id
+`TimeTrackerAgent`, invalid UUIDs) has been deleted.
+
+### Unmanaged Macs — one setup screen, nobody silently broken
+
+Apple doesn't let an app grant itself any of this. On a Mac without the
+profile the agent shows its own **"Finish setting up TimeTracker"** window
+(`setup_checklist.py`) right after pairing, and on every launch where
+something *required* is missing:
+
+* one row per permission with a live ✅/❌ (re-checked every 3s while open —
+  flipping a switch in System Settings turns the row green, no restart);
+* **Fix** opens the exact System Settings pane; **Ask** (an app that is
+  running and was never asked) triggers macOS's "TimeTracker wants to
+  control …" popup right then, while the window says "Click OK on the popup";
+  apps not running say "Will ask the first time you open …";
+* it stays until everything required is ✅ or the person picks **Remind me
+  later** (back in 4h; the red close button is a 1h snooze);
+* while anything required is missing, the menu-bar icon shows ⚠️ and the
+  menu's top item is **Finish setup (N permissions missing)**;
+  **Permissions & Setup…** is always in the menu.
+
+Required = Automation for the installed browsers and Adobe apps, plus the
+TimeTracker browser extension (while a supported browser is open).
+Accessibility is *recommended*, not required. Office and Finder are optional.
+The list is `AUTOMATION_TARGETS` / `AX_REQUIRED` in `permissions.py`.
+
+**Without Accessibility** capture continues: browser titles come from the
+extension (fresh within 45s) or from the same AppleScript that reads the URL,
+document apps' titles from the open file's name. Only apps with no scripting
+lose their title. Each check-in reports `capture_mode`
+(`full` | `no_accessibility`).
+
+**Reported to the server** in every hello2 check-in (and again whenever it
+changes): `accessibility`, `automation` per bundle id, `extension`,
+`capture_mode`, `required_missing`, `checked_at` — stored on
+`AgentDevice.permission_status` and shown in **Settings → Devices** as a red
+badge (an Automation target denied / extension off) or amber badge
+("Limited capture: Accessibility missing — Slack/desktop app window titles
+not captured"), and as a MavOps org health reason.
+
+**After an update.** If Accessibility is missing right after a version change,
+the agent runs `tccutil reset Accessibility TimeTracker` once (as the user —
+no admin needed; it only revokes) so the next prompt adds a fresh entry
+instead of leaving a stale, switched-on row that does nothing. The v1.9.17
+"dropped grant" was a different thing — see `permissions.executable_orphaned`:
+the update swap raced launchd's respawn, so the agent ran from its deleted
+old binary and macOS denied it every permission. The swap helper now
+`kickstart -k`s the agent after the swap, and the agent restarts itself if
+it ever finds its executable gone.
 
 `device_id` is the one `main.py` already keeps, passed in — not a second one
 minted inside `mdm_deploy`, which is what the Windows copy does.

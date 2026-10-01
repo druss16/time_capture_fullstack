@@ -160,11 +160,11 @@
 
 <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="effective-date">Effective Date: March 16, 2026</p>
+    <p class="effective-date">Effective Date: September 30, 2026</p>
 
     <div class="card">
         <h2>1. Introduction</h2>
-        <p>GROWU LLC ("Company," "we," "us," "our") operates the TimeTracker platform ("Service"), a time tracking and billing solution for professional services firms. This Privacy Policy describes how we collect, use, store, and protect your personal information when you use our Service.</p>
+        <p>Mavops Inc. ("Company," "we," "us," "our") operates the TimeTracker platform ("Service"), a time tracking and billing solution for professional services firms. This Privacy Policy describes how we collect, use, store, and protect your personal information when you use our Service.</p>
         <div class="highlight-box">
             We are committed to protecting your privacy. We collect only what is necessary to provide the Service, and we never sell your personal data to third parties.
         </div>
@@ -185,17 +185,17 @@
         <h3>2.2 Time Tracking Data</h3>
         <p>In the course of using the Service, we collect:</p>
         <ul>
-            <li>Application usage data from the desktop agent (active window titles, application names, timestamps)</li>
+            <li>Application usage data from the desktop agent (active window titles, application names, timestamps, the address of the active browser tab, and the file path of the open document)</li>
             <li>Time entries, categories, and client assignments</li>
             <li>Notes and descriptions you add to time entries</li>
         </ul>
 
         <h3>2.3 Integration Data</h3>
-        <p>When you connect third-party integrations (such as QuickBooks Online or Xero), we collect and store:</p>
+        <p>When you connect third-party integrations (such as QuickBooks Online, Xero, Clio, Microsoft Outlook, Google Calendar or Gmail), we collect and store:</p>
         <ul>
             <li>OAuth access tokens and refresh tokens (encrypted at rest)</li>
             <li>Account identifiers required for the integration to function</li>
-            <li>Data synchronized between the Service and the third-party platform (e.g., client lists, invoice data, time activities)</li>
+            <li>Data synchronized between the Service and the third-party platform (e.g., client lists, invoice data, time activities, calendar events, email headers). Google data is described in detail in Section 5.</li>
         </ul>
 
         <h3>2.4 Automatically Collected Information</h3>
@@ -219,7 +219,7 @@
             <li>Comply with legal obligations</li>
         </ul>
         <div class="highlight-box">
-            We use AI-powered classification to help categorize your time entries. This processing is done on our servers and your data is not shared with third-party AI providers for training purposes.
+            We use AI-powered classification to help categorize your time entries. To do this, activity details (window titles, application names, and file names or paths) and your firm’s client names are sent to our AI provider, OpenAI, through its API. OpenAI does not use data sent through its API to train its models, and we do not use your data to train AI models. Data received from Google APIs (Gmail and Google Calendar) is never sent to an AI provider.
         </div>
     </div>
 
@@ -229,7 +229,7 @@
         <ul>
             <li>We access only the data scopes you explicitly authorize</li>
             <li>OAuth tokens are stored securely and refreshed automatically</li>
-            <li>Data is transmitted to third-party APIs only when you initiate an action (e.g., pushing time entries, importing clients)</li>
+            <li>Some integrations act only when you initiate an action (e.g., pushing time entries, importing clients); others, such as calendar and email integrations, sync automatically in the background while connected</li>
             <li>You may disconnect any integration at any time from the Service settings</li>
         </ul>
         <p>We encourage you to review the privacy policies of any third-party services you connect:</p>
@@ -237,11 +237,51 @@
             <li><a href="https://www.intuit.com/privacy/" target="_blank" rel="noopener">Intuit (QuickBooks) Privacy Policy</a></li>
             <li><a href="https://www.xero.com/us/about/terms/privacy/" target="_blank" rel="noopener">Xero Privacy Policy</a></li>
             <li><a href="https://stripe.com/privacy" target="_blank" rel="noopener">Stripe Privacy Policy</a></li>
+            <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a></li>
+            <li><a href="https://privacy.microsoft.com/privacystatement" target="_blank" rel="noopener">Microsoft Privacy Statement</a></li>
         </ul>
     </div>
 
     <div class="card">
-        <h2>5. Data Storage &amp; Security</h2>
+        <h2>5. Google User Data (Gmail and Google Calendar)</h2>
+        <p>You can optionally connect your Google account so that meetings and email are recorded against the right client. Each connection is separate: you can connect Google Calendar, Gmail, both, or neither.</p>
+
+        <h3>5.1 What We Access</h3>
+        <ul>
+            <li><strong>Google Calendar</strong> (<code>calendar.events.readonly</code>): events on your primary calendar only &mdash; start and end times, event title, and the email addresses of attendees. We do not read other calendars, calendar settings or sharing.</li>
+            <li><strong>Gmail</strong> (<code>gmail.metadata</code>): message headers only &mdash; From, To, Cc, Subject and Date &mdash; for messages in your Inbox and Sent mail. Under this permission Google does not give us message bodies or attachments, and we never request them.</li>
+            <li>Your Google account email address (<code>openid</code>, <code>email</code>), to show which account is connected.</li>
+        </ul>
+
+        <h3>5.2 How We Use It</h3>
+        <ul>
+            <li>Calendar events are matched against your firm&rsquo;s client list so that time spent in a meeting is attributed to the client whose people attended.</li>
+            <li>Email headers are used to match the other party&rsquo;s email domain to a client, and the time between your activity in Gmail and a message you send is used to estimate how long you spent writing to that client.</li>
+            <li>We use Google data only to provide these features to you. We do not use it for advertising, we do not sell it, and we do not use it to train AI or machine-learning models.</li>
+        </ul>
+
+        <h3>5.3 Who Can See It</h3>
+        <ul>
+            <li>Email sender and recipient addresses and subject lines are visible only to you, on your own time entries.</li>
+            <li>Your firm&rsquo;s managers and administrators see only the client a meeting or email was matched to and the other party&rsquo;s email domain &mdash; never addresses or subject lines.</li>
+            <li>We do not transfer Google data to third parties, except as necessary to operate the Service (our hosting provider), to comply with law, or as part of a merger or acquisition with notice to you. Google data is never sent to an AI provider.</li>
+        </ul>
+
+        <h3>5.4 Storage, Retention and Deletion</h3>
+        <ul>
+            <li>Google OAuth tokens are encrypted at rest. All Google data is transmitted over TLS.</li>
+            <li>Email header records are kept for 30 days by default (your firm may set a different period) and are then deleted automatically.</li>
+            <li>When you disconnect Gmail or Google Calendar in TimeTracker, the email or calendar data we stored from that connection is deleted immediately and the tokens are cleared. You can also remove TimeTracker&rsquo;s access at any time at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
+            <li>To request deletion of any Google data we hold about you, contact <a href="mailto:privacy@mavops.ai">privacy@mavops.ai</a>.</li>
+        </ul>
+
+        <div class="highlight-box">
+            TimeTracker&rsquo;s use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>6. Data Storage &amp; Security</h2>
         <p>We implement industry-standard security measures to protect your data:</p>
         <ul>
             <li>All data is transmitted over HTTPS/TLS encryption</li>
@@ -255,30 +295,31 @@
     </div>
 
     <div class="card">
-        <h2>6. Data Retention</h2>
+        <h2>7. Data Retention</h2>
         <p>We retain your data for as long as your account is active or as needed to provide the Service. Specifically:</p>
         <ul>
             <li><strong>Account data:</strong> Retained for the life of your account</li>
             <li><strong>Time tracking data:</strong> Retained for the life of your account</li>
             <li><strong>Raw activity events:</strong> Automatically deleted after 30 days</li>
             <li><strong>Integration tokens:</strong> Deleted immediately upon disconnection</li>
+            <li><strong>Email header records (Gmail, Outlook):</strong> Deleted automatically after 30 days by default, and immediately when you disconnect</li>
         </ul>
         <p>Upon account termination, you may request an export of your data within 30 days. After this period, your data will be permanently deleted from our active systems within 90 days. Backup copies may persist for up to an additional 90 days before being purged.</p>
     </div>
 
     <div class="card">
-        <h2>7. Data Sharing</h2>
+        <h2>8. Data Sharing</h2>
         <p>We do not sell, rent, or trade your personal information. We may share your data only in the following limited circumstances:</p>
         <ul>
             <li><strong>With your consent:</strong> When you explicitly authorize a third-party integration</li>
-            <li><strong>Service providers:</strong> Trusted vendors who help us operate the Service (hosting, email delivery, payment processing), bound by confidentiality agreements</li>
+            <li><strong>Service providers:</strong> Trusted vendors who help us operate the Service (hosting, email delivery, payment processing, and AI classification as described in Section 3), bound by confidentiality agreements. Google user data is shared only as described in Section 5</li>
             <li><strong>Legal requirements:</strong> When required by law, regulation, legal process, or governmental request</li>
             <li><strong>Business transfers:</strong> In connection with a merger, acquisition, or sale of assets, with notice to affected users</li>
         </ul>
     </div>
 
     <div class="card">
-        <h2>8. Your Rights</h2>
+        <h2>9. Your Rights</h2>
         <p>Depending on your jurisdiction, you may have the right to:</p>
         <ul>
             <li><strong>Access</strong> the personal data we hold about you</li>
@@ -292,7 +333,7 @@
     </div>
 
     <div class="card">
-        <h2>9. Cookies &amp; Tracking</h2>
+        <h2>10. Cookies &amp; Tracking</h2>
         <p>We use cookies and similar technologies for:</p>
         <ul>
             <li><strong>Essential cookies:</strong> Authentication and session management (required for the Service to function)</li>
@@ -302,11 +343,11 @@
     </div>
 
     <div class="card">
-        <h2>10. Desktop Agent</h2>
+        <h2>11. Desktop Agent</h2>
         <p>The TimeTracker desktop agent captures application usage data to automate time tracking. Important details:</p>
         <ul>
-            <li>The agent captures active window titles and application names only</li>
-            <li>No screenshots, keystrokes, webcam, or microphone data is captured</li>
+            <li>The agent captures active window titles, application names, the address of the active browser tab, and the file path of the open document. To find a document&rsquo;s folder it may look the file name up in your computer&rsquo;s own search index (Spotlight on macOS); that lookup happens only on your computer</li>
+            <li>No screenshots, keystrokes, document contents, webcam images or microphone audio are captured. The agent only checks whether the camera or microphone is in use, so time spent on a call is not counted as idle</li>
             <li>Raw activity data is automatically deleted from our servers after 30 days</li>
             <li>You can pause or disable the agent at any time</li>
             <li>All data transmission is encrypted</li>
@@ -314,7 +355,7 @@
     </div>
 
     <div class="card">
-        <h2>11. Browser Extension</h2>
+        <h2>12. Browser Extension</h2>
         <p>The optional TimeTracker URL Reporter browser extension is a companion to the desktop agent that helps attribute browser-based work to the correct client. It takes no action unless the desktop agent is running on the same computer.</p>
 
         <h3>11.1 What the Extension Accesses</h3>
@@ -343,7 +384,7 @@
     </div>
 
     <div class="card">
-        <h2>12. Mobile App</h2>
+        <h2>13. Mobile App</h2>
         <p>The TimeTracker mobile app may request access to the following device features:</p>
         <ul>
             <li>
@@ -371,25 +412,25 @@
     </div>
 
     <div class="card">
-        <h2>13. Children's Privacy</h2>
+        <h2>14. Children's Privacy</h2>
         <p>The Service is not intended for use by individuals under the age of 16. We do not knowingly collect personal information from children. If we become aware that we have collected data from a child under 16, we will take steps to delete it promptly.</p>
     </div>
 
     <div class="card">
-        <h2>14. International Data Transfers</h2>
+        <h2>15. International Data Transfers</h2>
         <p>Your data may be processed and stored in the United States. If you are accessing the Service from outside the United States, your data will be transferred to and processed in the United States, where data protection laws may differ from those of your jurisdiction.</p>
     </div>
 
     <div class="card">
-        <h2>15. Changes to This Policy</h2>
+        <h2>16. Changes to This Policy</h2>
         <p>We may update this Privacy Policy from time to time. We will notify you of material changes by posting the updated policy on this page, updating the effective date, and (where appropriate) sending an email notification. Continued use of the Service after changes constitutes acceptance of the revised policy.</p>
     </div>
 
     <div class="card">
-        <h2>16. Contact Us</h2>
+        <h2>17. Contact Us</h2>
         <p>If you have questions or concerns about this Privacy Policy or our data practices, contact us at:</p>
         <p>
-            <strong>GROWU LLC</strong><br>
+            <strong>Mavops Inc.</strong><br>
             Email: <a href="mailto:privacy@mavops.ai">privacy@mavops.ai</a><br>
             Support: <a href="mailto:support@mavops.ai">support@mavops.ai</a><br>
             Web: <a href="https://timetracker.mavops.ai">timetracker.mavops.ai</a>
@@ -398,7 +439,7 @@
 </div>
 
 <div class="footer">
-    &copy; 2026 GROWU LLC. All rights reserved.
+    &copy; 2026 Mavops Inc. All rights reserved.
 </div>
 
 </body>

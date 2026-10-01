@@ -1016,7 +1016,7 @@ export default function Home() {
             <span className="footer-by">by MavOps AI</span>
           </div>
           <div className="footer-links">
-            <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:info@mavops.ai">Contact</a>
+            <a href="/privacy.html">Privacy</a><a href="/eula.html">Terms</a><a href="mailto:info@mavops.ai">Contact</a>
           </div>
           <p className="footer-copy">© 2025 MavOps AI</p>
         </div>

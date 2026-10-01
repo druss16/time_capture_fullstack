@@ -531,6 +531,7 @@ urlpatterns = [
     path('settings/email-domains/observed/',            views_mail_domains.email_domains_observed,      name='email_domains_observed'),
     path('settings/email-domains/bulk/',                views_mail_domains.email_domains_bulk,          name='email_domains_bulk'),
     path('settings/email-domains/ignored/',             views_mail_domains.email_domains_ignored,       name='email_domains_ignored'),
+    path('settings/email-domains/ignored/bulk/',        views_mail_domains.email_domains_ignored_bulk,  name='email_domains_ignored_bulk'),
     path('settings/email-domains/ignored/<int:ignore_id>/', views_mail_domains.email_domain_ignored_detail, name='email_domain_ignored_detail'),
     path('settings/email-domains/<int:rule_id>/',       views_mail_domains.email_domain_detail,         name='email_domain_detail'),
 

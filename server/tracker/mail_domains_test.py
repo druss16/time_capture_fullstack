@@ -46,13 +46,14 @@ class Base(TestCase):
         OrganizationMembership.objects.create(user=u, organization=org or self.org, role=role)
         return u
 
-    def _mail(self, domain, *, user=None, days_ago=1, client=None, subject='', org=None):
+    def _mail(self, domain, *, user=None, days_ago=1, client=None, subject='', org=None,
+              direction='in', from_address=None):
         self.n += 1
         return MailSignal.objects.create(
             org=org or self.org, user=user or self.owner, provider='google',
             external_id=f'm{self.n}', occurred_at=timezone.now() - timedelta(days=days_ago),
-            direction='in', other_party_domain=domain, extracted_client=client,
-            subject=subject)
+            direction=direction, other_party_domain=domain, extracted_client=client,
+            subject=subject, from_address=from_address)
 
     def _event(self, domains, *, user=None, days_ago=1, title='Catch up', client=None):
         self.n += 1
@@ -324,3 +325,202 @@ class CommandTest(Base):
         self.assertIn('Removed rule', self.run_cmd('--unmap', 'newco.io'))
         with self.assertRaises(CommandError):
             self.run_cmd('--map', 'gmail.com', str(self.acme.id))
+
+
+# ─── Signal-first ordering, automated classification, initials tier ─────────
+
+# Dan's real "Seen but not mapped" list: domain → (messages, meetings).
+DAN_DOMAINS = {
+    'clio.com': (27, 0), 'df-cpas.com': (10, 1), 'google.com': (11, 0),
+    'kishmish.com': (10, 0), 'ccf-law.com': (7, 0), 'meliopayments.com': (6, 0),
+    'mail.apollo.io': (5, 0), 'stripe.com': (5, 0), 'apollo.io': (4, 0), 'dnb.com': (4, 0),
+    'fundinnovationventure.com': (4, 0), 'tlwallaccounting.com': (4, 0), 'vyde.io': (4, 0),
+    'fustcharles.com': (3, 0), 'morethancars.com': (2, 1), 'raymondjames.com': (3, 0),
+    'send.calendly.com': (3, 0), 'email.americanexpress.com': (2, 0),
+    'email.neon.tech': (2, 0), 'followups.typeform.io': (2, 0), 'juno.tax': (1, 1),
+    'microsoft.com': (2, 0), 'user.hostinger.com': (2, 0), 'ar.neon.tech': (1, 0),
+    'dp.intuit.com': (1, 0), 'e.stripe.com': (1, 0), 'em1.cloudflare.com': (1, 0),
+    'emails.hostinger.com': (1, 0), 'improvmx.com': (1, 0), 'lemoyne.edu': (1, 0),
+    'mail.dnb.com': (1, 0), 'microsoftonline.com': (1, 0), 'neon.tech': (1, 0),
+    'notify.cloudflare.com': (1, 0), 'send.xero.com': (1, 0), 'tryapollo.io': (1, 0),
+    'updates.hostinger.com': (1, 0), 'updates.notion.com': (1, 0),
+}
+DAN_PEOPLE = {
+    'df-cpas.com', 'morethancars.com', 'juno.tax', 'kishmish.com', 'ccf-law.com',
+    'fundinnovationventure.com', 'tlwallaccounting.com', 'vyde.io', 'fustcharles.com',
+    'raymondjames.com', 'lemoyne.edu',
+}
+DAN_CLIENTS = [
+    'April Showers LLC', 'Aurelia', 'Beck CPA', 'Dauphin & Fantacone', 'Internal',
+    'Internal - Tax', "Little Nero's Pizza", "Lola's Pet Shop", 'Lupkynis', 'MAVOPS',
+    'Marta Vance', 'PureADK', 'Ridgeline Holdings LLC', "St. Mary's Church - Alaska",
+    'Test Client A', 'Test Client B', 'Testing 2',
+]
+
+
+class DanFixtureTest(Base):
+    """Dan's real list (all inbound; meetings as calendar attendees)."""
+
+    def setUp(self):
+        super().setUp()
+        Client.objects.filter(org=self.org).delete()
+        for i, name in enumerate(DAN_CLIENTS):
+            Client.objects.create(org=self.org, name=name, code=f'D{i}')
+        for d, (msgs, meetings) in DAN_DOMAINS.items():
+            for _ in range(msgs):
+                self._mail(d)
+            for _ in range(meetings):
+                self._event([d])
+
+    def test_split_people_first_automated_after(self):
+        rows = svc.observed_domains(self.org)
+        self.assertEqual(len(rows), 38)
+        top = [r['domain'] for r in rows if not r['automated']]
+        auto = [r['domain'] for r in rows if r['automated']]
+        self.assertEqual(set(top), DAN_PEOPLE)
+        self.assertEqual(set(auto), set(DAN_DOMAINS) - DAN_PEOPLE)
+        self.assertEqual([r['domain'] for r in rows[:len(top)]], top)
+        # The three with a meeting lead, df-cpas (most mail) first.
+        self.assertEqual(top[:3], ['df-cpas.com', 'morethancars.com', 'juno.tax'])
+        self.assertTrue(all(r['automated_reason'] for r in rows if r['automated']))
+
+    def test_exactly_one_suggestion(self):
+        rows = svc.observed_domains(self.org)
+        sugg = {r['domain']: r['suggestion'] for r in rows if r['suggestion']}
+        self.assertEqual(list(sugg), ['df-cpas.com'])
+        s = sugg['df-cpas.com']
+        self.assertEqual(s['client_name'], 'Dauphin & Fantacone')
+        self.assertEqual(s['tier'], 'initials')
+        self.assertIn('initials', s['reason'])
+
+
+class RankingAndAutomatedTest(Base):
+    def test_meetings_and_outbound_outrank_inbound_bulk(self):
+        for _ in range(30):
+            self._mail('bulkletter.example')
+        self._mail('wrote.example', direction='out')
+        self._event(['met.example'])
+        self._mail('quiet.example')
+        rows = svc.observed_domains(self.org)
+        self.assertEqual([r['domain'] for r in rows],
+                         ['met.example', 'wrote.example', 'bulkletter.example', 'quiet.example'])
+        w = next(r for r in rows if r['domain'] == 'wrote.example')
+        self.assertEqual((w['outbound'], w['inbound']), (1, 0))
+
+    def test_more_people_ranks_higher(self):
+        self._mail('one.example')
+        self._mail('one.example')
+        self._mail('two.example')
+        self._mail('two.example', user=self.member)
+        self.assertEqual([r['domain'] for r in svc.observed_domains(self.org)],
+                         ['two.example', 'one.example'])
+
+    def test_vendor_not_automated_with_meeting_or_outbound(self):
+        self._mail('clio.com')
+        self._mail('stripe.com')
+        self._mail('stripe.com', direction='out')
+        self._mail('send.calendly.com')
+        self._event(['send.calendly.com'])
+        rows = {r['domain']: r for r in svc.observed_domains(self.org)}
+        self.assertTrue(rows['clio.com']['automated'])
+        self.assertFalse(rows['stripe.com']['automated'])
+        self.assertFalse(rows['send.calendly.com']['automated'])
+        self.assertEqual(rows['stripe.com']['automated_reason'], '')
+
+    def test_classify(self):
+        c = svc.classify_automated
+        self.assertTrue(c('em2847.acme.com')[0])
+        self.assertTrue(c('news.acme.com')[0])
+        self.assertTrue(c('e.stripe.com')[0])
+        self.assertTrue(c('billing.clio.com')[0])          # vendor via registrable domain
+        self.assertFalse(c('acme.com')[0])
+        self.assertFalse(c('email.com')[0])                 # no subdomain: not judged by name
+        self.assertFalse(c('clio.com', events=1)[0])
+        self.assertFalse(c('clio.com', outbound=2)[0])
+
+    def test_sender_local_part(self):
+        for _ in range(3):
+            self._mail('saasy.example', from_address='no-reply@saasy.example')
+        self._mail('saasy.example', from_address='jo@saasy.example')
+        self._mail('person.example', from_address='jo@person.example')
+        self._mail('person.example', from_address='billing@person.example')
+        rows = {r['domain']: r for r in svc.observed_domains(self.org)}
+        self.assertTrue(rows['saasy.example']['automated'])
+        self.assertIn('no-reply', rows['saasy.example']['automated_reason'])
+        self.assertFalse(rows['person.example']['automated'])  # half is not most
+
+
+class BulkIgnoreTest(Base):
+    def test_bulk_ignore(self):
+        for d in ('a.example', 'b.example', 'keep.example'):
+            self._mail(d)
+        c = APIClient()
+        c.force_authenticate(self.owner)
+        r = c.post(URL + 'ignored/bulk/', {'domains': ['a.example', 'B.example', 'bad']},
+                   format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(sorted(i['domain'] for i in r.data['ignored']), ['a.example', 'b.example'])
+        self.assertEqual([f['domain'] for f in r.data['failed']], ['bad'])
+        self.assertEqual([o['domain'] for o in c.get(URL + 'observed/').data['observed']],
+                         ['keep.example'])
+        # Idempotent, and managers can't.
+        self.assertEqual(c.post(URL + 'ignored/bulk/', {'domains': ['a.example']},
+                                format='json').status_code, 200)
+        self.assertEqual(IgnoredEmailDomain.objects.filter(org=self.org).count(), 2)
+        m = APIClient()
+        m.force_authenticate(self.manager)
+        self.assertEqual(m.post(URL + 'ignored/bulk/', {'domains': ['keep.example']},
+                                format='json').status_code, 403)
+
+
+class InitialsTierTest(Base):
+    def ctx(self):
+        return svc.SuggestionContext.for_org(self.org)
+
+    def test_hyphen_and_joined(self):
+        df = Client.objects.create(org=self.org, name='Dauphin & Fantacone')
+        for d in ('df-cpas.com', 'dfcpas.com', 'df-law.com', 'cpa-df.com', 'df.com'):
+            s = svc.suggest_client(d, self.ctx())
+            self.assertEqual(s and s['client_id'], df.id, d)
+            self.assertEqual(s['tier'], 'initials')
+        self.assertIsNone(svc.suggest_client('dfx-cpas.com', self.ctx()))
+
+    def test_entity_suffix_excluded_and_kept_variant(self):
+        abc = Client.objects.create(org=self.org, name='Alpha Beta Corp')
+        self.assertEqual(svc.suggest_client('abc.com', self.ctx())['client_id'], abc.id)
+        self.assertEqual(svc.suggest_client('ab-llc.com', self.ctx())['client_id'], abc.id)
+        xy = Client.objects.create(org=self.org, name='Xeno Yarrow LLC')
+        self.assertEqual(svc.suggest_client('xy.com', self.ctx())['client_id'], xy.id)
+        self.assertIsNone(svc.suggest_client('xyl.com', self.ctx()))
+
+    def test_ambiguous_initials(self):
+        Client.objects.create(org=self.org, name='Dauphin & Fantacone')
+        Client.objects.create(org=self.org, name='Delta Foods')
+        self.assertIsNone(svc.suggest_client('df-cpas.com', self.ctx()))
+
+    def test_one_letter_rejected(self):
+        Client.objects.create(org=self.org, name='Beck CPA')    # core initials: b
+        Client.objects.create(org=self.org, name='Zorro')
+        self.assertIsNone(svc.suggest_client('b-cpas.com', self.ctx()))
+        self.assertIsNone(svc.suggest_client('z.com', self.ctx()))
+        self.assertEqual(svc.client_initials('Zorro'), set())
+        self.assertEqual(svc.client_initials('Testing 2'), set())
+
+    def test_stronger_tier_wins(self):
+        # "Delta Foods" (df) exists, but dfgroup.com is in another client's
+        # aliases: tier 1 wins, the initials tier is never consulted.
+        Client.objects.create(org=self.org, name='Delta Foods')
+        other = Client.objects.create(org=self.org, name='Other Co', aliases=['dfgroup.com'])
+        s = svc.suggest_client('dfgroup.com', self.ctx())
+        self.assertEqual((s['client_id'], s['tier']), (other.id, 'domain'))
+        # A name-tier hit beats an initials hit on a different client.
+        ac = Client.objects.create(org=self.org, name='Acmed')
+        Client.objects.create(org=self.org, name='Alpha Charlie Media Echo Delta')
+        s = svc.suggest_client('acmed.com', self.ctx())
+        self.assertEqual((s['client_id'], s['tier']), (ac.id, 'name'))
+
+    def test_ambiguous_strong_tier_does_not_fall_to_initials(self):
+        Client.objects.create(org=self.org, name='Smith Family Trust')
+        Client.objects.create(org=self.org, name='Smith Plumbing')
+        Client.objects.create(org=self.org, name='Sam Mint Ink Tea Holdings')  # initials smith
+        self.assertIsNone(svc.suggest_client('smith.com', self.ctx()))

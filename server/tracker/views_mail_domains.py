@@ -190,6 +190,30 @@ def email_domains_ignored(request):
     return Response({'id': obj.id, 'domain': obj.domain}, status=201)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def email_domains_ignored_bulk(request):
+    """POST {domains: [...]} — ignore several at once ("Ignore all automated").
+
+    Each domain succeeds or fails on its own; the response lists both.
+    """
+    org, err = _org_or_error(request)
+    if err:
+        return err
+    domains = request.data.get('domains') or []
+    if not isinstance(domains, list) or len(domains) > 500:
+        return Response({'error': 'Send a list of at most 500 domains.'}, status=400)
+    try:
+        done, failed = svc.ignore_domains(org, domains, user=request.user)
+    except Exception:
+        # Table missing: the migration has not been applied yet.
+        return Response({'error': 'Ignoring domains is not available yet.'}, status=503)
+    return Response({
+        'ignored': [{'id': i.id, 'domain': i.domain} for i in done],
+        'failed': failed,
+    })
+
+
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def email_domain_ignored_detail(request, ignore_id: int):

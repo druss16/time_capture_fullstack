@@ -34,14 +34,27 @@ interface Mapping {
   messages_attributed: number;
 }
 
-interface Suggestion { client_id: number; client_name: string; reason: string }
+interface Suggestion {
+  client_id: number;
+  client_name: string;
+  reason: string;
+  /** 'domain' | 'name' | 'token' | 'initials' — weakest last. */
+  tier?: string;
+}
 
 interface Observed {
   domain: string;
   messages: number;
+  inbound?: number;
+  outbound?: number;
   events: number;
   users: number;
   last_seen: string | null;
+  /** Server ranks by this: meetings and sent mail first, inbound-only bulk last. */
+  score?: number;
+  /** Vendor / bulk sender. Never true with a meeting or sent mail. */
+  automated?: boolean;
+  automated_reason?: string;
   suggestion: Suggestion | null;
 }
 
@@ -284,8 +297,120 @@ export default function EmailDomainsTab({
     if (ok) { setNewDomain(''); setNewClient(null); }
   };
 
+  const ignoreAll = async (rows: Observed[]) => {
+    if (!rows.length) return;
+    if (!window.confirm(`Ignore all ${rows.length} probably-automated domains? You can restore any of them from "Ignored domains".`)) return;
+    setBusy('__ignore_all__');
+    try {
+      const r = await safeFetchJson<{ ignored: Ignored[]; failed: { domain: string; error: string }[] }>(
+        `${BASE}ignored/bulk/`, { method: 'POST', body: JSON.stringify({ domains: rows.map(o => o.domain) }) },
+      );
+      onSuccess(`Ignored ${r.ignored.length} domain${r.ignored.length === 1 ? '' : 's'}`);
+      if (r.failed.length) onError(`${r.failed.length} could not be ignored: ${r.failed[0]?.error ?? ''}`);
+      await load(true);
+    } catch (e: any) {
+      onError(e?.message || 'Could not ignore those domains');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const suggestionCount = observed.filter(o => o.suggestion).length;
   const nothingYet = !loading && mappings.length === 0 && observed.length === 0;
+  // Server order is already signal-first; split keeps that order in each part.
+  const people = observed.filter(o => !o.automated);
+  const automated = observed.filter(o => o.automated);
+
+  // One table for both parts. overflow-x-auto + a min width: in a narrow
+  // settings column the table scrolls inside its card instead of crushing
+  // every cell to a few characters.
+  const renderObservedTable = (rows: Observed[]) => (
+    <div className="border border-border/70 rounded-lg bg-white overflow-x-auto">
+      <table className="w-full min-w-[720px] text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-border/70">
+            <th className="px-3 py-2 font-medium">Domain</th>
+            <th className="px-3 py-2 font-medium text-right">Messages</th>
+            <th className="px-3 py-2 font-medium text-right">Meetings</th>
+            <th className="px-3 py-2 font-medium text-right">People</th>
+            <th className="px-3 py-2 font-medium">Last seen</th>
+            <th className="px-3 py-2 font-medium">Client</th>
+            <th className="px-3 py-2 font-medium" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(o => {
+            const picking = pickFor === `o:${o.domain}`;
+            const rowBusy = busy === o.domain;
+            const sent = o.outbound ?? 0;
+            return (
+              <tr key={o.domain} className="border-b border-border/40 last:border-0 align-top">
+                <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">
+                  {o.domain}
+                  {o.automated && o.automated_reason && (
+                    <span className="block font-sans text-[11px] text-slate-400 mt-0.5">{o.automated_reason}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600 whitespace-nowrap"
+                    title={`${o.inbound ?? o.messages} received, ${sent} sent`}>
+                  {o.messages || '—'}
+                  {sent > 0 && <span className="block text-[11px] text-emerald-600">{sent} sent</span>}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{o.events || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{o.users}</td>
+                <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{fmtDate(o.last_seen)}</td>
+                <td className="px-3 py-2">
+                  {picking ? (
+                    <ClientPicker clients={clients}
+                                  onPick={c => mapDomain(o.domain, c)}
+                                  onCancel={() => setPickFor(null)} />
+                  ) : o.suggestion ? (
+                    <>
+                      <button
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary/8 text-primary text-[12.5px] font-semibold hover:bg-primary/15 disabled:opacity-50"
+                        title={o.suggestion.reason}
+                        disabled={busy !== null}
+                        onClick={() => mapDomain(o.domain, { id: o.suggestion!.client_id, name: o.suggestion!.client_name })}
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Map to {o.suggestion.client_name}
+                      </button>
+                      {o.suggestion.tier === 'initials' && (
+                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                          Matches initials of {o.suggestion.client_name}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[12px] text-slate-300">No suggestion</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  {rowBusy ? (
+                    <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin inline" />
+                  ) : (
+                    <>
+                      <button className="text-[12px] text-slate-500 hover:text-slate-800 mr-3"
+                              disabled={busy !== null}
+                              onClick={() => setPickFor(picking ? null : `o:${o.domain}`)}>
+                        {o.suggestion ? 'Other client…' : 'Map to…'}
+                      </button>
+                      <button className="inline-flex items-center gap-1 text-[12px] text-slate-400 hover:text-slate-700"
+                              title="Not a client (a bank, a vendor…). Hides it from this list; it changes no matching."
+                              disabled={busy !== null}
+                              onClick={() => ignore(o.domain)}>
+                        <EyeOff className="w-3.5 h-3.5" /> Ignore
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <SettingsPage
@@ -331,7 +456,7 @@ export default function EmailDomainsTab({
           sub="Exact domains only: acme.com does not cover mail.acme.com. Public domains (gmail.com, outlook.com…) and your own firm's domain can't be mapped."
         >
           <div className="flex flex-wrap items-end gap-3 mb-4">
-            <div className="w-56">
+            <div className="w-full sm:w-56">
               <label className={labelClass}>Domain</label>
               <input
                 value={newDomain}
@@ -341,7 +466,7 @@ export default function EmailDomainsTab({
                 className={inputClass}
               />
             </div>
-            <div className="w-72">
+            <div className="w-full sm:w-72">
               <label className={labelClass}>Client</label>
               {pickingNew ? (
                 <ClientPicker
@@ -367,8 +492,8 @@ export default function EmailDomainsTab({
           {mappings.length === 0 ? (
             <p className="text-[12.5px] text-slate-400">Nothing mapped yet.</p>
           ) : (
-            <div className="border border-border/70 rounded-lg bg-white">
-              <table className="w-full text-sm">
+            <div className="border border-border/70 rounded-lg bg-white overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-border/70">
                     <th className="px-3 py-2 font-medium">Domain</th>
@@ -429,77 +554,38 @@ export default function EmailDomainsTab({
             <p className="text-[12.5px] text-slate-400">
               Nothing waiting. New domains appear here as connected mailboxes and calendars sync.
             </p>
+          ) : people.length === 0 ? (
+            <p className="text-[12.5px] text-slate-400">
+              Everything seen lately looks automated (vendors, newsletters, notifications). It's listed below.
+            </p>
           ) : (
-            <div className="border border-border/70 rounded-lg bg-white">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-border/70">
-                    <th className="px-3 py-2 font-medium">Domain</th>
-                    <th className="px-3 py-2 font-medium text-right">Messages</th>
-                    <th className="px-3 py-2 font-medium text-right">Meetings</th>
-                    <th className="px-3 py-2 font-medium text-right">People</th>
-                    <th className="px-3 py-2 font-medium">Last seen</th>
-                    <th className="px-3 py-2 font-medium">Client</th>
-                    <th className="px-3 py-2 font-medium" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {observed.map(o => {
-                    const picking = pickFor === `o:${o.domain}`;
-                    const rowBusy = busy === o.domain;
-                    return (
-                      <tr key={o.domain} className="border-b border-border/40 last:border-0 align-top">
-                        <td className="px-3 py-2 font-mono text-[12.5px] text-slate-800">{o.domain}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-600">{o.messages || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-600">{o.events || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-600">{o.users}</td>
-                        <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{fmtDate(o.last_seen)}</td>
-                        <td className="px-3 py-2">
-                          {picking ? (
-                            <ClientPicker clients={clients}
-                                          onPick={c => mapDomain(o.domain, c)}
-                                          onCancel={() => setPickFor(null)} />
-                          ) : o.suggestion ? (
-                            <button
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary/8 text-primary text-[12.5px] font-semibold hover:bg-primary/15 disabled:opacity-50"
-                              title={o.suggestion.reason}
-                              disabled={busy !== null}
-                              onClick={() => mapDomain(o.domain, { id: o.suggestion!.client_id, name: o.suggestion!.client_name })}
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              Map to {o.suggestion.client_name}
-                            </button>
-                          ) : (
-                            <span className="text-[12px] text-slate-300">No suggestion</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">
-                          {rowBusy ? (
-                            <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin inline" />
-                          ) : (
-                            <>
-                              <button className="text-[12px] text-slate-500 hover:text-slate-800 mr-3"
-                                      disabled={busy !== null}
-                                      onClick={() => setPickFor(picking ? null : `o:${o.domain}`)}>
-                                {o.suggestion ? 'Other client…' : 'Map to…'}
-                              </button>
-                              <button className="inline-flex items-center gap-1 text-[12px] text-slate-400 hover:text-slate-700"
-                                      title="Not a client (a bank, a vendor…). Hides it from this list; it changes no matching."
-                                      disabled={busy !== null}
-                                      onClick={() => ignore(o.domain)}>
-                                <EyeOff className="w-3.5 h-3.5" /> Ignore
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <p className="text-[12px] text-slate-400 mb-2">
+                People you've met with or written to come first.
+              </p>
+              {renderObservedTable(people)}
+            </>
           )}
         </SettingsSection>
+
+        {!loading && automated.length > 0 && (
+          <SettingsSection
+            icon={<Inbox className="w-3.5 h-3.5" />}
+            title={`Probably automated (${automated.length})`}
+            sub="Software vendors, newsletters and notification senders, inbound only. Anyone you've met with or emailed is never put here."
+            collapsible
+          >
+            <div className="flex justify-end mb-3">
+              <button className={secondaryBtnClass} disabled={busy !== null} onClick={() => ignoreAll(automated)}>
+                {busy === '__ignore_all__'
+                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  : <EyeOff className="w-3.5 h-3.5" />}
+                Ignore all {automated.length}
+              </button>
+            </div>
+            {renderObservedTable(automated)}
+          </SettingsSection>
+        )}
 
         {ignored.length > 0 && (
           <SettingsSection

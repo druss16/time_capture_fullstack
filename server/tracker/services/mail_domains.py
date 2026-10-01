@@ -54,7 +54,7 @@ from typing import Iterable, Optional
 
 from celery import shared_task
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 
 from tracker.models import (
@@ -65,6 +65,7 @@ from tracker.services.alias_derivation import (
     FREE_EMAIL_DOMAINS, STOP_TOKENS, UNSAFE_SINGLE_TOKENS,
     _strip_corp_suffix, _strip_possessives,
 )
+from tracker.services import mail_domain_noise as noise
 from tracker.tasks_mail import PUBLIC_EMAIL_DOMAINS as _MATCHER_PUBLIC_DOMAINS
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,17 @@ def ignore_domain(org, raw_domain: str, user=None) -> IgnoredEmailDomain:
         return IgnoredEmailDomain.objects.get(org=org, domain=domain)
 
 
+def ignore_domains(org, raw_domains, user=None) -> tuple[list, list]:
+    """Ignore several domains. ([IgnoredEmailDomain], [{domain, error}])."""
+    done, failed = [], []
+    for raw in raw_domains or []:
+        try:
+            done.append(ignore_domain(org, raw if isinstance(raw, str) else '', user=user))
+        except DomainError as e:
+            failed.append({'domain': raw, 'error': str(e)})
+    return done, failed
+
+
 def unignore_domain(org, ignore_id) -> bool:
     try:
         deleted, _ = IgnoredEmailDomain.objects.filter(org=org, id=int(ignore_id)).delete()
@@ -341,29 +353,48 @@ def unignore_domain(org, ignore_id) -> bool:
 def domain_activity(org, days: int = DEFAULT_WINDOW_DAYS) -> dict[str, dict]:
     """Every counterparty domain seen in the window, unfiltered.
 
-    domain → {messages, events, users:set, last_seen}. Mail from
-    MailSignal.other_party_domain (all providers); calendar from each
-    CalendarEvent's attendee domains (one event counts once per domain).
+    domain → {messages, inbound, outbound, events, users:set, last_seen,
+    senders_known, senders_automated}. Mail from MailSignal.other_party_domain
+    (all providers); calendar from each CalendarEvent's attendee domains (one
+    event counts once per domain). `senders_*` count inbound rows that store a
+    from_address (Gmail only) and how many of those are noreply@-style.
     """
     since = timezone.now() - timedelta(days=days)
     acc: dict[str, dict] = defaultdict(
-        lambda: {'messages': 0, 'events': 0, 'users': set(), 'last_seen': None})
+        lambda: {'messages': 0, 'inbound': 0, 'outbound': 0, 'events': 0, 'users': set(),
+                 'last_seen': None, 'senders_known': 0, 'senders_automated': 0})
 
     def touch(d, when):
         cur = acc[d]['last_seen']
         if when and (cur is None or when > cur):
             acc[d]['last_seen'] = when
 
-    mail_rows = (MailSignal.objects.filter(org=org, occurred_at__gte=since)
-                 .values('other_party_domain', 'user_id')
+    def norm(raw):
+        return (raw or '').strip().lower().lstrip('@')
+
+    mail = MailSignal.objects.filter(org=org, occurred_at__gte=since)
+    mail_rows = (mail.values('other_party_domain', 'user_id', 'direction')
                  .annotate(n=Count('id'), last=Max('occurred_at')))
     for r in mail_rows:
-        d = (r['other_party_domain'] or '').strip().lower().lstrip('@')
+        d = norm(r['other_party_domain'])
         if not d:
             continue
         acc[d]['messages'] += r['n']
+        acc[d]['outbound' if r['direction'] == 'out' else 'inbound'] += r['n']
         acc[d]['users'].add(r['user_id'])
         touch(d, r['last'])
+
+    sender_rows = (mail.filter(direction='in', from_address__isnull=False)
+                   .exclude(from_address='')
+                   .values('other_party_domain')
+                   .annotate(known=Count('id'),
+                             automated=Count('id', filter=Q(
+                                 from_address__iregex=noise.AUTOMATED_LOCAL_PART_REGEX))))
+    for r in sender_rows:
+        d = norm(r['other_party_domain'])
+        if d in acc:
+            acc[d]['senders_known'] += r['known']
+            acc[d]['senders_automated'] += r['automated']
 
     # Read-only walk; keyset paging anyway so it never holds a named cursor.
     from tracker.utils.db_iter import keyset_iter
@@ -381,10 +412,45 @@ def domain_activity(org, days: int = DEFAULT_WINDOW_DAYS) -> dict[str, dict]:
     return dict(acc)
 
 
+# ─── Signal ranking + automated classification ──────────────────────────────
+# What lives in which list is in mail_domain_noise.py; this is only the logic.
+
+def classify_automated(domain: str, *, events: int = 0, outbound: int = 0,
+                       senders_known: int = 0, senders_automated: int = 0
+                       ) -> tuple[bool, str]:
+    """(automated, reason). Never automated with a meeting or outbound mail."""
+    if events > 0 or outbound > 0:
+        return False, ''
+    labels = [x for x in (domain or '').lower().split('.') if x]
+    _label, registrable = split_domain(domain)
+    if registrable and len(labels) > len(registrable.split('.')):
+        if noise.is_automated_host_label(labels[0]):
+            return True, f'Sent from a bulk-mail host ({labels[0]}.)'
+    if registrable in noise.VENDOR_DOMAINS:
+        return True, f'{registrable} is a known software or platform vendor'
+    if (senders_known and senders_automated / senders_known > noise.AUTOMATED_LOCAL_PART_SHARE):
+        return True, 'Mostly sent from no-reply or notification addresses'
+    return False, ''
+
+
+def signal_score(*, events: int = 0, outbound: int = 0, inbound: int = 0, users: int = 0) -> float:
+    """How much a domain looks like a person or business the firm works with.
+
+    Meetings and mail the firm SENT are strong; more firm members in touch
+    with it is strong; inbound-only volume is weak and capped, so a newsletter
+    that arrives daily (capped at 4) cannot outrank one meeting (10) or one
+    message the firm sent (5).
+    """
+    return round(10.0 * events + 5.0 * outbound + 3.0 * max(users - 1, 0)
+                 + 0.2 * min(inbound, 20), 2)
+
+
 def observed_domains(org, days: int = DEFAULT_WINDOW_DAYS, limit: int = 200) -> list[dict]:
     """Domains seen but not mapped: excludes public, own, mapped and ignored.
 
-    Each row carries a `suggestion` ({client_id, client_name, reason}) or None.
+    Each row carries `score` / `automated` / `automated_reason` and a
+    `suggestion` ({client_id, client_name, reason, tier}) or None. Ordered
+    non-automated first, then by score — strongest relationship at the top.
     """
     activity = domain_activity(org, days)
     own = org_own_domains(org)
@@ -397,14 +463,24 @@ def observed_domains(org, days: int = DEFAULT_WINDOW_DAYS, limit: int = 200) -> 
         if (d in PUBLIC_DOMAINS or d in own or d in mapped or d in ignored
                 or not _DOMAIN_RE.match(d)):
             continue
+        automated, why = classify_automated(
+            d, events=a['events'], outbound=a['outbound'],
+            senders_known=a['senders_known'], senders_automated=a['senders_automated'])
         rows.append({
             'domain': d,
             'messages': a['messages'],
+            'inbound': a['inbound'],
+            'outbound': a['outbound'],
             'events': a['events'],
             'users': len(a['users']),
             'last_seen': a['last_seen'].isoformat() if a['last_seen'] else None,
+            'score': signal_score(events=a['events'], outbound=a['outbound'],
+                                  inbound=a['inbound'], users=len(a['users'])),
+            'automated': automated,
+            'automated_reason': why,
         })
-    rows.sort(key=lambda r: (-(r['messages'] + r['events']), r['domain']))
+    rows.sort(key=lambda r: (r['automated'], -r['score'],
+                             -(r['messages'] + r['events']), r['domain']))
     rows = rows[:limit]
     for r in rows:
         r['suggestion'] = suggest_client(r['domain'], ctx)
@@ -449,6 +525,62 @@ def _tokens(name: str) -> list[str]:
     return [t for t in re.split(r'[^a-z0-9]+', _strip_possessives(name or '').lower()) if t]
 
 
+# ── Initials ──
+# Generic words a firm puts next to its initials in a domain: df-cpas.com,
+# dfcpas.com, cpa-df.com. Also left out of a client's own initials.
+FIRM_SUFFIXES = ('accounting', 'partners', 'group', 'cpas', 'cpa', 'law', 'llp',
+                 'llc', 'inc', 'pc', 'co')
+# Legal-form words never contribute a letter ("Alpha Beta LLC" → ab).
+_LEGAL_FORMS = frozenset({'llc', 'inc', 'ltd', 'llp', 'pllc', 'lp', 'pc', 'pa', 'plc',
+                          'dds', 'incorporated', 'limited'})
+# Kept in the WIDE variant only ("Alpha Beta Corp" → ab and abc).
+_CORP_WORDS = frozenset({'corp', 'corporation', 'company', 'co'})
+MIN_INITIALS = 2
+
+
+def client_initials(name: str) -> set[str]:
+    """Initials a domain might spell for a client name. Each is ≥2 letters.
+
+    Two variants: without legal forms or firm words ("Dauphin & Fantacone
+    CPAs" → df), and keeping firm words like Corp/Group/CPA ("Alpha Beta
+    Corp" → abc as well as ab). Stop words and '&' never count; a numeric
+    word contributes nothing.
+    """
+    words = [t for t in _tokens(name) if t not in STOP_TOKENS and t[0].isalpha()]
+    out = set()
+    core = ''.join(t[0] for t in words if t not in _LEGAL_FORMS and t not in FIRM_SUFFIXES
+                   and t not in _CORP_WORDS)
+    wide = ''.join(t[0] for t in words if t not in _LEGAL_FORMS)
+    for ini in (core, wide):
+        if len(ini) >= MIN_INITIALS:
+            out.add(ini)
+    return out
+
+
+def _initials_candidates(label: str) -> set[str]:
+    """Strings in a registrable label that could be a client's initials.
+
+    'df-cpas' → {df}, 'dfcpas' → {dfcpas, df}, 'abc' → {abc}, 'cpa-df' → {df}.
+    A preceding firm word is only recognised with a hyphen: stripping a
+    joined prefix ('co' + 'as') invents too many accidental matches.
+    """
+    parts = [_compact(p) for p in (label or '').lower().split('-') if _compact(p)]
+    if not parts:
+        return set()
+    whole = ''.join(parts)
+    cands = {whole}
+    if len(parts) >= 2 and parts[-1] in FIRM_SUFFIXES:
+        cands.add(''.join(parts[:-1]))
+    if len(parts) >= 2 and parts[0] in FIRM_SUFFIXES:
+        cands.add(''.join(parts[1:]))
+    for suf in FIRM_SUFFIXES:
+        if whole.endswith(suf) and len(whole) > len(suf):
+            cands.add(whole[:-len(suf)])
+    return {c for c in cands
+            if len(c) >= MIN_INITIALS and c.isalpha()
+            and c not in FIRM_SUFFIXES and c not in _GENERIC_LABELS}
+
+
 @dataclass
 class SuggestionContext:
     clients: list            # [(id, name)]
@@ -456,12 +588,14 @@ class SuggestionContext:
     form_owners: dict        # compact name form → {client ids}
     token_owners: dict       # name token → {client ids}
     names: dict              # id → name
+    initials_owners: dict = None  # initials ('df') → {client ids}
 
     @classmethod
     def for_org(cls, org) -> 'SuggestionContext':
         rows = list(Client.objects.filter(org=org, is_active=True)
                     .values_list('id', 'name', 'email', 'aliases'))
         domain_owners, form_owners, token_owners = defaultdict(set), defaultdict(set), defaultdict(set)
+        initials_owners = defaultdict(set)
         names = {}
         for cid, name, email, aliases in rows:
             names[cid] = name or ''
@@ -481,20 +615,51 @@ class SuggestionContext:
                 form_owners[f].add(cid)
             for t in set(_tokens(name or '')):
                 token_owners[t].add(cid)
+            for ini in client_initials(name or ''):
+                initials_owners[ini].add(cid)
         return cls(
             clients=[(cid, names[cid]) for cid, *_ in rows],
             domain_owners=dict(domain_owners), form_owners=dict(form_owners),
             token_owners=dict(token_owners), names=names,
+            initials_owners=dict(initials_owners),
         )
 
 
-def _one(ids, ctx, reason):
+def _one(ids, ctx, reason, tier):
     """The single client of a tier, or the string 'ambiguous'/None."""
     ids = set(ids or ())
     if len(ids) == 1:
         cid = next(iter(ids))
-        return {'client_id': cid, 'client_name': ctx.names.get(cid, ''), 'reason': reason}
+        return {'client_id': cid, 'client_name': ctx.names.get(cid, ''),
+                'reason': reason, 'tier': tier}
     return 'ambiguous' if ids else None
+
+
+def _strong_tiers(label: str, ctx: SuggestionContext):
+    """Tiers 2 and 3: a suggestion dict, 'ambiguous', or None."""
+    compact = _compact(label)
+    if (len(compact) < MIN_LABEL_LEN or compact in _GENERIC_LABELS
+            or label.replace('-', ' ').strip() in _GENERIC_LABELS):
+        return None
+
+    hit = _one(ctx.form_owners.get(compact), ctx, 'The domain name matches the client name',
+               'name')
+    if hit == 'ambiguous':
+        return hit
+    if hit:
+        # Family guard: "Acme Corp" matches acme.com exactly, but if "Acme
+        # Payroll LLC" is also a client the domain could be either of them.
+        family = set()
+        for form, ids in ctx.form_owners.items():
+            if form.startswith(compact):
+                family |= ids
+        family |= ctx.token_owners.get(compact, set())
+        return hit if family <= {hit['client_id']} else 'ambiguous'
+
+    if len(compact) >= MIN_TOKEN_LEN and '-' not in label and not compact.isdigit():
+        return _one(ctx.token_owners.get(compact), ctx,
+                    'The domain name is a word only this client’s name contains', 'token')
+    return None
 
 
 def suggest_client(domain: str, ctx: SuggestionContext) -> Optional[dict]:
@@ -508,6 +673,11 @@ def suggest_client(domain: str, ctx: SuggestionContext) -> Optional[dict]:
          ('acme-corp.com' ↔ "Acme Corp, Inc."), and is not a generic word.
       3. The label is a single long name word that only ONE client's name
          contains ('pureadk.com' ↔ "PureADK Holdings"), not a generic word.
+      4. Lowest: the label spells ONE client's initials, optionally with a
+         firm word ('df-cpas.com' ↔ "Dauphin & Fantacone"). Reached only when
+         tiers 1-3 found nothing at all; two clients with those initials →
+         nothing.
+    `tier` on the result is 'domain' / 'name' / 'token' / 'initials'.
     """
     domain = normalize_domain(domain)
     if not domain:
@@ -515,33 +685,22 @@ def suggest_client(domain: str, ctx: SuggestionContext) -> Optional[dict]:
     label, registrable = split_domain(domain)
 
     hit = _one(ctx.domain_owners.get(domain, set()) | ctx.domain_owners.get(registrable, set()),
-               ctx, 'This domain is in the client’s email address or aliases')
+               ctx, 'This domain is in the client’s email address or aliases', 'domain')
     if hit:
         return None if hit == 'ambiguous' else hit
 
-    compact = _compact(label)
-    if (len(compact) < MIN_LABEL_LEN or compact in _GENERIC_LABELS
-            or label.replace('-', ' ').strip() in _GENERIC_LABELS):
-        return None
-
-    hit = _one(ctx.form_owners.get(compact), ctx, 'The domain name matches the client name')
-    if hit == 'ambiguous':
-        return None
+    hit = _strong_tiers(label, ctx)
     if hit:
-        # Family guard: "Acme Corp" matches acme.com exactly, but if "Acme
-        # Payroll LLC" is also a client the domain could be either of them.
-        family = set()
-        for form, ids in ctx.form_owners.items():
-            if form.startswith(compact):
-                family |= ids
-        family |= ctx.token_owners.get(compact, set())
-        return hit if family <= {hit['client_id']} else None
+        return None if hit == 'ambiguous' else hit
 
-    if len(compact) >= MIN_TOKEN_LEN and '-' not in label and not compact.isdigit():
-        hit = _one(ctx.token_owners.get(compact), ctx,
-                   'The domain name is a word only this client’s name contains')
-        if hit:
-            return None if hit == 'ambiguous' else hit
+    owners = set()
+    for cand in _initials_candidates(label):
+        owners |= (ctx.initials_owners or {}).get(cand, set())
+    if len(owners) == 1:
+        cid = next(iter(owners))
+        name = ctx.names.get(cid, '')
+        return {'client_id': cid, 'client_name': name,
+                'reason': f'The domain matches the initials of {name}', 'tier': 'initials'}
     return None
 
 

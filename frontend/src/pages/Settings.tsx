@@ -361,8 +361,8 @@ export default function Settings() {
       </aside>
 
       {/* ── Main content ── */}
-      <main className="flex-1 pt-2 px-6 pb-6 bg-slate-50 overflow-auto min-w-0">
-        <div className="bg-white rounded-xl border border-border/60 p-6">
+      <main className="flex-1 pt-2 px-3 lg:px-6 pb-6 bg-slate-50 overflow-auto min-w-0">
+        <div className="bg-white rounded-xl border border-border/60 p-4 lg:p-6">
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <RefreshCw className="w-5 h-5 text-primary animate-spin" />

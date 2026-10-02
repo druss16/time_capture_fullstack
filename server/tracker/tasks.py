@@ -1973,6 +1973,13 @@ from tracker.integrations.clio.webhooks import (  # noqa: F401
     renew_clio_webhooks,
 )
 
+# QuickBooks Time project sync — registered here for the same autodiscovery
+# reason as Clio's: integrations/ is never walked by autodiscover_tasks().
+from tracker.integrations.qb_time.sync import (  # noqa: F401
+    sync_qb_time_full,
+    sync_all_qb_time_orgs,
+)
+
 # Matter attribution sweep. services/ is not a `tasks` module, so
 # autodiscover_tasks() never walks it — same gap that left sync_clio_full
 # unregistered. verify_beat_tasks now fails CI on this, which is how it was

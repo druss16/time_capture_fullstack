@@ -104,7 +104,9 @@ INDUSTRY_PRIMARY_INTEGRATIONS = {
     'legal': ['clio'],
     'cpa': ['quickbooks', 'xero'],
     'ai_consulting': ['quickbooks', 'xero'],
-    'marketing': ['quickbooks', 'xero'],
+    # Agencies commonly clock hours in QuickBooks Time, which holds their
+    # Customer → Project list and project estimates.
+    'marketing': ['qb_time', 'quickbooks', 'xero'],
     'general': ['quickbooks', 'xero'],
 }
 

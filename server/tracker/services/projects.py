@@ -3,9 +3,9 @@ Which projects a firm's time can be filed under.
 
 Two sources, one answer:
 
-  · MIRRORED — a Project that reflects a practice-management record (a Clio
-    matter, via ExternalMatterMapping). Live while the external record is open.
-    The external system owns the list; a project it does not know cannot push.
+  · MIRRORED — a Project that reflects an external record via
+    ExternalMatterMapping: a Clio matter, or a QuickBooks Time project jobcode.
+    Live while the external record is open. The external system owns the list.
 
   · LOCAL — a Project kept in TimeTracker itself: created by hand, from a CSV,
     or inline from Daily Review. Live while `is_active`. Only counts for
@@ -40,6 +40,9 @@ class ProjectOption:
     open_date: object = None
     responsible_attorney: str = ''
     practice_area: str = ''
+    provider: str = ''
+    estimated_hours: object = None
+    due_date: object = None
 
 
 def org_tracks_local_projects(org) -> bool:
@@ -69,7 +72,7 @@ def selectable_projects(org, *, client_ids=None, include_ids=()) -> dict[int, li
 
     mq = (ExternalMatterMapping.objects
           .filter(integration__organization=org)
-          .select_related('project'))
+          .select_related('project', 'integration'))
     if client_ids is not None:
         mq = mq.filter(project__client_id__in=list(client_ids))
     mapped_ids = set()
@@ -91,6 +94,9 @@ def selectable_projects(org, *, client_ids=None, include_ids=()) -> dict[int, li
             open_date=m.open_date,
             responsible_attorney=m.responsible_attorney or '',
             practice_area=m.practice_area or '',
+            provider=m.integration.provider,
+            estimated_hours=m.estimated_hours,
+            due_date=m.due_date,
         ))
 
     if org_tracks_local_projects(org):

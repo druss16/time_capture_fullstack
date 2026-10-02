@@ -169,7 +169,8 @@ def name_phrase(project_name: str, client_name: str = '') -> str:
 
 def build_name_index(options_by_client, client_names) -> dict:
     """
-    client_id -> {phrase: project_id} for projects kept in TimeTracker.
+    client_id -> {phrase: project_id} for projects known by NAME — kept in
+    TimeTracker, or mirrored from a source that has no numbers (QuickBooks Time).
 
     Scoped per client on purpose: "Website Refresh" is a project at half the
     agency's clients, and a name is only evidence among the projects of the
@@ -180,7 +181,9 @@ def build_name_index(options_by_client, client_names) -> dict:
     for client_id, options in options_by_client.items():
         seen = defaultdict(set)
         for o in options:
-            if o.mapped:
+            # Numbered matters (Clio) are matched by number, above. Projects
+            # mirrored by name (QuickBooks Time) are matched here like local ones.
+            if o.mapped and o.display_number:
                 continue
             phrase = name_phrase(o.name, client_names.get(client_id, ''))
             if phrase:

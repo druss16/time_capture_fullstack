@@ -15,7 +15,14 @@ import { safeFetchJson, API_BASE } from '@/lib/api';
 import { cn } from '@/lib/design-system';
 import { useTerminology } from '@/lib/terminology';
 
-type ProjectRow = { id: number; name: string; client_id: number; is_active: boolean; hours?: number };
+type ProjectRow = {
+  id: number; name: string; client_id: number; is_active: boolean; hours?: number;
+  /** 'local', or the integration it mirrors ('qb_time', 'clio'). */
+  source?: string;
+  estimated_hours?: number | null;
+};
+
+const SOURCE_LABEL: Record<string, string> = { qb_time: 'QB Time', clio: 'Clio' };
 
 export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }: {
   clientId: number;
@@ -114,9 +121,22 @@ export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }:
               ) : (
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{p.name}</span>
               )}
-              <span className="shrink-0 font-mono text-xs tabular-nums text-slate-400">{(p.hours ?? 0).toFixed(1)}h</span>
+              {p.source && p.source !== 'local' && (
+                <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700"
+                  title={`Kept in ${SOURCE_LABEL[p.source] || p.source} — rename or close it there`}>
+                  {SOURCE_LABEL[p.source] || p.source}
+                </span>
+              )}
+              <span className={cn('shrink-0 font-mono text-xs tabular-nums',
+                  p.estimated_hours != null && (p.hours ?? 0) > p.estimated_hours
+                    ? 'font-semibold text-amber-600' : 'text-slate-400')}
+                title={p.estimated_hours != null ? 'Tracked of estimated hours' : 'Tracked hours'}>
+                {(p.hours ?? 0).toFixed(1)}{p.estimated_hours != null ? ` / ${p.estimated_hours.toFixed(1)}` : ''}h
+              </span>
               {!p.is_active && <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Archived</span>}
-              {canManage && editing !== p.id && (
+              {/* A synced project's name and status belong to its source;
+                  edited here, the next hourly sync would quietly put them back. */}
+              {canManage && editing !== p.id && (!p.source || p.source === 'local') && (
                 <>
                   <button title="Rename" onClick={() => { setEditing(p.id); setEditName(p.name); }}
                     className="rounded-lg p-1.5 text-slate-400 hover:bg-primary/8 hover:text-primary"><Pencil className="h-3.5 w-3.5" /></button>

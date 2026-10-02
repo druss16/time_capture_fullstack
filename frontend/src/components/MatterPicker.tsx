@@ -32,6 +32,8 @@ interface MatterOption {
   responsible_attorney: string;
   practice_area: string;
   last_worked: string | null;
+  estimated_hours?: number | null;
+  due_date?: string | null;
 }
 
 /** "opened Mar 2026" — enough to separate two same-named matters, short enough to fit. */
@@ -193,7 +195,9 @@ export const MatterPicker: React.FC<{
             const prev = data.options[i - 1];
             const startsRest = !o.last_worked && (i === 0 || prev?.last_worked);
             const facts = [
-              o.open_date ? `opened ${fmtMatterDate(o.open_date)}` : null,
+              o.estimated_hours != null ? `est. ${o.estimated_hours}h` : null,
+              o.due_date ? `due ${fmtMatterDate(o.due_date)}` : null,
+              o.open_date && !o.due_date ? `opened ${fmtMatterDate(o.open_date)}` : null,
               o.responsible_attorney || null,
               o.practice_area || null,
             ].filter(Boolean);

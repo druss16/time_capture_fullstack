@@ -17,13 +17,15 @@
  *   amber = unassigned · mono = text captured off screen · sans = product voice ·
  *   every triage row leads with its minutes.
  */
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
 import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, suggestAliasFromTitle, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
 import { BlockEvidencePanel } from "@/components/BlockEvidencePanel";
-import type { Lanes, CertainGroup, MismatchBlock, SplitCandidate, AmbiguousGroup } from "@/lib/dailyReviewLanes";
+import type { Lanes, CertainGroup, CertainRow, MismatchBlock, SplitCandidate, AmbiguousGroup } from "@/lib/dailyReviewLanes";
+import { MatterPicker } from "@/components/MatterPicker";
+import { useTerminology } from "@/lib/terminology";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:7123/api";
 const API_BASE = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE.replace(/\/+$/, "")}/api`;
@@ -92,6 +94,7 @@ export default function CompactSummary({
   onInteractionChange,
 }: Props) {
   const sysDark = useSystemDark();
+  const terms = useTerminology();
   const { certain, needsYou } = lanes;
 
   const [certainOpen, setCertainOpen] = useState(false);
@@ -362,6 +365,43 @@ export default function CompactSummary({
 
   // One client group in the Certain browse: header (name · blocks · minutes · Move)
   // over its raw captured titles.
+  // Firms that work Client → Project see each client's rows under their
+  // projects, biggest first, with unfiled time as its own amber bucket that can
+  // be filed in one pick. Every other firm gets the flat list, unchanged.
+  const renderRows = (g: CertainGroup, renderRow: (r: CertainRow, i: number) => JSX.Element) => {
+    if (!g.projects || g.clientId == null) return g.rows.map(renderRow);
+    const buckets = new Map<string, CertainRow[]>();
+    for (const r of g.rows) {
+      const k = String(r.projectId ?? "none");
+      buckets.set(k, [...(buckets.get(k) || []), r]);
+    }
+    const order = [
+      ...g.projects.map((p) => String(p.id ?? "none")),
+      ...[...buckets.keys()].filter((k) => !g.projects!.some((p) => String(p.id ?? "none") === k)),
+    ];
+    return order.filter((k, i) => order.indexOf(k) === i && buckets.has(k)).map((k) => {
+      const rows = buckets.get(k)!;
+      const total = g.projects!.find((p) => String(p.id ?? "none") === k)?.minutes
+        ?? rows.reduce((s, r) => s + r.minutes, 0);
+      const unfiled = k === "none";
+      const name = unfiled ? `No ${terms.project.toLowerCase()} yet` : (rows[0].projectName || terms.project);
+      return (
+        <Fragment key={k}>
+          <div className={cn("mt-1.5 flex items-center gap-2 pb-0.5 pr-1",
+            unfiled ? "text-amber-700" : "text-foreground/80")}>
+            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", unfiled ? "bg-amber-500" : "bg-primary/60")} />
+            <span className={cn("min-w-0 flex-1 truncate font-sans text-[12.5px] font-semibold", unfiled && "italic")}>{name}</span>
+            {unfiled && (
+              <MatterPicker blockIds={rows.flatMap((r) => r.ids)} label="File all" onAssigned={() => onRefresh()} />
+            )}
+            <span className="shrink-0 font-mono text-[12px] tabular-nums">{fmtMin(total)}</span>
+          </div>
+          <div className="pl-3">{rows.map(renderRow)}</div>
+        </Fragment>
+      );
+    });
+  };
+
   const renderGroup = (g: CertainGroup) => {
     const open = openGroup === g.key || !!q;
     const allIds = g.rows.flatMap((r) => r.ids);
@@ -398,7 +438,7 @@ export default function CompactSummary({
         </div>
         {open && (
           <div className="mb-1 flex flex-col pb-2 pl-6">
-            {g.rows.map((r, i) => {
+            {renderRows(g, (r, i) => {
               const bid = r.ids[0] ?? null;
               const rowWhy = bid != null ? whyData[bid] : undefined;
               const rowOpen = bid != null && openWhy === bid;
@@ -489,6 +529,14 @@ export default function CompactSummary({
                               className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/20">
                               Change client / category <ChevronDown className="h-3 w-3" />
                             </button>
+                            {r.projectId !== undefined && g.clientId != null && (
+                              <MatterPicker
+                                blockIds={r.ids}
+                                tone={r.projectId == null ? "needed" : "resolved"}
+                                label={r.projectId == null ? `Set ${terms.project.toLowerCase()}` : `Change ${terms.project.toLowerCase()}`}
+                                onAssigned={() => onRefresh()}
+                              />
+                            )}
                             {bid != null && !canSmart && bd.length > 1 && splitFor !== bid && (
                               <button onClick={() => openSplit(bid, bd, g.clientId)}
                                 title="This block mixes more than one activity — book each to its own client"

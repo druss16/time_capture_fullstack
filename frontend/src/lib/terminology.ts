@@ -1,7 +1,7 @@
 // Vertical terminology.
 //
 // The same record is called different things by different professions: a law
-// firm's Matter is a CPA firm's Engagement is an agency's Campaign. Only the
+// firm's Matter is a CPA firm's Engagement is an agency's Project. Only the
 // word differs — the data, the queries and the billing are identical.
 //
 // The server resolves this per-org (tracker/industry_categories.py) and ships

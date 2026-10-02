@@ -15,6 +15,12 @@ an org without them no-ops. A CPA firm simply has no mappings, so nothing runs.
 Behaviour follows the data, configuration follows the vertical, and the two
 never have to know about each other.
 
+Agencies work the same shape — Client → Project — but keep projects in
+TimeTracker rather than a synced system. `services/projects.py` decides which
+projects are live (mirrored matters, plus local projects for the verticals
+configured to keep them), and everything below works off that one answer. Local
+projects have no number, so they add a NAME tier, scoped to the block's client.
+
 TIERS
 -----
 2. Matter number in the file path, title, or URL. Clio's `display_number`
@@ -141,6 +147,67 @@ def match_matter_in_text(text: str, index: dict):
     return None
 
 
+# A project name shorter than this, once the client's own words are stripped
+# out of it, is too generic to read out of free text ("Ads", "SEO" alone).
+MIN_NAME_PHRASE = 4
+
+
+def name_phrase(project_name: str, client_name: str = '') -> str:
+    """
+    The part of a project's name that identifies it among its client's projects.
+
+    Agencies name projects like "Ford - Spring Launch" or just "Spring Launch".
+    The client's words are already settled by the time this runs (the block
+    has a client), so they are stripped: "ford spring launch" would otherwise
+    never match a file called "Spring Launch storyboard.psd".
+    """
+    client_words = _tokens(client_name)
+    words = [w for w in _normalize(project_name).split() if w not in client_words]
+    phrase = ' '.join(words)
+    return phrase if len(phrase) >= MIN_NAME_PHRASE and not _YEAR_LIKE.match(phrase) else ''
+
+
+def build_name_index(options_by_client, client_names) -> dict:
+    """
+    client_id -> {phrase: project_id} for projects kept in TimeTracker.
+
+    Scoped per client on purpose: "Website Refresh" is a project at half the
+    agency's clients, and a name is only evidence among the projects of the
+    client the block already belongs to. A phrase two of one client's projects
+    share identifies neither and is dropped.
+    """
+    out = {}
+    for client_id, options in options_by_client.items():
+        seen = defaultdict(set)
+        for o in options:
+            if o.mapped:
+                continue
+            phrase = name_phrase(o.name, client_names.get(client_id, ''))
+            if phrase:
+                seen[phrase].add(o.project_id)
+        phrases = {ph: next(iter(p)) for ph, p in seen.items() if len(p) == 1}
+        if phrases:
+            out[client_id] = phrases
+    return out
+
+
+def match_project_name(text: str, phrases: dict):
+    """
+    Project id whose name appears in `text`, or None.
+
+    Whole words only. When one hit is contained in another ("social" inside
+    "social ads") the longer, more specific name wins; any other disagreement
+    abstains.
+    """
+    if not text or not phrases:
+        return None
+    padded = f' {_normalize(text)} '
+    hits = [ph for ph in phrases if f' {ph} ' in padded]
+    hits = [h for h in hits if not any(h != o and f' {h} ' in f' {o} ' for o in hits)]
+    pids = {phrases[h] for h in hits}
+    return next(iter(pids)) if len(pids) == 1 else None
+
+
 def folder_key(file_path: str) -> str:
     """
     The containing folder of a file, normalized.
@@ -230,7 +297,8 @@ def neighbour_matter(block, neighbours_by_user, window_minutes=90):
 
 
 def attribute_block(block, index, sole_matter_by_client, project_by_external_id=None,
-                    folder_index=None, neighbours=None, allow_temporal=False):
+                    folder_index=None, neighbours=None, allow_temporal=False,
+                    name_index=None):
     """
     (project_id, tier, reason) for one block, or (None, None, reason).
 
@@ -240,6 +308,8 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
       1. folder       — this folder has resolved to exactly one matter before,
                         by any route, including a human correcting it.
       2. number       — a matter number appears in the path, title or URL.
+      2b. name        — a project kept in TimeTracker is named in the path,
+                        title or URL, among the block's OWN client's projects.
       3. sole_matter  — the client has exactly one open matter. Deterministic:
                         there is nothing here to be wrong about.
       4. temporal     — both neighbours agree. Weakest, because it infers from
@@ -264,6 +334,13 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
         matched = match_matter_in_text(getattr(block, field, '') or '', index)
         if matched:
             return matched, 'number', f'matter number found in {field}'
+
+    if name_index and block.client_id in name_index:
+        phrases = name_index[block.client_id]
+        for field in ('file_path', 'window_title', 'title', 'url'):
+            matched = match_project_name(getattr(block, field, '') or '', phrases)
+            if matched:
+                return matched, 'name', f'project name found in {field}'
 
     if block.client_id:
         sole = sole_matter_by_client.get(block.client_id)
@@ -332,29 +409,42 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     """
     Fill Block.project for recent blocks that have none.
 
-    No-ops for orgs with no matter mappings, which is every org that does not
-    sync a practice management system — no vertical check required.
+    No-ops for a firm with no live projects: one that neither syncs a practice
+    management system nor keeps its own projects (services/projects.py).
     """
-    from tracker.models import Block, Project
+    from tracker.models import Block, Client
     from tracker.models_task_type_sets import ExternalMatterMapping
+    from tracker.services.projects import selectable_projects
 
     mappings = list(
         ExternalMatterMapping.objects
         .filter(integration__organization=org)
         .select_related('project')
     )
+    options_by_client = selectable_projects(org)
     stats = {
-        'org_id': org.id, 'matters': len(mappings), 'scanned': 0,
-        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0,
+        'org_id': org.id, 'matters': len(mappings),
+        'projects': sum(len(v) for v in options_by_client.values()),
+        'scanned': 0,
+        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0, 'by_name': 0,
         'by_sole_matter': 0, 'by_temporal': 0,
-        'unmatched': 0, 'client_corrected': 0, 'dry_run': dry_run,
+        'unmatched': 0, 'off_client': 0, 'client_corrected': 0, 'dry_run': dry_run,
     }
-    if not mappings:
+    if not mappings and not options_by_client:
         return stats
 
     index = build_matter_index(mappings)
     project_by_external_id = {str(m.external_id): m.project_id for m in mappings}
     client_by_project_id = {m.project_id: m.project.client_id for m in mappings}
+    live_project_client = {
+        o.project_id: o.client_id
+        for opts in options_by_client.values() for o in opts
+    }
+    client_by_project_id.update(live_project_client)
+    client_names = dict(
+        Client.objects.filter(id__in=list(options_by_client)).values_list('id', 'name')
+    )
+    name_index = build_name_index(options_by_client, client_names)
 
     since = timezone.now() - timedelta(days=days)
 
@@ -374,13 +464,9 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         ):
             neighbours_by_user[user_id].append((b_start, b_end, project_id))
 
-    # Only open matters can absorb new time.
-    open_projects = defaultdict(list)
-    for m in mappings:
-        if (m.external_status or '').lower() in OPEN_STATUSES:
-            open_projects[m.project.client_id].append(m.project_id)
+    # Only live projects can absorb new time — open matters, active local ones.
     sole_matter_by_client = {
-        cid: pids[0] for cid, pids in open_projects.items() if len(pids) == 1
+        cid: opts[0].project_id for cid, opts in options_by_client.items() if len(opts) == 1
     }
 
     qs = (
@@ -403,10 +489,23 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
             folder_index=folder_index,
             neighbours=neighbours_by_user.get(block.user_id),
             allow_temporal=allow_temporal,
+            name_index=name_index,
         )
         if not project_id:
             stats['unmatched'] += 1
             continue
+
+        # An inference may choose a project, never a client. A learned folder
+        # or a neighbour can point at another client's project (shared drives,
+        # back-to-back work for two clients), and writing it would leave the
+        # block saying one client while its project says another — the same
+        # contradiction set_block_matter refuses by hand. Only tier 0 knows the
+        # client outright; it is handled below.
+        if tier != 'clio_anchor':
+            want = live_project_client.get(project_id)
+            if want is None or (block.client_id and block.client_id != want):
+                stats['off_client'] += 1
+                continue
         stats[f'by_{tier}'] += 1
         updates[project_id].append(block.id)
 
@@ -455,8 +554,8 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
 @shared_task(name='tracker.attribute_matters_recent')
 def attribute_matters_recent(days: int = 2) -> dict:
     """
-    Attribute recently-compacted blocks to matters, for every firm that syncs
-    a practice management system.
+    Attribute recently-compacted blocks to matters/projects, for every firm
+    that syncs a practice management system or keeps its own projects.
 
     WHY THIS EXISTS SEPARATELY FROM THE POST-SYNC RUN
     -------------------------------------------------
@@ -479,10 +578,19 @@ def attribute_matters_recent(days: int = 2) -> dict:
     from tracker.models import Organization
     from tracker.models_task_type_sets import ExternalMatterMapping
 
-    org_ids = (
+    from tracker.industry_categories import INDUSTRY_LOCAL_PROJECTS
+
+    org_ids = set(
         ExternalMatterMapping.objects
         .values_list('integration__organization_id', flat=True)
         .distinct()
+    )
+    # Firms that keep their own projects have no sync to trigger a run, so
+    # this sweep is the only thing that ever attributes their time.
+    org_ids |= set(
+        Organization.objects
+        .filter(industry_type__in=INDUSTRY_LOCAL_PROJECTS)
+        .values_list('id', flat=True)
     )
     totals = {'orgs': 0, 'scanned': 0, 'attributed': 0, 'client_corrected': 0}
     for org in Organization.objects.filter(id__in=list(org_ids)):

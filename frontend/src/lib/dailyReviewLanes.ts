@@ -89,7 +89,13 @@ export type SplitCandidate = {
 };
 
 /** One captured activity line inside a Certain client group. */
-export type CertainRow = { ids: number[]; title: string; category: string; minutes: number };
+export type CertainRow = {
+  ids: number[]; title: string; category: string; minutes: number;
+  /** Firms that work Client → Project only. undefined = this firm does not
+   *  track projects; null = tracked but not filed under one yet. */
+  projectId?: number | null | undefined;
+  projectName?: string | null | undefined;
+};
 
 /** A whole client's auto-filed work — the unit the Certain lane browses / moves. */
 export type CertainGroup = {
@@ -102,6 +108,8 @@ export type CertainGroup = {
   billableMinutes: number;     // per-client billable minutes (from today-time)
   nonBillableMinutes: number;  // per-client non-billable minutes
   billable: boolean;      // which section this group belongs in
+  /** Per-project totals (minutes) when the firm works Client → Project. */
+  projects?: { id: number | null; name: string | null; minutes: number }[];
   blockCount: number;     // number of captured lines shown
   repCategory: string;    // dominant category (for the Move popover default)
   rows: CertainRow[];
@@ -216,16 +224,20 @@ const parseDurTag = (t: string): number => {
   return m ? parseInt(m[1], 10) : 0;
 };
 function mergeRowsByTitle(rows: CertainRow[]): CertainRow[] {
-  type Acc = { ids: number[]; base: string; category: string; minutes: number };
+  type Acc = { ids: number[]; base: string; category: string; minutes: number;
+               projectId?: number | null | undefined; projectName?: string | null | undefined };
   const accs: Acc[] = [];
   const idx = new Map<string, number>();
   for (const r of rows) {
     const base = stripDurTag(r.title);
-    const key = base.toLowerCase();
+    // Same file under two projects stays two lines — merging them would hide
+    // that the time was split, and the project is what's being reviewed.
+    const key = `${r.projectId ?? ""}|${base.toLowerCase()}`;
     const at = idx.get(key);
     if (at === undefined) {
       idx.set(key, accs.length);
-      accs.push({ ids: [...r.ids], base, category: r.category, minutes: r.minutes });
+      accs.push({ ids: [...r.ids], base, category: r.category, minutes: r.minutes,
+                  projectId: r.projectId, projectName: r.projectName });
     } else {
       const a = accs[at];
       a.ids = [...a.ids, ...r.ids];
@@ -237,6 +249,7 @@ function mergeRowsByTitle(rows: CertainRow[]): CertainRow[] {
     category: a.category,
     minutes: a.minutes,
     title: a.base,
+    ...(a.projectId !== undefined ? { projectId: a.projectId, projectName: a.projectName } : {}),
   }));
 }
 
@@ -310,9 +323,13 @@ export function deriveLanes(
       const perLine = cat.sample_activities.length
         ? (cat.hours * 60) / cat.sample_activities.length
         : 0;
-      const lines: { ids: number[]; title: string; minutes: number }[] =
+      const lines: { ids: number[]; title: string; minutes: number;
+                     projectId?: number | null; projectName?: string | null }[] =
         cat.activities?.length
-          ? cat.activities.map((a) => ({ ids: a.ids, title: a.title, minutes: a.minutes }))
+          ? cat.activities.map((a) => ({
+              ids: a.ids, title: a.title, minutes: a.minutes,
+              ...(a.project_id !== undefined ? { projectId: a.project_id, projectName: a.project_name ?? null } : {}),
+            }))
           : cat.sample_activities.map((a) => {
               const p = parse(a);
               const tagged = parseDurTag(p.title);
@@ -321,7 +338,10 @@ export function deriveLanes(
       for (const line of lines) {
         // A line whose block is flagged (mismatch or split) is shown in Needs-you.
         if (line.ids.some((id) => pulledIds.has(id))) continue;
-        rows.push({ ids: line.ids, title: line.title, category: cat.name, minutes: line.minutes });
+        rows.push({
+          ids: line.ids, title: line.title, category: cat.name, minutes: line.minutes,
+          ...(line.projectId !== undefined ? { projectId: line.projectId, projectName: line.projectName } : {}),
+        });
         catMinutes.set(cat.name, (catMinutes.get(cat.name) || 0) + line.minutes);
       }
     }
@@ -371,6 +391,9 @@ export function deriveLanes(
       blockCount: mergedRows.length,
       repCategory,
       rows: mergedRows,
+      ...(client.projects
+        ? { projects: client.projects.map((p) => ({ id: p.project_id, name: p.name, minutes: Math.round(p.hours * 60) })) }
+        : {}),
     });
     certainBlockCount += mergedRows.length;
     certainMinutes += minutes;

@@ -49,7 +49,11 @@ const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+
 // Every provider the Settings tab can render. Clio is region-partitioned in a
 // way the accounting providers are not, which is why identity below is a
 // per-provider concept rather than a shared "company id".
-type ProviderKey = 'quickbooks' | 'xero' | 'clio';
+type ProviderKey = 'quickbooks' | 'xero' | 'clio' | 'qb_time';
+
+// Providers that mirror a Client → Project structure and sync it whole,
+// rather than offering a client picker.
+const SYNCS_PROJECTS: ProviderKey[] = ['clio', 'qb_time'];
 
 // Providers whose clients are imported by picking them from a list. Clio is
 // excluded on purpose: matters, not clients, are what legal time attaches to,
@@ -75,12 +79,15 @@ interface IntegrationStatusResponse {
     quickbooks: ProviderStatus;
     xero: ProviderStatus;
     clio?: ProviderStatus;
+    qb_time?: ProviderStatus;
   };
   client_stats: {
     from_quickbooks: number;
     from_xero: number;
     from_clio?: number;
     clio_matters?: number;
+    from_qb_time?: number;
+    qb_time_projects?: number;
     manual: number;
   };
 }
@@ -156,6 +163,21 @@ const PROVIDERS = {
     customersEndpoint: '',           // Clio has no picker — see ImportableProviderKey
     importEndpoint: '',
   },
+  qb_time: {
+    name: 'QuickBooks Time',
+    short: 'QB Time',
+    icon: '⏱️',
+    color: 'teal',
+    description: 'Sync your customers, projects and project hour estimates from QuickBooks Time.',
+    features: ['Import customers and projects', 'Project hour estimates', 'File time to the right project', 'Refreshes every hour'],
+    bgClass: 'bg-teal-50 border-teal-200',
+    accentClass: 'text-teal-700',
+    btnClass: 'bg-teal-600 hover:bg-teal-700',
+    badgeClass: 'bg-teal-100 text-teal-800',
+    iconBgClass: 'bg-teal-100',
+    customersEndpoint: '',           // synced whole, like Clio
+    importEndpoint: '',
+  },
 } as const;
 
 // Clio runs four independent data regions. A token issued in one is rejected
@@ -172,6 +194,7 @@ const CLIO_REGIONS = [
 function providerIdentity(provider: ProviderKey, status: ProviderStatus): { label: string; value: string } {
   if (provider === 'quickbooks') return { label: 'Realm ID', value: status.realm_id || '—' };
   if (provider === 'xero') return { label: 'Tenant ID', value: status.tenant_id || '—' };
+  if (provider === 'qb_time') return { label: 'Company ID', value: status.realm_id || '—' };
   const region = CLIO_REGIONS.find((r) => r.value === status.region);
   return { label: 'Data Region', value: region ? region.label : (status.region || '—') };
 }
@@ -480,6 +503,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   const config = PROVIDERS[provider];
   const connected = status.connected;
   const isClio = provider === 'clio';
+  const syncsProjects = SYNCS_PROJECTS.includes(provider);
   const identity = providerIdentity(provider, status);
 
   return (
@@ -538,10 +562,10 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
                 <Users className="w-3.5 h-3.5" />
-                {isClio ? 'Clients / Matters' : 'Imported Clients'}
+                {isClio ? 'Clients / Matters' : syncsProjects ? 'Clients / Projects' : 'Imported Clients'}
               </div>
               <p className="font-bold text-slate-900 text-sm">
-                {isClio ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
+                {syncsProjects ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
               </p>
             </div>
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
@@ -634,12 +658,12 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
       <div className="mt-4">
         {connected ? (
           <div className="flex items-center gap-3">
-            {isClio ? (
+            {syncsProjects ? (
               <button onClick={onSync} disabled={syncing} className={primaryBtnClass}>
                 {syncing
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <RefreshCw className="w-4 h-4" />}
-                {syncing ? 'Syncing…' : 'Sync Clients & Matters'}
+                {syncing ? 'Syncing…' : isClio ? 'Sync Clients & Matters' : 'Sync Clients & Projects'}
               </button>
             ) : (
               <button
@@ -726,6 +750,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   // there is no way to detect the firm's region after the fact.
   const [clioRegion, setClioRegion] = useState<string>('us');
   const [clioSyncing, setClioSyncing] = useState(false);
+  const [qbTimeSyncing, setQbTimeSyncing] = useState(false);
   // Which providers lead for this org's vertical. A law firm should not have to
   // scroll past QuickBooks and Xero to find Clio. Null until whoami resolves,
   // which renders every provider — never fewer than today.
@@ -792,12 +817,16 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     } else if (params.get('clio_connected') === 'true') {
       onSuccess('Clio Manage connected successfully!');
       fetchIntegrations();
+    } else if (params.get('qb_time_connected') === 'true') {
+      onSuccess('QuickBooks Time connected — importing your projects now.');
+      fetchIntegrations();
     } else if (params.get('integration_error')) {
       onError(`Connection failed: ${params.get('integration_error')}`);
     }
     // Clean URL
     if (params.has('quickbooks_connected') || params.has('xero_connected')
-        || params.has('clio_connected') || params.has('integration_error')) {
+        || params.has('clio_connected') || params.has('qb_time_connected')
+        || params.has('integration_error')) {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
@@ -865,6 +894,21 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     }
   };
 
+  const handleQbTimeSync = async () => {
+    setQbTimeSyncing(true);
+    try {
+      const res = await safeFetchJson<{ message?: string }>(
+        `${API_BASE}/integrations/qb_time/sync/`, { method: 'POST' },
+      );
+      onSuccess(res?.message || 'QuickBooks Time sync complete.');
+    } catch (err: any) {
+      onError(err?.message || 'QuickBooks Time sync failed');
+    } finally {
+      await fetchIntegrations();
+      setQbTimeSyncing(false);
+    }
+  };
+
   const handleDisconnect = async (provider: ProviderKey) => {
     const name = PROVIDERS[provider].name;
     if (!confirm(`Disconnect ${name}? This will remove the connection but won't delete any imported data.`)) return;
@@ -891,12 +935,13 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const qbStatus = statusData?.integrations?.quickbooks || { connected: false };
   const xeroStatus = statusData?.integrations?.xero || { connected: false };
   const clioStatus = statusData?.integrations?.clio || { connected: false };
+  const qbTimeStatus = statusData?.integrations?.qb_time || { connected: false };
   const clientStats = statusData?.client_stats || { from_quickbooks: 0, from_xero: 0, manual: 0 };
 
   return (
     <SettingsPage
       title="Integrations"
-      subtitle="Connect QuickBooks, Xero, or Clio to sync invoices, push approved time entries, and import clients and matters."
+      subtitle="Connect QuickBooks, QuickBooks Time, Xero, or Clio to sync invoices, push approved time entries, and import clients, projects and matters."
     >
       {/* Security note */}
       <div className="mb-6 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-xl flex items-start gap-3">
@@ -942,6 +987,18 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
             onDisconnect: handleDisconnect,
             onImportClients: setImportProvider,
           };
+          if (key === 'qb_time') {
+            return (
+              <ProviderCard
+                {...common}
+                status={qbTimeStatus}
+                clientCount={clientStats.from_qb_time ?? 0}
+                matterCount={clientStats.qb_time_projects ?? 0}
+                onSync={handleQbTimeSync}
+                syncing={qbTimeSyncing}
+              />
+            );
+          }
           if (key === 'clio') {
             return (
               <ProviderCard
@@ -972,11 +1029,19 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
         // than showing one the firm does not need.
         const isConnected = (k: ProviderKey) =>
           k === 'clio' ? clioStatus.connected
+            : k === 'qb_time' ? qbTimeStatus.connected
             : k === 'quickbooks' ? qbStatus.connected : xeroStatus.connected;
 
+        // In the vertical's own order: an agency's QuickBooks Time leads,
+        // rather than trailing the accounting providers it doesn't bill from.
+        const rank = (k: ProviderKey) => {
+          const i = primaryProviders?.indexOf(k) ?? -1;
+          return i === -1 ? primaryProviders!.length : i;
+        };
         const primary = primaryProviders === null
           ? all
-          : all.filter((k) => primaryProviders.includes(k) || isConnected(k));
+          : all.filter((k) => primaryProviders.includes(k) || isConnected(k))
+              .sort((a, b) => rank(a) - rank(b));
         const others = all.filter((k) => !primary.includes(k));
 
         return (
@@ -1024,6 +1089,32 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
             <p className="text-sm font-bold text-red-800">Last Clio sync failed</p>
             <p className="text-sm text-red-700 mt-0.5 break-words">
               {clioStatus.last_sync_error || 'No details recorded.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {qbTimeStatus.connected && qbTimeStatus.last_sync_status === 'pending' && (
+        <SettingsSection className="border-sky-200 bg-sky-50/60">
+          <div className="flex items-start gap-3">
+            <Loader2 className="w-5 h-5 text-sky-500 animate-spin flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-sky-900 text-sm">Importing from QuickBooks Time…</p>
+              <p className="text-sky-800 text-sm mt-1">
+                Your customers, projects and estimates are being pulled in now. Refresh the page to see the count.
+              </p>
+            </div>
+          </div>
+        </SettingsSection>
+      )}
+
+      {qbTimeStatus.connected && qbTimeStatus.last_sync_status === 'failed' && (
+        <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-red-800">Last QuickBooks Time sync failed</p>
+            <p className="text-sm text-red-700 mt-0.5 break-words">
+              {qbTimeStatus.last_sync_error || 'No details recorded.'}
             </p>
           </div>
         </div>

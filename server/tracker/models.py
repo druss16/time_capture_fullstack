@@ -914,6 +914,7 @@ class Client(models.Model):
         ('quickbooks', 'QuickBooks'),
         ('xero', 'Xero'),
         ('clio', 'Clio'),
+        ('qb_time', 'QuickBooks Time'),
     ]
     imported_from = models.CharField(
         max_length=20,
@@ -1528,6 +1529,7 @@ class Integration(models.Model):
         ('karbon', 'Karbon'),
         ('cch_axcess', 'CCH Axcess Practice'),
         ('clio', 'Clio Manage'),
+        ('qb_time', 'QuickBooks Time'),
     ]
     
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='integrations')

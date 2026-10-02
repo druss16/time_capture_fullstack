@@ -1,0 +1,142 @@
+"""
+QuickBooks Time OAuth + sync endpoints: connect, callback, sync, disconnect.
+
+Same shape as Clio's (integrations/clio/views.py): one app registration for
+every firm, one Integration row per firm, connect/sync/disconnect limited to
+owners and admins because the connection is firm-wide, and a first import
+queued the moment the grant lands so the card never sits at "0 projects".
+"""
+import logging
+import secrets
+
+import requests
+from django.conf import settings
+from django.shortcuts import redirect
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+
+from tracker.integrations.clio.views import _require_admin
+from tracker.integrations.qb_time.client import (
+    apply_tokens, authorize_url, grant_url, is_configured,
+)
+from tracker.models import Integration
+from tracker.views_integrations import _oauth_success_response, error_response, get_integration
+
+logger = logging.getLogger(__name__)
+
+
+def _fail(reason):
+    return redirect(f"{settings.FRONTEND_URL}/settings?tab=integrations&integration_error={reason}")
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_connect(request):
+    org, denied = _require_admin(request, 'connect QuickBooks Time')
+    if denied:
+        return denied
+    if not is_configured():
+        return error_response('QuickBooks Time is not configured on this server.', 503, 'not_configured')
+
+    state = secrets.token_urlsafe(32)
+    Integration.objects.update_or_create(
+        organization=org, provider='qb_time', defaults={'oauth_state': state},
+    )
+    return Response({'auth_url': authorize_url(
+        settings.QBTIME_CLIENT_ID, settings.QBTIME_REDIRECT_URI, state)})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def qb_time_callback(request):
+    """Exchange the code for tokens. Reached by redirect, with no session."""
+    code, state, error = request.GET.get('code'), request.GET.get('state'), request.GET.get('error')
+    if error:
+        return _fail(error)
+    if not code or not state:
+        return _fail('missing_code')
+    try:
+        integration = Integration.objects.get(oauth_state=state, provider='qb_time')
+    except Integration.DoesNotExist:
+        return _fail('invalid_state')
+
+    try:
+        resp = requests.post(grant_url(), data={
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': settings.QBTIME_REDIRECT_URI,
+            'client_id': settings.QBTIME_CLIENT_ID,
+            'client_secret': settings.QBTIME_CLIENT_SECRET,
+        }, timeout=30)
+    except requests.RequestException as e:
+        logger.error('QB Time token exchange failed: %s', e)
+        return _fail('token_exchange_failed')
+    if resp.status_code != 200:
+        logger.error('QB Time token exchange %s: %s', resp.status_code, resp.text[:300])
+        return _fail('token_exchange_failed')
+
+    tokens = resp.json()
+    apply_tokens(integration, tokens)
+    # The QuickBooks Time company this grant belongs to — the card's identity.
+    integration.realm_id = str(tokens.get('company_id') or '')[:100]
+    integration.oauth_state = ''
+    integration.is_connected = True
+    integration.last_sync_status = 'pending'
+    integration.last_sync_error = ''
+    integration.save()
+
+    try:
+        from tracker.integrations.qb_time.sync import sync_qb_time_full
+        sync_qb_time_full.delay(integration.id)
+    except Exception as e:
+        integration.last_sync_status = 'failed'
+        integration.last_sync_error = (
+            f'Could not start the first import ({type(e).__name__}). Press Sync to run it now.')[:500]
+        integration.save(update_fields=['last_sync_status', 'last_sync_error', 'updated_at'])
+
+    return _oauth_success_response('qb_time')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_sync(request):
+    """Run the sync inline so the person who pressed it sees real counts."""
+    org, denied = _require_admin(request, 'run a QuickBooks Time sync')
+    if denied:
+        return denied
+    integration, err = get_integration(org, 'qb_time')
+    if err:
+        return err
+
+    from tracker.integrations.qb_time.sync import full_sync
+    stats = full_sync(integration)
+    if stats.get('errors'):
+        return error_response(f"Sync failed: {stats['errors'][0]}"[:300], 502, 'sync_failed')
+
+    c, p, e = stats['clients'], stats['projects'], stats['estimates']
+    message = (f"Synced {p['fetched']} projects across "
+               f"{c['created'] + c['matched']} clients ({c['created']} new).")
+    if e['available']:
+        message += f" {e['projects_with_estimate']} have an hours estimate."
+    else:
+        message += ' No project estimates on this QuickBooks Time account.'
+    return Response({'synced': True, 'message': message, 'stats': stats})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_disconnect(request):
+    """Drop the grant locally. Synced clients and projects stay."""
+    org, denied = _require_admin(request, 'disconnect QuickBooks Time')
+    if denied:
+        return denied
+    integration = Integration.objects.filter(organization=org, provider='qb_time').first()
+    if integration:
+        integration.is_connected = False
+        integration.access_token = ''
+        integration.refresh_token = ''
+        integration.token_expires_at = None
+        integration.oauth_state = ''
+        integration.save()
+    return Response({'success': True})

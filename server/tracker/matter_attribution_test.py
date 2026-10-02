@@ -38,7 +38,9 @@ try:
     from tracker.services.matter_attribution import (
         candidate_tokens, build_matter_index, match_matter_in_text, attribute_block,
         folder_key, neighbour_matter,
+        name_phrase, build_name_index, match_project_name,
     )
+    from tracker.services.projects import ProjectOption
     from datetime import datetime, timedelta
     _ok = True
 except Exception as e:
@@ -61,6 +63,9 @@ class _B:
         self.file_path, self.title = file_path, title
         self.window_title, self.url, self.client_id = window_title, url, client_id
         self.hints = hints or {}
+        # The Clio anchor only speaks for browser activity (is_browser_block);
+        # these fixtures model a Clio tab, so they are browser blocks.
+        self.app_name = 'Google Chrome'
         self.start = self.end = None
 
 
@@ -194,6 +199,51 @@ if _ok:
     check("temporal sits BELOW the sole-matter inference",
           attribute_block(_B(title='x.docx', client_id=77), idx2, sole, None,
                           neighbours=both_agree, allow_temporal=True)[:2] == (5, 'sole_matter'))
+
+if _ok:
+    print("Agency projects — a name is evidence only among the block's own client's projects:")
+    check("client words stripped from the project name",
+          name_phrase('Ford - Spring Launch', 'Ford') == 'spring launch')
+    check("a name that is only the client's words identifies nothing",
+          name_phrase('Ford', 'Ford') == '')
+    check("too-short remainder rejected", name_phrase('Ford SEO', 'Ford') == '')
+    check("bare year rejected", name_phrase('2026', 'Ford') == '')
+
+    def _opt(pid, cid, name, mapped=False, number=''):
+        return ProjectOption(project_id=pid, client_id=cid, name=name, mapped=mapped,
+                             display_number=number)
+
+    opts = {
+        10: [_opt(101, 10, 'Ford - Spring Launch'), _opt(102, 10, 'Social'),
+             _opt(103, 10, 'Social Ads'), _opt(104, 10, '00999-Mirrored', mapped=True, number='00999'),
+             _opt(105, 10, 'Dealer Event', mapped=True)],
+        20: [_opt(201, 20, 'Spring Launch')],
+    }
+    nidx = build_name_index(opts, {10: 'Ford', 20: 'Chevy'})
+    check("numbered matters are not name-indexed (they match by number)",
+          all(pid != 104 for pid in nidx[10].values()))
+    check("a mirror known only by name (QuickBooks Time) IS name-indexed",
+          nidx[10].get('dealer event') == 105)
+    check("same name at two clients stays per-client",
+          nidx[10]['spring launch'] == 101 and nidx[20]['spring launch'] == 201)
+    check("file named for the project matches",
+          match_project_name('Dropbox/Ford/Spring Launch storyboard v3.psd', nidx[10]) == 101)
+    check("partial word does not match ('springfield launcher')",
+          match_project_name('springfield launcher.ai', nidx[10]) is None)
+    check("longer name wins when one contains the other",
+          match_project_name('Social Ads - October report', nidx[10]) == 103)
+    check("two unrelated project names -> abstain",
+          match_project_name('Spring Launch vs Social recap', nidx[10]) is None)
+
+    check("name tier fires for the block's client",
+          attribute_block(_B(file_path='/Ford/Spring Launch/brief.docx', client_id=10),
+                          {}, {}, None, name_index=nidx)[:2] == (101, 'name'))
+    check("name tier ignores another client's project with the same name",
+          attribute_block(_B(title='Spring Launch brief', client_id=30),
+                          {}, {}, None, name_index=nidx)[0] is None)
+    check("name beats the sole-project inference",
+          attribute_block(_B(title='Spring Launch', client_id=20), {}, {20: 999}, None,
+                          name_index=nidx)[:2] == (201, 'name'))
 
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")
 sys.exit(1 if _failed else 0)

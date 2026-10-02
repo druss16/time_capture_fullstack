@@ -22,6 +22,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
 import NoTimeYet from "@/components/NoTimeYet";
 import { MatterPicker } from "@/components/MatterPicker";
+import { useTerminology } from "@/lib/terminology";
 import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type AmbiguousGroup, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -232,7 +233,8 @@ const StatCell = ({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-// Time that cannot be billed until someone says which matter it belongs to.
+// Time that cannot be billed until someone says which matter (law) or project
+// (agency) it belongs to. Wording comes from the org's terminology.
 //
 // Lives in Daily Review rather than the timesheet on purpose. A matter chosen
 // today is remembered; the same choice on Friday is reconstructed, and a
@@ -241,7 +243,12 @@ const StatCell = ({
 //
 // Only lists blocks whose client HAS matters to choose between — a client with
 // none is not a task, and including them would make this a queue people skip.
-const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }) => {
+const MatterLane = ({ date, range, onChanged, onQueue }: {
+  date: string; range: ViewRange; onChanged: () => void;
+  /** Reports what is waiting here, so the page headline counts it too. */
+  onQueue?: (count: number, minutes: number) => void;
+}) => {
+  const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(true);
@@ -250,12 +257,17 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
   const [shown, setShown] = useState(8);
 
   const load = useCallback(() => {
-    safeFetchJson(`${API_BASE}/blocks/needs-matter/?date=${date}`)
+    // Same window as the rest of the page, so "This week" catches up on the
+    // week's unfiled time too, not just today's.
+    const { start, end } = rangeBounds(date, range);
+    const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
+    safeFetchJson(`${API_BASE}/blocks/needs-matter/?${qs}`)
       .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
       .catch(() => { setRows([]); setTotal(0); });
-  }, [date]);
+  }, [date, range]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { onQueue?.(rows.length, total); }, [rows.length, total, onQueue]);
 
   if (rows.length === 0) return null;
 
@@ -268,7 +280,7 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
         className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-amber-50/60"
       >
         <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
-        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a matter</span>
+        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a {terms.project.toLowerCase()}</span>
         <span className="truncate font-mono text-[11.5px] text-muted-foreground">
           {fmt(total)} · {rows.length} {rows.length === 1 ? "activity" : "activities"}
         </span>
@@ -833,18 +845,25 @@ export default function DailyReview() {
     },
     [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, ambiguousGroups, hiddenIds, optimisticConfirms],
   );
-  const needsYouCount = lanes.needsYou.count;
+  // Time with a client but no matter / project. For a firm that bills by
+  // project it is not sorted yet, so the headline must not say "all caught up"
+  // above an amber lane of it. Its minutes are already inside the client totals
+  // (it is committed time), so they move from sorted to needs-you, never added.
+  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0 });
+  const onProjectQueue = useCallback((count: number, minutes: number) =>
+    setProjectQueue((q) => (q.count === count && q.minutes === minutes ? q : { count, minutes })), []);
+  const needsYouCount = lanes.needsYou.count + projectQueue.count;
   const autoFiled = lanes.certain.minutes > 0;
 
   // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
   const totalMin = Math.round(totalHours * 60);
-  const needsMin = lanes.needsYou.minutes;
+  const needsMin = lanes.needsYou.minutes + projectQueue.minutes;
   const sortedMin = Math.max(0, totalMin - needsMin);
   // 100% is reserved for a truly-clear day (nothing in "Needs you"). While
   // anything remains, never round up to 100 — cap at 99 so 1m left still reads
   // 99%, not a misleading "100% sorted".
   const sortedPct =
-    lanes.needsYou.count === 0
+    needsYouCount === 0
       ? 100
       : totalMin > 0
         ? Math.min(99, Math.round((sortedMin / totalMin) * 100))
@@ -1111,7 +1130,7 @@ export default function DailyReview() {
               </div>
             )}
           </div>
-          <MatterLane date={date} onChanged={scheduleRowRefresh} />
+          <MatterLane date={date} range={range} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}

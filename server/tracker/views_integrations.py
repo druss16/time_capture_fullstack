@@ -1394,7 +1394,7 @@ def integrations_status(request):
         return error_response('No organization found', 404)
 
     integrations = {}
-    for provider in ('quickbooks', 'xero', 'clio'):
+    for provider in ('quickbooks', 'xero', 'clio', 'qb_time'):
         try:
             i = Integration.objects.get(organization=org, provider=provider)
             integrations[provider] = {
@@ -1435,6 +1435,13 @@ def integrations_status(request):
                 live, _detail = live_sync_state(i)
                 integrations[provider]['live_sync'] = live
                 integrations[provider]['live_sync_error'] = live_sync_error(i) or None
+            elif provider == 'qb_time':
+                integrations[provider]['realm_id'] = i.realm_id if i.is_connected else None
+                integrations[provider]['last_sync_status'] = i.last_sync_status or None
+                integrations[provider]['last_sync_error'] = i.last_sync_error or None
+                integrations[provider]['last_synced'] = (
+                    i.last_synced_at.isoformat() if i.last_synced_at else None
+                )
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 
@@ -1452,6 +1459,16 @@ def integrations_status(request):
     from tracker.models_task_type_sets import ExternalMatterMapping
     client_stats['clio_matters'] = ExternalMatterMapping.objects.filter(
         integration__organization=org, integration__provider='clio',
+    ).count()
+    # Counted by mapping, not imported_from: most of an agency's QuickBooks
+    # Time customers match clients it already had, and those keep their origin.
+    from tracker.models_task_type_sets import ExternalClientMapping
+    client_stats['from_qb_time'] = ExternalClientMapping.objects.filter(
+        integration__organization=org, integration__provider='qb_time',
+    ).count()
+    client_stats['qb_time_projects'] = ExternalMatterMapping.objects.filter(
+        integration__organization=org, integration__provider='qb_time',
+        project__is_active=True,
     ).count()
 
     return Response({'integrations': integrations, 'client_stats': client_stats})

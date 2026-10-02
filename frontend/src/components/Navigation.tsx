@@ -79,8 +79,14 @@ export default function Navigation() {
   // unchanged from when the item read "Billing" — widening it to managers (who
   // the fee-basis endpoint does allow) is a separate call.
   const canAccessFees      = ['owner', 'admin'].includes(userRole || '');
-  // Hours vs monthly project budget — only for firms that budget by project.
-  const canAccessBudgets   = canAccessFees && !!userInfo?.local_projects;
+  // One pricing tab per kind of firm. Fees helps a firm decide what to charge
+  // AFTER the work, off the hours (TL Wall's monthly pricing). An agency sets
+  // its fee in advance from estimated hours per project, so for it Budgets —
+  // hours used against that estimate — is the same job, and showing both read
+  // as two answers to one question. /fees still resolves for anyone with a link.
+  const budgetsByProject   = !!userInfo?.local_projects;
+  const canAccessBudgets   = canAccessFees && budgetsByProject;
+  const showFeesTab        = canAccessFees && !budgetsByProject;
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -112,7 +118,7 @@ export default function Navigation() {
   const navItems = [
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
     { path: '/timesheet', label: 'My Week',      icon: Clock,     show: true                },
-    { path: '/fees',      label: 'Fees',         icon: DollarSign, show: canAccessFees      },
+    { path: '/fees',      label: 'Fees',         icon: DollarSign, show: showFeesTab        },
     { path: '/budgets',   label: 'Budgets',      icon: Target,    show: canAccessBudgets    },
     { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
     { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },

@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0180_qb_time_projects'),
+        ('tracker', '0181_agent_presence_unattended_cause'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

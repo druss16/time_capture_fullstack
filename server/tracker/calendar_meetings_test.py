@@ -104,11 +104,43 @@ class ProposalTests(Base):
         self.assertIn('newco.com', sentence)
         self.assertIsNone(sid)
 
-    def test_meeting_with_captured_activity_is_left_to_stage_6(self):
+    def test_busy_meeting_proposes_only_the_sustained_uncovered_gap(self):
         self.event()
-        self.agent_block(0, 30)       # 50% covered
+        self.agent_block(0, 30)       # 50% covered, on the meeting's own client
+        self.run_()
+        [b] = self.cal_blocks()       # the other 30 min, never the covered half
+        self.assertEqual((b.start, b.end), (T0 + timedelta(minutes=30), T0 + timedelta(minutes=60)))
+        self.assertEqual(b.proposed_client_id, self.acme.id)
+        self.assertNotIn('Your computer was on', b.proposed_reasoning)   # same client
+
+    def test_busy_meeting_short_gaps_are_not_proposed(self):
+        self.event()
+        self.agent_block(0, 52)       # 8 min left: a pause, not meeting time
         self.run_()
         self.assertEqual(self.cal_blocks(), [])
+
+    def test_no_cliff_just_over_the_coverage_threshold(self):
+        # 13 min of email in an hour (22%) used to drop the whole meeting.
+        self.event()
+        self.agent_block(25, 38)
+        self.run_()
+        spans = [(b.start, b.end) for b in self.cal_blocks()]
+        self.assertEqual(spans, [(T0, T0 + timedelta(minutes=25)),
+                                 (T0 + timedelta(minutes=38), T0 + timedelta(minutes=60))])
+
+    def test_computer_on_another_client_is_named_and_never_moved(self):
+        beta = Client.objects.create(org=self.org, name='Beta Foods')
+        self.event()                  # Acme meeting
+        work = self.agent_block(0, 40, client=beta, window_title='Beta Foods ledger.xlsx - Excel')
+        self.run_()
+        [b] = self.cal_blocks()
+        self.assertEqual(b.minutes, 20)
+        self.assertEqual(b.proposed_client_id, self.acme.id)
+        self.assertIn('Your computer was on Beta Foods for 40 min', b.proposed_reasoning)
+        self.assertIn('add the rest to Acme Widgets?', b.proposed_reasoning)
+        self.assertNotIn('no computer activity was captured', b.proposed_reasoning)
+        work.refresh_from_db()
+        self.assertEqual(work.client_id, beta.id)   # the Beta time stays Beta
 
     def test_partial_coverage_fills_only_uncovered_minutes(self):
         self.event()

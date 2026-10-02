@@ -2308,3 +2308,69 @@ def mavops_attribution_evidence(request):
         "decide where review time is worth spending, not as an error rate."
     )
     return Response(report)
+
+
+# ── Agent presence: remote off switch + measurement results ─────────────────
+# The switch only governs the desktop agent's agent-presence MEASUREMENT;
+# nothing here can affect time tracking. See services/agent_presence_switch.py.
+
+def _presence_switch_payload():
+    from tracker.services.agent_presence_switch import (
+        env_disabled_value, presence_enabled_for, switch_rows,
+    )
+    return {
+        'env_disabled': env_disabled_value(),
+        'everyone_enabled': presence_enabled_for(None),
+        'rows': switch_rows(),
+    }
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_agent_presence_switch(request):
+    """
+    GET  → current switch state.
+    POST {action: on|off|clear, scope: all|org|device, org_id?, device_pk?, note?}
+    """
+    from tracker.services.agent_presence_switch import clear_switch, set_switch
+
+    if request.method == 'POST':
+        d = request.data if isinstance(request.data, dict) else {}
+        action, scope = d.get('action'), d.get('scope')
+        if action not in ('on', 'off', 'clear') or scope not in ('all', 'org', 'device'):
+            return Response({'error': 'action must be on/off/clear and scope all/org/device'}, status=400)
+        ids = {'org_id': None, 'device_pk': None}
+        try:
+            if scope == 'org':
+                ids['org_id'] = int(d.get('org_id'))
+                if not Organization.objects.filter(pk=ids['org_id']).exists():
+                    return Response({'error': 'No such organization'}, status=404)
+            elif scope == 'device':
+                ids['device_pk'] = int(d.get('device_pk'))
+                if not AgentDevice.objects.filter(pk=ids['device_pk']).exists():
+                    return Response({'error': 'No such device'}, status=404)
+        except (TypeError, ValueError):
+            return Response({'error': 'org_id / device_pk must be a number'}, status=400)
+
+        if action == 'clear':
+            clear_switch(**ids)
+        else:
+            set_switch(action == 'on', note=str(d.get('note') or ''), **ids)
+        logger.info("[MAVOPS] agent presence %s scope=%s ids=%s by %s",
+                    action, scope, ids, request.user.email)
+    return Response(_presence_switch_payload())
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_agent_presence_summary(request):
+    """GET ?days=7&org_id= → the agent_presence_summary report as JSON."""
+    from tracker.management.commands.agent_presence_summary import build_report
+    try:
+        days = min(max(int(request.GET.get('days', 7)), 1), 30)
+    except (TypeError, ValueError):
+        days = 7
+    org = request.GET.get('org_id')
+    return Response(build_report(days, int(org) if org and org.isdigit() else None))

@@ -4986,7 +4986,9 @@ from tracker.models_engagements import (  # noqa: F401, E402
 )
 
 # AI agent work — kept apart from Block on purpose (see models_agent_work.py)
-from tracker.models_agent_work import AgentWorkSession, AgentPresenceSample  # noqa: F401, E402
+from tracker.models_agent_work import (  # noqa: F401, E402
+    AgentWorkSession, AgentPresenceSample, AgentPresenceSwitch,
+)
 
 # Agency project budgets — monthly hours per project (see models_project_budgets.py)
 from tracker.models_project_budgets import ProjectBudget  # noqa: F401, E402

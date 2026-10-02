@@ -1150,8 +1150,10 @@ def agents_hello(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def agent_control(request):
+    from tracker.services.agent_presence_switch import presence_enabled_for
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
+    device = None
     stop, reason, stop_until = False, "", None
     ship_logs = False
     restart = False
@@ -1171,6 +1173,10 @@ def agent_control(request):
             restart = True
             device.restart_requested = False
             device.save(update_fields=['restart_requested'])
+
+    # The authenticated device is the precise one; the hostname lookup above
+    # is a fallback for agents that call without a key.
+    presence_device = getattr(request, "agent_device", None) or (device if host else None)
 
     if username and host:
         try:
@@ -1192,6 +1198,9 @@ def agent_control(request):
         "stop_until": stop_until.isoformat() if stop_until else None,
         "ship_logs": ship_logs,
         "restart": restart,
+        # Remote off switch for the agent-presence measurement (never affects
+        # tracking). See services/agent_presence_switch.py.
+        "agent_presence": presence_enabled_for(presence_device),
     })
 
 

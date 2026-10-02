@@ -170,3 +170,117 @@ class AgentPresenceTest(TestCase):
         self.assertEqual(fleet['unattended_active']['candidate_agent_hours'], 0.1)
         self.assertEqual(fleet['unattended_active']['by_cause_hours']['remote_control'], 0.1)
         call_command('agent_presence_summary', '--days', '1', stdout=StringIO())
+
+
+class AgentPresenceSwitchTest(TestCase):
+    def setUp(self):
+        from tracker.services.agent_presence_switch import clear_cache
+        clear_cache()
+        self.org = Organization.objects.create(name='MavOps', slug='mavops', plan='professional')
+        self.other = Organization.objects.create(name='Other', slug='other', plan='professional')
+        self.user = User.objects.create_user('amy', email='amy@mavops.ai', password='x')
+        OrganizationMembership.objects.create(user=self.user, organization=self.org, role='member')
+        self.dev = AgentDevice.objects.create(
+            user=self.user, device_id='d1', hostname='AMY-PC', api_key='k-switch', is_active=True)
+
+    def control(self):
+        from tracker.services.agent_presence_switch import clear_cache
+        clear_cache()
+        c = APIClient()
+        c.credentials(HTTP_X_AGENT_KEY='k-switch')
+        r = c.get('/api/agent/control/?host=AMY-PC')
+        self.assertEqual(r.status_code, 200)
+        return r.data['agent_presence']
+
+    def switch(self, *args):
+        from io import StringIO
+        from django.core.management import call_command
+        call_command('agent_presence_switch', *args, stdout=StringIO())
+
+    def test_default_on(self):
+        self.assertTrue(self.control())
+
+    def test_precedence_device_then_firm_then_everyone(self):
+        self.switch('off', '--all')
+        self.assertFalse(self.control())
+        self.switch('on', '--org', str(self.org.pk))
+        self.assertTrue(self.control())                  # firm beats everyone
+        self.switch('off', '--device', 'AMY-PC')
+        self.assertFalse(self.control())                 # device beats firm
+        self.switch('clear', '--device', str(self.dev.pk))
+        self.assertTrue(self.control())
+        self.switch('off', '--org', str(self.other.pk))  # someone else's firm
+        self.switch('clear', '--org', str(self.org.pk))
+        self.assertFalse(self.control())                 # back to everyone=off
+
+    def test_env_var_beats_everything(self):
+        import os
+        from unittest import mock
+        self.switch('on', '--device', 'AMY-PC')
+        with mock.patch.dict(os.environ, {'AGENT_PRESENCE_DISABLED': '1'}):
+            self.assertFalse(self.control())
+
+    def test_broken_table_defaults_on(self):
+        from unittest import mock
+        with mock.patch('tracker.services.agent_presence_switch._rows', side_effect=RuntimeError('no table')):
+            self.assertTrue(self.control())
+
+
+class MavOpsAgentPresenceTest(TestCase):
+    def setUp(self):
+        from tracker.services.agent_presence_switch import clear_cache
+        clear_cache()
+        self.org = Organization.objects.create(name='MavOps', slug='mavops', plan='professional')
+        self.staff = User.objects.create_user('ops', email='ops@mavops.ai', password='x', is_staff=True)
+        self.member = User.objects.create_user('amy', email='amy@mavops.ai', password='x')
+        OrganizationMembership.objects.create(user=self.member, organization=self.org, role='owner')
+        self.dev = AgentDevice.objects.create(
+            user=self.member, device_id='d1', hostname='AMY-PC', api_key='k-mv', is_active=True)
+
+    def client_for(self, user):
+        c = APIClient()
+        tok = AuthToken.objects.create(user=user, token=f't-{user.username}',
+                                       expires_at=timezone.now() + timezone.timedelta(days=1))
+        c.credentials(HTTP_AUTHORIZATION=f'Bearer {tok.token}')
+        return c
+
+    def test_staff_only(self):
+        c = self.client_for(self.member)   # a firm OWNER is still not MavOps staff
+        self.assertEqual(c.get('/api/mavops/agent-presence/switch/').status_code, 403)
+        self.assertEqual(c.post('/api/mavops/agent-presence/switch/',
+                                {'action': 'off', 'scope': 'all'}, format='json').status_code, 403)
+        self.assertEqual(c.get('/api/mavops/agent-presence/summary/').status_code, 403)
+
+    def test_switch_round_trip_reaches_agents(self):
+        c = self.client_for(self.staff)
+        r = c.get('/api/mavops/agent-presence/switch/')
+        self.assertEqual((r.data['rows'], r.data['everyone_enabled']), ([], True))
+
+        r = c.post('/api/mavops/agent-presence/switch/',
+                   {'action': 'off', 'scope': 'device', 'device_pk': self.dev.pk, 'note': 'cpu'},
+                   format='json')
+        [row] = r.data['rows']
+        self.assertEqual((row['scope'], row['enabled'], row['note']), ('device', False, 'cpu'))
+        self.assertIn('AMY-PC', row['device_label'])
+
+        agent = APIClient()
+        agent.credentials(HTTP_X_AGENT_KEY='k-mv')
+        self.assertFalse(agent.get('/api/agent/control/?host=AMY-PC').data['agent_presence'])
+
+        c.post('/api/mavops/agent-presence/switch/',
+               {'action': 'clear', 'scope': 'device', 'device_pk': self.dev.pk}, format='json')
+        self.assertTrue(agent.get('/api/agent/control/?host=AMY-PC').data['agent_presence'])
+
+    def test_bad_input(self):
+        c = self.client_for(self.staff)
+        self.assertEqual(c.post('/api/mavops/agent-presence/switch/',
+                                {'action': 'off', 'scope': 'org', 'org_id': 'x'}, format='json').status_code, 400)
+        self.assertEqual(c.post('/api/mavops/agent-presence/switch/',
+                                {'action': 'off', 'scope': 'org', 'org_id': 999999}, format='json').status_code, 404)
+        self.assertEqual(c.post('/api/mavops/agent-presence/switch/',
+                                {'action': 'nuke', 'scope': 'all'}, format='json').status_code, 400)
+
+    def test_summary(self):
+        r = self.client_for(self.staff).get('/api/mavops/agent-presence/summary/?days=7')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('fleet', r.data)

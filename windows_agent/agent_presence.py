@@ -432,8 +432,12 @@ def _start_windows_input_monitor(collector: Collector, get_foreground, log):
                 pass
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
+    state = {}
+
     def run():
+        hwnd = None
         try:
+            state["tid"] = ctypes.windll.kernel32.GetCurrentThreadId()
             proc = WNDPROC(wndproc)
             run.proc = proc  # keep the callback alive
             wc = WNDCLASSW()
@@ -451,14 +455,31 @@ def _start_windows_input_monitor(collector: Collector, get_foreground, log):
                 return
             collector.input_monitor = "ok"
             msg = wintypes.MSG()
-            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            while not state.get("stopping") and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 user32.TranslateMessage(ctypes.byref(msg))
                 user32.DispatchMessageW(ctypes.byref(msg))
+            # WM_QUIT from stop(): unregister so no WM_INPUT reaches us again.
+            user32.RegisterRawInputDevices(
+                ctypes.byref(RAWINPUTDEVICE(0x01, 0x02, 0x00000001, None)),  # RIDEV_REMOVE
+                1, ctypes.sizeof(RAWINPUTDEVICE))
+            collector.input_monitor = "off"
         except Exception as e:
             collector.input_monitor = "error"
             log(f"[PRESENCE] input monitor stopped: {e}")
+        finally:
+            if hwnd:
+                user32.DestroyWindow(hwnd)
+            user32.UnregisterClassW("TimeTrackerAgentPresence",
+                                    ctypes.windll.kernel32.GetModuleHandleW(None))
 
     threading.Thread(target=run, name="agent-presence-input", daemon=True).start()
+
+    def stop():
+        state["stopping"] = True
+        tid = state.get("tid")
+        if tid:
+            user32.PostThreadMessageW(tid, 0x0012, 0, 0)  # WM_QUIT
+    return stop
 
 
 def _start_mac_input_monitor(collector: Collector, log):
@@ -478,7 +499,7 @@ def _start_mac_input_monitor(collector: Collector, log):
 
     if not Q.CGPreflightListenEventAccess():
         collector.input_monitor = "no_permission"
-        return
+        return None
 
     own_pid = os.getpid()
     names: dict[int, str] = {}
@@ -496,7 +517,8 @@ def _start_mac_input_monitor(collector: Collector, log):
     def callback(proxy, etype, event, refcon):
         try:
             if etype in (Q.kCGEventTapDisabledByTimeout, Q.kCGEventTapDisabledByUserInput):
-                Q.CGEventTapEnable(state["tap"], True)
+                if not state.get("stopping"):
+                    Q.CGEventTapEnable(state["tap"], True)
                 return event
             pid = Q.CGEventGetIntegerValueField(event, Q.kCGEventSourceUnixProcessID)
             if pid == own_pid:
@@ -520,16 +542,26 @@ def _start_mac_input_monitor(collector: Collector, log):
                 collector.input_monitor = "error"
                 return
             state["tap"] = tap
+            state["loop"] = Q.CFRunLoopGetCurrent()
             src = Q.CFMachPortCreateRunLoopSource(None, tap, 0)
-            Q.CFRunLoopAddSource(Q.CFRunLoopGetCurrent(), src, Q.kCFRunLoopCommonModes)
+            Q.CFRunLoopAddSource(state["loop"], src, Q.kCFRunLoopCommonModes)
             Q.CGEventTapEnable(tap, True)
             collector.input_monitor = "ok"
             Q.CFRunLoopRun()
+            collector.input_monitor = "off"   # stop() ended the run loop
         except Exception as e:
             collector.input_monitor = "error"
             log(f"[PRESENCE] input monitor stopped: {e}")
 
     threading.Thread(target=run, name="agent-presence-input", daemon=True).start()
+
+    def stop():
+        state["stopping"] = True
+        if state.get("tap") is not None:
+            Q.CGEventTapEnable(state["tap"], False)
+        if state.get("loop") is not None:
+            Q.CFRunLoopStop(state["loop"])
+    return stop
 
 
 # ──────────────────────────────────────────────
@@ -598,6 +630,75 @@ def recent_session_logs(home: str, since: float):
     return found
 
 
+# ──────────────────────────────────────────────
+# Remote off switch
+# ──────────────────────────────────────────────
+# The server answers every control check-in (every ~10s) with
+# "agent_presence": true/false, and the agent passes it to set_enabled(). Off
+# stops EVERYTHING — the input monitor too, not just the counting — and is
+# saved to disk, so an agent that restarts (say, because this module broke
+# it) stays off from its first second, before it has checked in once.
+OFF_MARKER = os.path.join(os.path.expanduser("~"), ".timetracker", "agent_presence_off")
+
+_ctl = {"collector": None, "stop_monitor": None, "paused": False,
+        "get_foreground": None, "log": print}
+_ctl_lock = threading.Lock()
+
+
+def _marker_set(off: bool):
+    try:
+        if off:
+            os.makedirs(os.path.dirname(OFF_MARKER), exist_ok=True)
+            with open(OFF_MARKER, "w") as f:
+                f.write("switched off by the server\n")
+        elif os.path.exists(OFF_MARKER):
+            os.remove(OFF_MARKER)
+    except OSError:
+        pass
+
+
+def _start_monitor():
+    c, log = _ctl["collector"], _ctl["log"]
+    try:
+        if sys.platform == "win32":
+            _ctl["stop_monitor"] = _start_windows_input_monitor(c, _ctl["get_foreground"], log)
+        elif sys.platform == "darwin":
+            _ctl["stop_monitor"] = _start_mac_input_monitor(c, log)
+    except Exception as e:
+        c.input_monitor = "error"
+        log(f"[PRESENCE] input monitor unavailable: {e}")
+
+
+def set_enabled(on: bool) -> None:
+    """Apply the server's switch. Idempotent and never raises; a no-op when
+    measurement never started (disabled locally — the local switch wins)."""
+    try:
+        with _ctl_lock:
+            c = _ctl["collector"]
+            want_paused = not on
+            _marker_set(want_paused)
+            if c is None or _ctl["paused"] == want_paused:
+                return
+            _ctl["paused"] = want_paused
+            if want_paused:
+                stop, _ctl["stop_monitor"] = _ctl["stop_monitor"], None
+                if stop:
+                    stop()
+                with c._lock:
+                    c._buckets.clear()        # nothing collected is sent
+                    c._session_files.clear()
+                c.input_monitor = "off"
+                _ctl["log"]("[PRESENCE] switched OFF by server")
+            else:
+                _start_monitor()
+                _ctl["log"]("[PRESENCE] switched back ON by server")
+    except Exception as e:
+        try:
+            _ctl["log"](f"[PRESENCE] switch error: {e}")
+        except Exception:
+            pass
+
+
 def start(get_foreground, get_idle, post, log, enabled=True, get_hid_idle=None):
     """Start measuring. Returns the Collector, or None if disabled.
 
@@ -610,15 +711,13 @@ def start(get_foreground, get_idle, post, log, enabled=True, get_hid_idle=None):
         log("[PRESENCE] disabled by config")
         return None
     collector = Collector()
-
-    try:
-        if sys.platform == "win32":
-            _start_windows_input_monitor(collector, get_foreground, log)
-        elif sys.platform == "darwin":
-            _start_mac_input_monitor(collector, log)
-    except Exception as e:
-        collector.input_monitor = "error"
-        log(f"[PRESENCE] input monitor unavailable: {e}")
+    with _ctl_lock:
+        _ctl.update(collector=collector, get_foreground=get_foreground, log=log,
+                    paused=os.path.exists(OFF_MARKER), stop_monitor=None)
+        if _ctl["paused"]:
+            log("[PRESENCE] off (server switch saved on disk) — waiting for the server to turn it on")
+        else:
+            _start_monitor()
 
     home = os.path.expanduser("~")
 
@@ -626,6 +725,10 @@ def start(get_foreground, get_idle, post, log, enabled=True, get_hid_idle=None):
         last = {"fg": 0.0, "proc": 0.0, "logs": time.time() - BUCKET_S, "send": time.time()}
         while True:
             now = time.time()
+            if _ctl["paused"]:
+                last["logs"] = now   # on resume, don't count logs from the off period
+                time.sleep(1)
+                continue
             try:
                 if now - last["fg"] >= FOREGROUND_POLL_S:
                     fg = get_foreground()
@@ -652,5 +755,6 @@ def start(get_foreground, get_idle, post, log, enabled=True, get_hid_idle=None):
             time.sleep(1)
 
     threading.Thread(target=loop, name="agent-presence", daemon=True).start()
-    log("[PRESENCE] measuring agent activity (counts only)")
+    if not _ctl["paused"]:
+        log("[PRESENCE] measuring agent activity (counts only)")
     return collector

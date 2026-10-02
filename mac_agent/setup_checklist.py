@@ -418,7 +418,10 @@ class SetupChecklist:
                       else "TimeTracker is set up", 20.0, weight=_SEMIBOLD)
         head.setFrame_(NSMakeRect(tx, 34, WIDTH - tx - PAD, 26))
         view.addSubview_(head)
-        req_all = [r for r in rows if r["required"]]
+        # Count only the required rows on screen: one folded into "Later"
+        # (its app isn't open yet) isn't missing, and counting it kept the
+        # bar short of full under "TimeTracker is set up".
+        req_all = required
         done_n = sum(1 for r in req_all if r["ok"] is True)
         sub_text = (f"{done_n} of {len(req_all)} required done. Until the rest are on, "
                     "some work is captured without the page or file name." if missing else

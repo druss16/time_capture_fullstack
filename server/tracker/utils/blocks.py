@@ -78,7 +78,13 @@ def is_communication_activity(app_name=None, window_title=None, url=None):
         ]
         if any(domain in url_lower for domain in communication_domains):
             return True
-    
+
+    # The shared video/telehealth platform list (doxy.me, Kareo telehealth,
+    # SimplePractice, Whereby, Jitsi, Chime, "Telehealth" titles, ...).
+    from tracker.utils.meeting_platforms import is_meeting_activity
+    if is_meeting_activity(app_name or '', window_title or '', url or ''):
+        return True
+
     return False
 
 

@@ -177,6 +177,9 @@ def find_sandwich_attribution(block, user, org) -> Optional['Signal']:
             start__lt=day_end,
         )
         .exclude(pk=getattr(block, 'pk', None))
+        # An unconfirmed calendar-born meeting row is a question, not evidence:
+        # it must not lend its guessed client to the work around it.
+        .exclude(device_id='calendar', classification_state='proposed')
         .order_by('start')
     )
 

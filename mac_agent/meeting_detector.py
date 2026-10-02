@@ -179,6 +179,28 @@ MEETING_TITLE_PATTERNS = {
     "whereby": "whereby",
     "around.co": "around",
     "gather.town": "gather",
+    # Kept in step with server/tracker/utils/meeting_platforms.py — telehealth
+    # and web meeting platforms. A browser tab titled "Telehealth - Camera and
+    # microphone recording" (Kareo, block 79634) was a call nobody detected.
+    # Title alone never starts a meeting: it still needs browser audio/camera.
+    "telehealth": "telehealth",
+    "tele-health": "telehealth",
+    "video visit": "telehealth",
+    "virtual visit": "telehealth",
+    "doxy.me": "doxy",
+    "simplepractice": "simplepractice",
+    "teladoc": "teladoc",
+    "vsee": "vsee",
+    "zoom.us/wc": "zoom",
+    "gotomeeting": "gotomeeting",
+    "goto meeting": "gotomeeting",
+    "bluejeans": "bluejeans",
+    "ringcentral video": "ringcentral",
+    "amazon chime": "chime",
+    "app.chime.aws": "chime",
+    "jitsi": "jitsi",
+    "meet.jit.si": "jitsi",
+    "huddle": "slack",
 }
 
 # v1.2.99: Native meeting app window title markers.

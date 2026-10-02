@@ -136,7 +136,19 @@ def sync_user_calendar(self, integration_id):
                 ).delete()
                 skipped_count += 1
                 continue
-            
+
+            # Declined by the user themselves: not time they spent. Mirrors
+            # the Google sync, and keeps a declined client call from being
+            # proposed as an off-computer meeting.
+            if ((evt.get('responseStatus') or {}).get('response') or '') == 'declined':
+                CalendarEvent.objects.filter(
+                    user=user,
+                    provider='microsoft',
+                    external_id=external_id,
+                ).delete()
+                skipped_count += 1
+                continue
+
             try:
                 start_iso = evt.get('start', {}).get('dateTime')
                 end_iso = evt.get('end', {}).get('dateTime')
@@ -215,6 +227,11 @@ def sync_user_calendar(self, integration_id):
         logger.info(f"[CAL-SYNC] {user.username}: {kept} time-off entries derived")
     except Exception as e:
         logger.warning(f"[CAL-SYNC] time-off derivation failed for {user.username}: {e}")
+
+    # Meetings with no captured activity -> proposed Needs You entries.
+    # Org-gated inside; queues a task, never blocks or fails the sync.
+    from tracker.services.calendar_meetings import after_calendar_sync
+    after_calendar_sync(org, user)
 
     logger.info(
         f"[CAL-SYNC] ✅ {user.username}: {saved_count} saved, {skipped_count} skipped"

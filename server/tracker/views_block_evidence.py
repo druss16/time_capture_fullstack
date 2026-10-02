@@ -1215,6 +1215,20 @@ def why_summary(block, org):
         "", co, surrounding, title_client=tc, title_family=fam)
     if _is_browser(block) and not (co and co.get("client_id")):
         sid, sname = None, None
+    # Same meeting rule as block_why, so the pending row and the "Why?" panel
+    # tell the same story (a telehealth call in Chrome, a calendar-born row).
+    try:
+        _mtg = _meeting_facts(block, org)
+    except Exception:
+        _mtg = None
+    if _mtg:
+        _sentence, _mid, _mname = _mtg
+        if tier in ("co_open", "title", "family") and sid:
+            sentence = f"{_sentence} {sentence}"
+        else:
+            sentence = _sentence
+            sid, sname = _mid, _mname
+        tier = "meeting"
     # On the family tier there is no single answer to offer — the row renders the
     # candidates as one-tap buttons instead of a (wrong) green client.
     candidates = fam["candidates"] if tier == "family" else []
@@ -1444,12 +1458,51 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
     return out
 
 
-_MEETING_APPS = ('teams', 'zoom', 'webex', 'meet', 'gotomeeting', 'ringcentral')
+def _overlapping_calendar_event(block):
+    """The timed calendar event that overlaps this block the most, preferring
+    one that already names a client. All-day entries (holidays, "WFH") cover
+    every block that day and say nothing about who a call was with."""
+    from tracker.models import CalendarEvent
+    if not (block.start and block.end):
+        return None
+    best, best_key = None, None
+    for ev in (CalendarEvent.objects
+               .filter(user=block.user, start__lt=block.end, end__gt=block.start,
+                       is_all_day=False)
+               .select_related('extracted_client')[:20]):
+        overlap = (min(ev.end, block.end) - max(ev.start, block.start)).total_seconds()
+        key = (bool(ev.extracted_client_id and (ev.extraction_confidence or 0) >= 0.70), overlap)
+        if best_key is None or key > best_key:
+            best, best_key = ev, key
+    return best
+
+
+def _event_attendee_emails(ev, user_email=''):
+    """Attendee addresses, minus the block owner. CalendarEvent.attendees holds
+    {email, domain, response} dicts (both providers); plain strings are
+    tolerated for any older row. The old code only accepted strings, so the
+    "with ..." part never rendered."""
+    me = (user_email or '').strip().lower()
+    out = []
+    for a in ev.attendees or []:
+        email = (a.get('email') if isinstance(a, dict) else a) or ''
+        email = email.strip()
+        if email and email.lower() != me and email not in out:
+            out.append(email)
+    return out
+
+
+_CALL_PHRASES = {
+    'Telehealth': 'a telehealth call',
+    'Video visit': 'a video visit',
+    'Huddle': 'a huddle',
+    'Meeting': 'a meeting',
+}
 
 
 def _meeting_facts(block, org, local_time=""):
-    """(sentence, client_id, client_name) for a block the agent bracketed as a
-    meeting — or None if this is not one.
+    """(sentence, client_id, client_name) for a block that was a meeting, or
+    None if this is not one.
 
     A meeting block is the one kind whose window title is reliably useless. The
     detector fires the instant the conferencing app appears, which is while it
@@ -1460,35 +1513,35 @@ def _meeting_facts(block, org, local_time=""):
 
     So say what we actually know instead of showing the splash: that it was a
     meeting, when, and for how long. Then look for the one thing that can say
-    WHO it was with — a calendar entry covering it, which carries a subject and
+    WHO it was with: a calendar entry covering it, which carries a subject and
     attendees, and may already name a client.
+
+    Meeting detection is the shared platform list (utils.meeting_platforms),
+    which includes browser-hosted calls and telehealth: block 79634, an 82-min
+    Kareo telehealth visit in Chrome, used to fall through to "No added
+    context to go on" because only Teams/Zoom/Webex/Meet app names counted.
     """
-    app = (block.app_name or '').lower()
-    title = (block.window_title or '').lower()
-    is_meeting = 'meeting' in app or (
-        any(a in app for a in _MEETING_APPS) and 'meeting' in title)
-    if not is_meeting:
+    from tracker.services.calendar_meetings import calendar_block_facts, is_calendar_block
+    if is_calendar_block(block):
+        return calendar_block_facts(block)
+
+    from tracker.utils.meeting_platforms import detect_meeting_platform
+    platform = detect_meeting_platform(block.app_name or '', block.window_title or '',
+                                       getattr(block, 'url', '') or '')
+    if not platform:
         return None
 
-    kind = next((a for a in _MEETING_APPS if a in app or a in title), None)
-    label = {'teams': 'Teams', 'zoom': 'Zoom', 'webex': 'Webex',
-             'meet': 'Google Meet'}.get(kind, '')
-    span = f"a {label} meeting" if label else "a meeting"
+    span = _CALL_PHRASES.get(platform) or f"a {platform} meeting"
     when = f" around {local_time}" if local_time else ""
 
-    ev = None
     try:
-        from tracker.models import CalendarEvent
-        ev = (CalendarEvent.objects
-              .filter(user=block.user, start__lt=block.end, end__gt=block.start)
-              .order_by('start').first())
+        ev = _overlapping_calendar_event(block)
     except Exception:
         ev = None
 
     if ev:
         # A calendar entry is the only real evidence of who was in the room.
-        others = [a for a in (ev.attendees or [])
-                  if isinstance(a, str) and a and a != getattr(block.user, 'email', '')]
+        others = _event_attendee_emails(ev, getattr(block.user, 'email', ''))
         who = ''
         if others:
             shown = ', '.join(others[:3])

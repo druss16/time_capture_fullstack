@@ -110,6 +110,9 @@ def sync_user_google_calendar(self, integration_id):
     except Exception as e:
         logger.warning(f"[GCAL-SYNC] time-off derivation failed for {user.username}: {e}")
 
+    from tracker.services.calendar_meetings import after_calendar_sync
+    after_calendar_sync(integration.org, user)
+
     logger.info(f"[GCAL-SYNC] {user.username}: {result}")
     return {'status': 'ok', 'user': user.username, **result}
 

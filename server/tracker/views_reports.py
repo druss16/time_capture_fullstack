@@ -405,6 +405,11 @@ def is_pending_review_block(b) -> bool:
         return False
 
     if state == "proposed":
+        # A meeting from the calendar with no captured activity. It asks even
+        # without a client guess — "who was this call with?" is the question.
+        from tracker.services.calendar_meetings import is_calendar_block
+        if is_calendar_block(b):
+            return True
         reasoning = (getattr(b, "proposed_reasoning", "") or "")
         return bool(getattr(b, "proposed_client_id", None)) or ("second-pass" in reasoning)
 

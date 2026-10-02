@@ -338,6 +338,16 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/15'),  # same cadence as Microsoft calendar
         'options': {'expires': 600},
     },
+    # Finished client meetings with no captured activity -> proposed Needs You
+    # entries (services/calendar_meetings.py). Only orgs with
+    # calendar_classification_enabled. Each calendar sync also queues a run
+    # for its user; this sweep catches meetings that ended between syncs.
+    # DatabaseScheduler: reaches the live schedule when beat restarts.
+    'propose-calendar-meetings': {
+        'task': 'tracker.propose_calendar_meetings_all',
+        'schedule': crontab(minute='5,35'),
+        'options': {'expires': 1500},
+    },
     'prune-mail-signals-nightly': {
         'task':     'tracker.prune_mail_signals',
         'schedule': 86400.0,  # 24 hours

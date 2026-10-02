@@ -86,11 +86,17 @@ CALENDAR_SOURCE = 'calendar'
 
 LOOKBACK = timedelta(days=2)
 # Agent-captured non-idle activity covering at least this share of the event
-# means the meeting happened at the computer — Stage 6's job, not ours.
+# means the person was (also) at the computer. Below it, every uncovered
+# stretch of MIN_SEGMENT_MINUTES+ is proposed; at or above it, only stretches
+# of BUSY_GAP_MIN_MINUTES+ are. A hard cut-off here used to drop the whole
+# meeting: 10 min of email in an hour proposed 50 min, 13 min proposed none.
 COVERAGE_THRESHOLD = 0.20
 # Stretches shorter than this are immaterial (the same 2-minute floor the
 # billing totals use) and are not proposed.
 MIN_SEGMENT_MINUTES = 2
+# While the computer was busy during a meeting, a short gap is a pause between
+# tasks, not meeting time; only a sustained one is worth asking about.
+BUSY_GAP_MIN_MINUTES = 10
 # A day-long "meeting" is a calendar placeholder (a conference, a hold), not time.
 MAX_EVENT_MINUTES = 6 * 60   # past this the reports' anomaly guard drops it anyway
 
@@ -325,12 +331,44 @@ def _billable_category(org) -> str:
     return FALLBACK_CATEGORIES.get(industry, FALLBACK_CATEGORIES_DEFAULT)[0]
 
 
-def _segment_fields(org, ev, attendees, start, end, category) -> dict:
-    client = ev.extracted_client if (
+def _event_client(ev):
+    return ev.extracted_client if (
         ev.extracted_client_id and (ev.extraction_confidence or 0) >= 0.70) else None
+
+
+def busy_elsewhere_note(ev, agent_blocks, lo, hi) -> str:
+    """When the computer was filed to a DIFFERENT client during the meeting,
+    say so, so the person decides which story is true. Never moves that time:
+    one stretch is never billed to two clients."""
+    event_client_id = getattr(ev, 'extracted_client_id', None) if _event_client(ev) else None
+    per_client: dict = {}
+    for b in agent_blocks:
+        cid = b.client_id or getattr(b, 'proposed_client_id', None)
+        if not cid or cid == event_client_id:
+            continue
+        overlap = (min(b.end, hi) - max(b.start, lo)).total_seconds()
+        if overlap > 0:
+            per_client[cid] = per_client.get(cid, 0.0) + overlap
+    if not per_client:
+        return ''
+    cid, secs = max(per_client.items(), key=lambda kv: kv[1])
+    mins = int(round(secs / 60))
+    if mins < 1:
+        return ''
+    from tracker.models import Client
+    name = Client.objects.filter(id=cid).values_list('name', flat=True).first() or 'another client'
+    target = ev.extracted_client.name if event_client_id and ev.extracted_client else 'this meeting'
+    return (f" Your computer was on {name} for {mins} min during it — "
+            f"add the rest to {target}?")
+
+
+def _segment_fields(org, ev, attendees, start, end, category, note: str = '') -> dict:
+    client = _event_client(ev)
     minutes = int(round((end - start).total_seconds() / 60))
     domains = sorted({a.rsplit('@', 1)[1] for a in attendees if '@' in a})
     reasoning = calendar_reasoning(ev.title, attendees)
+    if note:
+        reasoning = reasoning.replace(' — no computer activity was captured.', '.') + note
     signal = {
         'type': 'calendar_meeting',
         'strength': PROPOSED_CONFIDENCE if client else 0.0,
@@ -397,13 +435,17 @@ def reconcile_event(org, user, ev, attendees, existing, agent_blocks, other_cale
     agent_iv = [(b.start, b.end) for b in agent_blocks]
     coverage = _covered_seconds(agent_iv, lo, hi) / event_seconds if event_seconds > 0 else 1.0
 
-    desired: list[tuple] = []
-    if coverage < COVERAGE_THRESHOLD:
-        confirmed_same = [(b.start, b.end) for b in existing
-                          if not _is_pending(b) and not _is_dismissed(b)]
-        occupied = agent_iv + [(b.start, b.end) for b in other_calendar_blocks] + confirmed_same
-        desired = [(s, e) for s, e in _subtract(lo, hi, occupied)
-                   if (e - s).total_seconds() >= MIN_SEGMENT_MINUTES * 60]
+    # Fill only the minutes nothing else accounts for. When the computer was
+    # mostly idle, every stretch of 2+ min; when it was busy, only sustained
+    # gaps of 10+ min — and say what the computer was doing meanwhile.
+    busy = coverage >= COVERAGE_THRESHOLD
+    min_seg = BUSY_GAP_MIN_MINUTES if busy else MIN_SEGMENT_MINUTES
+    confirmed_same = [(b.start, b.end) for b in existing
+                      if not _is_pending(b) and not _is_dismissed(b)]
+    occupied = agent_iv + [(b.start, b.end) for b in other_calendar_blocks] + confirmed_same
+    desired: list[tuple] = [(s, e) for s, e in _subtract(lo, hi, occupied)
+                            if (e - s).total_seconds() >= min_seg * 60]
+    note = busy_elsewhere_note(ev, agent_blocks, lo, hi) if desired else ''
 
     hints_base = {
         'source': CALENDAR_SOURCE,
@@ -414,7 +456,7 @@ def reconcile_event(org, user, ev, attendees, existing, agent_blocks, other_cale
     }
 
     for i, (s, e) in enumerate(desired):
-        fields = _segment_fields(org, ev, attendees, s, e, category)
+        fields = _segment_fields(org, ev, attendees, s, e, category, note)
         hints = dict(hints_base, segment=i)
         if i < len(pending):
             b = pending[i]

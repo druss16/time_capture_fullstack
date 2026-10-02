@@ -2920,12 +2920,223 @@ function QboMappingTab({ apiFetch, flash, orgs }: QboMappingTabProps) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Agent Presence Tab — remote off switch + measurement results ─────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// The desktop agent's agent-presence MEASUREMENT (agent_presence.py) can be
+// switched off for everyone, a firm or one device. It never affects time
+// tracking. Agents check in every ~10s; the server caches 30s.
+
+interface PresenceSwitchRow {
+  id: number; scope: "all" | "org" | "device"; enabled: boolean; note: string; updated_at: string;
+  org_id: number | null; org_name: string; device_pk: number | null; device_label: string;
+}
+interface PresenceSwitchState { env_disabled: string; everyone_enabled: boolean; rows: PresenceSwitchRow[]; }
+interface PresenceSummary {
+  devices_reporting: number; hours_observed: number;
+  clicks: { real: number; synthetic: number; synthetic_share: number; driven_device_hours: number; top_sources: [string, number][] };
+  unattended_active: { hours: number; candidate_agent_hours: number; devices: number; by_cause_hours: Record<string, number>; top_apps: [string, number][] };
+  idle_activity: { changes: number; idle_hours: number; top_apps: [string, number][] };
+  agent_processes: Record<string, { devices: number; running_hours: number; busy_hours: number }>;
+  local_agent_logs: Record<string, { devices: number; session_hours: number }>;
+}
+interface PresenceReport { days: number; active_devices: number; fleet: PresenceSummary; orgs: Record<string, PresenceSummary>; }
+
+interface AgentPresenceTabProps {
+  apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
+  flash: (msg: string, type?: "ok" | "err") => void;
+  orgs: Org[];
+}
+
+function AgentPresenceTab({ apiFetch, flash, orgs }: AgentPresenceTabProps) {
+  const [state, setState] = useState<PresenceSwitchState | null>(null);
+  const [scope, setScope] = useState<"all" | "org" | "device">("all");
+  const [orgId, setOrgId] = useState<number | null>(null);
+  const [deviceList, setDeviceList] = useState<Device[]>([]);
+  const [devicePk, setDevicePk] = useState<number | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [days, setDays] = useState(7);
+  const [report, setReport] = useState<PresenceReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+
+  const loadState = useCallback(async () => {
+    try { setState(await apiFetch(`/mavops/agent-presence/switch/`)); }
+    catch { flash("Failed to load the agent presence switch.", "err"); }
+  }, [apiFetch, flash]);
+
+  const loadReport = useCallback(async (d: number) => {
+    setReportLoading(true);
+    try { setReport(await apiFetch(`/mavops/agent-presence/summary/?days=${d}`)); }
+    catch { flash("Failed to load agent presence results.", "err"); }
+    finally { setReportLoading(false); }
+  }, [apiFetch, flash]);
+
+  useEffect(() => { loadState(); }, [loadState]);
+  useEffect(() => { loadReport(days); }, [days, loadReport]);
+  useEffect(() => {
+    setDevicePk(null);
+    if (scope !== "device" || !orgId) { setDeviceList([]); return; }
+    apiFetch(`/mavops/devices/?org_id=${orgId}`)
+      .then(d => setDeviceList(d.devices || []))
+      .catch(() => flash("Failed to load devices.", "err"));
+  }, [scope, orgId, apiFetch, flash]);
+
+  const send = async (action: "on" | "off" | "clear", target?: { scope: string; org_id?: number | null; device_pk?: number | null }) => {
+    const t = target || { scope, org_id: orgId, device_pk: devicePk };
+    if (t.scope === "org" && !t.org_id) { flash("Pick a firm.", "err"); return; }
+    if (t.scope === "device" && !t.device_pk) { flash("Pick a device.", "err"); return; }
+    if (action === "off" && t.scope === "all" &&
+        !window.confirm("Turn the agent-presence measurement OFF for EVERY device?\n\nTime tracking is not affected.")) return;
+    setBusy(true);
+    try {
+      setState(await apiFetch(`/mavops/agent-presence/switch/`, {
+        method: "POST", body: JSON.stringify({ action, ...t, note }),
+      }));
+      flash(action === "clear" ? "Removed — that scope inherits again." : `Measurement ${action.toUpperCase()}. Agents pick it up within ~40s.`);
+      setNote("");
+    } catch { flash("Failed to change the switch.", "err"); }
+    finally { setBusy(false); }
+  };
+
+  const th: CSSProperties = { textAlign: "left", padding: "8px 10px", color: T.textMuted, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderBottom: `1px solid ${T.border}`, ...mono };
+  const td: CSSProperties = { padding: "8px 10px", color: T.text, fontSize: 13, borderBottom: `1px solid ${T.border}`, ...mono };
+  const sel: CSSProperties = { background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "5px 8px", fontSize: 12, borderRadius: 4, ...mono, maxWidth: 260 };
+  const heading: CSSProperties = { color: T.textSub, fontSize: 13, fontWeight: 600, marginBottom: 10, ...mono, letterSpacing: 1 };
+  const onOff = (on: boolean) => <span style={{ color: on ? T.green : T.red, fontWeight: 600 }}>{on ? "ON" : "OFF"}</span>;
+  const scopeLabel = (r: PresenceSwitchRow) =>
+    r.scope === "all" ? "Everyone" : r.scope === "org" ? `Firm · ${r.org_name || r.org_id}` : `Device · ${r.device_label}`;
+  const fmtCauses = (c: Record<string, number>) =>
+    Object.entries(c).filter(([, h]) => h > 0).map(([k, h]) => `${k.replace(/_/g, " ")} ${h}h`).join(" · ") || "—";
+  const topProcess = (p: PresenceSummary["agent_processes"]) =>
+    Object.entries(p).filter(([l]) => !l.startsWith("remote")).slice(0, 3)
+      .map(([l, v]) => `${l.replace(/_/g, " ")} (${v.devices})`).join(", ") || "—";
+
+  return (
+    <div>
+      {/* ── SWITCH ─────────────────────────────────────────── */}
+      <div style={{ ...card, marginBottom: 24 }}>
+        <div style={heading}>REMOTE SWITCH</div>
+        <div style={{ color: T.textMuted, fontSize: 12, ...mono, marginBottom: 14, lineHeight: 1.6 }}>
+          Turns the desktop agent's AI-agent measurement on or off. It never affects time tracking.
+          Most specific wins: device, then firm, then everyone. Agents v1.9.27 and newer obey it;
+          older agents ignore it.
+        </div>
+
+        {state?.env_disabled && (
+          <div style={{ background: T.red + "22", border: `1px solid ${T.red}`, color: T.red, padding: "10px 14px", borderRadius: 6, fontSize: 12, ...mono, marginBottom: 14 }}>
+            AGENT_PRESENCE_DISABLED is set on the server — the measurement is OFF for everyone, whatever the rows below say. Remove it in Render to use this switch.
+          </div>
+        )}
+
+        <div style={{ color: T.text, fontSize: 13, ...mono, marginBottom: 14 }}>
+          Everyone (default): {state ? onOff(state.everyone_enabled) : "…"}
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 10, alignItems: "center", marginBottom: 16 }}>
+          <select value={scope} onChange={e => setScope(e.target.value as any)} style={sel}>
+            <option value="all">Everyone</option>
+            <option value="org">One firm</option>
+            <option value="device">One device</option>
+          </select>
+          {scope !== "all" && (
+            <select value={orgId ?? ""} onChange={e => setOrgId(e.target.value ? Number(e.target.value) : null)} style={sel}>
+              <option value="">— select firm —</option>
+              {[...orgs].sort((a, b) => a.name.localeCompare(b.name)).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          )}
+          {scope === "device" && orgId && (
+            <select value={devicePk ?? ""} onChange={e => setDevicePk(e.target.value ? Number(e.target.value) : null)} style={sel}>
+              <option value="">— select device —</option>
+              {deviceList.map(d => <option key={d.id} value={d.id}>{d.machine_name} · {d.user} · v{d.agent_version}</option>)}
+            </select>
+          )}
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="note (why)"
+            style={{ ...sel, width: 200 }} />
+          <Btn label="turn OFF" color={T.red} onClick={() => send("off")} disabled={busy} small />
+          <Btn label="turn ON" onClick={() => send("on")} disabled={busy} small />
+        </div>
+
+        {state && state.rows.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse" as const }}>
+            <thead><tr><th style={th}>Applies to</th><th style={th}>State</th><th style={th}>Note</th><th style={th}>Changed</th><th style={th}></th></tr></thead>
+            <tbody>
+              {state.rows.map(r => (
+                <tr key={r.id}>
+                  <td style={td}>{scopeLabel(r)}</td>
+                  <td style={td}>{onOff(r.enabled)}</td>
+                  <td style={{ ...td, color: T.textSub }}>{r.note || "—"}</td>
+                  <td style={{ ...td, color: T.textMuted }}>{timeAgo(r.updated_at)}</td>
+                  <td style={td}>
+                    <button disabled={busy} onClick={() => send("clear", { scope: r.scope, org_id: r.org_id, device_pk: r.device_pk })}
+                      style={{ background: "none", border: `1px solid ${T.border}`, color: T.textMuted, padding: "3px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, ...mono }}>
+                      remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── RESULTS ────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{ ...heading, marginBottom: 0 }}>WHAT THE MEASUREMENT SEES</div>
+        <select value={days} onChange={e => setDays(Number(e.target.value))} style={sel}>
+          {[1, 7, 14, 30].map(d => <option key={d} value={d}>last {d} day{d > 1 ? "s" : ""}</option>)}
+        </select>
+        <button onClick={() => loadReport(days)} style={{ background: "none", border: `1px solid ${T.border}`, color: T.textSub, padding: "5px 12px", fontSize: 12, cursor: "pointer", borderRadius: 4, ...mono }}>↻ refresh</button>
+      </div>
+      <div style={{ color: T.textMuted, fontSize: 12, ...mono, marginBottom: 14, lineHeight: 1.6 }}>
+        Counts only, kept out of every report. "Candidate agent hours" is time the tracker booked as a person while
+        nobody touched the Mac and no remote-control tool, Universal Control, Sidecar, tablet driver or jiggler explains it.
+      </div>
+
+      {reportLoading && <div style={{ color: T.textMuted, ...mono, fontSize: 13 }}>loading…</div>}
+      {report && !reportLoading && report.fleet.devices_reporting === 0 && (
+        <div style={{ color: T.textMuted, fontSize: 13, ...mono, padding: "30px 0", textAlign: "center" as const }}>
+          No measurement received yet. Devices report once an hour after they run v1.9.25+, and only once the server migrations are applied.
+        </div>
+      )}
+      {report && !reportLoading && report.fleet.devices_reporting > 0 && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+            <StatCard label={`Devices reporting / ${report.active_devices} active`} value={report.fleet.devices_reporting} color={T.text} />
+            <StatCard label="Candidate agent hours (Mac)" value={report.fleet.unattended_active.candidate_agent_hours} color={report.fleet.unattended_active.candidate_agent_hours ? T.yellow : T.textMuted} />
+            <StatCard label="Synthetic clicks" value={`${(report.fleet.clicks.synthetic_share * 100).toFixed(1)}%`} color={report.fleet.clicks.synthetic ? T.yellow : T.textMuted} />
+            <StatCard label="Hours observed" value={report.fleet.hours_observed} color={T.textSub} />
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" as const, background: T.surface, borderRadius: 6, overflow: "hidden" }}>
+            <thead><tr>
+              <th style={th}>Firm</th><th style={th}>Devices</th><th style={th}>Candidate agent h</th>
+              <th style={th}>Unattended by cause</th><th style={th}>Synthetic clicks</th><th style={th}>Agents seen (devices)</th>
+            </tr></thead>
+            <tbody>
+              {Object.entries(report.orgs).map(([name, r]) => (
+                <tr key={name}>
+                  <td style={td}>{name.replace(/^\d+ /, "")}</td>
+                  <td style={{ ...td, color: T.textSub }}>{r.devices_reporting}</td>
+                  <td style={{ ...td, color: r.unattended_active.candidate_agent_hours ? T.yellow : T.textMuted }}>{r.unattended_active.candidate_agent_hours}</td>
+                  <td style={{ ...td, color: T.textSub, fontSize: 12 }}>{fmtCauses(r.unattended_active.by_cause_hours)}</td>
+                  <td style={{ ...td, color: T.textSub }}>{r.clicks.synthetic} / {r.clicks.real + r.clicks.synthetic}</td>
+                  <td style={{ ...td, color: T.textSub, fontSize: 12 }}>{topProcess(r.agent_processes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function MavOpsAdmin() {
   const [latestVersion, setLatestVersion] = useState<string>("0.0.0");
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping" | "agent-presence">("orgs");
 
   // The Daily Review tab has two jobs: WORK the firm's queue ("Needs You" —
   // every user's pending picks in one actionable list) or AUDIT what was
@@ -3234,8 +3445,8 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "accuracy", "daily-review", "qbo-mapping"] as const;
-  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping" };
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "accuracy", "daily-review", "qbo-mapping", "agent-presence"] as const;
+  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping", "agent-presence": "Agent Presence" };
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -3816,6 +4027,10 @@ export default function MavOpsAdmin() {
 
         {tab === "qbo-mapping" && (
           <QboMappingTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
+        )}
+
+        {tab === "agent-presence" && (
+          <AgentPresenceTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
         )}
 
         {/* ══ DAILY REVIEW — work the queue, or audit what was booked ══ */}

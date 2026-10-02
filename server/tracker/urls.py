@@ -9,6 +9,7 @@ from . import views_week_coverage
 from . import views_day_review
 from . import views_capture_status
 from . import views_review_misfiled
+from . import views_agent_work
 from . import views_outstanding_weeks
 from . import views_readiness
 from . import views_mail_domains
@@ -589,6 +590,9 @@ urlpatterns = [
     path("timesheets/outstanding/", views_outstanding_weeks.outstanding_weeks, name="timesheets_outstanding"),
     path("timesheets/ensure-week/", views_outstanding_weeks.ensure_week_timesheet, name="timesheets_ensure_week"),
     path("timesheets/week-misfiles/", views_outstanding_weeks.week_misfiles, name="timesheets_week_misfiles"),
+    # AI agent work — reported by agents themselves, totalled apart from human time.
+    path("agent-work/", views_agent_work.agent_work_list, name="agent_work_list"),
+    path("agent-work/report/", views_agent_work.agent_work_report, name="agent_work_report"),
     path("review/misfiled/", views_review_misfiled.review_misfiled_time, name="review_misfiled_time"),
     path("review/misfiled/resolve/", views_review_misfiled.review_misfiled_resolve, name="review_misfiled_resolve"),
     path("mavops/mismatches/", views_mavops.mavops_client_mismatches, name="mavops_client_mismatches"),

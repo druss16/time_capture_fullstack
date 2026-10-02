@@ -4983,6 +4983,9 @@ from tracker.models_engagements import (  # noqa: F401, E402
     Engagement, FeeScheduleEntry, PHASE_LADDERS, ladder_for, phase_progress,
 )
 
+# AI agent work — kept apart from Block on purpose (see models_agent_work.py)
+from tracker.models_agent_work import AgentWorkSession  # noqa: F401, E402
+
 
 
 

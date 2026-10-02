@@ -79,8 +79,10 @@ INDUSTRY_TERMS = {
         'task_types': 'Services',
     },
     'marketing': {
-        'project': 'Campaign',
-        'projects': 'Campaigns',
+        # Agencies say "project": Client A → Project 1, 2, 3, each with its
+        # own monthly hours estimate. "Campaign" is one KIND of project.
+        'project': 'Project',
+        'projects': 'Projects',
         'task_type': 'Deliverable',
         'task_types': 'Deliverables',
     },
@@ -105,6 +107,27 @@ INDUSTRY_PRIMARY_INTEGRATIONS = {
     'marketing': ['quickbooks', 'xero'],
     'general': ['quickbooks', 'xero'],
 }
+
+
+# Verticals whose work is organised Client → Project INSIDE TimeTracker.
+#
+# A law firm also works Client → Matter, but its matters are mirrored from Clio
+# (ExternalMatterMapping) and a matter Clio does not know cannot be billed — so
+# legal is deliberately NOT here; its project list comes only from the sync.
+# An agency keeps its projects wherever it likes (Asana, QuickBooks Time, a
+# spreadsheet), so for these verticals a Project created here — by hand, by
+# CSV, inline from Daily Review — is a real, selectable unit of work.
+#
+# Configuration, not a branch: this decides WHICH project rows count as live.
+# Why it cannot simply be "any active Project": legacy code paths auto-create
+# Project rows ("(General)" and friends) for every vertical, so presence of
+# Project rows says nothing about how a firm organises its work.
+INDUSTRY_LOCAL_PROJECTS = {'marketing'}
+
+
+def tracks_local_projects(industry_type: str) -> bool:
+    """True when this vertical's projects are created and kept in TimeTracker."""
+    return (industry_type or 'general') in INDUSTRY_LOCAL_PROJECTS
 
 
 def get_primary_integrations(industry_type: str) -> list:

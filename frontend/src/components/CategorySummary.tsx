@@ -39,7 +39,14 @@ const API_BASE = RAW_BASE.endsWith("/api")
 /** Structured twin of a `sample_activities` line — same order, same top-10
  *  slice, but with the activity's REAL minutes instead of the lossy "(1.5h)"
  *  tag baked into the display string. */
-export type Activity = { ids: number[]; title: string; minutes: number };
+export type Activity = {
+  ids: number[]; title: string; minutes: number;
+  /** Present only for firms that work Client → Project. null = not filed yet. */
+  project_id?: number | null;
+  project_name?: string | null;
+};
+/** Per-client project totals, sent only for firms that work Client → Project. */
+export type ProjectTotal = { project_id: number | null; name: string | null; hours: number };
 
 export type Category = {
   name: string;
@@ -58,6 +65,7 @@ export type ClientTime = {
   client: string;
   total_hours: number;
   categories: Category[];
+  projects?: ProjectTotal[];
 };
 export type ClientOption = { id: number; name: string };
 export type FlaggedBlock = {

@@ -1,10 +1,10 @@
 // src/pages/settings/ClientsTab.tsx
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Briefcase, Plus, Pencil, Trash2, Upload, Search, X, Tag,
   ChevronDown, Check, RefreshCw, CheckSquare, Square,
   MinusSquare, UserPlus, UserMinus, FileSpreadsheet,
-  Copy, AlertCircle, CheckCircle2, Loader2, Download, Receipt,
+  Copy, AlertCircle, CheckCircle2, Loader2, Download, Receipt, FolderKanban,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -14,6 +14,9 @@ import ClientImportWizard from '@/components/ClientImportWizard';
 import ClientTaskTypesPanel from '@/components/ClientTaskTypesPanel';
 import ClientBillingProfilePanel from '@/components/ClientBillingProfilePanel';
 import BulkBillingModal from '@/components/BulkBillingModal';
+import { ClientProjectsPanel, ImportProjectsModal } from '@/components/ClientProjectsPanel';
+import { useWhoAmI } from '@/lib/useWhoAmI';
+import { useTerminology } from '@/lib/terminology';
 import { SettingsPage, SettingsSection, inputClass, labelClass, primaryBtnClass, secondaryBtnClass } from './ui';
 
 
@@ -420,6 +423,26 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
 
   const canManage = ['owner', 'admin'].includes(currentUserRole);
 
+  // Client → Project firms (agencies) see each client's projects here. Every
+  // other firm's table is unchanged — legacy Project rows exist for them too,
+  // and showing those would invite managing something that does nothing.
+  const me = useWhoAmI();
+  const terms = useTerminology();
+  const localProjects = !!me?.local_projects;
+  const [projectsClientId, setProjectsClientId] = useState<number | null>(null);
+  const [showImportProjects, setShowImportProjects] = useState(false);
+  const [projectCounts, setProjectCounts] = useState<Record<number, number>>({});
+  const loadProjectCounts = useCallback(async () => {
+    if (!localProjects) return;
+    try {
+      const rows: { client_id: number }[] = await safeFetchJson(`${API_BASE}/projects/`);
+      const counts: Record<number, number> = {};
+      for (const r of rows) counts[r.client_id] = (counts[r.client_id] || 0) + 1;
+      setProjectCounts(counts);
+    } catch { /* the count is a convenience; the panel still works */ }
+  }, [localProjects]);
+  useEffect(() => { loadProjectCounts(); }, [loadProjectCounts]);
+
   const filteredClients = useMemo(() => {
     let list = clients;
     if (search.trim()) {
@@ -510,6 +533,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                     { icon: <Upload className="w-3.5 h-3.5 text-emerald-500" />, label: 'Import Clients', sub: 'From QuickBooks or Xero', action: () => { setShowImportWizard(true); setShowImportDropdown(false); } },
                     { icon: <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" />, label: 'Import Assignments', sub: 'CSV file upload', action: () => { setShowCSVImportModal(true); setShowImportDropdown(false); } },
                     { icon: <Copy className="w-3.5 h-3.5 text-purple-500" />, label: 'Copy Team', sub: 'From another client', action: () => { setShowCopyModal(true); setShowImportDropdown(false); } },
+                    ...(localProjects ? [{ icon: <FolderKanban className="w-3.5 h-3.5 text-amber-500" />, label: `Import ${terms.projects}`, sub: 'Client, project list (CSV)', action: () => { setShowImportProjects(true); setShowImportDropdown(false); } }] : []),
                   ].map(item => (
                     <button key={item.label} onClick={item.action} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 text-left transition-colors border-b border-border/20 last:border-b-0">
                       {item.icon}
@@ -627,7 +651,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                     </button>
                   </th>
                 )}
-                {['Client', 'Code', 'Aliases', 'Visibility', 'Status', ...(canManage ? ['Actions'] : [])].map(h => (
+                {['Client', ...(localProjects ? [terms.projects] : []), 'Code', 'Aliases', 'Visibility', 'Status', ...(canManage ? ['Actions'] : [])].map(h => (
                   <th key={h} className={cn('px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500', h === 'Actions' ? 'text-right' : 'text-left')}>{h}</th>
                 ))}
               </tr>
@@ -635,7 +659,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
             <tbody className="divide-y divide-border/30">
               {filteredClients.length === 0 ? (
                 <tr>
-                  <td colSpan={canManage ? 7 : 5} className="text-center py-14">
+                  <td colSpan={(canManage ? 7 : 5) + (localProjects ? 1 : 0)} className="text-center py-14">
                     <Briefcase className="w-10 h-10 text-slate-200 mx-auto mb-3" />
                     {search || statusFilter !== 'all' ? (
                       <>
@@ -662,6 +686,18 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                       </td>
                     )}
                     <td className="px-4 py-3 font-semibold text-slate-800">{client.name}</td>
+                    {localProjects && (
+                      <td className="px-4 py-3">
+                        <button onClick={() => setProjectsClientId(client.id)}
+                          className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold transition-colors',
+                            projectCounts[client.id]
+                              ? 'border-primary/30 bg-primary/8 text-primary hover:bg-primary/15'
+                              : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100')}>
+                          <FolderKanban className="h-3 w-3" />
+                          {projectCounts[client.id] || 'None'}
+                        </button>
+                      </td>
+                    )}
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">{client.code || '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
@@ -769,6 +805,27 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
           </div>
         </div>
       )}
+      {projectsClientId !== null && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl overflow-hidden flex flex-col" style={{ maxHeight: '90vh' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border/50 shrink-0">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  {terms.projects} · {clients.find(c => c.id === projectsClientId)?.name}
+                </h2>
+                <p className="text-xs text-slate-400">Every hour for this client is filed under one of these</p>
+              </div>
+              <button onClick={() => setProjectsClientId(null)} className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5">
+              <ClientProjectsPanel clientId={projectsClientId} canManage={canManage} onChanged={loadProjectCounts} onError={onError} />
+            </div>
+          </div>
+        </div>
+      )}
+      {showImportProjects && <ImportProjectsModal onClose={() => setShowImportProjects(false)} onDone={(m) => { onSuccess(m); loadProjectCounts(); }} onError={onError} />}
       {showCSVImportModal  && <CSVImportModal isOpen={showCSVImportModal} onClose={() => setShowCSVImportModal(false)} onSuccess={() => { onRefresh(); onSuccess('Assignments imported!'); }} />}
       {showCopyModal       && <CopyAssignmentsModal isOpen={showCopyModal} onClose={() => setShowCopyModal(false)} clients={clients} onSuccess={() => { onRefresh(); onSuccess('Team copied!'); }} />}
     </SettingsPage>

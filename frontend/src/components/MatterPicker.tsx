@@ -1,4 +1,9 @@
-// Choosing which matter a block's time belongs to.
+// Choosing which matter / project a block's time belongs to.
+//
+// One component for every vertical: a law firm picks a Clio matter, an agency
+// picks one of its own projects (and may create one on the spot). The words
+// come from the org's terminology; only `can_create` from the server changes
+// behaviour, so nothing here branches on industry.
 //
 // Prop-driven rather than context-driven, so it works in any list. The Weekly
 // Timesheet still carries its own context-bound copy; that should be collapsed
@@ -11,9 +16,10 @@
 
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Briefcase, Check, RefreshCw } from 'lucide-react';
+import { Briefcase, Check, Plus, RefreshCw } from 'lucide-react';
 import { safeFetchJson, API_BASE } from '@/lib/api';
 import { cn } from '@/lib/design-system';
+import { useTerminology } from '@/lib/terminology';
 
 interface MatterOption {
   project_id: number;
@@ -71,8 +77,13 @@ export const MatterPicker: React.FC<{
   label?: string;
   tone?: 'resolved' | 'needed';
   onAssigned?: (projectId: number) => void;
-}> = ({ blockIds, label = 'Choose matter', tone = 'needed', onAssigned }) => {
+}> = ({ blockIds, label, tone = 'needed', onAssigned }) => {
+  const terms = useTerminology();
+  const word = terms.project.toLowerCase();
+  const words = terms.projects.toLowerCase();
   const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<any | null>(null);
@@ -106,9 +117,32 @@ export const MatterPicker: React.FC<{
       // Without this the request failed, the row stayed unchanged, and nothing
       // said why — which is exactly how a server-side 500 looked like a button
       // that did not work. A failed correction has to be visible.
-      setError(e?.message || 'Could not set the matter');
+      setError(e?.message || `Could not set the ${word}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Create-then-assign. The server hands back an existing project of the same
+  // name rather than making a twin, so a typo-free retype is harmless.
+  const createAndChoose = async () => {
+    const name = newName.trim();
+    if (!name || !data?.client_id) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const res: any = await safeFetchJson(`${API_BASE}/projects/create/`, {
+        method: 'POST', body: JSON.stringify({ client_id: data.client_id, name }),
+      });
+      const id = res?.project?.id;
+      if (!id) throw new Error(res?.error || `Could not create the ${word}`);
+      setNewName('');
+      setData(null);  // the list changed; reload next time it opens
+      await choose(id);
+    } catch (e: any) {
+      setError(e?.message || `Could not create the ${word}`);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -131,7 +165,7 @@ export const MatterPicker: React.FC<{
         )}
       >
         {saving ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Briefcase className="h-3 w-3" />}
-        {error ? 'Failed — retry' : label}
+        {error ? 'Failed — retry' : (label ?? `Choose ${word}`)}
       </button>
       {error && (
         <span className="ml-1 hidden text-[10px] text-red-600 sm:inline" title={error}>
@@ -142,14 +176,16 @@ export const MatterPicker: React.FC<{
       {open && !saving && (
         <MenuPortal anchorEl={btnRef.current} onClose={() => setOpen(false)}>
           <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            {data?.client_name ? `Matters for ${data.client_name}` : 'Set matter'}
+            {data?.client_name ? `${terms.projects} for ${data.client_name}` : `Set ${word}`}
           </p>
           {loading && <p className="px-3 py-2 text-[12px] text-slate-400">Loading…</p>}
           {!loading && data && data.options?.length === 0 && (
             <p className="px-3 py-2 text-[12px] text-slate-500">
-              {data.client_id
-                ? `${data.client_name || 'This client'} has no open matters in Clio.`
-                : 'Assign a client first — a matter belongs to a client.'}
+              {!data.client_id
+                ? `Assign a client first — a ${word} belongs to a client.`
+                : data.can_create
+                  ? `${data.client_name || 'This client'} has no ${words} yet — add the first below.`
+                  : `${data.client_name || 'This client'} has no open ${words} in Clio.`}
             </p>
           )}
           {!loading && data?.options?.map((o: MatterOption, i: number) => {
@@ -170,7 +206,7 @@ export const MatterPicker: React.FC<{
                 )}
                 {startsRest && i > 0 && (
                   <p className="mt-1 border-t border-border/50 px-3 pt-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Other matters
+                    Other {words}
                   </p>
                 )}
                 <button
@@ -198,6 +234,29 @@ export const MatterPicker: React.FC<{
               </React.Fragment>
             );
           })}
+          {!loading && data?.can_create && (
+            <form
+              onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); createAndChoose(); }}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-1 flex items-center gap-1.5 border-t border-border/50 px-3 pb-1.5 pt-2"
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder={`New ${word} for ${data.client_name || 'this client'}`}
+                maxLength={200}
+                className="min-w-0 flex-1 rounded border border-border bg-white px-2 py-1 text-[12px] text-slate-700 outline-none focus:border-primary"
+              />
+              <button
+                type="submit"
+                disabled={!newName.trim() || creating}
+                className="shrink-0 rounded bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground disabled:opacity-40"
+              >
+                {creating ? 'Adding…' : 'Add'}
+              </button>
+            </form>
+          )}
           {!loading && data?.options?.length > 0 && (
             <p className="mt-1 border-t border-border/50 px-3 pb-1 pt-1.5 text-[10px] text-slate-400">
               Future work in the same folder goes here automatically.

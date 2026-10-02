@@ -3061,7 +3061,9 @@ def whoami(request):
         # Vertical labelling. Resolved here because whoami is the one payload
         # every page already loads, so no screen needs its own fetch to know
         # whether to say "Matter" or "Engagement".
-        from tracker.industry_categories import get_terminology, get_primary_integrations
+        from tracker.industry_categories import (
+            get_terminology, get_primary_integrations, tracks_local_projects,
+        )
         industry_type = (getattr(org, 'industry_type', None) or 'general') if org else 'general'
         
         return {
@@ -3085,6 +3087,9 @@ def whoami(request):
             "industry_type": industry_type,
             "terminology": get_terminology(industry_type),
             "primary_integrations": get_primary_integrations(industry_type),
+            # Work is organised Client → Project inside TimeTracker: Settings
+            # shows each client's projects and Daily Review groups by them.
+            "local_projects": tracks_local_projects(industry_type),
         }
     
     # 1) Check Authorization header (Bearer token)
@@ -4518,7 +4523,9 @@ def today_time(request):
 
     org = get_request_org_override(request)
     _totals = compute_totals(org, start_utc, end_utc, user_id=user.id, can_see_all=False)
-    result = compute_client_cards(org, start_utc, end_utc, user_id=user.id, can_see_all=False)
+    from tracker.services.projects import org_tracks_local_projects
+    result = compute_client_cards(org, start_utc, end_utc, user_id=user.id, can_see_all=False,
+                                  with_projects=org_tracks_local_projects(org))
 
     billable_hours     = _totals['billable_hours']
     non_billable_hours = _totals['non_billable_hours']
@@ -6647,22 +6654,128 @@ def delete_client(request, client_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_projects(request):
-    """List all projects, optionally filtered by client"""
+    """List projects, optionally filtered by client.
+
+    ?include_archived=1 adds archived projects and each row's tracked hours —
+    what the Settings project list needs to decide what is safe to archive.
+    """
     org = get_user_org(request.user)
     client_id = request.GET.get('client_id')
-    
-    qs = Project.objects.filter(org=org, is_active=True).select_related('client')
-    
+    include_archived = request.GET.get('include_archived') in ('1', 'true')
+
+    qs = Project.objects.filter(org=org).select_related('client')
+    if not include_archived:
+        qs = qs.filter(is_active=True)
     if client_id:
         qs = qs.filter(client_id=client_id)
-    
+
+    minutes = {}
+    if include_archived:
+        from django.db.models import Sum
+        minutes = dict(
+            Block.objects
+            .filter(org=org, project_id__in=qs.values('id'), deleted_at__isnull=True)
+            .values_list('project_id')
+            .annotate(m=Sum('minutes'))
+            .order_by()
+        )
+
     return Response([{
         'id': p.id,
         'name': p.name,
         'client_id': p.client_id,
         'client_name': p.client.name,
         'is_active': p.is_active,
+        **({'hours': round((minutes.get(p.id) or 0) / 60, 1)} if include_archived else {}),
     } for p in qs.order_by('client__name', 'name')])
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def import_projects(request):
+    """
+    POST /api/projects/import/   body: {"text": "<csv>", "dry_run": true}
+
+    Load a firm's Client → Project list in one go: two columns, client then
+    project, one project per line (a header row is fine). This is how an
+    agency's existing list — exported from Asana, QuickBooks Time or a
+    spreadsheet — arrives on day one, before a single hour has been captured.
+
+    Clients are matched by name, ignoring case and punctuation; a line naming a
+    client we do not have is reported back, never invented, because a client
+    created from a typo would start collecting time. Re-running is safe:
+    existing projects are left alone and archived ones come back.
+    """
+    import csv
+    import io
+    import re as _re
+
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    if not is_org_admin_or_owner(request.user, org):
+        return Response({'error': 'Only owners and admins can import projects'}, status=403)
+
+    text = (request.data.get('text') or '').strip()
+    dry_run = bool(request.data.get('dry_run'))
+    if not text:
+        return Response({'error': 'Paste or upload a client,project list'}, status=400)
+
+    def norm(v):
+        return _re.sub(r'[^a-z0-9]+', ' ', (v or '').lower()).strip()
+
+    clients = {}
+    for c in Client.objects.filter(org=org).only('id', 'name'):
+        clients.setdefault(norm(c.name), c)
+
+    existing = {
+        (p.client_id, p.name.strip().lower()): p
+        for p in Project.objects.filter(org=org).only('id', 'client_id', 'name', 'is_active')
+    }
+
+    created, reactivated, unchanged, unmatched, skipped = [], [], [], [], []
+    seen = set()
+    for i, row in enumerate(csv.reader(io.StringIO(text))):
+        cells = [c.strip() for c in row]
+        if len(cells) < 2 or not cells[0] or not cells[1]:
+            if any(cells):
+                skipped.append({'line': i + 1, 'text': ','.join(row)})
+            continue
+        client_name, project_name = cells[0], cells[1][:200]
+        if i == 0 and norm(client_name) in ('client', 'customer', 'client name') \
+                and norm(project_name) in ('project', 'project name', 'job', 'name'):
+            continue
+        client = clients.get(norm(client_name))
+        if not client:
+            unmatched.append({'line': i + 1, 'client': client_name, 'project': project_name})
+            continue
+        key = (client.id, project_name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = {'client': client.name, 'project': project_name}
+        p = existing.get(key)
+        if p and p.is_active:
+            unchanged.append(entry)
+        elif p:
+            reactivated.append(entry)
+            if not dry_run:
+                p.is_active = True
+                p.save(update_fields=['is_active'])
+        else:
+            created.append(entry)
+            if not dry_run:
+                Project.objects.create(org=org, client=client, name=project_name, is_active=True)
+
+    return Response({
+        'ok': True,
+        'dry_run': dry_run,
+        'created': created,
+        'reactivated': reactivated,
+        'unchanged': unchanged,
+        'unmatched_clients': unmatched,
+        'skipped_lines': skipped,
+    })
 
 
 @api_view(['POST'])
@@ -6686,9 +6799,25 @@ def create_project(request):
     except Client.DoesNotExist:
         return Response({'error': 'Client not found'}, status=404)
     
-    # Check for duplicate
-    if Project.objects.filter(org=org, client=client, name=name).exists():
-        return Response({'error': f"Project '{name}' already exists for this client"}, status=400)
+    # Same name, any case, is the same project. Created inline from Daily
+    # Review, the person typing "spring launch" wants the "Spring Launch" that
+    # already exists — handing it back is the useful answer, and an archived
+    # one comes back to life rather than being shadowed by a twin.
+    existing = Project.objects.filter(org=org, client=client, name__iexact=name).first()
+    if existing:
+        if not existing.is_active:
+            existing.is_active = True
+            existing.save(update_fields=['is_active'])
+        return Response({
+            'ok': True,
+            'existed': True,
+            'project': {
+                'id': existing.id,
+                'name': existing.name,
+                'client_id': client.id,
+                'client_name': client.name,
+            }
+        }, status=200)
     
     project = Project.objects.create(
         org=org,
@@ -7014,51 +7143,59 @@ def recategorize_block(request, block_id):
 @permission_classes([IsAuthenticated])
 def blocks_needing_matter(request):
     """
-    GET /api/blocks/needs-matter/?date=YYYY-MM-DD
+    GET /api/blocks/needs-matter/?date=YYYY-MM-DD   (or ?start=&end= for a range)
 
-    Blocks that a person can actually resolve: committed time, no matter yet,
-    whose client HAS matters to choose between.
+    Blocks that a person can actually resolve: committed time, no project yet,
+    whose client HAS projects to choose between.
 
-    Deliberately excludes clients with no matters. Nobody can act on those from
-    here, and listing them would turn a short actionable queue into a long one
-    people learn to skip.
+    Deliberately excludes clients with no projects when the list comes from a
+    synced system. Nobody can act on those from here, and listing them would
+    turn a short actionable queue into a long one people learn to skip.
 
-    Same day by default, because a matter chosen on Tuesday is remembered and a
-    matter chosen on Friday is reconstructed — and a reconstruction bills a
-    client.
+    A firm that keeps its own projects is the exception: there, every hour
+    belongs to a project and one can be created from the picker, so any real
+    client's unfiled time is actionable.
+
+    Same day by default, because a project chosen on Tuesday is remembered and
+    one chosen on Friday is reconstructed — and a reconstruction bills a client.
     """
     from datetime import datetime as _dt
-    from tracker.models_task_type_sets import ExternalMatterMapping
+    from tracker.industry_categories import is_internal_client_name
+    from tracker.services.projects import org_tracks_local_projects, selectable_projects
 
     org = get_user_org(request.user)
     if not org:
         return Response({'error': 'No organization'}, status=404)
 
-    raw = request.GET.get('date')
+    def _parse(raw):
+        return _dt.strptime(raw, '%Y-%m-%d').date()
+
     try:
-        day = _dt.strptime(raw, '%Y-%m-%d').date() if raw else timezone.localdate()
+        if request.GET.get('start') and request.GET.get('end'):
+            first, last = _parse(request.GET['start']), _parse(request.GET['end'])
+        else:
+            raw = request.GET.get('date')
+            first = last = _parse(raw) if raw else timezone.localdate()
     except ValueError:
-        return Response({'error': 'date must be YYYY-MM-DD'}, status=400)
+        return Response({'error': 'dates must be YYYY-MM-DD'}, status=400)
 
-    counts = {}
-    for m in ExternalMatterMapping.objects.filter(
-        integration__organization=org
-    ).select_related('project'):
-        if (m.external_status or '').lower() in ('open', 'pending', ''):
-            counts[m.project.client_id] = counts.get(m.project.client_id, 0) + 1
+    counts = {cid: len(opts) for cid, opts in selectable_projects(org).items()}
+    can_create = org_tracks_local_projects(org)
 
-    if not counts:
-        return Response({'date': str(day), 'blocks': [], 'total_minutes': 0})
+    if not counts and not can_create:
+        return Response({'date': str(first), 'blocks': [], 'total_minutes': 0})
 
     blocks = (
         Block.objects
-        .filter(org=org, user=request.user, day=day,
-                project__isnull=True, client_id__in=counts.keys(),
+        .filter(org=org, user=request.user, day__gte=first, day__lte=last,
+                project__isnull=True, client__isnull=False,
                 deleted_at__isnull=True)
         .exclude(classification_state='suppressed')
         .select_related('client')
         .order_by('start')
     )
+    if not can_create:
+        blocks = blocks.filter(client_id__in=counts.keys())
 
     rows = [{
         'id': b.id,
@@ -7069,12 +7206,15 @@ def blocks_needing_matter(request):
         # window_title carries the subject; title is often just the app.
         'label': (b.window_title or b.title or '').strip() or '(no title)',
         'matter_options': counts.get(b.client_id, 0),
-    } for b in blocks]
+    } for b in blocks
+        # The firm's own overhead clients have no projects to file under.
+        if not (b.client and is_internal_client_name(b.client.name))]
 
     return Response({
-        'date': str(day),
+        'date': str(first),
         'blocks': rows,
         'total_minutes': sum(r['minutes'] for r in rows),
+        'can_create': can_create,
     })
 
 
@@ -7084,67 +7224,68 @@ def block_matter_options(request, block_id):
     """
     GET /api/blocks/<id>/matter-options/
 
-    Matters this block could belong to — its client's open matters, plus
+    Projects this block could belong to — its client's live projects, plus
     whichever one is already set. Scoped to the client rather than the whole
-    firm: picking from three matters is a decision, picking from four hundred
+    firm: picking from three projects is a decision, picking from four hundred
     is a search.
+
+    `can_create` says whether the picker may offer "+ New project": only for a
+    firm that keeps its own projects. A matter Clio does not know cannot be
+    pushed, so a law firm's list stays the synced one.
     """
-    from tracker.models_task_type_sets import ExternalMatterMapping
+    from tracker.services.projects import org_tracks_local_projects, selectable_projects
 
     try:
         block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
     except Block.DoesNotExist:
         return Response({"error": "Block not found"}, status=404)
 
-    mappings = (
-        ExternalMatterMapping.objects
-        .filter(integration__organization=block.org, project__client_id=block.client_id)
-        .select_related('project')
-    )
-    candidates = [
-        m for m in mappings
-        if (m.external_status or '').lower() in ('open', 'pending', '')
-        or m.project_id == block.project_id
-    ]
+    candidates = []
+    if block.client_id:
+        candidates = selectable_projects(
+            block.org, client_ids=[block.client_id],
+            include_ids=[block.project_id] if block.project_id else (),
+        ).get(block.client_id, [])
 
-    # When did THIS user last work each of these matters. Lawyers live in a
-    # handful of active matters, so putting those first turns most picks into
+    # When did THIS user last work each of these projects. People live in a
+    # handful of active projects, so putting those first turns most picks into
     # hitting the top row instead of reading a list.
     from django.db.models import Max
     last_worked = dict(
         Block.objects
         .filter(user=request.user, org=block.org,
-                project_id__in=[m.project_id for m in candidates])
+                project_id__in=[o.project_id for o in candidates])
         .values_list('project_id')
         .annotate(last=Max('start'))
     )
 
-    def sort_key(m):
-        # Recently worked first, then newest matter — a matter opened last week
-        # is likelier to be the one in hand than one opened three years ago.
+    def sort_key(o):
+        # Recently worked first, then newest — a matter opened last week is
+        # likelier to be the one in hand than one opened three years ago — then
+        # by name.
         return (
-            last_worked.get(m.project_id) is None,
-            -(last_worked[m.project_id].timestamp() if last_worked.get(m.project_id) else 0),
-            -(m.open_date.toordinal() if m.open_date else 0),
-            m.display_number or '',
+            last_worked.get(o.project_id) is None,
+            -(last_worked[o.project_id].timestamp() if last_worked.get(o.project_id) else 0),
+            -(o.open_date.toordinal() if o.open_date else 0),
+            (o.display_number or o.name).lower(),
         )
 
     options = [
         {
-            'project_id': m.project_id,
-            'display_number': m.display_number,
-            'description': m.external_name,
-            'status': m.external_status,
-            'billing_method': m.billing_method,
-            'requires_utbms': m.requires_utbms,
+            'project_id': o.project_id,
+            'display_number': o.display_number or o.name,
+            'description': o.description,
+            'status': o.status,
+            'billing_method': o.billing_method,
+            'requires_utbms': o.requires_utbms,
             # The fields that make two same-named matters distinguishable.
-            'open_date': m.open_date.isoformat() if m.open_date else None,
-            'responsible_attorney': m.responsible_attorney,
-            'practice_area': m.practice_area,
-            'last_worked': (last_worked[m.project_id].isoformat()
-                            if last_worked.get(m.project_id) else None),
+            'open_date': o.open_date.isoformat() if o.open_date else None,
+            'responsible_attorney': o.responsible_attorney,
+            'practice_area': o.practice_area,
+            'last_worked': (last_worked[o.project_id].isoformat()
+                            if last_worked.get(o.project_id) else None),
         }
-        for m in sorted(candidates, key=sort_key)
+        for o in sorted(candidates, key=sort_key)
     ]
 
     return Response({
@@ -7153,6 +7294,7 @@ def block_matter_options(request, block_id):
         'client_name': block.client.name if block.client else None,
         'current_project_id': block.project_id,
         'options': options,
+        'can_create': bool(block.client_id) and org_tracks_local_projects(block.org),
     })
 
 

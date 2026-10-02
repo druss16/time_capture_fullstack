@@ -22,6 +22,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import CompactSummary from "@/components/CompactSummary";
 import NoTimeYet from "@/components/NoTimeYet";
 import { MatterPicker } from "@/components/MatterPicker";
+import { useTerminology } from "@/lib/terminology";
 import { deriveLanes, mergeOptimisticConfirms, type MismatchBlock, type SplitCandidate, type AmbiguousGroup, type OptimisticConfirm } from "@/lib/dailyReviewLanes";
 import { useAICompletion } from "@/hooks/useAICompletion";
 
@@ -232,7 +233,8 @@ const StatCell = ({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-// Time that cannot be billed until someone says which matter it belongs to.
+// Time that cannot be billed until someone says which matter (law) or project
+// (agency) it belongs to. Wording comes from the org's terminology.
 //
 // Lives in Daily Review rather than the timesheet on purpose. A matter chosen
 // today is remembered; the same choice on Friday is reconstructed, and a
@@ -241,7 +243,8 @@ const StatCell = ({
 //
 // Only lists blocks whose client HAS matters to choose between — a client with
 // none is not a task, and including them would make this a queue people skip.
-const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }) => {
+const MatterLane = ({ date, range, onChanged }: { date: string; range: ViewRange; onChanged: () => void }) => {
+  const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(true);
@@ -250,10 +253,14 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
   const [shown, setShown] = useState(8);
 
   const load = useCallback(() => {
-    safeFetchJson(`${API_BASE}/blocks/needs-matter/?date=${date}`)
+    // Same window as the rest of the page, so "This week" catches up on the
+    // week's unfiled time too, not just today's.
+    const { start, end } = rangeBounds(date, range);
+    const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
+    safeFetchJson(`${API_BASE}/blocks/needs-matter/?${qs}`)
       .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
       .catch(() => { setRows([]); setTotal(0); });
-  }, [date]);
+  }, [date, range]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -268,7 +275,7 @@ const MatterLane = ({ date, onChanged }: { date: string; onChanged: () => void }
         className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-amber-50/60"
       >
         <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
-        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a matter</span>
+        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a {terms.project.toLowerCase()}</span>
         <span className="truncate font-mono text-[11.5px] text-muted-foreground">
           {fmt(total)} · {rows.length} {rows.length === 1 ? "activity" : "activities"}
         </span>
@@ -1111,7 +1118,7 @@ export default function DailyReview() {
               </div>
             )}
           </div>
-          <MatterLane date={date} onChanged={scheduleRowRefresh} />
+          <MatterLane date={date} range={range} onChanged={scheduleRowRefresh} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}

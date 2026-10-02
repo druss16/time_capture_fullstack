@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0178_agentdevice_permission_status'),
+        ('tracker', '0179_agent_work_and_presence'),
     ]
 
     operations = [

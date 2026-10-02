@@ -188,3 +188,43 @@ class AgentPresenceSwitch(models.Model):
         scope = (f"device {self.device_pk}" if self.device_pk else
                  f"org {self.org_id}" if self.org_id else "everyone")
         return f"agent presence {'ON' if self.enabled else 'OFF'} for {scope}"
+
+
+class FirmFeatureFlag(models.Model):
+    """A per-firm switch for features that ship dark. No row = off.
+
+    First user: 'ai_agent_report' — Reports → AI agent activity, which stays
+    hidden until MavOps turns it on for a firm (MavOps Admin → Agent Presence).
+    Plain integer org_id, not a foreign key, so no delete ever touches it and a
+    pending migration can never break anything: readers treat any error as off.
+    """
+    org_id = models.IntegerField(db_index=True)
+    key = models.CharField(max_length=64)
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['org_id', 'key'], name='uniq_firm_feature_flag'),
+        ]
+
+    def __str__(self):
+        return f"{self.key} {'ON' if self.enabled else 'OFF'} for org {self.org_id}"
+
+
+class AgentActivityReview(models.Model):
+    """An owner's answer on one 'time to review' row of the AI agent activity
+    report: was that hour a person or an agent?
+
+    RECORD ONLY. Nothing reads this to change time — it never touches a block,
+    timesheet or report total. It exists so the owner's list shrinks as they
+    answer, and so the answers can grade the measurement's accuracy.
+    Plain integer ids (no foreign keys), same reasoning as FirmFeatureFlag.
+    """
+    VERDICTS = [('human', 'It was me / a person'), ('agent', 'It was an agent')]
+
+    org_id = models.IntegerField(db_index=True)
+    sample_id = models.IntegerField(unique=True)   # AgentPresenceSample pk
+    verdict = models.CharField(max_length=8, choices=VERDICTS)
+    reviewed_by_id = models.IntegerField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(auto_now=True)

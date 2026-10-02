@@ -211,6 +211,51 @@ class ProposalTests(Base):
         self.assertEqual(self.cal_blocks(), [])
 
 
+class SoloAppointmentTests(Base):
+    """An appointment only the user is on ("Derek Baker", a telehealth slot)
+    has no outside attendee, but its title names the client."""
+
+    def solo(self, title='Derek Baker', conf=0.80, client=True, **kw):
+        derek = Client.objects.get_or_create(org=self.org, name='Derek Baker')[0]
+        return self.event(attendees=(), title=title,
+                          extracted_client=derek if client else None,
+                          extraction_confidence=conf if client else 0.0, **kw), derek
+
+    def test_solo_appointment_named_for_a_client_is_proposed(self):
+        _, derek = self.solo()
+        stats = self.run_()
+        self.assertEqual(stats['created'], 1)
+        [b] = self.cal_blocks()
+        self.assertEqual(b.proposed_client_id, derek.id)
+        self.assertEqual(b.window_title, 'Derek Baker')
+        self.assertEqual(b.attendees, [])
+        self.assertIn('no computer activity was captured', b.proposed_reasoning)
+
+    def test_solo_event_without_a_client_name_stays_skipped(self):
+        self.solo(title='Focus time', client=False)
+        stats = self.run_()
+        self.assertEqual(self.cal_blocks(), [])
+        self.assertIn('internal_only', stats['skipped'])
+
+    def test_alias_only_match_is_not_enough_for_a_solo_event(self):
+        self.solo(conf=0.75)                      # alias tier, below the 0.80 bar
+        self.run_()
+        self.assertEqual(self.cal_blocks(), [])
+
+    def test_colleagues_only_meeting_naming_a_client_stays_internal(self):
+        self.event(attendees=('amy@mavops.ai',), title='Acme review prep')
+        stats = self.run_()
+        self.assertEqual(self.cal_blocks(), [])
+        self.assertIn('internal_only', stats['skipped'])
+
+    def test_solo_appointment_covered_by_computer_activity_proposes_nothing(self):
+        self.solo()
+        self.agent_block(0, 55, window_title='Telehealth - Camera and microphone recording',
+                         app_name='Google Chrome')
+        self.run_()
+        self.assertEqual(self.cal_blocks(), [])
+
+
 class BillingAndDailyReviewTests(Base):
     def _totals(self):
         from tracker.services.billing_totals import compute_totals

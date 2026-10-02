@@ -173,6 +173,31 @@ def external_attendees(ev, own_domains: set[str], member_emails: set[str]) -> li
     return out
 
 
+# A solo appointment ("Derek Baker", a telehealth slot, a client call booked
+# on your own calendar) has no outside attendee to go on, but its title names
+# the client. calendar_matching scores a client name or code in the title at
+# 0.80 and an alias at 0.75; only the name/code tier is strong enough to
+# propose time from a calendar entry nobody else is on.
+TITLE_CLIENT_MIN_CONFIDENCE = 0.80
+
+
+def _other_attendees(ev, self_emails: set[str]) -> list[str]:
+    """Attendee addresses other than the user (any domain)."""
+    out = []
+    for a in ev.attendees or []:
+        email = _attendee_email(a)
+        if email and email not in self_emails and email not in out:
+            out.append(email)
+    return out
+
+
+def names_client_alone(ev, self_emails: set[str]) -> bool:
+    """True for an event only the user is on whose title names a client."""
+    return (bool(getattr(ev, 'extracted_client_id', None))
+            and (ev.extraction_confidence or 0.0) >= TITLE_CLIENT_MIN_CONFIDENCE
+            and not _other_attendees(ev, self_emails))
+
+
 def _self_declined(ev, self_emails: set[str]) -> bool:
     for a in ev.attendees or []:
         if _attendee_email(a) in self_emails and _attendee_response(a) == 'declined':
@@ -248,7 +273,10 @@ def qualifies(ev, org, user, own_domains, member_emails, self_emails) -> tuple[b
     if _self_declined(ev, self_emails):
         return False, 'declined'
     if not external_attendees(ev, own_domains, member_emails):
-        return False, 'internal_only'
+        # Colleagues-only meetings stay out (internal). A solo appointment
+        # whose title names a client is client time with no one to invite.
+        if not names_client_alone(ev, self_emails):
+            return False, 'internal_only'
     if _on_time_off(org, user, ev):
         return False, 'time_off'
     return True, ''

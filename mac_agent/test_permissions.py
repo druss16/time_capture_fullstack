@@ -39,6 +39,7 @@ class FakeProbes:
         self.resets = 0
         self.asked = []
         self.answer = P.GRANTED
+        self.front = None
 
     def ax_trusted(self):
         return self.ax
@@ -52,6 +53,9 @@ class FakeProbes:
 
     def running_path(self, b):
         return f"/Applications/{b}.app" if b in self.running else None
+
+    def frontmost_bundle(self):
+        return self.front
 
     def ae_status(self, b):
         if b not in self.running:
@@ -248,13 +252,18 @@ def test_fix_denied_opens_automation_pane_not_ask():
     assert p.asked == [] and p.opened == [P.AUTOMATION_PANE_URL]
 
 
-def test_extension_required_only_while_a_browser_is_open():
+def test_extension_required_only_after_the_browser_sat_in_front_silently():
     p = FakeProbes(ax=True, installed={CHROME}, running={CHROME}, ae={CHROME: P.GRANTED})
     c = Clock()
     m = monitor(p, c, ext=None)
+    p.front = CHROME
     m.startup(False)
+    assert m.extension == P.NOT_RUNNING, "just came to front: too soon to judge"
+    c.advance(P.EXTENSION_FRONT_GRACE_S)
+    m.refresh()
     assert m.missing_required() == ["Browser extension"]
     p.running.clear()
+    p.front = None
     m.refresh()
     assert m.extension == P.NOT_RUNNING and m.missing_required() == []
 
@@ -267,6 +276,36 @@ def test_extension_required_only_while_a_browser_is_open():
     m3.startup(False)
     assert m3.extension is None
     assert "extension" not in {r["key"] for r in m3.rows()}
+
+
+def test_extension_quiet_while_browser_in_background_is_not_missing():
+    """The bug: Chrome open behind Photoshop for 5+ minutes flagged the
+    extension as off. It only posts while its browser is in front."""
+    p = FakeProbes(ax=True, installed={CHROME, PS}, running={CHROME, PS},
+                   ae={CHROME: P.GRANTED, PS: P.GRANTED})
+    c = Clock()
+    last = [c()]
+    m = P.PermissionMonitor(p, tempfile.mktemp(suffix=".json"), clock=c,
+                            log=lambda m: None, extension_last_seen=lambda: last[0])
+    p.front = CHROME
+    m.startup(False)
+    assert m.extension == "seen"
+    p.front = PS                                  # off to Photoshop for an hour
+    for _ in range(30):
+        c.advance(P.RECHECK_OK_S)
+        m.refresh()
+        assert m.extension == "seen" and m.missing_required() == []
+    # Back in Chrome; the extension posts on focus.
+    p.front = CHROME
+    m.refresh()
+    last[0] = c()
+    c.advance(P.EXTENSION_FRONT_GRACE_S)
+    m.refresh()
+    assert m.extension == "seen"
+    # Turned off: Chrome stays in front and nothing arrives.
+    c.advance(P.EXTENSION_FRESH_S)
+    m.refresh()
+    assert m.extension == "not_seen"
 
 
 # ---------------------------------------------------------------- nagging

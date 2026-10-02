@@ -52,8 +52,14 @@ RECHECK_OK_S = 120
 # "Remind me later" puts the checklist away for this long.
 REMIND_LATER_S = 4 * 3600
 # The browser extension posts to the local context bus about every 30s while
-# its browser is open; this long without a post means it is off.
+# its browser is open AND IN FRONT — it stays silent while the person works in
+# another app, so a quiet extension says nothing about whether it is on. A
+# post within this long counts as "on".
 EXTENSION_FRESH_S = 5 * 60
+# "Off" needs a browser in front this long with no post: the extension posts
+# within a second of the browser gaining focus, then every 30s. Two minutes
+# also covers a stretch on a new-tab or chrome:// page, which it skips.
+EXTENSION_FRONT_GRACE_S = 2 * 60
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,14 @@ class MacProbes:
         except Exception:
             pass
         return None
+
+    def frontmost_bundle(self) -> Optional[str]:
+        try:
+            from AppKit import NSWorkspace
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            return str(app.bundleIdentifier() or "") if app is not None else None
+        except Exception:
+            return None
 
     def ae_status(self, bundle_id: str) -> str:
         """Ask macOS, WITHOUT prompting, whether we may script `bundle_id`."""
@@ -361,6 +375,7 @@ class PermissionMonitor:
         self.automation: Dict[str, str] = {}      # bundle_id -> status
         self.installed: tuple = ()                # AutomationTargets on this Mac
         self.extension: Optional[str] = None      # seen | not_seen | not_running | None
+        self._browser_front_since: Optional[float] = None
         self.checked_at: Optional[float] = None
         self.stale_entry_reset = False
         self.ax_prompted_this_launch = False
@@ -434,17 +449,29 @@ class PermissionMonitor:
 
         browsers = [t.bundle_id for t in installed if t.bundle_id in EXTENSION_BROWSERS]
         if browsers:
+            now = self.clock()
             seen = self._safe(self.extension_last_seen)
-            if seen and self.clock() - seen < EXTENSION_FRESH_S:
-                self.extension = "seen"
-            elif any(self._safe(self.p.running_path, b) for b in browsers):
-                # A supported browser is open and the extension has said
-                # nothing for 5 minutes: it is off or not installed.
-                self.extension = "not_seen"
+            if self._safe(self.p.frontmost_bundle) in browsers:
+                if self._browser_front_since is None:
+                    self._browser_front_since = now
             else:
-                self.extension = NOT_RUNNING      # can't tell until one opens
+                self._browser_front_since = None
+            front = self._browser_front_since
+            if seen and now - seen < EXTENSION_FRESH_S:
+                self.extension = "seen"
+            elif front is not None and now - max(front, seen or 0) >= EXTENSION_FRONT_GRACE_S:
+                # The browser has been in front for minutes and the extension
+                # has said nothing: it is off or not installed. Only judged
+                # while a browser is in front — in the background the
+                # extension is silent on purpose.
+                self.extension = "not_seen"
+            elif seen and any(self._safe(self.p.running_path, b) for b in browsers):
+                self.extension = "seen"           # it spoke the last time it could
+            else:
+                self.extension = NOT_RUNNING      # can't tell until a browser is used
         else:
             self.extension = None
+            self._browser_front_since = None
 
         self.checked_at = self.clock()
         self._last_check = self.checked_at
@@ -676,7 +703,7 @@ class PermissionMonitor:
                 "ok": True if st == "seen" else (None if st == NOT_RUNNING else False),
                 "status": st,
                 "detail": ("Sending the page you are on." if st == "seen" else
-                           "Will check the next time your browser is open." if st == NOT_RUNNING
+                           "Will check the next time you use your browser." if st == NOT_RUNNING
                            else "Not heard from in 5 minutes. Click Fix, then in your browser "
                                 "open Extensions and turn on “TimeTracker”."),
                 "fix": "Fix" if st == "not_seen" else None})

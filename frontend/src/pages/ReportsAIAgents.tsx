@@ -13,8 +13,8 @@
  * grade the measurement. They never move a minute of anyone's time.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Loader2, Info, Lock, ArrowLeft, Bot, Undo2, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, Info, Lock, Bot, Undo2, ChevronDown, ChevronRight } from "lucide-react";
+import ReportsViewToggle from "@/components/reports/ReportsViewToggle";
 import { API_BASE } from "@/lib/api";
 
 // Same "Lightning" tokens as ReportsSummary, so the Reports pages read as one.
@@ -130,11 +130,13 @@ export default function ReportsAIAgents() {
 
   return (
     <div className="mx-auto w-full max-w-[1120px] my-6 rounded-2xl p-4 sm:p-6 space-y-5" style={{ ...INTER, backgroundColor: GROUND }}>
+      {/* People | AI agents. Shown whenever this page is in use: here only an
+          owner of an enabled firm gets data, and People is always a way back. */}
+      <ReportsViewToggle active="agents" />
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link to="/reports" className={`${EYEBROW} inline-flex items-center gap-1 hover:text-slate-600`}>
-            <ArrowLeft className="h-3 w-3" /> Reports
-          </Link>
+          <div className={EYEBROW}>Reports</div>
           <h1 className="mt-1.5 text-[22px] font-bold tracking-[-0.01em] text-slate-900 flex items-center gap-2">
             <Bot className="h-5 w-5 text-slate-500" /> AI agent activity
           </h1>

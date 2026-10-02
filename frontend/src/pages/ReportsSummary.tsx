@@ -31,9 +31,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Loader2, Download, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check, Bot,
+  ChevronDown, ChevronRight, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import ReportsViewToggle, { useAiAgentsReportAvailable } from "@/components/reports/ReportsViewToggle";
 import { API_BASE } from "@/lib/api";
 import {
   TIMEFRAMES, resolveTimeframe, timeframePhrase, type TimeframeKey,
@@ -352,19 +352,9 @@ export default function ReportsSummary({
     return p.toString();
   }, [period, orgIdOverride, customMode, appliedStart, appliedEnd]);
 
-  // Reports → AI agent activity: linked only for owners at firms where MavOps
-  // has turned it on. The status call answers {available:false} otherwise.
-  const [aiAgentsAvailable, setAiAgentsAvailable] = useState(false);
-  useEffect(() => {
-    const token = getAuthToken();
-    const imp = localStorage.getItem("impersonating_org_id");
-    fetch(`${API_BASE}/reports/ai-agents/status/${imp ? `?org_id=${imp}` : ""}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: "include",
-    })
-      .then(r => (r.ok ? r.json() : { available: false }))
-      .then(d => setAiAgentsAvailable(Boolean(d.available)))
-      .catch(() => setAiAgentsAvailable(false));
-  }, []);
+  // People | AI agents toggle: only for owners at firms where MavOps has
+  // turned the agent report on. Everyone else sees Reports exactly as before.
+  const aiAgentsAvailable = useAiAgentsReportAvailable();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -626,6 +616,8 @@ export default function ReportsSummary({
       className="mx-auto w-full max-w-[1120px] my-6 rounded-2xl p-4 sm:p-6 space-y-5"
       style={{ ...INTER, backgroundColor: GROUND }}
     >
+      {aiAgentsAvailable && <ReportsViewToggle active="people" />}
+
       {/* Header + period toggle */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -653,11 +645,6 @@ export default function ReportsSummary({
         </div>
 
         <div className="flex items-center gap-2">
-          {aiAgentsAvailable && (
-            <Link to="/reports/ai-agents" className={CONTROL} title="AI agents at your firm — kept separate from your team's time">
-              <Bot className="h-3.5 w-3.5" /> AI agent activity
-            </Link>
-          )}
           {/* QuickBooks-style timeframe presets */}
           <div className="relative inline-flex items-center">
             <select

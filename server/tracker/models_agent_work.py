@@ -157,3 +157,34 @@ class AgentPresenceSample(models.Model):
                                     name='uniq_agent_presence_device_hour'),
         ]
         indexes = [models.Index(fields=['org', 'bucket_start'])]
+
+
+class AgentPresenceSwitch(models.Model):
+    """Remote off switch for the desktop agent's agent-presence MEASUREMENT.
+    Never affects time tracking.
+
+    One row per scope: org_id and device_pk both null = everyone; org_id set =
+    one firm; device_pk set = one machine. Most specific row wins; no row =
+    on. The AGENT_PRESENCE_DISABLED env var turns it off for everyone with no
+    database at all. Flip with `manage.py agent_presence_switch`.
+
+    Plain integers, not foreign keys, on purpose: nothing that deletes a user,
+    firm or device ever touches this table, so it can never be the reason a
+    delete fails while a migration is pending.
+    """
+    org_id = models.IntegerField(null=True, blank=True, db_index=True)
+    device_pk = models.IntegerField(null=True, blank=True, db_index=True)
+    enabled = models.BooleanField(default=True)
+    note = models.CharField(max_length=255, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['org_id', 'device_pk'],
+                                    name='uniq_agent_presence_switch_scope'),
+        ]
+
+    def __str__(self):
+        scope = (f"device {self.device_pk}" if self.device_pk else
+                 f"org {self.org_id}" if self.org_id else "everyone")
+        return f"agent presence {'ON' if self.enabled else 'OFF'} for {scope}"

@@ -113,6 +113,62 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(b["synthetic_by"]["_other"], 5)
 
 
+class RemoteSwitchTest(unittest.TestCase):
+    """The server's off switch: stops the monitor, drops what was collected,
+    survives a restart via the on-disk marker, and comes back on."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig_marker = ap.OFF_MARKER
+        ap.OFF_MARKER = os.path.join(self.tmp.name, "agent_presence_off")
+        self.monitor_starts, self.monitor_stops, self.logs = 0, 0, []
+        self.orig_start_monitor = ap._start_monitor
+
+        def fake_start_monitor():
+            self.monitor_starts += 1
+            def stop():
+                self.monitor_stops += 1
+            ap._ctl["stop_monitor"] = stop
+        ap._start_monitor = fake_start_monitor
+
+    def tearDown(self):
+        ap.OFF_MARKER = self.orig_marker
+        ap._start_monitor = self.orig_start_monitor
+        ap._ctl.update(collector=None, stop_monitor=None, paused=False)
+        self.tmp.cleanup()
+
+    def boot(self):
+        return ap.start(get_foreground=lambda: None, get_idle=lambda: 0,
+                        post=lambda p: None, log=self.logs.append)
+
+    def test_off_stops_monitor_clears_data_and_persists(self):
+        c = self.boot()
+        self.assertEqual(self.monitor_starts, 1)
+        c.note_click(True, "x")
+        ap.set_enabled(False)
+        self.assertEqual(self.monitor_stops, 1)
+        self.assertTrue(os.path.exists(ap.OFF_MARKER))
+        self.assertEqual(c._buckets, {})
+        ap.set_enabled(False)                      # idempotent
+        self.assertEqual(self.monitor_stops, 1)
+
+        ap._ctl.update(collector=None, stop_monitor=None, paused=False)
+        self.boot()                                # restart: stays off, no monitor
+        self.assertEqual(self.monitor_starts, 1)
+        self.assertTrue(ap._ctl["paused"])
+
+        ap.set_enabled(True)
+        self.assertEqual(self.monitor_starts, 2)
+        self.assertFalse(os.path.exists(ap.OFF_MARKER))
+        self.assertFalse(ap._ctl["paused"])
+
+    def test_local_config_off_wins(self):
+        self.assertIsNone(ap.start(get_foreground=lambda: None, get_idle=lambda: 0,
+                                   post=lambda p: None, log=self.logs.append, enabled=False))
+        ap.set_enabled(True)                       # server can't turn on what config disabled
+        self.assertEqual(self.monitor_starts, 0)
+
+
 class ClassifyTest(unittest.TestCase):
     def test_known_agents(self):
         self.assertEqual(ap.classify_process("PAD.Robot.exe"), "power_automate")

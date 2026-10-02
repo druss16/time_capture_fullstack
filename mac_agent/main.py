@@ -2587,6 +2587,16 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
         if attempt == 0:
             time.sleep(0.5)
     
+    # Remote off switch for the agent-presence MEASUREMENT (never affects
+    # tracking). Acted on only when the server sends it: older servers
+    # don't, and silence must not switch anything off.
+    if "agent_presence" in data:
+        try:
+            import agent_presence
+            agent_presence.set_enabled(bool(data["agent_presence"]))
+        except Exception as e:
+            log(f"[CTRL] presence switch error: {e}")
+
     stop = bool(data.get("stop"))
     if stop:
         log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")

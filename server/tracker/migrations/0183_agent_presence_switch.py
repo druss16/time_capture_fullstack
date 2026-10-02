@@ -11,7 +11,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0181_agent_presence_unattended_cause'),
+        ('tracker', '0182_project_budgets'),
     ]
 
     operations = [

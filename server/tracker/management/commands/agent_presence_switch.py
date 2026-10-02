@@ -17,13 +17,13 @@ override a firm or device that was switched off — clear those rows instead.
 Emergency path with no database: set AGENT_PRESENCE_DISABLED=1 on the Render
 service. It beats every row.
 """
-import os
-
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Q
 
 from tracker.models import AgentDevice, AgentPresenceSwitch, Organization
-from tracker.services.agent_presence_switch import clear_cache
+from tracker.services.agent_presence_switch import (
+    clear_switch, env_disabled_value, set_switch,
+)
 
 
 class Command(BaseCommand):
@@ -67,19 +67,17 @@ class Command(BaseCommand):
             scope['device_pk'], label = d.pk, f"device pk={d.pk} ({d.hostname})"
 
         if action == 'clear':
-            n, _ = AgentPresenceSwitch.objects.filter(**scope).delete()
+            n = clear_switch(**scope)
             self.stdout.write(f"Cleared {n} row(s) for {label}; it now inherits.")
         else:
-            AgentPresenceSwitch.objects.update_or_create(
-                **scope, defaults={'enabled': action == 'on', 'note': note[:255]})
+            set_switch(action == 'on', note=note, **scope)
             self.stdout.write(self.style.SUCCESS(
                 f"Agent presence measurement {action.upper()} for {label}. "
                 f"Agents pick this up within ~40s."))
-        clear_cache()
         self._status()
 
     def _status(self):
-        env = (os.environ.get("AGENT_PRESENCE_DISABLED") or "").strip()
+        env = env_disabled_value()
         if env:
             self.stdout.write(self.style.WARNING(
                 f"AGENT_PRESENCE_DISABLED={env!r} is set — OFF for everyone regardless of rows."))

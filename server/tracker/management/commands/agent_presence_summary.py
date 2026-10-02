@@ -115,6 +115,34 @@ def summarise(samples):
     }
 
 
+def build_report(days: int, org=None) -> dict:
+    """The whole summary as data — shared by this command and MavOps Admin."""
+    since = timezone.now() - timedelta(days=days)
+    qs = AgentPresenceSample.objects.filter(bucket_start__gte=since)
+    devices_active = AgentDevice.objects.filter(is_active=True, last_seen_at__gte=since)
+    if org:
+        qs = qs.filter(org_id=org)
+        devices_active = devices_active.filter(user__memberships__organization_id=org)
+
+    # Every field summarise() reads is in this list: a deferred field read per
+    # row would be one query per row (see the deferred-field N+1 incident).
+    by_org = defaultdict(list)
+    for s in qs.select_related('org').only(
+            'device_id', 'org__name', 'seconds_observed', 'idle_seconds', 'remote_session',
+            'input_monitor', 'clicks_real', 'clicks_synthetic', 'synthetic_by',
+            'idle_changes', 'idle_changes_by_app', 'unattended_active_seconds',
+            'unattended_active_by_app', 'unattended_by_cause', 'processes', 'local_sessions'):
+        by_org[(s.org_id, s.org.name)].append(s)
+
+    all_samples = [s for ss in by_org.values() for s in ss]
+    return {
+        'days': days,
+        'active_devices': devices_active.distinct().count(),
+        'fleet': summarise(all_samples),
+        'orgs': {f'{oid} {name}': summarise(ss) for (oid, name), ss in sorted(by_org.items())},
+    }
+
+
 class Command(BaseCommand):
     help = "Summarise agent-presence measurement (read-only)."
 
@@ -124,28 +152,7 @@ class Command(BaseCommand):
         parser.add_argument('--json', action='store_true', dest='as_json')
 
     def handle(self, *args, days, org, as_json, **opts):
-        since = timezone.now() - timedelta(days=days)
-        qs = AgentPresenceSample.objects.filter(bucket_start__gte=since)
-        devices_active = AgentDevice.objects.filter(is_active=True, last_seen_at__gte=since)
-        if org:
-            qs = qs.filter(org_id=org)
-            devices_active = devices_active.filter(user__memberships__organization_id=org)
-
-        by_org = defaultdict(list)
-        for s in qs.select_related('org').only(
-                'device_id', 'org__name', 'seconds_observed', 'idle_seconds', 'remote_session',
-                'input_monitor', 'clicks_real', 'clicks_synthetic', 'synthetic_by',
-                'idle_changes', 'idle_changes_by_app', 'unattended_active_seconds',
-                'unattended_active_by_app', 'unattended_by_cause', 'processes', 'local_sessions'):
-            by_org[(s.org_id, s.org.name)].append(s)
-
-        all_samples = [s for ss in by_org.values() for s in ss]
-        report = {
-            'days': days,
-            'active_devices': devices_active.distinct().count(),
-            'fleet': summarise(all_samples),
-            'orgs': {f'{oid} {name}': summarise(ss) for (oid, name), ss in sorted(by_org.items())},
-        }
+        report = build_report(days, org)
         if as_json:
             self.stdout.write(json.dumps(report, indent=2, default=str))
             return

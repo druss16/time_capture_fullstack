@@ -218,3 +218,85 @@ def agent_work_list(request):
         'by_user': by_user,
         'sessions': sessions,
     })
+
+
+# ──────────────────────────────────────────────
+# Agent presence — measurement from the desktop agent (agent_presence.py)
+# ──────────────────────────────────────────────
+
+MAX_BUCKETS_PER_POST = 100
+MAX_MAP_KEYS = 50
+
+
+def _count_map(value):
+    """{name: non-negative int}, capped — the agent caps too; never trust it."""
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for k, v in list(value.items())[:MAX_MAP_KEYS]:
+        out[str(k)[:64]] = _int(v)
+    return out
+
+
+def _process_map(value):
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for label, p in list(value.items())[:MAX_MAP_KEYS]:
+        if isinstance(p, dict):
+            try:
+                cpu = round(max(float(p.get('cpu_s') or 0), 0.0), 1)
+            except (TypeError, ValueError):
+                cpu = 0.0
+            out[str(label)[:64]] = {'seen_min': _int(p.get('seen_min')),
+                                    'busy_min': _int(p.get('busy_min')), 'cpu_s': cpu}
+    return out
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication])
+@permission_classes([AgentKeyPermission])
+def agent_presence_report(request):
+    """
+    POST /api/agent-presence/   {"buckets": [<one device-hour of counts>, ...]}
+
+    Idempotent per (device, hour): a re-sent hour replaces itself. Stored for
+    measurement only; nothing that computes time reads it.
+    """
+    from tracker.models import AgentPresenceSample
+
+    device = request.agent_device
+    org = get_user_org(device.user) if device.user else None
+    if not org:
+        return Response({'error': 'Device is not paired to a firm member.'}, status=400)
+
+    buckets = request.data.get('buckets') if isinstance(request.data, dict) else None
+    if not isinstance(buckets, list):
+        return Response({'error': 'buckets must be a list'}, status=400)
+
+    saved = 0
+    for b in buckets[:MAX_BUCKETS_PER_POST]:
+        if not isinstance(b, dict):
+            continue
+        start = _aware(b.get('bucket_start'))
+        if not start:
+            continue
+        AgentPresenceSample.objects.update_or_create(
+            device=device, bucket_start=start,
+            defaults=dict(
+                org=org, user=device.user,
+                app_version=(request.headers.get('X-Agent-Version') or device.app_version or '')[:32],
+                seconds_observed=min(_int(b.get('seconds_observed')), 3600),
+                idle_seconds=min(_int(b.get('idle_seconds')), 3600),
+                remote_session=bool(b.get('remote_session')),
+                input_monitor=str(b.get('input_monitor') or '')[:16],
+                clicks_real=_int(b.get('clicks_real')),
+                clicks_synthetic=_int(b.get('clicks_synthetic')),
+                synthetic_by=_count_map(b.get('synthetic_by')),
+                idle_changes=_int(b.get('idle_changes')),
+                idle_changes_by_app=_count_map(b.get('idle_changes_by_app')),
+                processes=_process_map(b.get('processes')),
+                local_sessions=_count_map(b.get('local_sessions')),
+            ))
+        saved += 1
+    return Response({'saved': saved})

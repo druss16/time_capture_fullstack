@@ -4826,6 +4826,30 @@ def run_agent():
     # === RE-CHECK FOR UPDATES EVERY HOUR ===
     start_background_checker(API_BASE, APP_VERSION)
 
+    # === AI AGENT PRESENCE — measurement only, never touches attribution ===
+    # Counts real vs synthetic clicks, foreground changes while idle, known
+    # agent processes and local agent session logs; posts hourly. See
+    # agent_presence.py. Kill switch: "agent_presence_enabled": false.
+    try:
+        import agent_presence
+
+        def _presence_fg():
+            # NSWorkspace + AX directly: get_frontmost_app() shells out to
+            # osascript, far too heavy for a 10-second side poll.
+            ws = get_frontmost_via_nsworkspace()
+            return (ws[0], get_window_title_via_ax(ws[1]) or "") if ws else None
+
+        agent_presence.start(
+            get_foreground=_presence_fg,
+            get_idle=mouse_idle_seconds,
+            post=lambda payload: http_post_json(
+                f"{API_BASE}/agent-presence/", payload, api_headers(os_user, hostname), timeout=10),
+            log=log,
+            enabled=str(_get("agent_presence_enabled", True)).lower() not in ("0", "false", "no"),
+        )
+    except Exception as e:
+        log(f"[PRESENCE] not started: {e}")
+
     # === LOG SHIPPING (every 30 min → backend visibility for remote debugging) ===
     start_log_shipping(interval_minutes=30)
     # === WATCHDOG: Detect dead OR frozen tracking thread ===

@@ -24,6 +24,7 @@ a = Analysis(
         ('tracking_health.py', '.'),
         ('finder_watcher.py', '.'),
         ('meeting_detector.py', '.'),
+        ('agent_presence.py', '.'),
         ('update_checker.py', '.'),
         # Permission state, the setup checklist, and titles without
         # Accessibility. Keep in step with .github/workflows/release.yml.
@@ -53,6 +54,7 @@ a = Analysis(
         'tracking_health',
         'finder_watcher',
         'meeting_detector',
+        'agent_presence',
         'update_checker',
         'permissions',
         'title_fallback',

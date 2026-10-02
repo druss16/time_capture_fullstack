@@ -4089,6 +4089,28 @@ def run_agent():
 
     # === RE-CHECK FOR UPDATES EVERY HOUR ===
     start_background_checker(API_BASE, APP_VERSION)
+
+    # === AI AGENT PRESENCE — measurement only, never touches attribution ===
+    # Counts real vs synthetic clicks, foreground changes while idle, known
+    # agent processes and local agent session logs; posts hourly. See
+    # agent_presence.py. Kill switch: "agent_presence_enabled": false.
+    try:
+        import agent_presence
+
+        def _presence_fg():
+            info = get_foreground_window_info()
+            return (info[1] or info[0], info[3] or "") if info else None
+
+        agent_presence.start(
+            get_foreground=_presence_fg,
+            get_idle=mouse_idle_seconds,
+            post=lambda payload: http_post_json(
+                f"{API_BASE}/agent-presence/", payload, api_headers(os_user, hostname), timeout=10),
+            log=log,
+            enabled=str(_get("agent_presence_enabled", True)).lower() not in ("0", "false", "no"),
+        )
+    except Exception as e:
+        log(f"[PRESENCE] not started: {e}")
     
     # === WATCHDOG: Restart process if tracking freezes OR dies ===
     _thread_ref = [tracking_thread]

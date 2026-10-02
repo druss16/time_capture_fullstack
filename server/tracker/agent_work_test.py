@@ -5,6 +5,8 @@ Real database: run against a THROWAWAY Postgres only (never server/.env):
 
     python manage.py test tracker.agent_work_test --noinput < /dev/null
 """
+import json
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
@@ -109,3 +111,55 @@ class AgentWorkTest(TestCase):
         r = self.web(self.member).get('/api/agent-work/?start=2026-10-01&end=2026-10-03')
         self.assertEqual(r.data['scope'], 'self')
         self.assertEqual(r.data['totals']['active_seconds'], 900)
+
+
+class AgentPresenceTest(TestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(name='MavOps', slug='mavops', plan='professional')
+        self.user = User.objects.create_user('amy', email='amy@mavops.ai', password='x')
+        OrganizationMembership.objects.create(user=self.user, organization=self.org, role='member')
+        self.dev = AgentDevice.objects.create(
+            user=self.user, device_id='d1', api_key='k-presence', is_active=True)
+        self.agent = APIClient()
+        self.agent.credentials(HTTP_X_AGENT_KEY='k-presence')
+
+    def bucket(self, **kw):
+        b = {'bucket_start': '2026-10-02T14:00:00+00:00', 'seconds_observed': 3600,
+             'idle_seconds': 1200, 'remote_session': False, 'input_monitor': 'ok',
+             'clicks_real': 300, 'clicks_synthetic': 40, 'synthetic_by': {'pad.robot': 40},
+             'idle_changes': 12, 'idle_changes_by_app': {'chrome': 12},
+             'processes': {'power_automate': {'seen_min': 60, 'busy_min': 45, 'cpu_s': 300.5}},
+             'local_sessions': {'claude_code': 2}}
+        b.update(kw)
+        return b
+
+    def test_hour_is_idempotent_and_sanitised(self):
+        from tracker.models import AgentPresenceSample
+        r = self.agent.post('/api/agent-presence/', {'buckets': [self.bucket()]}, format='json')
+        self.assertEqual(r.data, {'saved': 1})
+        self.agent.post('/api/agent-presence/', {'buckets': [
+            self.bucket(clicks_synthetic=50, seconds_observed=99999, clicks_real=-5,
+                        synthetic_by={f'a{i}': 1 for i in range(80)}),
+            {'bucket_start': 'garbage'}, 'not-a-dict']}, format='json')
+        s = AgentPresenceSample.objects.get()
+        self.assertEqual((s.clicks_synthetic, s.seconds_observed, s.clicks_real), (50, 3600, 0))
+        self.assertEqual(len(s.synthetic_by), 50)
+        self.assertEqual((s.org, s.user), (self.org, self.user))
+
+    def test_rejects_non_list(self):
+        r = self.agent.post('/api/agent-presence/', {'buckets': 'x'}, format='json')
+        self.assertEqual(r.status_code, 400)
+
+    def test_summary_command_runs(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from django.utils import timezone as tz
+        self.agent.post('/api/agent-presence/', {'buckets': [
+            self.bucket(bucket_start=(tz.now() - tz.timedelta(hours=2)).replace(
+                minute=0, second=0, microsecond=0).isoformat())]}, format='json')
+        out = StringIO()
+        call_command('agent_presence_summary', '--days', '1', '--json', stdout=out)
+        fleet = json.loads(out.getvalue())['fleet']
+        self.assertEqual(fleet['clicks']['driven_device_hours'], 1)
+        self.assertEqual(fleet['agent_processes']['power_automate']['busy_hours'], 0.8)
+        call_command('agent_presence_summary', '--days', '1', stdout=StringIO())

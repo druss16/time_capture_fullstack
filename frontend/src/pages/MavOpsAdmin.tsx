@@ -16,7 +16,7 @@ interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; gra
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
-  deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; mouse_idle_pause_seconds?: number; health?: OrgHealth;
+  deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; project_switch?: boolean; mouse_idle_pause_seconds?: number; health?: OrgHealth;
   industry_type?: string;
   seat_grace_deadline?: string | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
@@ -2954,6 +2954,7 @@ export default function MavOpsAdmin() {
   const [showArchived, setShowArchived] = useState(false);
   const [archivingOrg, setArchivingOrg] = useState<number | null>(null);
   const [widgetOrg, setWidgetOrg] = useState<number | null>(null);
+  const [projectSwitchOrg, setProjectSwitchOrg] = useState<number | null>(null);
   const [idleOrg, setIdleOrg] = useState<number | null>(null);
   const [industryOrg, setIndustryOrg] = useState<number | null>(null);
 
@@ -3051,6 +3052,24 @@ export default function MavOpsAdmin() {
       await loadOrgs();
     } catch { flash("Failed to update ticker visibility.", "err"); }
     finally { setWidgetOrg(null); }
+  }, [apiFetch, loadOrgs]);
+
+  // "Switch Project" inside the ticker. Off by default, and it only shows where
+  // the ticker itself is on — an agency that files by naming convention never
+  // needs it, but a firm without one can be given it.
+  const setProjectSwitch = useCallback(async (org: Org, enabled: boolean) => {
+    setProjectSwitchOrg(org.id);
+    try {
+      await apiFetch(`/mavops/orgs/${org.id}/feature/`, {
+        method: "POST",
+        body: JSON.stringify({ key: "project_switch", enabled }),
+      });
+      flash(enabled
+        ? `Switch Project ON for "${org.name}"${org.show_client_widget ? "" : " — shows once the ticker is on"}.`
+        : `Switch Project OFF for "${org.name}".`);
+      await loadOrgs();
+    } catch { flash("Failed to update Switch Project.", "err"); }
+    finally { setProjectSwitchOrg(null); }
   }, [apiFetch, loadOrgs]);
 
   const setIdlePause = useCallback(async (org: Org) => {
@@ -3602,6 +3621,13 @@ export default function MavOpsAdmin() {
                         onClick={() => setShowWidget(org, !org.show_client_widget)}
                         outline
                         color={org.show_client_widget ? T.teal : T.textMuted}
+                        tiny
+                      />
+                      <Btn
+                        label={projectSwitchOrg === org.id ? "…" : org.project_switch ? "projects on" : "projects off"}
+                        onClick={() => setProjectSwitch(org, !org.project_switch)}
+                        outline
+                        color={org.project_switch ? T.teal : T.textMuted}
                         tiny
                       />
                       <Btn

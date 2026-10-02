@@ -865,6 +865,12 @@ class TimeTrackerSystemTray:
         # ticker hidden and manual client-switching disabled for this org's
         # users. set_client_widget_enabled() flips it when sync arrives.
         self.client_widget_enabled = False
+        # Second vendor gate, nested inside the ticker: "Switch Project" shows
+        # only where the ticker is on AND MavOps gave the firm the feature.
+        self.project_switch_enabled = False
+        self.get_projects_callback = None
+        self.set_current_project_callback = None
+        self.current_project_id = None
         self.user_name = None  # NEW: Store user's display name
         
         self._last_picker_time = 0
@@ -990,10 +996,13 @@ class TimeTrackerSystemTray:
         # org; the menu is refreshed via icon.update_menu() in
         # set_client_widget_enabled() when the flag flips.
         _ticker_on = lambda item: getattr(self, 'client_widget_enabled', False)
+        _projects_on = lambda item: (getattr(self, 'client_widget_enabled', False)
+                                     and getattr(self, 'project_switch_enabled', False))
         menu_items.extend([
             Item("📋 Daily Review", on_daily_review),
             Item("Search Clients...    Alt+Ctrl+T", on_search, visible=_ticker_on),
             Item("Switch Client", pystray.Menu(*client_items), visible=_ticker_on),
+            Item("Switch Project", pystray.Menu(*self._project_items()), visible=_projects_on),
             pystray.Menu.SEPARATOR,
             Item("Show Client Widget", on_show_widget, visible=_ticker_on),
             pystray.Menu.SEPARATOR,
@@ -1131,6 +1140,62 @@ class TimeTrackerSystemTray:
         if not getattr(self, 'client_widget_enabled', False):
             return base
         return f"{base} - {client_label}"
+
+    def _project_items(self):
+        """'Switch Project' entries for the current client's projects."""
+        client_id = self.state.current_client_id
+        if not client_id:
+            return [Item("Pick a client first", None, enabled=False)]
+        projects = []
+        try:
+            if self.get_projects_callback:
+                projects = self.get_projects_callback(client_id) or []
+        except Exception as e:
+            print(f"[GUI] project list failed: {e}")
+        if not projects:
+            return [Item("No projects for this client", None, enabled=False)]
+
+        def make_handler(pid, pname):
+            def handler(icon, item):
+                threading.Thread(target=lambda: self._switch_project(pid, pname), daemon=True).start()
+            return handler
+
+        items = [Item("No Project", make_handler(None, None))]
+        for p in sorted(projects, key=lambda x: (x.get("name") or "").lower()):
+            pid, pname = p.get("id"), p.get("name") or ""
+            prefix = "● " if pid == self.current_project_id else ""
+            items.append(Item(f"{prefix}{pname}", make_handler(pid, pname)))
+        return items
+
+    def _switch_project(self, project_id, project_name):
+        if not (getattr(self, 'client_widget_enabled', False)
+                and getattr(self, 'project_switch_enabled', False)):
+            print("[GUI] project switch ignored (feature off)")
+            return
+        self.current_project_id = project_id
+        try:
+            if self.set_current_project_callback:
+                self.set_current_project_callback(project_id)
+        except Exception as e:
+            print(f"[GUI] project switch failed: {e}")
+        print(f"[GUI] Project → {project_name or 'none'}")
+        try:
+            if self.icon is not None:
+                self.icon.update_menu()
+        except Exception as e:
+            print(f"[GUI] update_menu failed: {e}")
+
+    def set_project_switch_enabled(self, enabled):
+        """Vendor gate for 'Switch Project', from org_settings sync."""
+        enabled = bool(enabled)
+        if getattr(self, 'project_switch_enabled', None) == enabled:
+            return
+        self.project_switch_enabled = enabled
+        try:
+            if self.icon is not None:
+                self.icon.update_menu()
+        except Exception as e:
+            print(f"[GUI] update_menu failed: {e}")
 
     def set_client_widget_enabled(self, enabled):
         """Vendor gate from org_settings sync. When False (default), the client
@@ -1282,6 +1347,8 @@ class TimeTrackerSystemTray:
             return
 
         track_client_selection(client_id)
+        # A project belongs to one client; a new client means no project yet.
+        self.current_project_id = None
         
         if client_id == 0:
             self.state.set_client(None, "No Client")
@@ -1437,7 +1504,9 @@ def run_gui_app(on_client_confirmed: Callable,
                 set_current_client: Callable = None,
                 get_current_client: Callable = None,
                 repair_callback: Callable = None,
-                sync=None):
+                sync=None,
+                get_projects: Callable = None,
+                set_current_project: Callable = None):
     """Start the GUI system tray app."""
     if not GUI_AVAILABLE:
         print("[GUI] GUI components not available")
@@ -1452,6 +1521,8 @@ def run_gui_app(on_client_confirmed: Callable,
     tray.set_current_client_callback = set_current_client
     tray.get_current_client_callback = get_current_client
     tray.repair_callback = repair_callback  # NEW: Set repair callback
+    tray.get_projects_callback = get_projects
+    tray.set_current_project_callback = set_current_project
     
     if fetch_clients:
         try:

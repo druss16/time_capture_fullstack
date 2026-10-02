@@ -3596,6 +3596,48 @@ def set_current_client(request):
     })
 
 
+@api_view(["POST"])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def set_current_project(request):
+    """
+    POST /api/project/set-current/   body: {"project_id": 63}  (null clears)
+
+    "Switch Project" from the desktop ticker. Files the last few minutes of
+    this person's unfiled time for that project's client to it, and records it
+    so the attribution sweep keeps filing their same-client work there until
+    they switch or it goes stale. Only for orgs MavOps has given the feature.
+    """
+    from tracker.models import CurrentProject
+    from tracker.services.feature_flags import PROJECT_SWITCH, feature_enabled
+    from tracker.services.projects import CURRENT_PROJECT_BACKFILL_MINUTES
+
+    org = get_user_org(request.user)
+    if not feature_enabled(org, PROJECT_SWITCH):
+        return Response({"error": "Switch Project is not enabled for this organization"}, status=403)
+
+    project_id = (request.data or {}).get("project_id")
+    if not project_id:
+        CurrentProject.objects.filter(user=request.user).delete()
+        return Response({"ok": True, "project_id": None})
+
+    try:
+        project = Project.objects.select_related("client").get(id=project_id, org=org, is_active=True)
+    except Project.DoesNotExist:
+        return Response({"error": "Project not found"}, status=404)
+
+    now = timezone.now()
+    CurrentProject.objects.update_or_create(
+        user=request.user, defaults={"project": project, "started_at": now})
+    filed = (Block.objects
+             .filter(user=request.user, org=org, client_id=project.client_id, project__isnull=True,
+                     start__gte=now - timedelta(minutes=CURRENT_PROJECT_BACKFILL_MINUTES),
+                     deleted_at__isnull=True)
+             .update(project=project))
+    return Response({"ok": True, "project_id": project.id, "project_name": project.name,
+                     "client_id": project.client_id, "retroactive_blocks": filed})
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_current_client(request):

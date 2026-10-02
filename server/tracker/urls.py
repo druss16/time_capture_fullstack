@@ -47,6 +47,7 @@ urlpatterns = [
     # Client Selection (Agent)
     # -------------------------------
     path("client/set-current/", csrf_exempt(views.set_current_client), name="set_current_client"),
+    path("project/set-current/", csrf_exempt(views.set_current_project), name="set_current_project"),
     path("client/current/", csrf_exempt(views.get_current_client), name="get_current_client"),
     path("clients/list/", views.list_clients, name="list_clients"),
     path("context/guess/", views.context_guess, name="context_guess"),
@@ -410,6 +411,7 @@ urlpatterns = [
     path('mavops/orgs/',                  views_mavops.mavops_orgs,          name='mavops-orgs'),
     path('mavops/orgs/<int:org_id>/archive/', views_mavops.mavops_set_org_archived, name='mavops-set-org-archived'),
     path('mavops/orgs/<int:org_id>/show-client-widget/', views_mavops.mavops_set_org_show_client_widget, name='mavops-set-org-show-client-widget'),
+    path('mavops/orgs/<int:org_id>/feature/', views_mavops.mavops_set_org_feature, name='mavops-set-org-feature'),
     path('mavops/orgs/<int:org_id>/idle-pause/', views_mavops.mavops_set_org_idle_pause, name='mavops-set-org-idle-pause'),
     path('mavops/orgs/<int:org_id>/industry/', views_mavops.mavops_set_org_industry, name='mavops-set-org-industry'),
     path('mavops/qbo-mappings/',          views_mavops.mavops_qbo_mappings,  name='mavops-qbo-mappings'),

@@ -510,6 +510,18 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     updates = defaultdict(list)
     client_fixes = defaultdict(list)
     stats['by_convention'] = 0
+    stats['by_current_project'] = 0
+    # Ticker "Switch Project" picks: user -> (project, client, from, until).
+    picks = {}
+    try:
+        from tracker.models import CurrentProject
+        from tracker.services.projects import CURRENT_PROJECT_TTL_HOURS
+        for cp in CurrentProject.objects.filter(project__org=org, project__is_active=True) \
+                .select_related('project'):
+            picks[cp.user_id] = (cp.project_id, cp.project.client_id, cp.started_at,
+                                 cp.started_at + timedelta(hours=CURRENT_PROJECT_TTL_HOURS))
+    except Exception as e:      # table not migrated yet — the tier is simply absent
+        logger.warning('current-project picks unavailable: %s', e)
     for block in qs:
         stats['scanned'] += 1
 
@@ -534,6 +546,15 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
                 # Client only: let the other tiers find the project, now
                 # scoped to the client the file named.
                 block.client_id = want_client
+
+        # What the person said they are on, for their same-client work while
+        # the pick is fresh. Below the convention (a named file is specific),
+        # above every inference (a statement beats a guess).
+        pick = picks.get(block.user_id)
+        if pick and block.client_id == pick[1] and pick[2] <= block.start <= pick[3]:
+            updates[pick[0]].append(block.id)
+            stats['by_current_project'] += 1
+            continue
 
         project_id, tier, _reason = attribute_block(
             block, index, sole_matter_by_client, project_by_external_id,

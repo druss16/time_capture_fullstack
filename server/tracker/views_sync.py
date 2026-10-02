@@ -24,6 +24,12 @@ def _compute_hash(data: str) -> str:
     return hashlib.md5(data.encode()).hexdigest()[:12]
 
 
+
+def _project_switch_on(org) -> bool:
+    from tracker.services.feature_flags import PROJECT_SWITCH, feature_enabled
+    return feature_enabled(org, PROJECT_SWITCH)
+
+
 @api_view(['GET'])
 @authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
 @permission_classes([IsAuthenticated])
@@ -126,6 +132,7 @@ def sync_status(request):
                 'count': 0,
                 'hash': _compute_hash(
                     f"{int(bool(getattr(org, 'show_client_widget', False)))}:"
+                    f"{int(_project_switch_on(org))}:"
                     f"{getattr(org, 'ai_sensitivity', 50)}:"
                     f"{org.agent_idle_pause_seconds()}"
                 ),
@@ -378,6 +385,9 @@ def sync_full(request):
         # client experience is fully hands-off. MavOps staff flip it on per-org
         # (e.g. a demo org) to show the file-open→client ticker for sales demos.
         'show_client_widget': bool(getattr(org, 'show_client_widget', False)),
+        # Vendor-controlled, off by default: "Switch Project" inside the ticker.
+        # Only meaningful where show_client_widget is also on.
+        'show_project_switch': _project_switch_on(org),
     }
 
     return Response({

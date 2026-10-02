@@ -173,6 +173,8 @@ def mavops_orgs(request):
     orgs = Organization.objects.all().order_by('name')
     if not include_archived:
         orgs = orgs.filter(mavops_archived=False)
+    from tracker.services.feature_flags import PROJECT_SWITCH, flags_for_orgs
+    project_switch_on = flags_for_orgs(orgs.values_list('id', flat=True), PROJECT_SWITCH)
 
     result = []
     archived_count = 0
@@ -239,6 +241,7 @@ def mavops_orgs(request):
             'deactivated_devices': deactivated_devices,
             'mavops_archived': getattr(org, 'mavops_archived', False),
             'show_client_widget': getattr(org, 'show_client_widget', False),
+            'project_switch': org.id in project_switch_on,
             'mouse_idle_pause_seconds': getattr(org, 'mouse_idle_pause_seconds', 600),
             'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
@@ -622,6 +625,34 @@ def mavops_set_org_show_client_widget(request, org_id):
     org.save(update_fields=['show_client_widget', 'updated_at'])
 
     return Response({'ok': True, 'id': org.id, 'show_client_widget': org.show_client_widget})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_set_org_feature(request, org_id):
+    """
+    Vendor feature switch (MavOps staff only).
+    POST /api/mavops/orgs/<org_id>/feature/  body: {"key": "project_switch", "enabled": true}
+
+    project_switch — "Switch Project" inside the desktop ticker. Off by default;
+    it only shows where the ticker itself is on, so a hands-off firm never sees
+    it. Not exposed in the client Settings UI.
+    """
+    from tracker.models import OrgFeatureFlag
+    from tracker.services.feature_flags import set_feature
+    try:
+        org = Organization.all_objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+    key = request.data.get('key')
+    if key not in dict(OrgFeatureFlag.KEYS):
+        return Response({'error': f'Unknown feature {key!r}'}, status=400)
+    enabled = request.data.get('enabled', False)
+    if isinstance(enabled, str):
+        enabled = enabled.lower() in ('1', 'true', 'yes')
+    flag = set_feature(org, key, bool(enabled), request.user)
+    return Response({'ok': True, 'id': org.id, 'key': key, 'enabled': flag.enabled})
 
 
 @api_view(['POST'])

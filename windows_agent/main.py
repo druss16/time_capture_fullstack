@@ -2423,6 +2423,32 @@ def get_current_client_from_backend(api_base: str, api_key: str) -> dict:
         log(f"[CLIENT] Failed to fetch current client: {e}")
         return {"client_id": None, "client_name": None}
 
+def set_current_project_backend(api_base: str, api_key: str, project_id) -> bool:
+    """Tell the backend which project this person is on (None clears).
+
+    Only reachable from 'Switch Project', which only exists where MavOps has
+    given the firm the feature; the server refuses it otherwise.
+    """
+    if not api_base or not api_key:
+        return False
+    req = urllib.request.Request(
+        f"{api_base}/project/set-current/",
+        data=json.dumps({"project_id": project_id}).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Authorization", f"DeviceKey {api_key}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            result = json.loads(resp.read())
+            log(f"[PROJECT] current project -> {result.get('project_name') or 'none'} "
+                f"({result.get('retroactive_blocks', 0)} recent blocks)")
+            return bool(result.get("ok"))
+    except Exception as e:
+        log(f"[PROJECT] set current project failed: {e}")
+        return False
+
+
 def set_current_client_backend(api_base: str, api_key: str, client_id) -> bool:
     if not api_base or not api_key:
         return False
@@ -2916,6 +2942,9 @@ def run_agent():
                 },
                 repair_callback=repair_device,
                 sync=sync,
+                get_projects=lambda cid: [p for p in (getattr(sync, 'projects', None) or [])
+                                          if p.get('client_id') == cid],
+                set_current_project=lambda pid: set_current_project_backend(api_base, api_key, pid),
             )
             log("[GUI] System tray initialized")
 
@@ -2944,6 +2973,9 @@ def run_agent():
                     log(f"[TICKER] applying show_client_widget={_sw} at GUI-ready")
                     if hasattr(gui_menu_bar, 'set_client_widget_enabled'):
                         gui_menu_bar.set_client_widget_enabled(_sw)
+                    if hasattr(gui_menu_bar, 'set_project_switch_enabled'):
+                        gui_menu_bar.set_project_switch_enabled(
+                            bool(_osettings.get('show_project_switch', False)))
                 except Exception as _e:
                     log(f"[TICKER] GUI-ready apply failed: {_e}")
             
@@ -3168,6 +3200,10 @@ def run_agent():
                         log(f"[TICKER] sync update: show_client_widget={_sw} (gui={'ready' if gmb else 'not ready'})")
                         if gmb is not None and hasattr(gmb, 'set_client_widget_enabled'):
                             gmb.set_client_widget_enabled(_sw)
+                        # Switch Project: a second vendor gate inside the ticker.
+                        if gmb is not None and hasattr(gmb, 'set_project_switch_enabled'):
+                            gmb.set_project_switch_enabled(
+                                bool(sync.org_settings.get("show_project_switch", False)))
                     except Exception as _e:
                         log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher

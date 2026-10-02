@@ -1716,6 +1716,34 @@ def fetch_clients_from_backend(api_base: str, api_key: str) -> list:
         return []
 
 
+def set_current_project_backend(api_base: str, api_key: str, project_id) -> bool:
+    """Tell the backend which project this person is on (None clears).
+
+    Only reachable from 'Switch Project', which only exists where MavOps has
+    given the firm the feature; the server refuses it otherwise.
+    """
+    if not api_base or not api_key:
+        return False
+    req = urllib.request.Request(f"{api_base}/project/set-current/", method="POST")
+    req.add_header("Authorization", f"DeviceKey {api_key}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        body = json.dumps({"project_id": project_id}).encode("utf-8")
+        with urllib.request.urlopen(req, data=body, timeout=6) as resp:
+            result = json.loads(resp.read())
+            log(f"[PROJECT] current project → {result.get('project_name') or 'none'} "
+                f"({result.get('retroactive_blocks', 0)} recent blocks)")
+            return bool(result.get("ok"))
+    except Exception as e:
+        log(f"[PROJECT] set current project failed: {e}")
+        return False
+
+
+def _projects_for_client(client_id):
+    """Active projects of one client, from the sync cache."""
+    return [p for p in (getattr(sync, "projects", None) or []) if p.get("client_id") == client_id]
+
+
 def set_current_client_backend(api_base: str, api_key: str, client_id: int) -> bool:
     """Set the current client on the backend."""
     if not api_base or not api_key:
@@ -4100,6 +4128,8 @@ def run_agent():
                 fetch_clients=lambda: fetch_clients_from_backend(API_BASE, API_KEY),
                 set_current_client=lambda client_id: _on_gui_client_switch(client_id),
                 get_current_client=lambda: get_current_client_backend(API_BASE, API_KEY),
+                get_projects=_projects_for_client,
+                set_current_project=lambda pid: set_current_project_backend(API_BASE, api_key, pid),
                 repair_callback=_gui_pair_callback,
                 sync=sync,
             )
@@ -4246,6 +4276,13 @@ def run_agent():
                             gui_menu_bar, "set_client_widget_enabled"
                         ):
                             gui_menu_bar.set_client_widget_enabled(_sw)
+                        # Switch Project: a second vendor gate inside the ticker.
+                        if gui_menu_bar is not None and hasattr(
+                            gui_menu_bar, "set_project_switch_enabled"
+                        ):
+                            gui_menu_bar.set_project_switch_enabled(
+                                bool(sync.org_settings.get("show_project_switch", False))
+                            )
                     except Exception as _e:
                         log(f"[TICKER] set_client_widget_enabled failed: {_e}")
             sync.on_update = _on_sync_with_switcher

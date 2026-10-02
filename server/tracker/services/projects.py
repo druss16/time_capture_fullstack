@@ -24,6 +24,11 @@ from dataclasses import dataclass
 
 OPEN_STATUSES = {'open', 'pending', ''}
 
+# A ticker "Switch Project" pick covers the person's same-client work for this
+# long after it was made, and files this much of the time just before it.
+CURRENT_PROJECT_TTL_HOURS = 4
+CURRENT_PROJECT_BACKFILL_MINUTES = 15
+
 
 @dataclass
 class ProjectOption:

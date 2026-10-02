@@ -1208,6 +1208,13 @@ if RUMPS_AVAILABLE:
             self.client_widget_enabled = bool(
                 getattr(controller, "client_widget_enabled", False)
             )
+            # Second vendor gate, nested inside the first: "Switch Project"
+            # only ever appears where the ticker is on AND MavOps gave the
+            # firm the feature. Same adopt-don't-overwrite rule as above.
+            self.project_switch_enabled = bool(
+                getattr(controller, "project_switch_enabled", False)
+            )
+            self._project_callbacks = {}
             self._start_keepalive()
             self._start_setup_timers()
 
@@ -1412,9 +1419,73 @@ if RUMPS_AVAILABLE:
                 switch_menu.add(all_menu)
 
             self.menu.add(switch_menu)
+
+            if getattr(self, "project_switch_enabled", False):
+                self.menu.add(self._build_project_menu(current_id))
             self.menu.add(None)
 
             self._add_tail_menu_items()
+
+        def _build_project_menu(self, client_id):
+            """'Switch Project' for the current client's projects."""
+            menu = rumps.MenuItem("Switch Project")
+            if not client_id:
+                hint = rumps.MenuItem("Pick a client first")
+                hint.set_callback(None)
+                menu.add(hint)
+                return menu
+            getter = getattr(self.controller, "get_projects_callback", None)
+            projects = []
+            try:
+                projects = getter(client_id) if getter else []
+            except Exception as e:
+                print(f"[GUI] project list failed: {e}")
+            if not projects:
+                hint = rumps.MenuItem("No projects for this client")
+                hint.set_callback(None)
+                menu.add(hint)
+                return menu
+
+            current = getattr(self.controller, "current_project_id", None)
+
+            def make_callback(pid, pname):
+                def callback(_):
+                    self._switch_project(pid, pname)
+                return callback
+
+            clear = rumps.MenuItem("No Project")
+            clear.set_callback(make_callback(None, None))
+            menu.add(clear)
+            menu.add(None)
+            for p in sorted(projects, key=lambda x: (x.get("name") or "").lower()):
+                pid, pname = p.get("id"), p.get("name") or ""
+                key = f"project_{pid}"
+                if key not in self._project_callbacks:
+                    self._project_callbacks[key] = make_callback(pid, pname)
+                item = rumps.MenuItem(f"{'● ' if pid == current else ''}{pname}")
+                item.set_callback(self._project_callbacks[key])
+                menu.add(item)
+            return menu
+
+        def _switch_project(self, project_id, project_name):
+            self.controller.current_project_id = project_id
+            cb = getattr(self.controller, "set_current_project_callback", None)
+            if cb:
+                # Network call off the main thread: the menu must not hang on it.
+                threading.Thread(target=lambda: cb(project_id), daemon=True).start()
+            print(f"[GUI] Project → {project_name or 'none'}")
+            self._rebuild_menu()
+
+        def set_project_switch_enabled(self, enabled):
+            enabled = bool(enabled)
+            if getattr(self, "project_switch_enabled", None) == enabled:
+                return
+            self.project_switch_enabled = enabled
+            print(f"[GUI] project switch {'enabled' if enabled else 'disabled'}")
+            try:
+                self._rebuild_menu()
+            except Exception as e:
+                print(f"[GUI] menu rebuild after project-switch flip failed: {e}")
 
         def _add_tail_menu_items(self):
             """The items every user gets, hands-off or not."""
@@ -1489,6 +1560,8 @@ if RUMPS_AVAILABLE:
             self._switch_client(0, "No Client")
         
         def _switch_client(self, client_id: int, client_name: str):
+            # A project belongs to one client; a new client means no project yet.
+            self.controller.current_project_id = None
             if client_id and client_id > 0:
                 track_client_selection(client_id)
             
@@ -1605,6 +1678,11 @@ class TimeTrackerSystemTray:
         self.fetch_clients_callback = None
         self.set_current_client_callback = None
         self.get_current_client_callback = None
+        # Switch Project (vendor-gated, see set_project_switch_enabled).
+        self.get_projects_callback = None
+        self.set_current_project_callback = None
+        self.current_project_id = None
+        self.project_switch_enabled = False
         
         self.app = None
         # permissions.PermissionMonitor, set by main.py after the launch check.
@@ -1776,6 +1854,14 @@ class TimeTrackerSystemTray:
             # this off the controller when it builds.
             print(f"[GUI] client widget flag stored ({enabled}); menu not up yet")
 
+    def set_project_switch_enabled(self, enabled):
+        """Vendor gate for 'Switch Project', pushed from org_settings on each
+        sync. Stored here too so a menu built later adopts it."""
+        self.project_switch_enabled = bool(enabled)
+        app = getattr(self, "app", None)
+        if app is not None and hasattr(app, "set_project_switch_enabled"):
+            app.set_project_switch_enabled(enabled)
+
     def run(self):
         if RUMPS_AVAILABLE:
             self.app = TimeTrackerMenuBarApp(self)
@@ -1797,6 +1883,8 @@ def run_gui_app(on_client_confirmed: Callable,
                 fetch_clients: Callable = None,
                 set_current_client: Callable = None,
                 get_current_client: Callable = None,
+                get_projects: Callable = None,
+                set_current_project: Callable = None,
                 repair_callback: Callable = None,
                 cpa_tools_data: dict = None,
                 sync=None):
@@ -1813,6 +1901,8 @@ def run_gui_app(on_client_confirmed: Callable,
     tray.fetch_clients_callback = fetch_clients
     tray.set_current_client_callback = set_current_client
     tray.get_current_client_callback = get_current_client
+    tray.get_projects_callback = get_projects
+    tray.set_current_project_callback = set_current_project
     
     if fetch_clients:
         try:

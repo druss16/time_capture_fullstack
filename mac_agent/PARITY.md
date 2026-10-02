@@ -66,7 +66,11 @@ QuickBooks Desktop is a Windows product; there is nothing here to read.
 always-on-top ticker window. The Mac agent lives in the menu bar instead.
 The *behaviour* attached to the ticker did port: the vendor hands-off gate
 (`_show_client_widget` / `set_client_widget_enabled`) hides the manual
-client controls while leaving automatic attribution running.
+client controls while leaving automatic attribution running. "Switch Project"
+is a second vendor gate nested inside it (`show_project_switch` in
+org_settings → `set_project_switch_enabled`), built on both platforms: the
+Windows tray submenu and the Mac menu-bar submenu list the current client's
+projects and POST `/api/project/set-current/`.
 
 **`ensure_extension.py`** — silently force-installs the URL Reporter
 extension by writing an `ExtensionInstallForcelist` policy under HKCU, which

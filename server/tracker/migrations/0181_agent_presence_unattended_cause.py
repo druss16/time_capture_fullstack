@@ -12,7 +12,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0179_agent_work_and_presence'),
+        ('tracker', '0180_qb_time_projects'),
     ]
 
     operations = [

@@ -38,6 +38,11 @@ interface PreviewSummary {
   total_rows: number; will_import: number; matched: number;
   unmatched: number; duplicates: number; parse_errors: number;
 }
+interface RateCheck {
+  default_rate: number; rows_with_hours: number; median_implied: number;
+  min_implied: number; max_implied: number; rows_off_default: number;
+  clients_off_default: { client: string; implied_rate: number }[];
+}
 interface Props { filter?: string; onFilterClear?: () => void }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -229,7 +234,7 @@ const CsvImportModal: React.FC<{
   const [step,        setStep]        = useState<Step>('upload');
   const [uploading,   setUploading]   = useState(false);
   const [committing,  setCommitting]  = useState(false);
-  const [preview,     setPreview]     = useState<{ rows: PreviewRow[]; summary: PreviewSummary } | null>(null);
+  const [preview,     setPreview]     = useState<{ rows: PreviewRow[]; summary: PreviewSummary; rate_check?: RateCheck | null } | null>(null);
   const [editedRows,  setEditedRows]  = useState<PreviewRow[]>([]);
   const [commitResult,setCommitResult]= useState<any>(null);
   const [error,       setError]       = useState('');
@@ -301,6 +306,20 @@ const CsvImportModal: React.FC<{
 
   const importCount = editedRows.filter(r => !r.is_duplicate && !r.needs_review).length;
 
+  // A firm sending two years of history uploads thousands of rows, and every
+  // row here carries a <select>. Rendering them all locks the tab, and nobody
+  // reads 8,000 rows anyway. The rows that need a person are the ones we
+  // couldn't match; the rest are shown as a sample to confirm it looks right.
+  const AUTO_SAMPLE = 25;
+  const visibleRows = (() => {
+    const keyed = editedRows.map((row, i) => ({ row, i }));
+    const decisions = keyed.filter(({ row }) => row.needs_review);
+    const settled = keyed.filter(({ row }) => !row.needs_review);
+    if (keyed.length <= 200) return keyed;
+    return [...decisions, ...settled.slice(0, AUTO_SAMPLE)];
+  })();
+  const hiddenCount = editedRows.length - visibleRows.length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
@@ -351,11 +370,12 @@ const CsvImportModal: React.FC<{
                 <p className="font-semibold text-slate-700 text-sm mb-1">
                   {uploading ? 'Parsing CSV…' : 'Drop your CSV here or click to browse'}
                 </p>
-                <p className="text-xs text-slate-400">Required: client_code, invoice_number, invoice_date, amount</p>
+                <p className="text-xs text-slate-400">Send the export your billing software already produces — we read QuickBooks and Xero column names as they come.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Three columns: who it was billed to, the date, the amount. Hours too if the file has them — that's what lets us check the rate.</p>
               </div>
               <div className="text-center">
                 <button onClick={downloadTemplate} className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
-                  <Download className="w-3.5 h-3.5" /> Download template with your client codes pre-filled
+                  <Download className="w-3.5 h-3.5" /> Or download a blank one to send to whoever does your billing
                 </button>
               </div>
             </div>
@@ -386,6 +406,35 @@ const CsvImportModal: React.FC<{
                 )}
               </div>
 
+              {preview.rate_check && preview.rate_check.rows_off_default > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                  <p className="text-sm font-semibold text-amber-900">
+                    These invoices don't all bill at ${preview.rate_check.default_rate}/hr
+                  </p>
+                  <p className="text-[12.5px] text-amber-800 mt-1">
+                    {preview.rate_check.rows_off_default.toLocaleString()} of{' '}
+                    {preview.rate_check.rows_with_hours.toLocaleString()} rows with hours imply a
+                    different rate — the file spans ${preview.rate_check.min_implied} to $
+                    {preview.rate_check.max_implied}/hr, median ${preview.rate_check.median_implied}.
+                    Every figure on this site currently prices time at $
+                    {preview.rate_check.default_rate}, so those clients are being valued wrong.
+                  </p>
+                  {preview.rate_check.clients_off_default.length > 0 && (
+                    <ul className="mt-2 space-y-0.5">
+                      {preview.rate_check.clients_off_default.map(c => (
+                        <li key={c.client} className="text-[12px] text-amber-900 tabular-nums">
+                          <span className="font-medium">{c.client}</span> — bills about ${c.implied_rate}/hr
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="text-[11.5px] text-amber-700/90 mt-2">
+                    Importing is still the right move — this is what tells us the rate is wrong.
+                    Worth fixing in Settings → Economics afterwards.
+                  </p>
+                </div>
+              )}
+
               {/* Preview table */}
               <div className="border border-border/60 rounded-xl overflow-hidden">
                 <table className="w-full text-sm border-collapse">
@@ -397,12 +446,12 @@ const CsvImportModal: React.FC<{
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/30">
-                    {editedRows.map((row, i) => (
+                    {visibleRows.map(({ row, i }) => (
                       <tr key={i} className={cn('transition-colors', row.is_duplicate ? 'opacity-40 bg-slate-50' : 'hover:bg-slate-50/50')}>
                         <td className="px-4 py-2.5 font-mono font-semibold text-slate-700 text-xs">{row.invoice_number}</td>
                         <td className="px-4 py-2.5 text-slate-500 text-xs tabular-nums">{fmtDate(row.invoice_date)}</td>
                         <td className="px-4 py-2.5 font-semibold text-slate-800 tabular-nums text-xs">{fmtCurrency(row.amount)}</td>
-                        <td className="px-4 py-2.5 font-mono text-[10px] text-slate-400">{row.client_code}</td>
+                        <td className="px-4 py-2.5 text-xs text-slate-500">{row.client_code}</td>
                         <td className="px-4 py-2.5">
                           {row.is_duplicate ? (
                             <span className="text-slate-300 text-xs italic">—</span>
@@ -441,6 +490,12 @@ const CsvImportModal: React.FC<{
                     ))}
                   </tbody>
                 </table>
+                {hiddenCount > 0 && (
+                  <div className="px-4 py-2.5 bg-slate-50 border-t border-border/50 text-xs text-slate-500">
+                    {hiddenCount.toLocaleString()} more matched cleanly and aren't shown.
+                    Everything we couldn't match is listed above — those are the only rows that need you.
+                  </div>
+                )}
               </div>
             </div>
           )}

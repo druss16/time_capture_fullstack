@@ -125,6 +125,11 @@ class SyncTests(TestCase):
         self.assertEqual(spring.estimated_hours, Decimal('20.00'))
         self.assertEqual(str(spring.due_date), '2026-10-31')
         self.assertEqual(spring.display_number, '')
+        # MTC's estimates are monthly hours: the estimate becomes the budget.
+        from tracker.models import ProjectBudget
+        budget = ProjectBudget.objects.get(project=spring.project)
+        self.assertEqual((budget.monthly_hours, budget.source), (Decimal('20.00'), 'qb_time'))
+        self.assertEqual(stats['estimates'].get('applied'), 1)
         truck = ExternalMatterMapping.objects.get(integration=self.integration, external_id='21')
         self.assertFalse(truck.project.is_active)   # completed project takes no new time
         self.assertEqual(truck.project.client_id, self.existing.id)

@@ -6702,14 +6702,79 @@ def list_projects(request):
     } for p in qs.order_by('client__name', 'name')])
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def project_budgets_summary(request):
+    """
+    GET /api/projects/budgets/?month=YYYY-MM[&client_id=N]
+
+    Each project's monthly hour budget against the hours actually filed to it
+    that month, with the fee the budget is worth (hours × client rate, else
+    the firm's default). Owners and admins: the fee is the firm's revenue.
+    """
+    from tracker.services.project_budgets import month_summary, parse_month
+    from tracker.services.projects import org_uses_projects
+
+    org = get_user_org(request.user)
+    if not org:
+        return Response({'error': 'No organization'}, status=404)
+    if not is_org_admin_or_owner(request.user, org):
+        return Response({'error': 'Only owners and admins can see project budgets'}, status=403)
+    if not org_uses_projects(org):
+        return Response({'error': 'This firm does not track projects'}, status=404)
+    try:
+        month = parse_month(request.GET.get('month'))
+    except ValueError:
+        return Response({'error': 'month must be YYYY-MM'}, status=400)
+    client_id = request.GET.get('client_id')
+    return Response(month_summary(org, month, client_ids=[int(client_id)] if client_id else None))
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def set_project_budget(request, project_id):
+    """
+    PUT /api/projects/<id>/budget/   body: {"monthly_hours": 20, "month": "2026-10"}
+
+    Budget this project N hours a month from `month` (default: this month) on.
+    Earlier months keep the budget they had. 0 ends the budget. A budget set
+    here outranks the QuickBooks Time estimate from then on.
+    """
+    from decimal import Decimal, InvalidOperation
+    from tracker.services.project_budgets import parse_month, set_monthly_budget
+
+    org = get_user_org(request.user)
+    if not org or not is_org_admin_or_owner(request.user, org):
+        return Response({'error': 'Only owners and admins can set budgets'}, status=403)
+    try:
+        project = Project.objects.get(id=project_id, org=org)
+    except Project.DoesNotExist:
+        return Response({'error': 'Project not found'}, status=404)
+    try:
+        hours = Decimal(str(request.data.get('monthly_hours')))
+        month = parse_month(request.data.get('month'))
+    except (InvalidOperation, ValueError, TypeError):
+        return Response({'error': 'monthly_hours must be a number and month YYYY-MM'}, status=400)
+    if hours < 0 or hours > 2000:
+        return Response({'error': 'monthly_hours must be between 0 and 2000'}, status=400)
+
+    row = set_monthly_budget(project, hours, month=month, source='manual', user=request.user)
+    return Response({
+        'ok': True, 'project_id': project.id,
+        'monthly_hours': float(row.monthly_hours),
+        'effective_month': row.effective_month.strftime('%Y-%m'),
+    })
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def import_projects(request):
     """
     POST /api/projects/import/   body: {"text": "<csv>", "dry_run": true}
 
-    Load a firm's Client → Project list in one go: two columns, client then
-    project, one project per line (a header row is fine). This is how an
+    Load a firm's Client → Project list in one go: client, project and an
+    optional third column of monthly budget hours, one project per line (a
+    header row is fine). This is how an
     agency's existing list — exported from Asana, QuickBooks Time or a
     spreadsheet — arrives on day one, before a single hour has been captured.
 
@@ -6745,7 +6810,11 @@ def import_projects(request):
         for p in Project.objects.filter(org=org).only('id', 'client_id', 'name', 'is_active')
     }
 
+    from decimal import Decimal
+    from tracker.services.project_budgets import set_monthly_budget
+
     created, reactivated, unchanged, unmatched, skipped = [], [], [], [], []
+    budgeted = 0
     seen = set()
     for i, row in enumerate(csv.reader(io.StringIO(text))):
         cells = [c.strip() for c in row]
@@ -6757,6 +6826,13 @@ def import_projects(request):
         if i == 0 and norm(client_name) in ('client', 'customer', 'client name') \
                 and norm(project_name) in ('project', 'project name', 'job', 'name'):
             continue
+        budget = None
+        if len(cells) > 2 and cells[2]:
+            try:
+                budget = Decimal(cells[2].replace('h', '').strip())
+            except Exception:
+                skipped.append({'line': i + 1, 'text': ','.join(row)})
+                continue
         client = clients.get(norm(client_name))
         if not client:
             unmatched.append({'line': i + 1, 'client': client_name, 'project': project_name})
@@ -6765,7 +6841,8 @@ def import_projects(request):
         if key in seen:
             continue
         seen.add(key)
-        entry = {'client': client.name, 'project': project_name}
+        entry = {'client': client.name, 'project': project_name,
+                 'monthly_hours': float(budget) if budget is not None else None}
         p = existing.get(key)
         if p and p.is_active:
             unchanged.append(entry)
@@ -6777,7 +6854,11 @@ def import_projects(request):
         else:
             created.append(entry)
             if not dry_run:
-                Project.objects.create(org=org, client=client, name=project_name, is_active=True)
+                p = Project.objects.create(org=org, client=client, name=project_name, is_active=True)
+        if budget is not None:
+            budgeted += 1
+            if not dry_run:
+                set_monthly_budget(p, budget, source='csv', user=request.user)
 
     return Response({
         'ok': True,
@@ -6787,6 +6868,7 @@ def import_projects(request):
         'unchanged': unchanged,
         'unmatched_clients': unmatched,
         'skipped_lines': skipped,
+        'budgeted': budgeted,
     })
 
 
@@ -7282,6 +7364,13 @@ def block_matter_options(request, block_id):
             (o.display_number or o.name).lower(),
         )
 
+    from tracker.services.project_budgets import budgets_in_effect, month_start
+    monthly = {
+        pid: row.monthly_hours for pid, row in
+        budgets_in_effect(block.org, month_start(), [o.project_id for o in candidates]).items()
+        if row.monthly_hours > 0
+    }
+
     options = [
         {
             'project_id': o.project_id,
@@ -7296,6 +7385,7 @@ def block_matter_options(request, block_id):
             'practice_area': o.practice_area,
             'source': o.provider or 'local',
             'estimated_hours': float(o.estimated_hours) if o.estimated_hours is not None else None,
+            'monthly_hours': float(monthly[o.project_id]) if o.project_id in monthly else None,
             'due_date': o.due_date.isoformat() if o.due_date else None,
             'last_worked': (last_worked[o.project_id].isoformat()
                             if last_worked.get(o.project_id) else None),

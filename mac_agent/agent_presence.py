@@ -64,7 +64,7 @@ PROCESS_POLL_S = 60
 LOG_POLL_S = 300
 SEND_POLL_S = 300
 IDLE_ACTIVITY_S = 60
-BUSY_CPU_S = 1.0          # CPU seconds in one process sample = "busy minute"
+BUSY_CPU_S = 1.0          # CPU seconds per minute = "busy"
 MAX_PENDING_BUCKETS = 72  # three days offline, then the oldest are dropped
 MAX_NAMES = 25            # per-bucket cap on any name->count map
 
@@ -87,17 +87,49 @@ KNOWN_AGENT_PROCESSES = {
     "autohotkey64": "autohotkey",
     "autohotkeyu64": "autohotkey",
 }
-# Not agents: tools through which a REAL person's input arrives as software
-# input (remote control). Recorded so the summary can split "unattended-active"
-# time into hours with and without one running — the main false positive.
-KNOWN_REMOTE_PROCESSES = {
-    "screensharingd": "remote_screen_sharing",   # macOS Screen Sharing / ARD
-    "ardagent": "remote_screen_sharing",
-    "teamviewer": "remote_teamviewer",
-    "teamviewer_service": "remote_teamviewer",
-    "anydesk": "remote_anydesk",
+# EXPLAINERS — not agents. Tools through which a REAL person's input (or a
+# keep-awake jiggle) arrives as software input: the known false positives of
+# unattended-active time. When one is active, that time is booked to its cause
+# and never to "possibly an agent".
+#
+# Most of these run all day (UniversalControl and SidecarRelay are always up on
+# a modern Mac; TeamViewer/AnyDesk idle as services), so RUNNING proves
+# nothing — they explain an interval only while BUSY, i.e. actually relaying
+# input or streaming a screen. A tablet driver or a jiggler is the explanation
+# whenever it is running at all.
+#
+# Deliberately absent: "parsecd" — on macOS that is Apple's Siri-suggestions
+# daemon, not the Parsec remote desktop app. Matching it would explain away
+# real agent time on every Mac.
+EXPLAINER_PROCESSES = {
+    "screensharingd": "remote_control",       # macOS Screen Sharing / ARD
+    "ardagent": "remote_control",
+    "teamviewer": "remote_control",
+    "teamviewer_service": "remote_control",
+    "anydesk": "remote_control",
+    "rustdesk": "remote_control",
+    "universalcontrol": "universal_control",  # driven from an iPad/another Mac
+    "sidecarrelay": "sidecar",
+    "wacomtabletdriver": "tablet_driver",
+    "wacomtouchdriver": "tablet_driver",
+    "wacom_tabletdriver": "tablet_driver",
+    "jiggler": "keep_awake",
+    "mouse jiggler": "keep_awake",
 }
-KNOWN_AGENT_PROCESSES.update(KNOWN_REMOTE_PROCESSES)
+EXPLAINER_CAUSES = set(EXPLAINER_PROCESSES.values())
+ALWAYS_EXPLAINS = {"tablet_driver", "keep_awake"}   # running is enough
+# CPU seconds per minute. Measured on an idle Mac: UniversalControl
+# 0.13, SidecarRelay 0.0 — the bar sits ~4x above idle noise so an unused
+# explainer can never explain away real agent time.
+EXPLAINER_BUSY_CPU_S = 0.5
+
+# Agents whose CPU means the AGENT is working. Electron desktop apps are not
+# here: the Claude desktop app alone burns ~5 CPU-s/min sitting open, so as
+# evidence it would say "agent busy" all day.
+CORROBORATING_AGENTS = {
+    "claude_code", "codex", "claude_in_chrome",
+    "power_automate", "uipath", "autohotkey",
+}
 
 # Agents shipped as node scripts: the process is "node", the cmdline says who.
 NODE_AGENT_MARKERS = {
@@ -125,6 +157,8 @@ def classify_process(name: str, exe: str = "", cmdline=None) -> str | None:
         # The bridge Claude in Chrome talks through; generic name, so only
         # when it ships inside Claude.
         return "claude_in_chrome" if "claude" in exe_l else None
+    if n in EXPLAINER_PROCESSES:
+        return EXPLAINER_PROCESSES[n]
     label = KNOWN_AGENT_PROCESSES.get(n)
     if label == "claude":
         # The desktop app and Claude Code share a name — and the desktop app
@@ -161,6 +195,10 @@ def _new_bucket(start: int) -> dict:
         "idle_changes_by_app": {},
         "unattended_active_seconds": 0,
         "unattended_active_by_app": {},
+        # Why the tracker saw input nobody physically made. Only "agent_busy"
+        # and "unexplained" are candidate agent time; every other key is a
+        # known false positive (a person, or a jiggler).
+        "unattended_by_cause": {},
         "processes": {},         # label -> {seen_min, busy_min, cpu_s}
         "local_sessions": {},    # tool -> distinct session logs written
     }
@@ -178,6 +216,8 @@ class Collector:
         self.remote_session = False
         self._last_fg = None
         self._last_cpu: dict[int, float] = {}
+        self._active_causes: set = set()   # explainers active at last process sample
+        self._busy_agents: set = set()     # agent labels busy at last process sample
 
     def _bucket(self, now: float) -> dict:
         start = _bucket_start(now)
@@ -209,6 +249,7 @@ class Collector:
                     and hid_idle_s >= IDLE_ACTIVITY_S:
                 b["unattended_active_seconds"] += int(interval_s)
                 _bump(b["unattended_active_by_app"], _proc_name(app), int(interval_s))
+                _bump(b["unattended_by_cause"], self._cause(), int(interval_s))
             if idle_s >= IDLE_ACTIVITY_S:
                 b["idle_seconds"] += int(interval_s)
                 # Only a change BETWEEN two idle samples counts: the window a
@@ -221,6 +262,18 @@ class Collector:
                 self._last_fg = fg
             else:
                 self._last_fg = None
+
+    def _cause(self) -> str:
+        """Best explanation for input nobody physically made, right now.
+        Explainers win over agents: when a person could be the source, the
+        time must never be claimed for an agent."""
+        if self.remote_session:
+            return "remote_control"
+        if self._active_causes:
+            return sorted(self._active_causes)[0]
+        if self._busy_agents:
+            return "agent_busy"
+        return "unexplained"
 
     # ── signal 3: agent processes ──
     def note_processes(self, samples, interval_s: float, now: float | None = None):
@@ -235,6 +288,13 @@ class Collector:
                 seen_cpu[pid] = cpu_total
                 per_label[label] = per_label.get(label, 0.0) + delta
             self._last_cpu = seen_cpu
+            per_min = 60.0 / max(interval_s, 1.0)   # thresholds are per minute
+            self._active_causes = {
+                l for l, cpu in per_label.items() if l in EXPLAINER_CAUSES
+                and (l in ALWAYS_EXPLAINS or cpu * per_min >= EXPLAINER_BUSY_CPU_S)}
+            self._busy_agents = {
+                l for l, cpu in per_label.items()
+                if l in CORROBORATING_AGENTS and cpu * per_min >= BUSY_CPU_S}
             minutes = max(int(round(interval_s / 60)), 1)
             for label, cpu in per_label.items():
                 p = b["processes"].setdefault(label, {"seen_min": 0, "busy_min": 0, "cpu_s": 0.0})
@@ -495,7 +555,8 @@ def sample_agent_processes():
         try:
             name = p.info.get("name") or ""
             n = _proc_name(name)
-            if n not in ("node", "chrome-native-host") and n not in KNOWN_AGENT_PROCESSES:
+            if n not in ("node", "chrome-native-host") and n not in KNOWN_AGENT_PROCESSES \
+                    and n not in EXPLAINER_PROCESSES:
                 continue
             exe = cmd = None
             if n in ("claude", "chrome-native-host"):

@@ -142,6 +142,10 @@ class AgentPresenceSample(models.Model):
     # hardware-only clock saw no physical input — mis-booked time, directly.
     unattended_active_seconds = models.PositiveIntegerField(default=0)
     unattended_active_by_app = models.JSONField(default=dict, blank=True)
+    # The same seconds by cause. Only 'agent_busy' and 'unexplained' are
+    # candidate agent time; remote_control / universal_control / sidecar /
+    # tablet_driver / keep_awake are known false positives.
+    unattended_by_cause = models.JSONField(default=dict, blank=True)
     processes = models.JSONField(default=dict, blank=True)
     local_sessions = models.JSONField(default=dict, blank=True)
 

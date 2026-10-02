@@ -57,6 +57,31 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(b["unattended_active_seconds"], 20)
         self.assertEqual(b["unattended_active_by_app"], {"safari": 20})
 
+    def test_unattended_time_is_given_a_cause_and_people_win_over_agents(self):
+        def tick(t, procs):
+            self.c.note_processes(procs, 60, now=HOUR + t)
+            self.c.note_foreground("Excel", "", idle_s=2, interval_s=10, now=HOUR + t + 1, hid_idle_s=300)
+
+        tick(0, [(1, "universal_control", 10.0), (2, "claude_code", 10.0)])     # baseline sample
+        tick(60, [(1, "universal_control", 10.0), (2, "claude_code", 10.0)])    # nothing busy
+        tick(120, [(1, "universal_control", 10.0), (2, "claude_code", 15.0)])   # agent busy
+        tick(180, [(1, "universal_control", 11.0), (2, "claude_code", 20.0)])   # UC busy too: person
+        tick(240, [(1, "universal_control", 11.0), (2, "claude_code", 20.0),
+                   (3, "tablet_driver", 0.0)])                                  # tablet: always explains
+        [b] = self.c.take_closed(now=HOUR + 3600)
+        self.assertEqual(b["unattended_by_cause"], {
+            "unexplained": 20, "agent_busy": 10, "universal_control": 10, "tablet_driver": 10})
+
+    def test_always_running_explainer_does_not_explain_while_quiet(self):
+        self.c.note_processes([(1, "universal_control", 5.0)], 60, now=HOUR)
+        self.c.note_processes([(1, "universal_control", 5.13),      # measured idle noise
+                               (2, "claude_desktop", 5.0)], 60, now=HOUR + 60)
+        self.c.note_processes([(1, "universal_control", 5.26),
+                               (2, "claude_desktop", 10.2)], 60, now=HOUR + 120)  # open app != agent
+        self.c.note_foreground("Excel", "", idle_s=2, interval_s=10, now=HOUR + 121, hid_idle_s=300)
+        [b] = self.c.take_closed(now=HOUR + 3600)
+        self.assertEqual(b["unattended_by_cause"], {"unexplained": 10})
+
     def test_process_busy_minutes_from_cpu_delta(self):
         self.c.note_processes([(10, "claude_code", 5.0)], 60, now=HOUR + 60)
         self.c.note_processes([(10, "claude_code", 9.0)], 60, now=HOUR + 120)   # +4s: busy
@@ -107,8 +132,11 @@ class ClassifyTest(unittest.TestCase):
                          "claude_code")
         self.assertIsNone(ap.classify_process("node", "", ["node", "server.js"]))
         self.assertIsNone(ap.classify_process("EXCEL.EXE"))
-        self.assertEqual(ap.classify_process("screensharingd"), "remote_screen_sharing")
-        self.assertEqual(ap.classify_process("TeamViewer.exe"), "remote_teamviewer")
+        self.assertEqual(ap.classify_process("screensharingd"), "remote_control")
+        self.assertEqual(ap.classify_process("TeamViewer.exe"), "remote_control")
+        self.assertEqual(ap.classify_process("UniversalControl"), "universal_control")
+        self.assertEqual(ap.classify_process("WacomTabletDriver"), "tablet_driver")
+        self.assertIsNone(ap.classify_process("parsecd"))  # Apple's Siri daemon, not Parsec
 
 
 class SessionLogScanTest(unittest.TestCase):

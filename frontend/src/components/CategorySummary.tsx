@@ -110,6 +110,11 @@ export type ProposedInline = {
   // Learned-pattern maturity for the suggested client (the "Learning… ~N more to
   // auto-file" hint). null = no pattern yet; {mature} = will auto-file already.
   learning?: { mature?: boolean; seen?: number; remaining?: number } | null;
+  /** 'calendar' = a meeting on the user's calendar with no captured computer
+   *  activity, proposed by the server (services/calendar_meetings.py). */
+  source?: "calendar" | "agent";
+  start?: string | null;
+  end?: string | null;
 };
 
 type ParsedActivity = { blockId: number | null; blockIds: number[]; title: string };

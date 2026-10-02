@@ -321,6 +321,11 @@ def _sync_projects(integration, plan, clients, hours, stats):
             est = hours.get(qbt_project_id) if qbt_project_id else None
             if est is not None:
                 stats['estimates']['projects_with_estimate'] += 1
+                # MTC's estimates are monthly hours, so the estimate IS the
+                # project's monthly budget — unless someone set one by hand.
+                from tracker.services.project_budgets import apply_source_estimate
+                outcome = apply_source_estimate(project, est, source='qb_time')
+                stats['estimates'][outcome] = stats['estimates'].get(outcome, 0) + 1
             # display_number stays blank: agency projects are known by name,
             # and the name tier of attribution only reads number-less rows.
             mapping.display_number = ''

@@ -4990,6 +4990,9 @@ from tracker.models_agent_work import (  # noqa: F401, E402
     AgentWorkSession, AgentPresenceSample, AgentPresenceSwitch,
 )
 
+# Agency project budgets — monthly hours per project (see models_project_budgets.py)
+from tracker.models_project_budgets import ProjectBudget  # noqa: F401, E402
+
 
 
 

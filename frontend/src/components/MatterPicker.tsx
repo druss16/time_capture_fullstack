@@ -33,6 +33,8 @@ interface MatterOption {
   practice_area: string;
   last_worked: string | null;
   estimated_hours?: number | null;
+  /** This month's budget, when the project has one. */
+  monthly_hours?: number | null;
   due_date?: string | null;
 }
 
@@ -195,7 +197,8 @@ export const MatterPicker: React.FC<{
             const prev = data.options[i - 1];
             const startsRest = !o.last_worked && (i === 0 || prev?.last_worked);
             const facts = [
-              o.estimated_hours != null ? `est. ${o.estimated_hours}h` : null,
+              o.monthly_hours != null ? `${o.monthly_hours}h/mo`
+                : o.estimated_hours != null ? `est. ${o.estimated_hours}h` : null,
               o.due_date ? `due ${fmtMatterDate(o.due_date)}` : null,
               o.open_date && !o.due_date ? `opened ${fmtMatterDate(o.open_date)}` : null,
               o.responsible_attorney || null,

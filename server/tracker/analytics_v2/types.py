@@ -43,7 +43,7 @@ LensKey = Literal[
     "overview", "clients", "team", "distribution",
     # Focused lenses
     "pulse", "trust", "review", "profitability", "utilization", "wip",
-    "realization", "trends", "engagements",
+    "realization", "trends", "engagements", "projects",
 ]
 
 

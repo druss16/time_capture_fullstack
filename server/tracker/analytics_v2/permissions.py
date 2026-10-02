@@ -203,6 +203,13 @@ def authorize_lens(org: Organization, lens: str) -> None:
             upgrade_required=True,
         )
     
+    # The Projects lens exists for firms that work Client → Project. Hiding it
+    # from the nav is not a gate; this is.
+    if lens == "projects":
+        from tracker.services.projects import org_tracks_local_projects
+        if not org_tracks_local_projects(org):
+            raise PermissionDenied("The Projects view is for firms that track work by project.")
+
     # Executive-only lens on a Professional plan → blocked
     if lens in EXECUTIVE_ONLY_LENSES and not plan.startswith(("executive", "trial")):
         raise PermissionDenied(
@@ -400,6 +407,12 @@ def _all_lens_keys_for_plan(org: Organization) -> set[str]:
         # every plan, executive included. TL Wall is executive and has 334
         # engagements carrying budgets.
         base.update({"trends", "engagements"})
+    # Agencies: budget vs actual per project. Offered only where projects are
+    # how the firm organises its work — a CPA firm's legacy Project rows would
+    # make it an empty page.
+    from tracker.services.projects import org_tracks_local_projects
+    if org_tracks_local_projects(org):
+        base.add("projects")
     return base
 
 def firm_invoices_here(org) -> bool:

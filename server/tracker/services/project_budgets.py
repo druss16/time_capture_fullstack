@@ -193,3 +193,74 @@ def month_summary(org, month: date, *, client_ids=None) -> dict:
         'rows': rows,
         'clients': sorted(clients.values(), key=lambda c: c['client'].lower()),
     }
+
+
+# ============================================================================
+# Arbitrary windows (Analytics) — budgets prorated by calendar coverage
+# ============================================================================
+
+def months_in(start: date, end: date) -> list[date]:
+    out, m = [], month_start(start)
+    while m <= end:
+        out.append(m)
+        m = next_month(m)
+    return out
+
+
+def window_budget(org, start: date, end: date, projects) -> dict:
+    """
+    project_id -> (budget_hours, fee) for [start, end], prorated by calendar days.
+
+    A month budget covers its whole month, so a window holding ten of October's
+    thirty-one days holds 10/31 of October's budget. That makes "this month"
+    the full monthly budget, "last quarter" three of them, and a rolling
+    30-day window an honest blend of the two months it straddles — rather
+    than comparing a week of hours against a month of budget. Each month's
+    share is priced at the rate in force that month.
+    """
+    projects = list(projects)
+    client_of = {p.id: p.client_id for p in projects}
+    hours = defaultdict(lambda: ZERO)
+    fees = defaultdict(lambda: ZERO)
+    for m in months_in(start, end):
+        m_end = next_month(m) - timedelta(days=1)
+        covered = (min(end, m_end) - max(start, m)).days + 1
+        if covered <= 0:
+            continue
+        share = Decimal(covered) / Decimal((m_end - m).days + 1)
+        rates = fee_rates(org, set(client_of.values()), m)
+        for pid, row in budgets_in_effect(org, m, list(client_of)).items():
+            if row.monthly_hours > 0:
+                h = row.monthly_hours * share
+                hours[pid] += h
+                fees[pid] += h * rates.get(client_of[pid], ZERO)
+    q = Decimal('0.01')
+    return {pid: (hours[pid].quantize(q), fees[pid].quantize(q)) for pid in hours}
+
+
+def window_elapsed(start: date, end: date, today: date | None = None) -> float:
+    """Share of the window's days that have happened (1.0 once it is over)."""
+    today = today or timezone.localdate()
+    total = (end - start).days + 1
+    if today >= end:
+        return 1.0
+    if today < start:
+        return 0.0
+    return round(((today - start).days + 1) / total, 3)
+
+
+def window_minutes_by_project_user(org, start: date, end: date, project_ids=None) -> dict:
+    """(project_id, user_id) -> confirmed minutes in [start, end]."""
+    from tracker.services.billing_totals import committed_block_qs
+    from tracker.views_reports import _block_minutes
+
+    tz = timezone.get_current_timezone()
+    s = timezone.make_aware(datetime.combine(start, datetime.min.time()), tz)
+    e = timezone.make_aware(datetime.combine(end + timedelta(days=1), datetime.min.time()), tz)
+    qs = committed_block_qs(org, s, e, can_see_all=True).filter(project__isnull=False)
+    if project_ids is not None:
+        qs = qs.filter(project_id__in=list(project_ids))
+    out = defaultdict(int)
+    for b in qs:
+        out[(b.project_id, b.user_id)] += _block_minutes(b)
+    return dict(out)

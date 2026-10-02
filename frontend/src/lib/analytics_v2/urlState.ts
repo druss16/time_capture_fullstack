@@ -47,6 +47,9 @@ export const VIEW_OPTIONS: ViewOption[] = [
   { value: "team",         label: "Team",           description: "Capacity and contribution by person" },
   { value: "distribution", label: "Where time goes", description: "Time by client, project and category" },
   { value: "profitability", label: "Profitability", description: "Revenue, margin, labor cost" },
+  // Offered only to firms that work Client → Project (the backend decides via
+  // available_lenses), so it sits in the primary nav for exactly those firms.
+  { value: "projects",     label: "Projects",       description: "Budget vs hours used, by project" },
   { value: "trust",        label: "Trust",          description: "Can you believe the time data?",       secondary: true },
   { value: "review",       label: "Review",         description: "The numbers, and where they came from", secondary: true },
   { value: "utilization",  label: "Utilization",    description: "Billable share and capacity",           secondary: true },

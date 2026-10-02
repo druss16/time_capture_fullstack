@@ -13,7 +13,9 @@ export type LensKey =
   | "overview" | "clients" | "team" | "distribution"
   // Focused lenses
   | "pulse" | "trust" | "review" | "profitability" | "utilization" | "wip" | "realization" | "trends"
-  | "engagements";
+  | "engagements"
+  // Agencies: monthly project budgets vs hours used
+  | "projects";
 
 /** Dimensions the control bar can narrow the whole dashboard by. */
 export type FilterDim = "client" | "staff" | "service" | "engagement";

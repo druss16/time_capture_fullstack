@@ -33,6 +33,7 @@ def summarise(samples):
     driven_remote = 0
     idle_secs = idle_changes = 0
     idle_by_app = Counter()
+    unattended_s, unattended_by_app, unattended_devices = 0, Counter(), set()
     proc_devices, proc_seen, proc_busy = defaultdict(set), Counter(), Counter()
     log_devices, log_sessions = defaultdict(set), Counter()
 
@@ -53,6 +54,10 @@ def summarise(samples):
         idle_secs += s.idle_seconds
         idle_changes += s.idle_changes
         idle_by_app.update(s.idle_changes_by_app or {})
+        unattended_s += s.unattended_active_seconds
+        unattended_by_app.update(s.unattended_active_by_app or {})
+        if s.unattended_active_seconds:
+            unattended_devices.add(s.device_id)
         for label, p in (s.processes or {}).items():
             proc_devices[label].add(s.device_id)
             proc_seen[label] += p.get('seen_min', 0) / 60
@@ -76,6 +81,12 @@ def summarise(samples):
             'driven_device_hours_remote': driven_remote,
             'devices_with_driven_hours': len(driven),
             'top_sources': syn_by.most_common(10),
+        },
+        'unattended_active': {
+            'hours': round(unattended_s / 3600, 1),
+            'devices': len(unattended_devices),
+            'share_of_observed': round(unattended_s / (hours['observed'] * 3600), 4) if hours['observed'] else 0,
+            'top_apps': [(a, round(sec / 3600, 1)) for a, sec in unattended_by_app.most_common(10)],
         },
         'idle_activity': {
             'idle_hours': round(idle_secs / 3600, 1),
@@ -116,7 +127,8 @@ class Command(BaseCommand):
         for s in qs.select_related('org').only(
                 'device_id', 'org__name', 'seconds_observed', 'idle_seconds', 'remote_session',
                 'input_monitor', 'clicks_real', 'clicks_synthetic', 'synthetic_by',
-                'idle_changes', 'idle_changes_by_app', 'processes', 'local_sessions'):
+                'idle_changes', 'idle_changes_by_app', 'unattended_active_seconds',
+                'unattended_active_by_app', 'processes', 'local_sessions'):
             by_org[(s.org_id, s.org.name)].append(s)
 
         all_samples = [s for ss in by_org.values() for s in ss]
@@ -142,6 +154,9 @@ class Command(BaseCommand):
                               f"({c['driven_device_hours_remote']} of them remote)")
             if c['top_sources']:
                 self.stdout.write(f"    synthetic sources: {c['top_sources']}")
+            u = r['unattended_active']
+            self.stdout.write(f"  unattended-active (Mac): {u['hours']}h on {u['devices']} devices "
+                              f"({u['share_of_observed']:.1%} of observed); top {u['top_apps'][:5]}")
             self.stdout.write(f"  idle: {i['changes']} window changes in {i['idle_hours']}h idle "
                               f"({i['changes_per_idle_hour']}/idle-hour); top {i['top_apps'][:5]}")
             for label, p in r['agent_processes'].items():

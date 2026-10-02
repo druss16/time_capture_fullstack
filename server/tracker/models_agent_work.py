@@ -138,6 +138,10 @@ class AgentPresenceSample(models.Model):
     synthetic_by = models.JSONField(default=dict, blank=True)
     idle_changes = models.PositiveIntegerField(default=0)
     idle_changes_by_app = models.JSONField(default=dict, blank=True)
+    # macOS: seconds the tracker's idle clock called active while the
+    # hardware-only clock saw no physical input — mis-booked time, directly.
+    unattended_active_seconds = models.PositiveIntegerField(default=0)
+    unattended_active_by_app = models.JSONField(default=dict, blank=True)
     processes = models.JSONField(default=dict, blank=True)
     local_sessions = models.JSONField(default=dict, blank=True)
 

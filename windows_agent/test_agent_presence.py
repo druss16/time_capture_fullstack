@@ -34,6 +34,18 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(b["idle_changes_by_app"], {"chrome": 1})
         self.assertEqual((b["seconds_observed"], b["idle_seconds"]), (20, 10))
 
+    def test_unattended_active_needs_tracker_active_and_hardware_idle(self):
+        n = lambda idle, hid, t: self.c.note_foreground("Safari", "x", idle_s=idle, interval_s=10,
+                                                         now=HOUR + t, hid_idle_s=hid)
+        n(1, 2, 10)       # person working: both clocks fresh
+        n(3, 300, 20)     # tracker sees input, hardware untouched 5 min: software
+        n(5, 310, 30)
+        n(400, 400, 40)   # genuinely idle: tracker would not book it
+        n(2, None, 50)    # no HID clock (Windows): never counted
+        [b] = self.c.take_closed(now=HOUR + 3600)
+        self.assertEqual(b["unattended_active_seconds"], 20)
+        self.assertEqual(b["unattended_active_by_app"], {"safari": 20})
+
     def test_process_busy_minutes_from_cpu_delta(self):
         self.c.note_processes([(10, "claude_code", 5.0)], 60, now=HOUR + 60)
         self.c.note_processes([(10, "claude_code", 9.0)], 60, now=HOUR + 120)   # +4s: busy

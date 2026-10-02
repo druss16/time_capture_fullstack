@@ -37,6 +37,14 @@ permission:
   3. processes    known agent programs running, and how much CPU they burned.
   4. local logs   how many Claude Code / Codex sessions wrote to their local
                   logs (file mtimes only; contents are never opened).
+  5. unattended   macOS only, and needs NO permission: seconds the tracker's
+     active      idle clock (combined session state, which counts posted
+                  events) says "active" while the hardware-only HID clock says
+                  nobody has touched anything for IDLE_ACTIVITY_S. That is the
+                  mis-booked time itself, measured directly — and it works on
+                  the Macs where signal 1 cannot (no Input Monitoring).
+                  Unverified until fleet data: an automation tool that posts
+                  with a HID-state event source may move the HID clock too.
 
 Privacy: app/process NAMES and counts only. No window titles, no keystrokes,
 no click positions, no log contents ever leave the machine.
@@ -139,6 +147,8 @@ def _new_bucket(start: int) -> dict:
         "synthetic_by": {},      # Windows: foreground app at the click; macOS: sender
         "idle_changes": 0,
         "idle_changes_by_app": {},
+        "unattended_active_seconds": 0,
+        "unattended_active_by_app": {},
         "processes": {},         # label -> {seen_min, busy_min, cpu_s}
         "local_sessions": {},    # tool -> distinct session logs written
     }
@@ -176,11 +186,17 @@ class Collector:
 
     # ── signal 2: foreground changes while idle ──
     def note_foreground(self, app: str, title: str, idle_s: float, interval_s: float,
-                        now: float | None = None):
+                        now: float | None = None, hid_idle_s: float | None = None):
         fg = (app or "", title or "")
         with self._lock:
             b = self._bucket(now or time.time())
             b["seconds_observed"] += int(interval_s)
+            # The tracker would book this interval (recent input on its clock)
+            # but no physical input has happened in a while: software input.
+            if hid_idle_s is not None and idle_s < interval_s + 2 \
+                    and hid_idle_s >= IDLE_ACTIVITY_S:
+                b["unattended_active_seconds"] += int(interval_s)
+                _bump(b["unattended_active_by_app"], _proc_name(app), int(interval_s))
             if idle_s >= IDLE_ACTIVITY_S:
                 b["idle_seconds"] += int(interval_s)
                 if self._last_fg is not None and fg != self._last_fg:
@@ -442,6 +458,17 @@ def _start_mac_input_monitor(collector: Collector, log):
 # Pollers
 # ──────────────────────────────────────────────
 
+def mac_hid_idle_seconds() -> float:
+    """Seconds since the last PHYSICAL keyboard/mouse/scroll event, on the same
+    event types the Mac tracker's mouse_idle_seconds() reads — but from the
+    HID system state, which posted (synthetic) events are not expected to
+    update. Needs no permission."""
+    import Quartz as Q
+    st = Q.kCGEventSourceStateHIDSystemState
+    return float(min(Q.CGEventSourceSecondsSinceLastEventType(st, t)
+                     for t in (Q.kCGEventMouseMoved, Q.kCGEventKeyDown, Q.kCGEventScrollWheel)))
+
+
 def sample_agent_processes():
     """[(pid, label, cpu_seconds_total)] for running known agents."""
     import psutil
@@ -492,12 +519,13 @@ def recent_session_logs(home: str, since: float):
     return found
 
 
-def start(get_foreground, get_idle, post, log, enabled=True):
+def start(get_foreground, get_idle, post, log, enabled=True, get_hid_idle=None):
     """Start measuring. Returns the Collector, or None if disabled.
 
     get_foreground() -> (app_or_exe, title) | None
     get_idle()       -> seconds since last input, as the tracker sees it
     post(payload)    -> raises on failure
+    get_hid_idle()   -> seconds since last PHYSICAL input (macOS), optional
     """
     if not enabled:
         log("[PRESENCE] disabled by config")
@@ -523,7 +551,9 @@ def start(get_foreground, get_idle, post, log, enabled=True):
                 if now - last["fg"] >= FOREGROUND_POLL_S:
                     fg = get_foreground()
                     if fg:
-                        collector.note_foreground(fg[0], fg[1], get_idle(), FOREGROUND_POLL_S, now)
+                        collector.note_foreground(
+                            fg[0], fg[1], get_idle(), FOREGROUND_POLL_S, now,
+                            hid_idle_s=get_hid_idle() if get_hid_idle else None)
                     last["fg"] = now
                 if now - last["proc"] >= PROCESS_POLL_S:
                     collector.note_processes(sample_agent_processes(), PROCESS_POLL_S, now)

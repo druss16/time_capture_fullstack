@@ -4846,6 +4846,10 @@ def run_agent():
                 f"{API_BASE}/agent-presence/", payload, api_headers(os_user, hostname), timeout=10),
             log=log,
             enabled=str(_get("agent_presence_enabled", True)).lower() not in ("0", "false", "no"),
+            # Physical-only idle clock: lets the module measure time this
+            # tracker books as active while nobody touched the Mac. No
+            # permission needed, unlike the click tap.
+            get_hid_idle=agent_presence.mac_hid_idle_seconds,
         )
     except Exception as e:
         log(f"[PRESENCE] not started: {e}")

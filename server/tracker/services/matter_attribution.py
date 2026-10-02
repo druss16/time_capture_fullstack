@@ -408,6 +408,20 @@ def may_correct_client(categorized_by) -> bool:
     return (categorized_by or '') not in HUMAN_SET_CLIENT
 
 
+def _build_convention_index(org, options_by_client):
+    """The naming-convention lookup for this firm (clients, codes, live projects)."""
+    from tracker.models import Client
+    from tracker.models_task_type_sets import ExternalClientMapping
+    from tracker.services.naming_convention import build_index
+    clients = Client.objects.filter(org=org, is_active=True).values_list('id', 'name', 'code', 'aliases')
+    extra = (ExternalClientMapping.objects
+             .filter(integration__organization=org).exclude(external_code='')
+             .values_list('client_id', 'external_code'))
+    projects = [(o.project_id, o.client_id, o.name)
+                for opts in options_by_client.values() for o in opts]
+    return build_index(clients, extra, projects)
+
+
 def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dict:
     """
     Fill Block.project for recent blocks that have none.
@@ -457,7 +471,13 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
 
     # Temporal inference is opt-in per org, reusing the flag that already gates
     # Stage Sandwich for clients — the same trade, and the same firms who want it.
-    allow_temporal = bool(getattr(org, 'sandwich_correlation_enabled', False))
+    # Firms that keep their own projects get it regardless: every hour belongs to
+    # a project there, and the Slack/email between two files of the same project
+    # is that project. It still only fills a block whose client already agrees.
+    from tracker.services.projects import org_tracks_local_projects
+    tracks_local = org_tracks_local_projects(org)
+    allow_temporal = bool(getattr(org, 'sandwich_correlation_enabled', False)) or tracks_local
+    convention = _build_convention_index(org, options_by_client) if tracks_local else None
     neighbours_by_user = defaultdict(list)
     if allow_temporal:
         for user_id, b_start, b_end, project_id in (
@@ -476,8 +496,12 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         Block.objects
         .filter(org=org, project__isnull=True, start__gte=since)
         .exclude(classification_state='suppressed')
+        # Every field the loop reads must be here: a deferred field costs one
+        # query PER BLOCK on access. categorized_by (may_correct_client) and
+        # app_name (is_browser_block) were missing — see deferred-field N+1.
         .only('id', 'user_id', 'client_id', 'file_path', 'title',
-              'window_title', 'url', 'hints', 'start', 'end')
+              'window_title', 'url', 'hints', 'start', 'end',
+              'categorized_by', 'app_name')
         .order_by('-start')
     )
     if limit:
@@ -485,8 +509,32 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
 
     updates = defaultdict(list)
     client_fixes = defaultdict(list)
+    stats['by_convention'] = 0
     for block in qs:
         stats['scanned'] += 1
+
+        # The firm's own naming convention names client AND project outright
+        # (services/naming_convention.py). Knowledge, not inference: it may set
+        # a missing client or correct a machine-guessed one, like a Clio anchor.
+        if convention:
+            from tracker.services.naming_convention import resolve_text
+            hit = resolve_text([('file_path', block.file_path), ('window_title', block.window_title),
+                                ('title', block.title)], convention)
+            if hit:
+                want_client, conv_project, _field = hit
+                if block.client_id != want_client:
+                    if block.client_id and not may_correct_client(block.categorized_by):
+                        stats['off_client'] += 1
+                        continue
+                    client_fixes[want_client].append(block.id)
+                if conv_project:
+                    updates[conv_project].append(block.id)
+                    stats['by_convention'] += 1
+                    continue
+                # Client only: let the other tiers find the project, now
+                # scoped to the client the file named.
+                block.client_id = want_client
+
         project_id, tier, _reason = attribute_block(
             block, index, sole_matter_by_client, project_by_external_id,
             folder_index=folder_index,
@@ -507,6 +555,12 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         if tier != 'clio_anchor':
             want = live_project_client.get(project_id)
             if want is None or (block.client_id and block.client_id != want):
+                stats['off_client'] += 1
+                continue
+            # A neighbour may carry a project across a gap only within the
+            # client the block already has — a YouTube tab between two Acme
+            # files must not become Acme work.
+            if tier == 'temporal' and block.client_id != want:
                 stats['off_client'] += 1
                 continue
         stats[f'by_{tier}'] += 1

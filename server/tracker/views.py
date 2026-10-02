@@ -2160,7 +2160,9 @@ def infer_task_for_block(b) -> str:
         path = ""
 
     # Meetings
-    if "meet.google.com" in host or "zoom.us" in host or "teams.microsoft.com" in host:
+    from tracker.utils.meeting_platforms import platform_for_host
+    if "meet.google.com" in host or "zoom.us" in host or "teams.microsoft.com" in host \
+            or platform_for_host(host):
         return "Meeting"
 
     # Email/Communication
@@ -4732,6 +4734,7 @@ def today_time(request):
     # client" / "No Client" rows).
     from tracker.views_reports import is_pending_review_block
     from tracker.views_block_evidence import why_summary
+    from tracker.services.calendar_meetings import is_calendar_block
     proposed_inline = []
     _pending = Block.objects.filter(
         user=user, day__gte=start_date, day__lte=end_date,
@@ -4773,6 +4776,11 @@ def today_time(request):
             # the row offers these as one-tap picks instead of a green guess.
             'why_candidates':           _why_cands,
             'learning':                 _learning,
+            # 'calendar' = a meeting on the calendar with no captured activity
+            # (services.calendar_meetings). The row badges it and offers Dismiss.
+            'source':                   'calendar' if is_calendar_block(_b) else 'agent',
+            'start':                    _b.start.isoformat() if _b.start else None,
+            'end':                      _b.end.isoformat() if _b.end else None,
         })
 
     # ── Mismatch flags: title clearly names a DIFFERENT client than booked ──

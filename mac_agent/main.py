@@ -727,9 +727,14 @@ MEETING_BUNDLES = set(
 MEETING_DOMAINS = {
     "zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com",
     "webex.com", "gotomeeting.com", "bluejeans.com", "whereby.com", "around.co",
+    # Kept in step with server/tracker/utils/meeting_platforms.py.
+    "meet.goto.com", "app.goto.com", "v.ringcentral.com", "app.chime.aws",
+    "meet.jit.si", "doxy.me", "telehealth.kareo.com",
+    "video.simplepractice.com", "vsee.com", "vsee.me", "teladoc.com",
 }
 
-MEETING_KEYWORDS = {"zoom meeting", "teams meeting", "google meet", "webex meeting"}
+MEETING_KEYWORDS = {"zoom meeting", "teams meeting", "google meet", "webex meeting",
+                    "telehealth", "video visit"}
 
 # --- CPA-Specific Tools & Categories (COMPREHENSIVE VERSION) ---
 CPA_TOOL_DETECTION = {
@@ -2638,6 +2643,11 @@ def is_in_meeting(bundle_id: Optional[str], url: Optional[str],
                 "webex", "webex meeting",
                 # Generic
                 "- call", "video call", "screen sharing",
+                # Telehealth + web platforms (server/tracker/utils/meeting_platforms.py)
+                "telehealth", "video visit", "virtual visit", "doxy.me",
+                "simplepractice", "teladoc", "vsee", "whereby", "jitsi",
+                "gotomeeting", "goto meeting", "bluejeans", "ringcentral video",
+                "amazon chime", "huddle",
             ]
             
             if any(pattern in title_lower for pattern in meeting_title_patterns):

@@ -463,7 +463,12 @@ def run_second_pass(org_id, days=14, dry_run=True):
     pile = Block.objects.filter(
         org_id=org_id, deleted_at__isnull=True, start__date__gte=since,
         classification_state__in=['captured', 'proposed'], client_id__isnull=True
-    ).exclude(minutes__lt=2)
+    ).exclude(minutes__lt=2).exclude(
+        # Calendar-born meeting proposals (services.calendar_meetings) have no
+        # window to read; second-pass would re-file them as "unrecognized" or
+        # personal and erase the "who was this call with?" question.
+        device_id='calendar',
+    )
 
     summary = {'commit_nb': 0, 'propose_high': 0, 'propose_needs': 0, 'skip': 0,
                'billed': 0, 'llm_web_check': 0, 'llm_personal': 0, 'llm_budget_skipped': 0}

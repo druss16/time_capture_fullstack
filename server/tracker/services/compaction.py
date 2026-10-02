@@ -1067,7 +1067,11 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     # (app=Qbw.Exe, client_id=151). The content_id distinction would be
     # lost — exactly the bug that caused block 11364 (St. James + Sacred
     # Heart + dialog events all merged into one Account Temps block).
-    existing_blocks = list(Block.objects.filter(user=user, day=day).order_by("start"))
+    # Calendar-born meeting proposals are not agent captures: the macOS
+    # Calendar app shares their app_name, and a merge would glue real raw
+    # events onto an unconfirmed calendar row.
+    existing_blocks = list(Block.objects.filter(user=user, day=day)
+                           .exclude(device_id='calendar').order_by("start"))
 
     existing_by_app_client = {}
     for b in existing_blocks:
@@ -1503,6 +1507,13 @@ def _create_block(block_data: Dict, user, org, day: date_type) -> Optional[Block
             is_work_pattern = True
             break
 
+    # Every video/telehealth platform on the shared list (utils.meeting_platforms)
+    # — a call is never idle, however still the mouse is.
+    if not is_work_pattern:
+        from tracker.utils.meeting_platforms import is_meeting_activity
+        if is_meeting_activity(app_name, window_title, url):
+            is_work_pattern = True
+
     if not is_work_pattern:
         for app in NEVER_IDLE_APPS:
             if app in app_name:
@@ -1658,7 +1669,7 @@ def auto_categorize_existing_blocks(user, day: date_type = None) -> Dict[str, in
     if day is None:
         day = timezone.localdate()
 
-    blocks = Block.objects.filter(user=user, day=day, is_categorized=False)
+    blocks = Block.objects.filter(user=user, day=day, is_categorized=False).exclude(device_id='calendar')
     stats = {'checked': 0, 'categorized': 0}
 
     for block in blocks:
@@ -1697,7 +1708,8 @@ def cleanup_duplicate_blocks(user, day: date_type = None, dry_run: bool = True) 
     if day is None:
         day = timezone.localdate()
 
-    blocks = list(Block.objects.filter(user=user, day=day).order_by('start'))
+    blocks = list(Block.objects.filter(user=user, day=day)
+                  .exclude(device_id='calendar').order_by('start'))
 
     to_delete = []
     checked = set()

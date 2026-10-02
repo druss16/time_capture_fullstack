@@ -532,6 +532,11 @@ _MEETING_PLATFORMS = (
     ('teams', 'Teams'), ('zoom', 'Zoom'), ('webex', 'Webex'),
     ('gotomeeting', 'GoToMeeting'), ('ringcentral', 'RingCentral'),
     ('google meet', 'Google Meet'), ('meet.google', 'Google Meet'),
+    # Kept in step with utils.meeting_platforms (telehealth + web platforms).
+    ('telehealth', 'Telehealth'), ('doxy.me', 'Doxy.me'),
+    ('simplepractice', 'SimplePractice'), ('whereby', 'Whereby'),
+    ('bluejeans', 'BlueJeans'), ('vsee', 'VSee'), ('teladoc', 'Teladoc'),
+    ('chime', 'Amazon Chime'), ('jitsi', 'Jitsi'), ('huddle', 'Huddle'),
 )
 # Vocabulary a meeting window uses to describe ITSELF. A title made only of
 # these says nothing about what the meeting was for.

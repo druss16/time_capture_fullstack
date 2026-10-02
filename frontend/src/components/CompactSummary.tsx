@@ -18,7 +18,7 @@
  *   every triage row leads with its minutes.
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical } from "lucide-react";
+import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
 import { MovePopover, suggestAliasFromTitle, type ClientOption, type ProposedInline } from "@/components/CategorySummary";
@@ -166,6 +166,17 @@ export default function CompactSummary({
       onRefresh();
     } catch { onRevertRows([b.block_id]); showToast("Couldn’t update this entry", "error"); }
   }, [onConfirmRows, onRevertRows, onRefresh, showToast]);
+
+  // A calendar-born row ("From calendar") the user says didn't happen. The
+  // server soft-deletes it and never proposes that event again.
+  const dismissCalendar = useCallback(async (b: ProposedInline) => {
+    onHideRows([b.block_id]);
+    try {
+      await safeFetchJson(`${API_BASE}/blocks/${b.block_id}/delete/`, { method: "DELETE" });
+      showToast("Dismissed — it won’t be suggested again", "success");
+      onRefresh();
+    } catch { onRevertRows([b.block_id]); showToast("Couldn’t dismiss this entry", "error"); }
+  }, [onHideRows, onRevertRows, onRefresh, showToast]);
 
   // "Always file titles like this here": confirm this block AND turn it into a
   // hard, firm-wide rule (a client alias derived from the title) so future
@@ -671,6 +682,7 @@ export default function CompactSummary({
                   onAlwaysFile={(cid) => alwaysFile(b, cid)}
                   onAssigned={onRefresh}
                   onNotBillable={() => acceptTo(b, null)}
+                  onDismiss={b.source === "calendar" ? () => dismissCalendar(b) : undefined}
                   onPick={(anchor) => openMove(anchor, [b.block_id], null, b.proposed_category || catList[0], "Pick a client", null, true, suggestAliasFromTitle(b.window_title || ""))}
                   // "Change" means the shown suggestion was wrong, so open on a
                   // neutral No client · Non-Billable default — never pre-fill an
@@ -742,9 +754,11 @@ type WhyData = {
 
 /** Pending: accept the green suggested client in one tap (with the contextual
  *  reason from /why/), or pick a client / mark not billable when there's no guess. */
-function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, onChange, onAssigned }: {
+function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, onChange, onAssigned, onDismiss }: {
   b: ProposedInline;
   busy: boolean;
+  /** Calendar-born rows only: "this meeting didn't happen". */
+  onDismiss?: (() => void) | undefined;
   /** The evidence panel can assign a client on its own. Without this the row
    *  would sit there looking unchanged after the write landed. */
   onAssigned: () => void;
@@ -798,7 +812,12 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
       <span className={CHIP}>{fmtMin(b.minutes || 0)}</span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          {sourceLabel(b.app_name) && (
+          {b.source === "calendar" ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-sky-700 dark:text-sky-300"
+              title="A meeting on your calendar with no computer activity captured — confirm it to count the time">
+              <CalendarDays className="h-3 w-3" /> From calendar
+            </span>
+          ) : sourceLabel(b.app_name) && (
             <span className="shrink-0 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 font-sans text-[10px] font-medium text-muted-foreground"
               title={`Captured from ${b.app_name}`}>
               {sourceLabel(b.app_name)}
@@ -865,13 +884,14 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
                 </span>
               </span>
             )}
-            <button
+            {/* A meeting title ("Weekly sync") is no basis for a firm-wide filing rule. */}
+            {b.source !== "calendar" && <button
               onClick={() => onAlwaysFile(guessId)}
               disabled={busy}
               title={`Make a firm-wide rule: always file titles like this under ${guessName}`}
               className="inline-flex items-center gap-1 font-sans text-[11px] font-medium text-primary/75 transition-colors hover:text-primary hover:underline disabled:opacity-50">
               <Check className="h-3 w-3" /> Always file titles like this here
-            </button>
+            </button>}
           </div>
         )}
       </div>
@@ -894,6 +914,12 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
             </button>
             <button onClick={onNotBillable} disabled={busy} className={PILL_GHOST}>Not billable</button>
           </>
+        )}
+        {onDismiss && (
+          <button onClick={onDismiss} disabled={busy} className={PILL_GHOST}
+            title="This meeting didn't happen (or isn't time to record) — remove it">
+            <X className="h-3 w-3" /> Dismiss
+          </button>
         )}
       </div>
     </div>

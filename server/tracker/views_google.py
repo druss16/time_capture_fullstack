@@ -226,7 +226,13 @@ def _status(request, provider):
     except UserIntegration.DoesNotExist:
         return Response({'connected': False, 'configured': _configured()})
     org_disabled = _is_mail(provider) and _org_mail_disabled(integration.org)
+    extra = {}
+    if not _is_mail(provider):
+        # Read-only view of the org's calendar gate (see views_calendar).
+        extra['calendar_classification_enabled'] = bool(
+            getattr(integration.org, 'calendar_classification_enabled', False))
     return Response({
+        **extra,
         'connected': integration.is_connected and not org_disabled,
         'configured': _configured(),
         'org_disabled': org_disabled,

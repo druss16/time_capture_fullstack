@@ -190,6 +190,10 @@ def microsoft_calendar_status(request):
         'last_synced_at': integration.last_synced_at.isoformat() if integration.last_synced_at else None,
         'last_sync_error': integration.last_sync_error,
         'health': health_payload(integration),
+        # Read-only: whether the org lets the calendar shape time (Stage 6 +
+        # proposed off-computer meetings). Flipped by MavOps, never here.
+        'calendar_classification_enabled': bool(
+            getattr(integration.org, 'calendar_classification_enabled', False)),
     })
 
 

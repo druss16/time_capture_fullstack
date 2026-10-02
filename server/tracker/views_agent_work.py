@@ -297,6 +297,7 @@ def agent_presence_report(request):
                 idle_changes_by_app=_count_map(b.get('idle_changes_by_app')),
                 unattended_active_seconds=min(_int(b.get('unattended_active_seconds')), 3600),
                 unattended_active_by_app=_count_map(b.get('unattended_active_by_app')),
+                unattended_by_cause=_count_map(b.get('unattended_by_cause')),
                 processes=_process_map(b.get('processes')),
                 local_sessions=_count_map(b.get('local_sessions')),
             ))

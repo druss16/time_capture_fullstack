@@ -129,6 +129,7 @@ class AgentPresenceTest(TestCase):
              'clicks_real': 300, 'clicks_synthetic': 40, 'synthetic_by': {'pad.robot': 40},
              'idle_changes': 12, 'idle_changes_by_app': {'chrome': 12},
              'unattended_active_seconds': 900, 'unattended_active_by_app': {'safari': 900},
+             'unattended_by_cause': {'remote_control': 540, 'agent_busy': 180, 'unexplained': 180},
              'processes': {'power_automate': {'seen_min': 60, 'busy_min': 45, 'cpu_s': 300.5}},
              'local_sessions': {'claude_code': 2}}
         b.update(kw)
@@ -165,4 +166,7 @@ class AgentPresenceTest(TestCase):
         self.assertEqual(fleet['agent_processes']['power_automate']['busy_hours'], 0.8)
         self.assertEqual(fleet['unattended_active']['hours'], 0.2)
         self.assertEqual(fleet['unattended_active']['top_apps'], [['safari', 0.2]])
+        # Remote control is a person, not an agent: only agent_busy + unexplained count.
+        self.assertEqual(fleet['unattended_active']['candidate_agent_hours'], 0.1)
+        self.assertEqual(fleet['unattended_active']['by_cause_hours']['remote_control'], 0.1)
         call_command('agent_presence_summary', '--days', '1', stdout=StringIO())

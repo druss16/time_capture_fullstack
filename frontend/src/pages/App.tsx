@@ -44,6 +44,7 @@ const Devices = lazyWithRetry(() => import("./Devices"));
 const Login = lazyWithRetry(() => import("./Login"));
 const NotFound = lazyWithRetry(() => import("./NotFound"));
 const BillingPage = lazyWithRetry(() => import("./BillingPage"));
+const BudgetsPage = lazyWithRetry(() => import("./BudgetsPage"));
 const WhiteGloveOnboarding = lazyWithRetry(() => import("./settings/WhiteGloveOnboarding"));
 const Home = lazyWithRetry(() => import("./Home"));
 const RequestAccess = lazyWithRetry(() => import("./RequestAccess"));
@@ -268,6 +269,7 @@ export default function App() {
                 <Route path="/reports/ai-agents" element={<MaybeProtected><AppLayout><ReportsAIAgents /></AppLayout></MaybeProtected>} />
                 <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
                 <Route path="/fees" element={<MaybeProtected><AppLayout><BillingPage section="fees" /></AppLayout></MaybeProtected>} />
+                <Route path="/budgets" element={<MaybeProtected><AppLayout><BudgetsPage /></AppLayout></MaybeProtected>} />
                 {/* /billing was Set Fees · Client Billing · Invoices. Only Set Fees
                     survived, so the section became the item. Bookmarks and any
                     ?tab= link land on it rather than a 404. */}

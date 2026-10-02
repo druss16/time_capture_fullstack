@@ -19,6 +19,7 @@ import {
   Download,
   BarChart2,
   PieChart,
+  Target,
 } from 'lucide-react';
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -34,6 +35,8 @@ interface UserInfo {
   org_name: string | null;
   is_authenticated: boolean;
   mdm_managed?: boolean;
+  /** Firm works Client → Project in TimeTracker (agencies). */
+  local_projects?: boolean;
 }
 
 export default function Navigation() {
@@ -76,6 +79,8 @@ export default function Navigation() {
   // unchanged from when the item read "Billing" — widening it to managers (who
   // the fee-basis endpoint does allow) is a separate call.
   const canAccessFees      = ['owner', 'admin'].includes(userRole || '');
+  // Hours vs monthly project budget — only for firms that budget by project.
+  const canAccessBudgets   = canAccessFees && !!userInfo?.local_projects;
   const mdmManaged = userInfo?.mdm_managed || false;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -108,6 +113,7 @@ export default function Navigation() {
     { path: '/daily',     label: 'Daily Review', icon: Calendar,  show: true                },
     { path: '/timesheet', label: 'My Week',      icon: Clock,     show: true                },
     { path: '/fees',      label: 'Fees',         icon: DollarSign, show: canAccessFees      },
+    { path: '/budgets',   label: 'Budgets',      icon: Target,    show: canAccessBudgets    },
     { path: '/reports',   label: 'Reports',      icon: PieChart,  show: true                },
     { path: '/analytics', label: 'Analytics',    icon: BarChart2, show: canAccessAnalytics  },
   ].filter(item => item.show);

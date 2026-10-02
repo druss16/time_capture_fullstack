@@ -58,6 +58,15 @@ app.conf.beat_schedule = {
         'options': {'expires': 3000},
     },
 
+    # Hourly: pull every connected firm's QuickBooks Time customers, projects
+    # and estimates. QuickBooks Time sends no jobcode webhooks, so for these
+    # firms this sweep is how a new project becomes selectable.
+    'sync-qb-time-orgs-hourly': {
+        'task': 'tracker.sync_all_qb_time_orgs',
+        'schedule': crontab(minute=35),
+        'options': {'expires': 3000},
+    },
+
     # Every 10 minutes: give freshly-compacted blocks their matter.
     # Attribution used to run ONLY at the end of a Clio sync, so a block's
     # matter was decided on the sync's cadence rather than the block's — work

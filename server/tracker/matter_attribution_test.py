@@ -209,17 +209,21 @@ if _ok:
     check("too-short remainder rejected", name_phrase('Ford SEO', 'Ford') == '')
     check("bare year rejected", name_phrase('2026', 'Ford') == '')
 
-    def _opt(pid, cid, name, mapped=False):
-        return ProjectOption(project_id=pid, client_id=cid, name=name, mapped=mapped)
+    def _opt(pid, cid, name, mapped=False, number=''):
+        return ProjectOption(project_id=pid, client_id=cid, name=name, mapped=mapped,
+                             display_number=number)
 
     opts = {
         10: [_opt(101, 10, 'Ford - Spring Launch'), _opt(102, 10, 'Social'),
-             _opt(103, 10, 'Social Ads'), _opt(104, 10, '00999-Mirrored', mapped=True)],
+             _opt(103, 10, 'Social Ads'), _opt(104, 10, '00999-Mirrored', mapped=True, number='00999'),
+             _opt(105, 10, 'Dealer Event', mapped=True)],
         20: [_opt(201, 20, 'Spring Launch')],
     }
     nidx = build_name_index(opts, {10: 'Ford', 20: 'Chevy'})
-    check("mirrored matters are not name-indexed (they have numbers)",
+    check("numbered matters are not name-indexed (they match by number)",
           all(pid != 104 for pid in nidx[10].values()))
+    check("a mirror known only by name (QuickBooks Time) IS name-indexed",
+          nidx[10].get('dealer event') == 105)
     check("same name at two clients stays per-client",
           nidx[10]['spring launch'] == 101 and nidx[20]['spring launch'] == 201)
     check("file named for the project matches",

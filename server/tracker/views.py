@@ -6669,9 +6669,16 @@ def list_projects(request):
     if client_id:
         qs = qs.filter(client_id=client_id)
 
-    minutes = {}
+    minutes, synced = {}, {}
     if include_archived:
         from django.db.models import Sum
+        from tracker.models_task_type_sets import ExternalMatterMapping
+        # A synced project's name and status belong to its source; the list
+        # says so, so nobody renames one here only to see the sync revert it.
+        synced = {
+            m.project_id: m for m in ExternalMatterMapping.objects
+            .filter(project_id__in=qs.values('id')).select_related('integration')
+        }
         minutes = dict(
             Block.objects
             .filter(org=org, project_id__in=qs.values('id'), deleted_at__isnull=True)
@@ -6686,7 +6693,12 @@ def list_projects(request):
         'client_id': p.client_id,
         'client_name': p.client.name,
         'is_active': p.is_active,
-        **({'hours': round((minutes.get(p.id) or 0) / 60, 1)} if include_archived else {}),
+        **({
+            'hours': round((minutes.get(p.id) or 0) / 60, 1),
+            'source': synced[p.id].integration.provider if p.id in synced else 'local',
+            'estimated_hours': (float(synced[p.id].estimated_hours)
+                                if p.id in synced and synced[p.id].estimated_hours is not None else None),
+        } if include_archived else {}),
     } for p in qs.order_by('client__name', 'name')])
 
 
@@ -7282,6 +7294,9 @@ def block_matter_options(request, block_id):
             'open_date': o.open_date.isoformat() if o.open_date else None,
             'responsible_attorney': o.responsible_attorney,
             'practice_area': o.practice_area,
+            'source': o.provider or 'local',
+            'estimated_hours': float(o.estimated_hours) if o.estimated_hours is not None else None,
+            'due_date': o.due_date.isoformat() if o.due_date else None,
             'last_worked': (last_worked[o.project_id].isoformat()
                             if last_worked.get(o.project_id) else None),
         }

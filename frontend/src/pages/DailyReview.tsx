@@ -243,7 +243,11 @@ const StatCell = ({
 //
 // Only lists blocks whose client HAS matters to choose between — a client with
 // none is not a task, and including them would make this a queue people skip.
-const MatterLane = ({ date, range, onChanged }: { date: string; range: ViewRange; onChanged: () => void }) => {
+const MatterLane = ({ date, range, onChanged, onQueue }: {
+  date: string; range: ViewRange; onChanged: () => void;
+  /** Reports what is waiting here, so the page headline counts it too. */
+  onQueue?: (count: number, minutes: number) => void;
+}) => {
   const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -263,6 +267,7 @@ const MatterLane = ({ date, range, onChanged }: { date: string; range: ViewRange
   }, [date, range]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { onQueue?.(rows.length, total); }, [rows.length, total, onQueue]);
 
   if (rows.length === 0) return null;
 
@@ -840,18 +845,25 @@ export default function DailyReview() {
     },
     [timeSummary, proposedInline, mismatchBlocks, ignoredMismatch, splitCandidates, ambiguousGroups, hiddenIds, optimisticConfirms],
   );
-  const needsYouCount = lanes.needsYou.count;
+  // Time with a client but no matter / project. For a firm that bills by
+  // project it is not sorted yet, so the headline must not say "all caught up"
+  // above an amber lane of it. Its minutes are already inside the client totals
+  // (it is committed time), so they move from sorted to needs-you, never added.
+  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0 });
+  const onProjectQueue = useCallback((count: number, minutes: number) =>
+    setProjectQueue((q) => (q.count === count && q.minutes === minutes ? q : { count, minutes })), []);
+  const needsYouCount = lanes.needsYou.count + projectQueue.count;
   const autoFiled = lanes.certain.minutes > 0;
 
   // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
   const totalMin = Math.round(totalHours * 60);
-  const needsMin = lanes.needsYou.minutes;
+  const needsMin = lanes.needsYou.minutes + projectQueue.minutes;
   const sortedMin = Math.max(0, totalMin - needsMin);
   // 100% is reserved for a truly-clear day (nothing in "Needs you"). While
   // anything remains, never round up to 100 — cap at 99 so 1m left still reads
   // 99%, not a misleading "100% sorted".
   const sortedPct =
-    lanes.needsYou.count === 0
+    needsYouCount === 0
       ? 100
       : totalMin > 0
         ? Math.min(99, Math.round((sortedMin / totalMin) * 100))
@@ -1118,7 +1130,7 @@ export default function DailyReview() {
               </div>
             )}
           </div>
-          <MatterLane date={date} range={range} onChanged={scheduleRowRefresh} />
+          <MatterLane date={date} range={range} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}

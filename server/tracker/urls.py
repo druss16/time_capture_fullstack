@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from django.views.decorators.csrf import csrf_exempt
 from . import views
 from .integrations.clio import views as clio_views
+from .integrations.qb_time import views as qb_time_views
 from . import views_fee_basis
 from . import views_week_coverage
 from . import views_day_review
@@ -320,6 +321,10 @@ urlpatterns = [
     path('integrations/clio/status/', clio_views.clio_status, name='clio-status'),
     path('integrations/clio/push-trigger/', clio_views.clio_push_trigger, name='clio-push-trigger'),
     path('integrations/clio/disconnect/', clio_views.clio_disconnect, name='clio-disconnect'),
+    path('integrations/qb_time/connect/', qb_time_views.qb_time_connect, name='qb-time-connect'),
+    path('integrations/qb_time/callback/', qb_time_views.qb_time_callback, name='qb-time-callback'),
+    path('integrations/qb_time/sync/', qb_time_views.qb_time_sync, name='qb-time-sync'),
+    path('integrations/qb_time/disconnect/', qb_time_views.qb_time_disconnect, name='qb-time-disconnect'),
     # Unauthenticated by necessity — Clio calls it. The token selects which
     # subscription's secret to verify the HMAC against; the HMAC authorizes.
     path('integrations/clio/webhook/<str:url_token>/', clio_views.clio_webhook,

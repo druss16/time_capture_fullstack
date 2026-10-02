@@ -291,6 +291,11 @@ class ExternalMatterMapping(models.Model):
     """
     Maps an internal Project to an external system's matter/job identifier.
 
+    Also mirrors QuickBooks Time project jobcodes for agencies (Customer →
+    Project), where `display_number` is left blank — those projects are known
+    by name, not number — and `estimated_hours`/`due_date` carry the project
+    estimate.
+
     This exists because legal practice management is matter-centric in a way
     accounting systems are not: a Clio TimeEntry is rejected without a matter
     id, so client-level attribution is not enough to push time. Every Clio
@@ -353,6 +358,20 @@ class ExternalMatterMapping(models.Model):
     practice_area = models.CharField(
         max_length=128, blank=True, default='',
         help_text='Clio practice area, when the firm uses them.',
+    )
+
+    # The source's own estimate for the job, when it keeps one (QuickBooks
+    # Time project estimates). Recorded as the source said it; what a budget
+    # does with it is decided elsewhere, so a change to budgeting rules never
+    # needs a re-sync to recover the original number.
+    estimated_hours = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+        help_text='Estimate from the source system (e.g. QuickBooks Time). '
+                  'Blank when the source keeps none.',
+    )
+    due_date = models.DateField(
+        null=True, blank=True,
+        help_text='Due date from the source system, when it keeps one.',
     )
 
     last_synced_at = models.DateTimeField(null=True, blank=True)

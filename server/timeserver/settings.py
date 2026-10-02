@@ -413,6 +413,12 @@ CLIO_REDIRECT_URI = os.environ.get('CLIO_REDIRECT_URI', default='')
 # arrive on a different host than the OAuth redirect.
 CLIO_WEBHOOK_BASE_URL = os.environ.get('CLIO_WEBHOOK_BASE_URL', default='')
 
+# QuickBooks Time (formerly TSheets). Its own OAuth app, separate from QBO's:
+# register at the QuickBooks Time developer portal (Feature Add-ons → API).
+QBTIME_CLIENT_ID = os.environ.get('QBTIME_CLIENT_ID', default='')
+QBTIME_CLIENT_SECRET = os.environ.get('QBTIME_CLIENT_SECRET', default='')
+QBTIME_REDIRECT_URI = os.environ.get('QBTIME_REDIRECT_URI', default='')
+
 # Microsoft Graph (Calendar Integration)
 MS_GRAPH_CLIENT_ID = os.environ.get('MS_GRAPH_CLIENT_ID', '')
 MS_GRAPH_CLIENT_SECRET = os.environ.get('MS_GRAPH_CLIENT_SECRET', '')

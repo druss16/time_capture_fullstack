@@ -303,3 +303,82 @@ def agent_presence_report(request):
             ))
         saved += 1
     return Response({'saved': saved})
+
+
+# ──────────────────────────────────────────────
+# Reports → AI agent activity (firm owners; hidden until MavOps enables it)
+# ──────────────────────────────────────────────
+
+def _owner_report_org(request):
+    """(org, error). Owner of the org (or a superuser doing support) AND the
+    report switched on for that firm. A hidden report answers 404, so a
+    non-enabled firm can't tell it exists."""
+    from tracker.cost_visibility import can_view_cost_data
+    from tracker.services.ai_agent_report import report_enabled
+    from tracker.views_billing import get_request_org_override_billing
+
+    org = get_request_org_override_billing(request)
+    if not org or not report_enabled(org):
+        return None, Response({'error': 'not_found'}, status=404)
+    if not can_view_cost_data(request.user, org):
+        return None, Response({'error': 'owners_only',
+                               'message': 'AI agent activity is visible to firm owners only.'},
+                              status=403)
+    return org, None
+
+
+@api_view(['GET'])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def ai_agent_report_status(request):
+    """GET /api/reports/ai-agents/status/ → {available}. Drives the Reports link."""
+    org, err = _owner_report_org(request)
+    return Response({'available': err is None})
+
+
+@api_view(['GET'])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def ai_agent_report(request):
+    """GET /api/reports/ai-agents/?days=7"""
+    from tracker.services.ai_agent_report import build_firm_report
+    org, err = _owner_report_org(request)
+    if err:
+        return err
+    try:
+        days = min(max(int(request.GET.get('days', 7)), 1), 90)
+    except (TypeError, ValueError):
+        days = 7
+    return Response(build_firm_report(org, days))
+
+
+@api_view(['POST'])
+@authentication_classes([BearerTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def ai_agent_report_review(request):
+    """POST /api/reports/ai-agents/review/ {sample_id, verdict: human|agent|clear}
+
+    Records the owner's answer. Changes no time anywhere.
+    """
+    from tracker.models import AgentActivityReview, AgentPresenceSample
+    org, err = _owner_report_org(request)
+    if err:
+        return err
+    data = request.data if isinstance(request.data, dict) else {}
+    verdict = data.get('verdict')
+    try:
+        sample_id = int(data.get('sample_id'))
+    except (TypeError, ValueError):
+        return Response({'error': 'sample_id must be a number'}, status=400)
+    if verdict not in ('human', 'agent', 'clear'):
+        return Response({'error': 'verdict must be human, agent or clear'}, status=400)
+    if not AgentPresenceSample.objects.filter(pk=sample_id, org=org).exists():
+        return Response({'error': 'not_found'}, status=404)
+
+    if verdict == 'clear':
+        AgentActivityReview.objects.filter(org_id=org.pk, sample_id=sample_id).delete()
+    else:
+        AgentActivityReview.objects.update_or_create(
+            sample_id=sample_id,
+            defaults={'org_id': org.pk, 'verdict': verdict, 'reviewed_by_id': request.user.pk})
+    return Response({'sample_id': sample_id, 'verdict': None if verdict == 'clear' else verdict})

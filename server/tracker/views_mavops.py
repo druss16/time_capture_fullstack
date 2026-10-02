@@ -2405,3 +2405,29 @@ def mavops_agent_presence_summary(request):
         days = 7
     org = request.GET.get('org_id')
     return Response(build_report(days, int(org) if org and org.isdigit() else None))
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_ai_agent_report_flag(request):
+    """Which firms see Reports → AI agent activity.
+
+    GET  → {orgs: [{id, name}]}
+    POST {org_id, enabled} → same
+    """
+    from tracker.services.ai_agent_report import enabled_org_ids, set_report_enabled
+    if request.method == 'POST':
+        d = request.data if isinstance(request.data, dict) else {}
+        try:
+            org_id = int(d.get('org_id'))
+        except (TypeError, ValueError):
+            return Response({'error': 'org_id must be a number'}, status=400)
+        if not Organization.objects.filter(pk=org_id).exists():
+            return Response({'error': 'No such organization'}, status=404)
+        set_report_enabled(org_id, bool(d.get('enabled')))
+        logger.info("[MAVOPS] ai agent report %s for org %s by %s",
+                    'ON' if d.get('enabled') else 'OFF', org_id, request.user.email)
+    ids = enabled_org_ids()
+    names = dict(Organization.objects.filter(pk__in=ids).values_list('pk', 'name'))
+    return Response({'orgs': [{'id': i, 'name': names.get(i, f'org {i}')} for i in ids]})

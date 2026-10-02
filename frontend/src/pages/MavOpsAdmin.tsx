@@ -2959,6 +2959,22 @@ function AgentPresenceTab({ apiFetch, flash, orgs }: AgentPresenceTabProps) {
   const [days, setDays] = useState(7);
   const [report, setReport] = useState<PresenceReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+  const [firmReportOrgs, setFirmReportOrgs] = useState<{ id: number; name: string }[]>([]);
+  const [firmReportPick, setFirmReportPick] = useState<number | null>(null);
+
+  const loadFirmReport = useCallback(async () => {
+    try { setFirmReportOrgs((await apiFetch(`/mavops/ai-agent-report/`)).orgs || []); }
+    catch { flash("Failed to load firm report settings.", "err"); }
+  }, [apiFetch, flash]);
+  useEffect(() => { loadFirmReport(); }, [loadFirmReport]);
+
+  const setFirmReport = async (orgId: number, enabled: boolean) => {
+    try {
+      const d = await apiFetch(`/mavops/ai-agent-report/`, { method: "POST", body: JSON.stringify({ org_id: orgId, enabled }) });
+      setFirmReportOrgs(d.orgs || []);
+      flash(enabled ? "Firm owners can now see Reports → AI agent activity." : "Report hidden from that firm.");
+    } catch { flash("Failed to change the firm report.", "err"); }
+  };
 
   const loadState = useCallback(async () => {
     try { setState(await apiFetch(`/mavops/agent-presence/switch/`)); }
@@ -3078,6 +3094,33 @@ function AgentPresenceTab({ apiFetch, flash, orgs }: AgentPresenceTabProps) {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* ── FIRM REPORT ─────────────────────────────────────── */}
+      <div style={{ ...card, marginBottom: 24 }}>
+        <div style={heading}>FIRM REPORT · REPORTS → AI AGENT ACTIVITY</div>
+        <div style={{ color: T.textMuted, fontSize: 12, ...mono, marginBottom: 14, lineHeight: 1.6 }}>
+          Hidden from every firm until turned on here. Owners only. Answers owners give are recorded and never change anyone's time.
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 10, alignItems: "center", marginBottom: 12 }}>
+          <select value={firmReportPick ?? ""} onChange={e => setFirmReportPick(e.target.value ? Number(e.target.value) : null)} style={sel}>
+            <option value="">— select firm —</option>
+            {[...orgs].sort((a, b) => a.name.localeCompare(b.name)).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          <Btn label="show report" small onClick={() => firmReportPick ? setFirmReport(firmReportPick, true) : flash("Pick a firm.", "err")} />
+        </div>
+        <div style={{ color: T.text, fontSize: 13, ...mono }}>
+          {firmReportOrgs.length === 0 ? <span style={{ color: T.textMuted }}>Not shown to any firm.</span> : (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 8 }}>
+              {firmReportOrgs.map(o => (
+                <span key={o.id} style={{ display: "inline-flex", alignItems: "center", gap: 8, border: `1px solid ${T.border}`, borderRadius: 4, padding: "3px 8px" }}>
+                  {o.name}
+                  <button onClick={() => setFirmReport(o.id, false)} style={{ background: "none", border: "none", color: T.textMuted, cursor: "pointer", fontSize: 11, ...mono }}>hide</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── RESULTS ────────────────────────────────────────── */}

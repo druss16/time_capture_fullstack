@@ -51,6 +51,7 @@ const MavOpsAdmin = lazyWithRetry(() => import("./MavOpsAdmin"));
 const DashboardV2 = lazyWithRetry(() => import("./DashboardV2"));
 const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
 const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
+const ReportsAIAgents = lazyWithRetry(() => import("./ReportsAIAgents"));
 const AcceptInvite = lazyWithRetry(() => import("./AcceptInvite"));
 const Welcome = lazyWithRetry(() => import("./Welcome"));
 const ForgotPassword = lazyWithRetry(() => import("./ForgotPassword"));
@@ -263,6 +264,8 @@ export default function App() {
                 <Route path="/daily" element={<MaybeProtected><AppLayout><DailyReview /></AppLayout></MaybeProtected>} />
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
+                {/* Owners only, hidden per firm until MavOps enables it — the server enforces both */}
+                <Route path="/reports/ai-agents" element={<MaybeProtected><AppLayout><ReportsAIAgents /></AppLayout></MaybeProtected>} />
                 <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
                 <Route path="/fees" element={<MaybeProtected><AppLayout><BillingPage section="fees" /></AppLayout></MaybeProtected>} />
                 {/* /billing was Set Fees · Client Billing · Invoices. Only Set Fees

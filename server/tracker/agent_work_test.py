@@ -284,3 +284,112 @@ class MavOpsAgentPresenceTest(TestCase):
         r = self.client_for(self.staff).get('/api/mavops/agent-presence/summary/?days=7')
         self.assertEqual(r.status_code, 200)
         self.assertIn('fleet', r.data)
+
+
+class AIAgentReportTest(TestCase):
+    def setUp(self):
+        from tracker.models import AgentPresenceSample
+        self.org = Organization.objects.create(name='More Than Cars', slug='mtc', plan='professional')
+        self.owner = User.objects.create_user('own', email='own@mtc.com', password='x')
+        self.manager = User.objects.create_user('mgr', email='mgr@mtc.com', password='x')
+        self.jordan = User.objects.create_user('jordan', email='jordan@mtc.com', password='x',
+                                               first_name='Jordan', last_name='Lee')
+        for u, role in ((self.owner, 'owner'), (self.manager, 'manager'), (self.jordan, 'member')):
+            OrganizationMembership.objects.create(user=u, organization=self.org, role=role)
+        dev = AgentDevice.objects.create(user=self.jordan, device_id='j1', api_key='k-j', is_active=True)
+        hour = (timezone.now() - timezone.timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
+        mk = lambda **kw: AgentPresenceSample.objects.create(
+            org=self.org, user=self.jordan, device=dev, input_monitor='ok', **kw)
+        # Mac hour: agent working while nobody touched the Mac
+        self.mac = mk(bucket_start=hour, unattended_active_seconds=1800,
+                      unattended_active_by_app={'excel': 1500, 'chrome': 300},
+                      unattended_by_cause={'agent_busy': 900, 'unexplained': 300, 'remote_control': 600},
+                      processes={'power_automate': {'seen_min': 60, 'busy_min': 40, 'cpu_s': 90},
+                                 'claude_desktop': {'seen_min': 60, 'busy_min': 60, 'cpu_s': 300},
+                                 'remote_teamviewer': {'seen_min': 60, 'busy_min': 0, 'cpu_s': 0}})
+        # Windows hour: simulated clicks
+        self.win = mk(bucket_start=hour - timezone.timedelta(hours=1), clicks_synthetic=25,
+                      synthetic_by={'excel': 25}, processes={})
+        # Remote session hour: never listed, whatever the clicks
+        mk(bucket_start=hour - timezone.timedelta(hours=2), clicks_synthetic=99, remote_session=True)
+        # Small Mac hour: under the 5-minute bar
+        mk(bucket_start=hour - timezone.timedelta(hours=3), unattended_by_cause={'unexplained': 120})
+
+    def as_user(self, user):
+        c = APIClient()
+        tok = AuthToken.objects.create(user=user, token=f'r-{user.username}',
+                                       expires_at=timezone.now() + timezone.timedelta(days=1))
+        c.credentials(HTTP_AUTHORIZATION=f'Bearer {tok.token}')
+        return c
+
+    def enable(self):
+        from tracker.services.ai_agent_report import set_report_enabled
+        set_report_enabled(self.org.pk, True)
+
+    def test_hidden_until_enabled(self):
+        c = self.as_user(self.owner)
+        self.assertEqual(c.get('/api/reports/ai-agents/').status_code, 404)
+        self.assertFalse(c.get('/api/reports/ai-agents/status/').data['available'])
+        self.enable()
+        self.assertTrue(c.get('/api/reports/ai-agents/status/').data['available'])
+
+    def test_owners_only(self):
+        self.enable()
+        for u in (self.manager, self.jordan):
+            c = self.as_user(u)
+            self.assertEqual(c.get('/api/reports/ai-agents/').status_code, 403)
+            self.assertFalse(c.get('/api/reports/ai-agents/status/').data['available'])
+            self.assertEqual(c.post('/api/reports/ai-agents/review/',
+                                    {'sample_id': self.mac.pk, 'verdict': 'human'},
+                                    format='json').status_code, 403)
+
+    def test_report_content(self):
+        self.enable()
+        r = self.as_user(self.owner).get('/api/reports/ai-agents/?days=7').data
+        self.assertEqual([x['sample_id'] for x in r['review']], [self.mac.pk, self.win.pk])
+        mac, win = r['review']
+        self.assertEqual((mac['minutes'], mac['app'], mac['person']), (20, 'excel', 'Jordan Lee'))
+        self.assertEqual(mac['evidence'], 'Power Automate was working')
+        self.assertEqual((win['clicks'], win['app']), (25, 'excel'))
+        tools = {t['tool']: t for t in r['tools']}
+        self.assertEqual(tools['power_automate']['working_hours'], 0.7)
+        self.assertIsNone(tools['claude_desktop']['working_hours'])   # open, not evidence
+        self.assertNotIn('remote_teamviewer', tools)                  # a person's tool, not an agent
+        self.assertEqual(r['tiles']['to_review'], 2)
+        self.assertEqual(r['explained_hours'], 0.2)
+        self.assertEqual((r['tiles']['people_using'], r['tiles']['people_total']), (1, 3))
+
+    def test_review_is_record_only(self):
+        from tracker.models import Block
+        self.enable()
+        c = self.as_user(self.owner)
+        blocks_before = Block.objects.count()
+        r = c.post('/api/reports/ai-agents/review/', {'sample_id': self.mac.pk, 'verdict': 'agent'},
+                   format='json')
+        self.assertEqual(r.data['verdict'], 'agent')
+        rep = c.get('/api/reports/ai-agents/').data
+        self.assertEqual(rep['tiles']['to_review'], 1)
+        self.assertEqual(rep['review'][0]['verdict'], 'agent')
+        self.assertEqual(Block.objects.count(), blocks_before)
+        c.post('/api/reports/ai-agents/review/', {'sample_id': self.mac.pk, 'verdict': 'clear'},
+               format='json')
+        self.assertEqual(c.get('/api/reports/ai-agents/').data['tiles']['to_review'], 2)
+
+    def test_cannot_review_another_firms_sample(self):
+        self.enable()
+        other = Organization.objects.create(name='Other', slug='o', plan='professional')
+        boss = User.objects.create_user('boss', email='b@o.com', password='x')
+        OrganizationMembership.objects.create(user=boss, organization=other, role='owner')
+        from tracker.services.ai_agent_report import set_report_enabled
+        set_report_enabled(other.pk, True)
+        r = self.as_user(boss).post('/api/reports/ai-agents/review/',
+                                    {'sample_id': self.mac.pk, 'verdict': 'human'}, format='json')
+        self.assertEqual(r.status_code, 404)
+
+    def test_mavops_flag_endpoint(self):
+        staff = User.objects.create_user('ops', email='ops@mavops.ai', password='x', is_staff=True)
+        c = self.as_user(staff)
+        self.assertEqual(c.get('/api/mavops/ai-agent-report/').data['orgs'], [])
+        r = c.post('/api/mavops/ai-agent-report/', {'org_id': self.org.pk, 'enabled': True}, format='json')
+        self.assertEqual(r.data['orgs'], [{'id': self.org.pk, 'name': 'More Than Cars'}])
+        self.assertEqual(self.as_user(self.owner).get('/api/mavops/ai-agent-report/').status_code, 403)

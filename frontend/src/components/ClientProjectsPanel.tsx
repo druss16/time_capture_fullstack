@@ -5,9 +5,14 @@
 // hard-deletes one that never collected an hour. The hours column is what makes
 // "is this safe to archive?" answerable without leaving the page.
 //
-// The bulk path is ImportProjectsModal below: a two-column client,project list,
+// The bulk path is ImportProjectsModal below: a client,project[,hours] list,
 // previewed before anything is written, which is how an agency's existing list
 // (Asana, QuickBooks Time, a spreadsheet) arrives on day one.
+//
+// Owners and admins also see each project's MONTHLY budget against this
+// month's hours, and the client's monthly fee (budget hours × rate). The budget
+// carries forward month to month; editing it here changes it from this month
+// on and outranks the QuickBooks Time estimate.
 
 import { useCallback, useEffect, useState } from 'react';
 import { Archive, Check, Loader2, Pencil, Plus, RotateCcw, Upload, X } from 'lucide-react';
@@ -24,6 +29,62 @@ type ProjectRow = {
 
 const SOURCE_LABEL: Record<string, string> = { qb_time: 'QB Time', clio: 'Clio' };
 
+type BudgetRow = {
+  project_id: number; budget_hours: number | null; budget_source: string | null;
+  actual_hours: number; rate: number; fee: number | null;
+};
+type BudgetSummary = {
+  month: string; month_elapsed: number;
+  rows: BudgetRow[];
+  clients: { client_id: number; budget_hours: number; actual_hours: number; fee: number;
+             unbudgeted_projects: number }[];
+};
+
+const BUDGET_SOURCE: Record<string, string> = {
+  manual: 'Set here', qb_time: 'From the QuickBooks Time estimate', csv: 'Imported from a file',
+};
+const money = (n: number) => n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+/** This month's hours against the monthly budget; click to change the budget. */
+function BudgetCell({ row, elapsed, canEdit, onSave }: {
+  row: BudgetRow | undefined; elapsed: number; canEdit: boolean; onSave: (hours: number) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const actual = row?.actual_hours ?? 0;
+  const budget = row?.budget_hours ?? null;
+  // Ahead of the calendar, not just over the line: 15 of 20h with a third of
+  // the month gone is the warning worth giving.
+  const over = budget != null && actual > budget;
+  const ahead = budget != null && !over && budget > 0 && actual / budget > elapsed + 0.15;
+
+  if (editing) {
+    return (
+      <form className="flex shrink-0 items-center gap-1"
+        onSubmit={async (e) => { e.preventDefault(); const n = Number(value); if (!isNaN(n) && n >= 0) { await onSave(n); setEditing(false); } }}>
+        <input autoFocus type="number" min={0} step={0.5} value={value} onChange={(e) => setValue(e.target.value)}
+          className="w-16 rounded border border-border/60 px-1.5 py-0.5 text-right font-mono text-xs focus:border-primary focus:outline-none" />
+        <span className="text-[11px] text-slate-400">h/mo</span>
+        <button type="submit" className="p-0.5 text-primary"><Check className="h-3.5 w-3.5" /></button>
+        <button type="button" onClick={() => setEditing(false)} className="p-0.5 text-slate-400"><X className="h-3.5 w-3.5" /></button>
+      </form>
+    );
+  }
+  return (
+    <button
+      disabled={!canEdit}
+      onClick={() => { setValue(budget != null ? String(budget) : ''); setEditing(true); }}
+      title={budget != null
+        ? `This month: ${actual.toFixed(1)} of ${budget}h budgeted. ${BUDGET_SOURCE[row?.budget_source || ''] || ''}`
+        : 'No monthly budget yet'}
+      className={cn('shrink-0 rounded px-1 font-mono text-xs tabular-nums',
+        canEdit && 'hover:bg-slate-100',
+        over ? 'font-semibold text-amber-600' : ahead ? 'text-amber-600' : 'text-slate-500')}>
+      {actual.toFixed(1)} / {budget != null ? budget : '—'}h
+    </button>
+  );
+}
+
 export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }: {
   clientId: number;
   canManage: boolean;
@@ -38,6 +99,7 @@ export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }:
   const [editing, setEditing] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [budgets, setBudgets] = useState<BudgetSummary | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -46,7 +108,24 @@ export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }:
       setRows([]);
       onError(e?.message || `Could not load ${terms.projects.toLowerCase()}`);
     }
-  }, [clientId, onError, terms.projects]);
+    // Budgets carry the fee, so only owners/admins fetch them.
+    if (canManage) {
+      try {
+        setBudgets(await safeFetchJson(`${API_BASE}/projects/budgets/?client_id=${clientId}`));
+      } catch { setBudgets(null); }
+    }
+  }, [clientId, canManage, onError, terms.projects]);
+
+  const saveBudget = async (projectId: number, hours: number) => {
+    try {
+      await safeFetchJson(`${API_BASE}/projects/${projectId}/budget/`, {
+        method: 'PUT', body: JSON.stringify({ monthly_hours: hours }),
+      });
+      await load();
+    } catch (e: any) { onError(e?.message || 'Could not save the budget'); }
+  };
+  const budgetFor = (id: number) => budgets?.rows.find((r) => r.project_id === id);
+  const clientTotals = budgets?.clients[0];
 
   useEffect(() => { load(); }, [load]);
 
@@ -127,12 +206,14 @@ export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }:
                   {SOURCE_LABEL[p.source] || p.source}
                 </span>
               )}
-              <span className={cn('shrink-0 font-mono text-xs tabular-nums',
-                  p.estimated_hours != null && (p.hours ?? 0) > p.estimated_hours
-                    ? 'font-semibold text-amber-600' : 'text-slate-400')}
-                title={p.estimated_hours != null ? 'Tracked of estimated hours' : 'Tracked hours'}>
-                {(p.hours ?? 0).toFixed(1)}{p.estimated_hours != null ? ` / ${p.estimated_hours.toFixed(1)}` : ''}h
-              </span>
+              {budgets ? (
+                <BudgetCell row={budgetFor(p.id)} elapsed={budgets.month_elapsed}
+                  canEdit={canManage && p.is_active} onSave={(h) => saveBudget(p.id, h)} />
+              ) : (
+                <span className="shrink-0 font-mono text-xs tabular-nums text-slate-400" title="Tracked hours, all time">
+                  {(p.hours ?? 0).toFixed(1)}h
+                </span>
+              )}
               {!p.is_active && <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Archived</span>}
               {/* A synced project's name and status belong to its source;
                   edited here, the next hourly sync would quietly put them back. */}
@@ -149,6 +230,22 @@ export function ClientProjectsPanel({ clientId, canManage, onChanged, onError }:
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {budgets && clientTotals && (
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <span>
+            <b className="text-slate-800">Monthly fee {money(clientTotals.fee)}</b>
+            {' '}· {clientTotals.budget_hours}h budgeted
+            {budgets.rows[0]?.rate ? ` × ${money(budgets.rows[0].rate)}/h` : ''}
+            {clientTotals.unbudgeted_projects > 0 && (
+              <span className="text-amber-600"> · {clientTotals.unbudgeted_projects} without a budget</span>
+            )}
+          </span>
+          <span className="font-mono tabular-nums">
+            {clientTotals.actual_hours.toFixed(1)}h used this month ({Math.round(budgets.month_elapsed * 100)}% of the month gone)
+          </span>
         </div>
       )}
 
@@ -208,7 +305,7 @@ export function ImportProjectsModal({ onClose, onDone, onError }: {
         <div className="flex shrink-0 items-center justify-between border-b border-border/50 px-6 py-4">
           <div>
             <h2 className="text-base font-bold text-slate-900">Import {terms.projects}</h2>
-            <p className="text-xs text-slate-400">Two columns — client, then {terms.project.toLowerCase()} — one per line. Clients must already exist.</p>
+            <p className="text-xs text-slate-400">Client, {terms.project.toLowerCase()}, and optional monthly budget hours — one per line. Clients must already exist.</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-slate-100"><X className="h-4 w-4 text-slate-400" /></button>
         </div>
@@ -217,7 +314,7 @@ export function ImportProjectsModal({ onClose, onDone, onError }: {
             value={text}
             onChange={(e) => { setText(e.target.value); setPreview(null); }}
             rows={8}
-            placeholder={'Client,Project\nAcme Motors,Spring Launch\nAcme Motors,Website Refresh'}
+            placeholder={'Client,Project,Hours\nAcme Motors,Spring Launch,20\nAcme Motors,Website Refresh,12'}
             className="w-full rounded-lg border border-border/60 px-3 py-2 font-mono text-xs focus:border-primary focus:outline-none"
           />
           <label className="flex cursor-pointer items-center gap-2 self-start text-xs font-medium text-slate-500 hover:text-slate-800">

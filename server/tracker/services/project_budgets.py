@@ -116,6 +116,24 @@ def actual_hours(org, month: date, project_ids=None) -> dict:
     return {pid: (Decimal(m) / 60).quantize(Decimal('0.01')) for pid, m in minutes.items()}
 
 
+def client_unassigned_hours(org, month: date, client_ids) -> dict:
+    """client_id -> confirmed hours in `month` with that client but no project."""
+    from tracker.services.billing_totals import committed_block_qs
+    from tracker.views_reports import _block_minutes
+
+    if not client_ids:
+        return {}
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(month, datetime.min.time()), tz)
+    end = timezone.make_aware(datetime.combine(next_month(month), datetime.min.time()), tz)
+    qs = (committed_block_qs(org, start, end, can_see_all=True)
+          .filter(project__isnull=True, client_id__in=list(client_ids)))
+    minutes = defaultdict(int)
+    for b in qs:
+        minutes[b.client_id] += _block_minutes(b)
+    return {cid: (Decimal(m) / 60).quantize(Decimal('0.01')) for cid, m in minutes.items()}
+
+
 def month_elapsed(month: date, today: date | None = None) -> float:
     """Share of `month` gone: 1.0 for a past month, 0.0 for a future one."""
     today = today or timezone.localdate()
@@ -183,9 +201,20 @@ def month_summary(org, month: date, *, client_ids=None) -> dict:
         else:
             c['budget_hours'] += r['budget_hours']
             c['fee'] += r['fee']
-    for c in clients.values():
+    # Time the client got this month that is on no project yet. It is real
+    # work against the client's monthly budget, so it counts in the client's
+    # hours used — and is shown on its own line so it can be filed.
+    unassigned = client_unassigned_hours(org, month, list(clients))
+    for cid, c in clients.items():
+        extra = float(unassigned.get(cid, ZERO))
+        c['unassigned_hours'] = round(extra, 2)
+        c['actual_hours'] += extra
         for k in ('budget_hours', 'actual_hours', 'fee'):
             c[k] = round(c[k], 2)
+        c['delta_hours'] = round(c['budget_hours'] - c['actual_hours'], 2) if c['budget_hours'] else None
+    for r in rows:
+        r['delta_hours'] = (round(r['budget_hours'] - r['actual_hours'], 2)
+                            if r['budget_hours'] is not None else None)
 
     return {
         'month': month.strftime('%Y-%m'),

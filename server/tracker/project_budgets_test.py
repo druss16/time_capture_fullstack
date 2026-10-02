@@ -99,6 +99,17 @@ class BudgetTests(Base):
         self.assertIsNone(rows['Website']['budget_hours'])
         acme = next(c for c in s['clients'] if c['client'] == 'Acme Motors')
         self.assertEqual((acme['fee'], acme['unbudgeted_projects']), (3300.0, 1))
+        self.assertEqual(rows['Spring Launch']['delta_hours'], 18.0)    # 20 budgeted − 2 used
+        self.assertIsNone(rows['Website']['delta_hours'])                # no budget, no delta
+
+    def test_client_delta_counts_time_on_no_project(self):
+        pb.set_monthly_budget(self.spring, 20, month=OCT)
+        t = datetime(2026, 10, 6, 15, 0, tzinfo=dt_timezone.utc)
+        self.block(self.spring, t, 300)                                  # 5h on the project
+        loose = self.block(self.spring, t + timedelta(hours=8), 120)     # 2h, then unfiled
+        Block.objects.filter(id=loose.id).update(project=None)
+        acme = next(c for c in pb.month_summary(self.org, OCT)['clients'] if c['client'] == 'Acme Motors')
+        self.assertEqual((acme['unassigned_hours'], acme['actual_hours'], acme['delta_hours']), (2.0, 7.0, 13.0))
 
 
 class EndpointTests(Base):

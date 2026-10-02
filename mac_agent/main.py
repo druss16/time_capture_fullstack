@@ -4835,9 +4835,16 @@ def run_agent():
 
         def _presence_fg():
             # NSWorkspace + AX directly: get_frontmost_app() shells out to
-            # osascript, far too heavy for a 10-second side poll.
+            # osascript, far too heavy for a 10-second side poll. The title is
+            # only used while the person is idle, so it is only READ then:
+            # while someone works, this makes no AX call at all and can never
+            # compete with the tracker's own AX reads.
             ws = get_frontmost_via_nsworkspace()
-            return (ws[0], get_window_title_via_ax(ws[1]) or "") if ws else None
+            if not ws:
+                return None
+            if mouse_idle_seconds() < agent_presence.IDLE_ACTIVITY_S:
+                return (ws[0], "")
+            return (ws[0], get_window_title_via_ax(ws[1]) or "")
 
         agent_presence.start(
             get_foreground=_presence_fg,

@@ -27,12 +27,23 @@ class CollectorTest(unittest.TestCase):
     def test_foreground_change_counts_only_while_idle(self):
         self.c.note_foreground("chrome.exe", "a", idle_s=0, interval_s=5, now=HOUR + 1)
         self.c.note_foreground("chrome.exe", "b", idle_s=0, interval_s=5, now=HOUR + 6)    # person
-        self.c.note_foreground("chrome.exe", "c", idle_s=120, interval_s=5, now=HOUR + 11)  # nobody
+        self.c.note_foreground("chrome.exe", "c", idle_s=120, interval_s=5, now=HOUR + 11)  # idle entry
         self.c.note_foreground("chrome.exe", "c", idle_s=125, interval_s=5, now=HOUR + 16)  # no change
+        self.c.note_foreground("chrome.exe", "d", idle_s=130, interval_s=5, now=HOUR + 21)  # nobody
         [b] = self.c.take_closed(now=HOUR + 3600)
         self.assertEqual(b["idle_changes"], 1)
         self.assertEqual(b["idle_changes_by_app"], {"chrome": 1})
-        self.assertEqual((b["seconds_observed"], b["idle_seconds"]), (20, 10))
+        self.assertEqual((b["seconds_observed"], b["idle_seconds"]), (25, 15))
+
+    def test_change_at_idle_entry_is_not_counted(self):
+        # Active samples carry no title (macOS skips the AX read while working);
+        # crossing into idle must not count that as a window change.
+        self.c.note_foreground("Safari", "", idle_s=5, interval_s=10, now=HOUR + 10)
+        self.c.note_foreground("Safari", "Inbox", idle_s=70, interval_s=10, now=HOUR + 20)
+        self.c.note_foreground("Safari", "Inbox", idle_s=80, interval_s=10, now=HOUR + 30)
+        self.c.note_foreground("Safari", "Order #4", idle_s=90, interval_s=10, now=HOUR + 40)
+        [b] = self.c.take_closed(now=HOUR + 3600)
+        self.assertEqual(b["idle_changes"], 1)
 
     def test_unattended_active_needs_tracker_active_and_hardware_idle(self):
         n = lambda idle, hid, t: self.c.note_foreground("Safari", "x", idle_s=idle, interval_s=10,
@@ -96,6 +107,8 @@ class ClassifyTest(unittest.TestCase):
                          "claude_code")
         self.assertIsNone(ap.classify_process("node", "", ["node", "server.js"]))
         self.assertIsNone(ap.classify_process("EXCEL.EXE"))
+        self.assertEqual(ap.classify_process("screensharingd"), "remote_screen_sharing")
+        self.assertEqual(ap.classify_process("TeamViewer.exe"), "remote_teamviewer")
 
 
 class SessionLogScanTest(unittest.TestCase):

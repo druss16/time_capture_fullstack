@@ -87,6 +87,18 @@ KNOWN_AGENT_PROCESSES = {
     "autohotkey64": "autohotkey",
     "autohotkeyu64": "autohotkey",
 }
+# Not agents: tools through which a REAL person's input arrives as software
+# input (remote control). Recorded so the summary can split "unattended-active"
+# time into hours with and without one running — the main false positive.
+KNOWN_REMOTE_PROCESSES = {
+    "screensharingd": "remote_screen_sharing",   # macOS Screen Sharing / ARD
+    "ardagent": "remote_screen_sharing",
+    "teamviewer": "remote_teamviewer",
+    "teamviewer_service": "remote_teamviewer",
+    "anydesk": "remote_anydesk",
+}
+KNOWN_AGENT_PROCESSES.update(KNOWN_REMOTE_PROCESSES)
+
 # Agents shipped as node scripts: the process is "node", the cmdline says who.
 NODE_AGENT_MARKERS = {
     "claude-code": "claude_code",
@@ -199,10 +211,16 @@ class Collector:
                 _bump(b["unattended_active_by_app"], _proc_name(app), int(interval_s))
             if idle_s >= IDLE_ACTIVITY_S:
                 b["idle_seconds"] += int(interval_s)
+                # Only a change BETWEEN two idle samples counts: the window a
+                # person left behind when they stopped is not evidence. This
+                # also lets a caller skip reading the title while the person
+                # is active (macOS does — no extra AX calls during work).
                 if self._last_fg is not None and fg != self._last_fg:
                     b["idle_changes"] += 1
                     _bump(b["idle_changes_by_app"], _proc_name(app))
-            self._last_fg = fg
+                self._last_fg = fg
+            else:
+                self._last_fg = None
 
     # ── signal 3: agent processes ──
     def note_processes(self, samples, interval_s: float, now: float | None = None):

@@ -34,6 +34,7 @@ def summarise(samples):
     idle_secs = idle_changes = 0
     idle_by_app = Counter()
     unattended_s, unattended_by_app, unattended_devices = 0, Counter(), set()
+    unattended_with_remote_s = 0
     proc_devices, proc_seen, proc_busy = defaultdict(set), Counter(), Counter()
     log_devices, log_sessions = defaultdict(set), Counter()
 
@@ -55,6 +56,10 @@ def summarise(samples):
         idle_changes += s.idle_changes
         idle_by_app.update(s.idle_changes_by_app or {})
         unattended_s += s.unattended_active_seconds
+        # Remote control is the main false positive: a real person's input
+        # arrives as software input. Split it out rather than trust the total.
+        if s.remote_session or any(l.startswith('remote_') for l in (s.processes or {})):
+            unattended_with_remote_s += s.unattended_active_seconds
         unattended_by_app.update(s.unattended_active_by_app or {})
         if s.unattended_active_seconds:
             unattended_devices.add(s.device_id)
@@ -84,6 +89,7 @@ def summarise(samples):
         },
         'unattended_active': {
             'hours': round(unattended_s / 3600, 1),
+            'hours_with_remote_tool': round(unattended_with_remote_s / 3600, 1),
             'devices': len(unattended_devices),
             'share_of_observed': round(unattended_s / (hours['observed'] * 3600), 4) if hours['observed'] else 0,
             'top_apps': [(a, round(sec / 3600, 1)) for a, sec in unattended_by_app.most_common(10)],
@@ -155,7 +161,8 @@ class Command(BaseCommand):
             if c['top_sources']:
                 self.stdout.write(f"    synthetic sources: {c['top_sources']}")
             u = r['unattended_active']
-            self.stdout.write(f"  unattended-active (Mac): {u['hours']}h on {u['devices']} devices "
+            self.stdout.write(f"  unattended-active (Mac): {u['hours']}h on {u['devices']} devices, "
+                              f"{u['hours_with_remote_tool']}h of it with a remote-control tool running "
                               f"({u['share_of_observed']:.1%} of observed); top {u['top_apps'][:5]}")
             self.stdout.write(f"  idle: {i['changes']} window changes in {i['idle_hours']}h idle "
                               f"({i['changes_per_idle_hour']}/idle-hour); top {i['top_apps'][:5]}")

@@ -195,8 +195,13 @@ def project_detail(request, pk):
                 return _err('Unknown install path.')
             if field == 'status' and val not in dict(OnboardingProject.STATUS_CHOICES):
                 return _err('Unknown status.')
-            setattr(p, field, val or (None if field == 'target_go_live' else val))
-            changed[field] = val
+            if field == 'target_go_live':
+                try:
+                    val = svc.parse_go_live(val)
+                except ConsoleError as e:
+                    return _err(e)
+            setattr(p, field, val)
+            changed[field] = val.isoformat() if hasattr(val, 'isoformat') else val
         p.save()
         svc.audit(p, request.user, 'project.update', **changed)
 

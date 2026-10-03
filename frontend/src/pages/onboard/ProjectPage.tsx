@@ -142,32 +142,43 @@ function StepRow({ step, projectId, onAction, onChanged }: {
   const [note, setNote] = useState(step.note);
   const [err, setErr] = useState<string | null>(null);
   const tickable = !step.live;
+  // Optimistic: the circle changes on click. Saving is quick, but the
+  // checklist reload behind it re-runs every live check, which took seconds.
+  // The pending value is dropped once fresh data arrives, or on a failed save.
+  const [pending, setPending] = useState<{ done?: boolean; not_applicable?: boolean } | null>(null);
+  useEffect(() => { setPending(null); }, [step.done, step.not_applicable]);
+  const done = pending?.done ?? step.done;
+  const na = pending?.not_applicable ?? step.not_applicable;
 
   const mark = async (body: { done?: boolean; not_applicable?: boolean; note?: string }) => {
     setErr(null);
+    const optimistic: { done?: boolean; not_applicable?: boolean } = {};
+    if (body.done !== undefined) optimistic.done = body.done;
+    if (body.not_applicable !== undefined) optimistic.not_applicable = body.not_applicable;
+    if (Object.keys(optimistic).length) setPending((p) => ({ ...p, ...optimistic }));
     try { await onboardApi.mark(projectId, step.key, body); onChanged(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setPending(null); setErr(e instanceof Error ? e.message : String(e)); }
   };
 
-  const icon = step.not_applicable ? <MinusCircle className="h-5 w-5 text-slate-300" />
-    : step.done ? <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+  const icon = na ? <MinusCircle className="h-5 w-5 text-slate-300" />
+    : done ? <CheckCircle2 className="h-5 w-5 text-emerald-500" />
     : <Circle className="h-5 w-5 text-slate-300" />;
 
   return (
-    <li className={cn("px-5 py-3", step.not_applicable && "opacity-60")}>
+    <li className={cn("px-5 py-3", na && "opacity-60")}>
       <div className="flex items-start gap-3">
-        {tickable && !step.not_applicable ? (
-          <button onClick={() => mark({ done: !step.done })} aria-label={step.done ? `Untick ${step.title}` : `Tick ${step.title}`}
+        {tickable && !na ? (
+          <button onClick={() => mark({ done: !done })} aria-label={done ? `Untick ${step.title}` : `Tick ${step.title}`}
             className="mt-0.5 rounded-full hover:ring-4 hover:ring-slate-100">{icon}</button>
         ) : <span className="mt-0.5" title="Ticks itself from live data">{icon}</span>}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className={cn("text-sm font-medium", step.done ? "text-slate-500" : "text-slate-900")}>{step.title}</span>
+            <span className={cn("text-sm font-medium", done ? "text-slate-500" : "text-slate-900")}>{step.title}</span>
             {step.live && <Zap className="h-3.5 w-3.5 text-amber-500" aria-label="Live check" />}
             {step.who !== "us" && <Pill>{WHO_LABEL[step.who]}</Pill>}
           </div>
           {(step.detail || step.error) && (
-            <div className={cn("mt-0.5 text-xs", step.error ? "text-red-600" : step.done ? "text-slate-500" : "text-amber-700")}>
+            <div className={cn("mt-0.5 text-xs", step.error ? "text-red-600" : done ? "text-slate-500" : "text-amber-700")}>
               {step.error ? `check failed: ${step.error}` : step.detail}
             </div>
           )}
@@ -179,8 +190,8 @@ function StepRow({ step, projectId, onAction, onChanged }: {
                 placeholder="Note (who you spoke to, what they decided…)" className={inputClass + " text-sm"} />
               <div className="flex flex-wrap gap-2">
                 <button className={secondaryBtnClass + " py-1 text-xs"} onClick={() => mark({ note })}>Save note</button>
-                <button className={secondaryBtnClass + " py-1 text-xs"} onClick={() => mark({ not_applicable: !step.not_applicable, note })}>
-                  {step.not_applicable ? "It applies after all" : "Not applicable"}
+                <button className={secondaryBtnClass + " py-1 text-xs"} onClick={() => mark({ not_applicable: !na, note })}>
+                  {na ? "It applies after all" : "Not applicable"}
                 </button>
               </div>
               {step.marked_by && <div className="text-xs text-slate-400">Last marked by {step.marked_by} · {fmtDate(step.marked_at)}</div>}
@@ -189,8 +200,8 @@ function StepRow({ step, projectId, onAction, onChanged }: {
           <ErrorNote message={err} />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {step.action && !step.not_applicable && (
-            <button className={cn(step.done ? secondaryBtnClass : primaryBtnClass, "px-3 py-1.5 text-xs")} onClick={() => onAction(step.action)}>
+          {step.action && !na && (
+            <button className={cn(done ? secondaryBtnClass : primaryBtnClass, "px-3 py-1.5 text-xs")} onClick={() => onAction(step.action)}>
               {ACTION_LABEL[step.action] || "Open"}
             </button>
           )}

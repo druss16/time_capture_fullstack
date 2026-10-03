@@ -730,3 +730,90 @@ def clean_intake_payload(data):
                           for k, v in answers.items()}
     return out
 
+
+
+# ── Deleting an onboarding ───────────────────────────────────────────────
+
+def _created_by_console(project):
+    """True only when the console itself created this firm's organization.
+
+    An adopted firm existed before the console touched it, so deleting the
+    onboarding must never take its organization with it. Missing evidence
+    counts as adopted.
+    """
+    ev = (project.audit_events.filter(action='project.create')
+          .order_by('created_at').first())
+    return bool(ev and ev.detail.get('adopted') is False)
+
+
+def deletion_check(project):
+    """What deleting this onboarding would do, and what blocks it."""
+    from tracker.models import (
+        AgentDevice, Block, Client, OrganizationMembership, Timesheet,
+    )
+    org = project.organization
+    members = list(OrganizationMembership.objects.filter(organization=org)
+                   .select_related('user'))
+    user_ids = [m.user_id for m in members]
+    blockers = []
+    if Block.objects.filter(org=org).exists():
+        blockers.append('time has been captured')
+    if Timesheet.objects.filter(org=org).exists():
+        blockers.append('timesheets exist')
+    if org.stripe_subscription_id or org.stripe_customer_id:
+        blockers.append('it is linked to Stripe')
+    if AgentDevice.objects.filter(user_id__in=user_ids).exists():
+        blockers.append('a device is paired')
+    signed_in = [m.user.email for m in members if m.user.last_login]
+    if signed_in:
+        blockers.append(f'{len(signed_in)} member(s) have signed in')
+    clients = Client.objects.filter(org=org).exclude(name__istartswith='Internal').count()
+    return {
+        'firm_created_here': _created_by_console(project),
+        'blockers': blockers,
+        'members': len(members),
+        'clients': clients,
+    }
+
+
+@transaction.atomic
+def delete_onboarding(project, actor, *, confirm_name, delete_firm):
+    """Remove an onboarding — and, for a firm the console created, the firm.
+
+    The confirmation is the firm's exact name. Staff accounts are deleted only
+    when they were never used and belong to no other firm; anyone else keeps
+    their account and just loses this membership.
+    """
+    from django.contrib.auth import get_user_model
+    from tracker.models import OrganizationMembership
+
+    org = project.organization
+    if (confirm_name or '').strip() != org.name:
+        raise ConsoleError('Type the firm name exactly to confirm.')
+    check = deletion_check(project)
+    if check['blockers']:
+        raise ConsoleError('Not deleted — ' + '; '.join(check['blockers']) + '.')
+    if delete_firm and not check['firm_created_here']:
+        raise ConsoleError('This firm existed before its onboarding started, so only the '
+                           'onboarding can be removed here — the firm itself stays.')
+
+    summary = {'org_id': org.id, 'org': org.name, 'slug': org.slug,
+               'deleted_firm': bool(delete_firm), 'members': check['members'],
+               'clients': check['clients']}
+    if delete_firm:
+        User = get_user_model()
+        user_ids = list(OrganizationMembership.objects.filter(organization=org)
+                        .values_list('user_id', flat=True))
+        org.delete()                       # cascades the project, memberships, clients
+        # Memberships of the deleted firm are gone by now, so any membership
+        # left means the person belongs to another firm — keep them.
+        orphans = (User.objects.filter(id__in=user_ids, last_login__isnull=True,
+                                       is_staff=False, is_superuser=False)
+                   .exclude(memberships__isnull=False))
+        summary['accounts_removed'] = orphans.count()
+        orphans.delete()
+    else:
+        project.delete()
+    # The project's own audit trail goes with it; this record outlives it.
+    audit(None, actor, 'project.delete', **summary)
+    return summary

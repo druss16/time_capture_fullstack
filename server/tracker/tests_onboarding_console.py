@@ -437,3 +437,46 @@ class RoleGroupOrgTests(TestCase):
         self.assertTrue(_client_for(u).get('/api/whoami/').json().get('is_onboarding_operator'))
         other = User.objects.create_user('x', 'x@firm.test', 'x')
         self.assertFalse(_client_for(other).get('/api/whoami/').json().get('is_onboarding_operator'))
+
+
+class DeleteOnboardingTests(ConsoleBase):
+    def test_delete_console_created_firm_with_unused_staff(self):
+        p = self.make_project()
+        org_id = p.organization_id
+        svc.run_provision(p.organization, kind='team', csv_text=TEAM_CSV, dry_run=False)
+        url = f'/api/onboard/projects/{p.id}/delete/'
+        check = self.api.get(url).json()
+        self.assertTrue(check['firm_created_here'])
+        self.assertEqual(check['blockers'], [])
+        bad = self.api.post(url, {'confirm_name': 'wrong', 'delete_firm': True}, format='json')
+        self.assertEqual(bad.status_code, 400)
+        r = self.api.post(url, {'confirm_name': 'Acme Agency', 'delete_firm': True}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertFalse(Organization.objects.filter(id=org_id).exists())
+        self.assertFalse(User.objects.filter(email='jane@agency.test').exists())
+        self.assertTrue(OnboardingAuditEvent.objects.filter(
+            action='project.delete', project__isnull=True).exists())
+
+    def test_adopted_firm_is_never_deleted(self):
+        org = Organization.objects.create(name='Old Firm', slug='old-firm')
+        p = svc.create_project(actor=self.operator, vertical='cpa',
+                               install_path='windows_gpo', org_id=org.id)
+        url = f'/api/onboard/projects/{p.id}/delete/'
+        self.assertFalse(self.api.get(url).json()['firm_created_here'])
+        r = self.api.post(url, {'confirm_name': 'Old Firm', 'delete_firm': True}, format='json')
+        self.assertEqual(r.status_code, 400)
+        r = self.api.post(url, {'confirm_name': 'Old Firm', 'delete_firm': False}, format='json')
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(Organization.objects.filter(id=org.id).exists())
+        self.assertFalse(OnboardingProject.objects.filter(id=p.id).exists())
+
+    def test_blocked_when_someone_signed_in_and_other_firm_member_kept(self):
+        p = self.make_project()
+        svc.run_provision(p.organization, kind='team', csv_text=TEAM_CSV, dry_run=False)
+        jane = User.objects.get(email='jane@agency.test')
+        jane.last_login = timezone.now(); jane.save()
+        url = f'/api/onboard/projects/{p.id}/delete/'
+        self.assertIn('1 member(s) have signed in', self.api.get(url).json()['blockers'])
+        r = self.api.post(url, {'confirm_name': 'Acme Agency', 'delete_firm': True}, format='json')
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(Organization.objects.filter(id=p.organization_id).exists())

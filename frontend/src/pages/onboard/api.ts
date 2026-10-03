@@ -99,6 +99,9 @@ export const onboardApi = {
     safeFetchJson<{ customer: string; subscription: string; coupon: string | null }>(`${BASE}/projects/${id}/stripe/`, { method: "POST", ...json(body) }),
   deployKit: (id: number) => safeFetchJson<{ token: string; files: KitFile[] }>(`${BASE}/projects/${id}/deploy-kit/`, { method: "POST" }),
   goLive: (id: number) => safeFetchJson(`${BASE}/projects/${id}/go-live/`, { method: "POST" }),
+  deleteCheck: (id: number) => safeFetchJson<{ firm_created_here: boolean; blockers: string[]; members: number; clients: number }>(`${BASE}/projects/${id}/delete/`),
+  deleteProject: (id: number, body: { confirm_name: string; delete_firm: boolean }) =>
+    safeFetchJson(`${BASE}/projects/${id}/delete/`, { method: "POST", ...json(body) }),
   issueIntake: (id: number) => safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/`, { method: "POST" }),
   reopenIntake: (id: number) => safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/reopen/`, { method: "POST" }),
 };

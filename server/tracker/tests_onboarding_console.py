@@ -516,3 +516,59 @@ class DeleteOnboardingTests(ConsoleBase):
         r = self.api.post(url, {'confirm_name': 'Acme Agency', 'delete_firm': True}, format='json')
         self.assertEqual(r.status_code, 400)
         self.assertTrue(Organization.objects.filter(id=p.organization_id).exists())
+
+
+class IntakeSendTests(ConsoleBase):
+    def _step(self, p, key):
+        return {st['key']: st for ph in evaluate(p)['phases'] for st in ph['steps']}[key]
+
+    def test_link_alone_does_not_tick_sent(self):
+        p = self.make_project()
+        self.api.post(f'/api/onboard/projects/{p.id}/intake/')
+        st = self._step(p, 'intake_sent')
+        self.assertFalse(st['done'])
+        self.assertIn('not sent', st['detail'])
+
+    def test_send_by_email_ticks_and_records_recipient(self):
+        p = self.make_project()
+        with mock.patch('tracker.email_service.send_email', return_value=True) as sent:
+            r = self.api.post(f'/api/onboard/projects/{p.id}/intake/send/',
+                              {'email': 'owner@mtc.test', 'name': 'Sam'}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(r.json()['emailed'])
+        self.assertEqual(sent.call_args.kwargs['to_email'], 'owner@mtc.test')
+        self.assertIn(r.json()['url'], sent.call_args.kwargs['plain_content'])
+        self.assertEqual(r.json()['sent']['to'], 'owner@mtc.test')
+        st = self._step(p, 'intake_sent')
+        self.assertTrue(st['done'])
+        self.assertIn('owner@mtc.test', st['detail'])
+
+    def test_failed_email_returns_link_but_does_not_tick(self):
+        p = self.make_project()
+        with mock.patch('tracker.email_service.send_email', return_value=False):
+            r = self.api.post(f'/api/onboard/projects/{p.id}/intake/send/',
+                              {'email': 'owner@mtc.test'}, format='json')
+        self.assertFalse(r.json()['emailed'])
+        self.assertIn('/intake/', r.json()['url'])
+        self.assertFalse(self._step(p, 'intake_sent')['done'])
+
+    def test_bad_email_refused_and_mark_by_hand(self):
+        p = self.make_project()
+        r = self.api.post(f'/api/onboard/projects/{p.id}/intake/send/', {'email': 'nope'},
+                          format='json')
+        self.assertEqual(r.status_code, 400)
+        r = self.api.post(f'/api/onboard/projects/{p.id}/intake/mark-sent/', {}, format='json')
+        self.assertEqual(r.status_code, 400)          # no link yet
+        self.api.post(f'/api/onboard/projects/{p.id}/intake/')
+        r = self.api.post(f'/api/onboard/projects/{p.id}/intake/mark-sent/',
+                          {'to': 'texted Sam'}, format='json')
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(self._step(p, 'intake_sent')['done'])
+
+    def test_reissuing_after_send_needs_sending_again(self):
+        p = self.make_project()
+        with mock.patch('tracker.email_service.send_email', return_value=True):
+            self.api.post(f'/api/onboard/projects/{p.id}/intake/send/',
+                          {'email': 'owner@mtc.test'}, format='json')
+        self.api.post(f'/api/onboard/projects/{p.id}/intake/')       # new link, not sent
+        self.assertFalse(self._step(p, 'intake_sent')['done'])

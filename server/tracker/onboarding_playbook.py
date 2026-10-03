@@ -265,9 +265,15 @@ class Facts:
             return False, 'no link yet'
         if last.submitted_at:
             return True, f'submitted {last.submitted_at:%b %d}'
-        if last.is_open:
-            return True, f'open until {last.expires_at:%b %d}'
-        return False, 'last link expired or revoked — issue a new one'
+        if not last.is_open:
+            return False, 'last link expired or revoked — send a new one'
+        # A link existing is not a link sent: it ticks once it has gone out.
+        from tracker.services.onboarding_console import intake_sent_event
+        sent = intake_sent_event(last)
+        if not sent:
+            return False, 'link made but not sent — Send by email, or mark it sent'
+        to = sent.detail.get('to') or 'the firm'
+        return True, f'sent to {to} {sent.created_at:%b %d} · open until {last.expires_at:%b %d}'
 
     def intake_received(self):
         from tracker.models_onboarding_console import OnboardingIntake

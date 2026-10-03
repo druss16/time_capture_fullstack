@@ -35,6 +35,8 @@ export interface Intake {
   id: number; is_open: boolean; created_at: string; expires_at: string;
   last_saved_at: string | null; submitted_at: string | null; revoked_at: string | null;
   payload: any; url?: string;
+  /** Set once the link actually went out (email or marked by hand). */
+  sent: { to: string | null; how: string | null; at: string; by: string | null } | null;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -104,6 +106,10 @@ export const onboardApi = {
     safeFetchJson(`${BASE}/projects/${id}/delete/`, { method: "POST", ...json(body) }),
   issueIntake: (id: number) => safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/`, { method: "POST" }),
   reopenIntake: (id: number) => safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/reopen/`, { method: "POST" }),
+  sendIntake: (id: number, email: string, name: string) =>
+    safeFetchJson<Intake & { emailed: boolean; to: string }>(`${BASE}/projects/${id}/intake/send/`, { method: "POST", ...json({ email, name }) }),
+  markIntakeSent: (id: number, to: string) =>
+    safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/mark-sent/`, { method: "POST", ...json({ to }) }),
 };
 
 export interface RosterRow {

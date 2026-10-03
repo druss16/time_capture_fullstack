@@ -89,6 +89,25 @@ class ProjectTests(ConsoleBase):
         self.assertEqual(org.plan, 'none')
         self.assertTrue(OnboardingAuditEvent.objects.filter(action='project.create').exists())
 
+    def test_double_submit_returns_the_same_firm(self):
+        body = {'name': 'More Than Cars', 'vertical': 'marketing',
+                'install_path': 'mac_hand', 'seat_count': 8}
+        a = self.api.post('/api/onboard/projects/', body, format='json')
+        b = self.api.post('/api/onboard/projects/', body, format='json')
+        self.assertEqual(a.status_code, 201, a.content)
+        self.assertEqual(b.status_code, 201, b.content)
+        self.assertEqual(a.json()['id'], b.json()['id'])
+        self.assertEqual(Organization.objects.filter(name='More Than Cars').count(), 1)
+        self.assertEqual(OnboardingAuditEvent.objects.filter(action='project.create').count(), 1)
+
+    def test_old_or_other_operator_duplicate_still_refused(self):
+        body = {'name': 'More Than Cars', 'vertical': 'marketing', 'install_path': 'mac_hand'}
+        self.api.post('/api/onboard/projects/', body, format='json')
+        OnboardingProject.objects.update(created_at=timezone.now() - timedelta(minutes=10))
+        r = self.api.post('/api/onboard/projects/', body, format='json')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already exists', r.json()['error'])
+
     def test_duplicate_firm_refused(self):
         Organization.objects.create(name='Smith & Co., LLC', slug='smith-co')
         r = self.api.post('/api/onboard/projects/', {
@@ -111,6 +130,13 @@ class ProjectTests(ConsoleBase):
         self.assertEqual(org.industry_type, 'legal')
         ev = OnboardingAuditEvent.objects.get(project=p, action='project.create')
         self.assertEqual(ev.detail['changed_vertical'], ['general', 'legal'])
+        # An immediate repeat is a replay of the same request…
+        again = svc.create_project(actor=self.operator, vertical='legal',
+                                   install_path='windows_gpo', org_id=org.id)
+        self.assertEqual(again.id, p.id)
+        # …but adopting it again later is refused.
+        OnboardingProject.objects.filter(id=p.id).update(
+            created_at=timezone.now() - timedelta(minutes=10))
         with self.assertRaises(svc.ConsoleError):
             svc.create_project(actor=self.operator, vertical='legal',
                                install_path='windows_gpo', org_id=org.id)

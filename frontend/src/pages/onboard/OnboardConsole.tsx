@@ -2,7 +2,7 @@
 // The Onboarding Console — Mavops' own tool for onboarding firms at scale.
 // Standalone (no AppLayout, no org nav): it is not part of any firm's app and
 // not part of Mavops admin. Access is the server's "Onboarding Operator" role.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ClipboardCheck, Loader2, Lock, Plus } from "lucide-react";
 import { cn } from "@/lib/design-system";
@@ -166,14 +166,19 @@ function NewOnboarding({ onClose }: { onClose: () => void }) {
   };
   const ready = form.vertical && form.install_path && (mode === "new" ? form.name.trim() : form.org_id);
 
+  // A ref, not just the busy state: two clicks in the same frame both see
+  // busy=false, because the disabled button only re-renders after the first.
+  const submitting = useRef(false);
   const create = async () => {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true); setErr(null);
     try {
       const p = await onboardApi.create(mode === "new"
         ? { name: form.name, vertical: form.vertical, install_path: form.install_path, seat_count: form.seat_count, target_go_live: form.target_go_live || null }
         : { org_id: Number(form.org_id), vertical: form.vertical, install_path: form.install_path, target_go_live: form.target_go_live || null });
       nav(`/onboard/${p.id}`);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); submitting.current = false; }
   };
 
   return (

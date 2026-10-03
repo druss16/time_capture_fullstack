@@ -88,6 +88,27 @@ def find_existing_firm(name):
     return None
 
 
+REPLAY_WINDOW_SECONDS = 120
+
+
+def _just_created_by(org, actor, vertical):
+    """The project this operator created for this org moments ago, if any.
+
+    A double-clicked Start (or a retried request) would otherwise create the
+    firm on the first submit and fail the second on the duplicate check —
+    which shows an error for something that worked. A repeat of the same
+    request returns what the first one made instead.
+    """
+    from datetime import timedelta
+    from tracker.models_onboarding_console import OnboardingProject
+    if not getattr(actor, 'pk', None) or org.industry_type != vertical:
+        return None
+    return (OnboardingProject.objects
+            .filter(organization=org, created_by=actor,
+                    created_at__gte=timezone.now() - timedelta(seconds=REPLAY_WINDOW_SECONDS))
+            .first())
+
+
 @transaction.atomic
 def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
                    org_id=None, slug=None, target_go_live=None):
@@ -112,6 +133,9 @@ def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
         if not org:
             raise ConsoleError('Organization not found.')
         if OnboardingProject.objects.filter(organization=org).exists():
+            replay = _just_created_by(org, actor, vertical)
+            if replay:
+                return replay
             raise ConsoleError(f'{org.name} already has an onboarding.')
         if org.industry_type != vertical:
             # Adopting an existing firm is also the moment to correct it —
@@ -128,6 +152,9 @@ def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
             raise ConsoleError('Firm name is required.')
         existing = find_existing_firm(name)
         if existing:
+            replay = _just_created_by(existing, actor, vertical)
+            if replay:
+                return replay
             raise ConsoleError(
                 f'"{existing.name}" already exists in TimeTracker (org #{existing.id}, '
                 f'{existing.slug}). Choose "Firm already in TimeTracker" instead of '

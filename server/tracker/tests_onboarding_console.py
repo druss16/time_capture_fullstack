@@ -608,19 +608,29 @@ class InternalTaxClientTests(ConsoleBase):
         self.assertEqual(self._codes(agency), {'INTERNAL'})
         self.assertEqual(self._codes(law), {'INTERNAL'})
 
-    def test_cleanup_removes_unused_and_keeps_used(self):
+    def test_cleanup_only_touches_named_firms_and_refuses_general(self):
         from io import StringIO
         from django.core.management import call_command
+        from django.core.management.base import CommandError
         from tracker.models import Block, Client
         agency = self.make_project('marketing', 'mac_hand', 'Agency Co').organization
+        other_agency = self.make_project('marketing', 'mac_hand', 'Other Agency').organization
+        tlwall = Organization.objects.create(name='TL Wall Accounting', slug='tl-wall-x',
+                                             industry_type='general')
         busy = self.make_project('legal', 'windows_gpo', 'Busy Law').organization
-        unused = Client.objects.create(org=agency, code='INTERNAL_TAX', name='Internal - Tax')
-        used = Client.objects.create(org=busy, code='INTERNAL_TAX', name='Internal - Tax')
+        mk = lambda o: Client.objects.get_or_create(org=o, code='INTERNAL_TAX',
+                                                    defaults={'name': 'Internal - Tax'})[0]
+        a, other, tl, used = mk(agency), mk(other_agency), mk(tlwall), mk(busy)
         now = timezone.now()
         Block.objects.create(org=busy, user=self.operator, client=used, start=now,
                              end=now + timedelta(minutes=5), device_id='d', hostname='h')
-        call_command('remove_internal_tax_non_cpa', stdout=StringIO())
-        self.assertTrue(Client.objects.filter(id=unused.id).exists())     # dry run
-        call_command('remove_internal_tax_non_cpa', apply=True, stdout=StringIO())
-        self.assertFalse(Client.objects.filter(id=unused.id).exists())
-        self.assertTrue(Client.objects.filter(id=used.id).exists())
+        with self.assertRaises(CommandError):                 # --org-id is required
+            call_command('remove_internal_tax_non_cpa', stdout=StringIO())
+        out = StringIO()
+        call_command('remove_internal_tax_non_cpa', '--org-id', str(agency.id),
+                     '--org-id', str(tlwall.id), '--org-id', str(busy.id), '--apply', stdout=out)
+        self.assertFalse(Client.objects.filter(id=a.id).exists())
+        self.assertTrue(Client.objects.filter(id=tl.id).exists())        # general: refused
+        self.assertIn('REFUSED', out.getvalue())
+        self.assertTrue(Client.objects.filter(id=used.id).exists())      # has time
+        self.assertTrue(Client.objects.filter(id=other.id).exists())     # not named

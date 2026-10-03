@@ -29,7 +29,8 @@ def _blockers(org):
         out.append('has timesheets')
     if org.stripe_subscription_id or org.stripe_customer_id:
         out.append('is linked to Stripe')
-    real_clients = Client.objects.filter(org=org).exclude(name__istartswith='Internal')
+    from tracker.industry_categories import real_clients as _real
+    real_clients = _real(Client.objects.filter(org=org))
     if real_clients.exists():
         out.append(f'has {real_clients.count()} client(s)')
     return out

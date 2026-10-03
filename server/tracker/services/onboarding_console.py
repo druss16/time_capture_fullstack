@@ -790,7 +790,8 @@ def deletion_check(project):
     signed_in = [m.user.email for m in members if m.user.last_login]
     if signed_in:
         blockers.append(f'{len(signed_in)} member(s) have signed in')
-    clients = Client.objects.filter(org=org).exclude(name__istartswith='Internal').count()
+    from tracker.industry_categories import real_clients
+    clients = real_clients(Client.objects.filter(org=org)).count()
     return {
         'firm_created_here': _created_by_console(project),
         'blockers': blockers,

@@ -1777,6 +1777,17 @@ def is_internal_client_name(name: str) -> bool:
     return n == "internal" or n.startswith("internal -")
 
 
+def real_clients(queryset):
+    """The same Client queryset minus the firm's internal clients.
+
+    Every org is created with "Internal" and "Internal - Tax", so counting
+    clients without this reports two for a firm that has imported none.
+    Same rule as is_internal_client_name, as a query.
+    """
+    from django.db.models import Q
+    return queryset.exclude(Q(name__iexact='internal') | Q(name__istartswith='internal -'))
+
+
 def ensure_internal_client(org):
     """
     Ensure an 'Internal' client exists for the given org.

@@ -240,7 +240,10 @@ class Command(BaseCommand):
         not on every path, and a client with no aliases is close to unmatchable
         from a window title. Counting them beats remembering to ask.
         """
-        qs = Client.objects.filter(org=org, is_active=True)
+        from tracker.industry_categories import real_clients
+        # The auto-created Internal clients are not the firm's clients: counted,
+        # a firm with nothing imported read "2 active".
+        qs = real_clients(Client.objects.filter(org=org, is_active=True))
         total = qs.count()
         if total == 0:
             self._line('clients', BAD, 'none', quiet)

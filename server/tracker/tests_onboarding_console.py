@@ -572,3 +572,24 @@ class IntakeSendTests(ConsoleBase):
                           {'email': 'owner@mtc.test'}, format='json')
         self.api.post(f'/api/onboard/projects/{p.id}/intake/')       # new link, not sent
         self.assertFalse(self._step(p, 'intake_sent')['done'])
+
+
+class InternalClientsTests(ConsoleBase):
+    def test_new_firm_has_no_clients_yet(self):
+        from tracker.models import Client
+        from tracker.management.commands.verify_firm import run_checks
+        p = self.make_project()
+        self.assertTrue(Client.objects.filter(org=p.organization, name='Internal').exists())
+        st = {s['key']: s for ph in evaluate(p)['phases'] for s in ph['steps']}
+        self.assertFalse(st['clients']['done'])
+        self.assertEqual(st['clients']['detail'], 'none yet')
+        self.assertEqual(st['aliases']['detail'], 'no clients yet')
+        line = next(l for l in run_checks(p.organization)['lines'] if l['label'] == 'clients')
+        self.assertEqual(line['detail'], 'none')
+
+    def test_real_client_named_internal_something_still_counts(self):
+        from tracker.models import Client
+        p = self.make_project()
+        Client.objects.create(org=p.organization, name='Internal Revenue Service', code='IRS')
+        st = {s['key']: s for ph in evaluate(p)['phases'] for s in ph['steps']}
+        self.assertEqual(st['clients']['detail'], '1 active')

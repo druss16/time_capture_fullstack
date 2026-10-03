@@ -8,7 +8,7 @@ Features:
   - Monday mornings review Friday's timesheet
   - Respects per-user email_timesheet_reminders preference
   - Skips users with already-approved timesheets
-  - Beautiful dark-themed HTML email with client breakdown
+  - HTML email in the shared TimeTracker shell, with client breakdown
   - Plain text fallback
   - Dry run mode for testing
 
@@ -28,7 +28,9 @@ Place at:
 from datetime import date, timedelta, datetime, time as dt_time
 
 from django.core.management.base import BaseCommand
-from django.core.mail import EmailMultiAlternatives
+from tracker.email_service import (
+    send_email, _wrap_html, _btn, _p, _panel, _rows, _e, _prefs_note,
+)
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
@@ -252,23 +254,18 @@ class Command(BaseCommand):
         return results
 
     def _send_reminder_email(self, user, review_date, summary):
-        """Send the reminder email with HTML template."""
+        """Send the reminder email through the shared SendGrid shell."""
         display_name = getattr(user, 'first_name', '') or user.username
         date_str = review_date.strftime('%A, %B %d')
         review_url = f"{WEB_APP_URL}/daily?date={review_date.isoformat()}"
 
         status = summary.get('status', 'draft')
         if status == 'submitted':
-            status_text = "Submitted — pending approval"
-            status_color = "#14B8A6"
+            status_text, status_tone = "Submitted — pending approval", 'brand'
         elif status == 'approved':
-            status_text = "Approved ✓"
-            status_color = "#10B981"
+            status_text, status_tone = "Approved", 'brand'
         else:
-            status_text = "Draft — not yet submitted"
-            status_color = "#F59E0B"
-
-        subject = f"⏱ Review your timesheet for {date_str}"
+            status_text, status_tone = "Draft — not yet submitted", 'warn'
 
         html_content = self._build_html_email(
             display_name=display_name,
@@ -276,7 +273,7 @@ class Command(BaseCommand):
             summary=summary,
             review_url=review_url,
             status_text=status_text,
-            status_color=status_color,
+            status_tone=status_tone,
         )
 
         text_content = self._build_text_email(
@@ -287,151 +284,48 @@ class Command(BaseCommand):
             status_text=status_text,
         )
 
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=text_content,
+        # Django's mail path has no EMAIL_BACKEND configured; every other
+        # email goes through SendGrid, so this one does too.
+        sent = send_email(
+            to_email=user.email,
+            subject=f"Review your timesheet for {date_str}",
+            html_content=html_content,
+            plain_content=text_content,
             from_email=REMINDER_FROM_EMAIL,
-            to=[user.email],
+            categories=["timesheet_reminder", "daily"],
         )
-        msg.attach_alternative(html_content, "text/html")
-        msg.send(fail_silently=False)
+        if not sent:
+            raise RuntimeError(f"SendGrid did not accept the email to {user.email}")
 
     def _build_html_email(self, display_name, date_str, summary,
-                          review_url, status_text, status_color):
-        """Build the HTML email content."""
+                          review_url, status_text, status_tone):
+        """Build the HTML email in the shared TimeTracker shell."""
         entries = summary.get('entries', [])
         total_hours = summary.get('total_hours', 0)
 
-        client_rows = ""
         if entries:
-            for entry in entries:
-                client_rows += f"""
-                <tr>
-                    <td style="padding: 10px 16px; border-bottom: 1px solid #333; color: #fff; font-size: 14px;">
-                        {entry['client_name']}
-                    </td>
-                    <td style="padding: 10px 16px; border-bottom: 1px solid #333; color: #14B8A6; font-weight: bold; text-align: right; font-size: 14px;">
-                        {entry['hours']:.1f} hrs
-                    </td>
-                </tr>"""
+            table = _rows(
+                [(_e(e['client_name']), f"{e['hours']:.1f} hrs") for e in entries],
+                heading=('Client', 'Hours'),
+                total=f"{total_hours:.1f} hrs",
+            )
         else:
-            client_rows = """
-                <tr>
-                    <td colspan="2" style="padding: 20px 16px; color: #F59E0B; text-align: center; font-size: 14px;">
-                        ⚠️ No time was tracked
-                    </td>
-                </tr>"""
+            table = _panel('<strong>No time was captured.</strong> If you worked '
+                           'that day, check that the TimeTracker desktop app is running.',
+                           'warn')
 
-        return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; background-color: #111; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #111;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
-                <table width="500" cellpadding="0" cellspacing="0" style="background-color: #1A1A1A; border-radius: 12px; overflow: hidden;">
-                    
-                    <!-- Header -->
-                    <tr>
-                        <td style="background: linear-gradient(135deg, #14B8A6, #0D9488); padding: 24px 30px;">
-                            <h1 style="margin: 0; color: #fff; font-size: 20px; font-weight: 700;">
-                                📋 Review Your Timesheet
-                            </h1>
-                            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.85); font-size: 14px;">
-                                {date_str}
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- Greeting -->
-                    <tr>
-                        <td style="padding: 24px 30px 8px;">
-                            <p style="margin: 0; color: #ccc; font-size: 15px; line-height: 1.5;">
-                                Hi {display_name},<br>
-                                Here's your time summary. Please review and submit your timesheet.
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- Time Summary Table -->
-                    <tr>
-                        <td style="padding: 16px 30px;">
-                            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #252525; border-radius: 8px; overflow: hidden;">
-                                <thead>
-                                    <tr>
-                                        <th style="padding: 12px 16px; text-align: left; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #333;">
-                                            Client
-                                        </th>
-                                        <th style="padding: 12px 16px; text-align: right; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #333;">
-                                            Hours
-                                        </th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {client_rows}
-                                </tbody>
-                                <tfoot>
-                                    <tr>
-                                        <td style="padding: 12px 16px; color: #fff; font-weight: bold; font-size: 15px; border-top: 2px solid #3A3A3A;">
-                                            Total
-                                        </td>
-                                        <td style="padding: 12px 16px; color: #14B8A6; font-weight: bold; font-size: 15px; text-align: right; border-top: 2px solid #3A3A3A;">
-                                            {total_hours:.1f} hrs
-                                        </td>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </td>
-                    </tr>
-                    
-                    <!-- Status -->
-                    <tr>
-                        <td style="padding: 0 30px 16px;">
-                            <p style="margin: 0; font-size: 13px;">
-                                <span style="color: {status_color};">●</span>
-                                <span style="color: #999; margin-left: 6px;">{status_text}</span>
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- CTA Button -->
-                    <tr>
-                        <td style="padding: 8px 30px 28px;">
-                            <table width="100%" cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td align="center">
-                                        <a href="{review_url}" 
-                                           style="display: inline-block; background-color: #14B8A6; color: #fff; 
-                                                  text-decoration: none; padding: 14px 40px; border-radius: 8px; 
-                                                  font-size: 16px; font-weight: 600; letter-spacing: 0.3px;">
-                                            📝 Review &amp; Submit Timesheet
-                                        </a>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    
-                    <!-- Footer -->
-                    <tr>
-                        <td style="padding: 16px 30px; background-color: #151515; border-top: 1px solid #252525;">
-                            <p style="margin: 0; color: #555; font-size: 12px; text-align: center; line-height: 1.4;">
-                                This is an automated reminder from TimeTracker.<br>
-                                You can adjust notification preferences in your 
-                                <a href="{WEB_APP_URL}/settings" style="color: #14B8A6; text-decoration: none;">account settings</a>.
-                            </p>
-                        </td>
-                    </tr>
-                    
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>"""
+        body = (
+            _p(f'Hi {_e(display_name)},')
+            + _p("Here's your time summary. Please review and submit your timesheet.",
+                 last=True)
+            + table
+            + _panel(f'Status: <strong>{_e(status_text)}</strong>', status_tone)
+            + _btn(review_url, 'brand', 'Review &amp; submit')
+        )
+        return _wrap_html('brand', '', 'Review your timesheet', body,
+                          subtitle=_e(date_str),
+                          preheader=f'{total_hours:.1f} hrs captured · {_e(status_text)}',
+                          footer_note=_prefs_note())
 
     def _build_text_email(self, display_name, date_str, summary, review_url, status_text):
         """Build plain text fallback."""

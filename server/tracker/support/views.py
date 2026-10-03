@@ -214,18 +214,17 @@ def create_ticket(request):
         conversation=conv,
     )
 
-    # Reuse your existing Celery/Graph/SMTP mail path here.
-    from django.core.mail import send_mail
-    send_mail(
-        subject=f"[TimeTracker support #{ticket.id}] {ticket.subject}",
-        message=(
-            f"From: {request.user.email} (org: {org.name}, id {org.id})\n\n"
-            f"{ticket.body}\n\n"
-            f"--- ticket #{ticket.id} ---"
-        ),
-        from_email="support@mavops.ai",
-        recipient_list=["support@mavops.ai"],
-        fail_silently=False,
+    # Through SendGrid like every other email. Django's send_mail had no
+    # EMAIL_BACKEND configured, and with fail_silently=False a failed send
+    # 500'd the request after the ticket had already been saved.
+    from tracker.email_service import send_support_ticket
+    send_support_ticket(
+        ticket_id=ticket.id,
+        subject=ticket.subject,
+        body=ticket.body,
+        user_email=request.user.email,
+        org_name=org.name,
+        org_id=org.id,
     )
 
     return JsonResponse({"ticket_id": ticket.id, "status": ticket.status})

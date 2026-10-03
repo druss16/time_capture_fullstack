@@ -324,8 +324,9 @@ class Facts:
         return decided, f'on {trig}' + ('' if decided else ' (default — not confirmed)')
 
     def clients(self):
+        from tracker.industry_categories import real_clients
         from tracker.models import Client
-        n = Client.objects.filter(org=self.org, is_active=True).count()
+        n = real_clients(Client.objects.filter(org=self.org, is_active=True)).count()
         return n > 0, f'{n} active' if n else 'none yet'
 
     def task_types(self):
@@ -357,8 +358,9 @@ class Facts:
         return not missing and total > 0, f'{total - len(missing)}/{total} resolve'
 
     def aliases(self):
+        from tracker.industry_categories import real_clients
         from tracker.models import Client
-        vals = list(Client.objects.filter(org=self.org, is_active=True)
+        vals = list(real_clients(Client.objects.filter(org=self.org, is_active=True))
                     .values_list('aliases', flat=True))
         if not vals:
             return False, 'no clients yet'

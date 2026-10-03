@@ -4,7 +4,7 @@ import App from "./pages/App"; // ✅ Points to merged App
 import "./index.css";
 import { installViewAsFetch } from "./lib/viewAs";
 
-// MavOps "View as": patch window.fetch before anything renders, so the very
+// Mavops "View as": patch window.fetch before anything renders, so the very
 // first request of the session already carries the header. Installed
 // unconditionally — it is a pass-through unless a view-as is active.
 installViewAsFetch();

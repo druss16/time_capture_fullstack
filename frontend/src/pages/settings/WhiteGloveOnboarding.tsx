@@ -11,11 +11,11 @@ const MUTED = "#64748B";
 const steps = [
   { who: "IT Admin", what: "Export user/device list from Intune or AD (email, display name, machine hostname, Windows username). Send as CSV." },
   { who: "Office Manager", what: "Add role (staff/manager/admin) and billing rate to the team list. Provide a client list with names, rates, and assigned team members." },
-  { who: "MavOps", what: "Import team roster, clients, and device map into TimeTracker. Generate the firm’s org token." },
-  { who: "MavOps", what: "Build the MSI with the org token embedded. Test on a clean VM. Send MSI to IT Admin." },
+  { who: "Mavops", what: "Import team roster, clients, and device map into TimeTracker. Generate the firm’s org token." },
+  { who: "Mavops", what: "Build the MSI with the org token embedded. Test on a clean VM. Send MSI to IT Admin." },
   { who: "IT Admin", what: "Push MSI to all machines via Intune (server → portal → devices)." },
   { who: "Automatic", what: "Agent starts, reads org token, detects hostname/username, calls API, auto-pairs to the correct user. Zero user interaction." },
-  { who: "MavOps", what: "Verify all devices paired in admin panel. Check-in call at day 2–3. Tune AI categorization as needed." },
+  { who: "Mavops", what: "Verify all devices paired in admin panel. Check-in call at day 2–3. Tune AI categorization as needed." },
 ];
 
 const teamDeviceCsvExample = [
@@ -80,7 +80,7 @@ function SimpleTable({ data }: { data: string[][] }) {
 
 function StepRow({ n, who, what }: { n: number; who: string; what: string }) {
   const tone =
-    who === "MavOps"
+    who === "Mavops"
       ? "bg-emerald-50 text-emerald-900 border-emerald-200"
       : who === "Automatic"
       ? "bg-slate-50 text-slate-900 border-slate-200"
@@ -164,7 +164,7 @@ export default function WhiteGloveOnboarding() {
             <p className="text-sm leading-6" style={{ color: TEXT }}>
               TimeTracker provides <span className="font-semibold">zero-interaction</span> enterprise deployment using Microsoft Intune or Active Directory.
               <br />
-              <span className="font-semibold">MavOps</span> handles provisioning. Your <span className="font-semibold">IT team</span> handles distribution.{" "}
+              <span className="font-semibold">Mavops</span> handles provisioning. Your <span className="font-semibold">IT team</span> handles distribution.{" "}
               <span className="font-semibold">End users do nothing.</span>
             </p>
             <div className="mt-3 flex items-center gap-2 text-sm" style={{ color: MUTED }}>
@@ -177,7 +177,7 @@ export default function WhiteGloveOnboarding() {
             <ul className="text-sm leading-6 list-disc pl-5" style={{ color: TEXT }}>
               <li><span className="font-semibold">IT Admin:</span> Device/user CSV (Intune or AD)</li>
               <li><span className="font-semibold">Office Manager:</span> Roles + billing rates + client assignments</li>
-              <li><span className="font-semibold">MavOps:</span> Build MSI + test + deliver to IT</li>
+              <li><span className="font-semibold">Mavops:</span> Build MSI + test + deliver to IT</li>
             </ul>
           </Card>
         </div>
@@ -229,7 +229,7 @@ export default function WhiteGloveOnboarding() {
         </div>
 
         <div className="pt-2 text-xs" style={{ color: MUTED }}>
-          TimeTracker by MavOps — Secure. Zero-friction. Enterprise-ready.
+          TimeTracker by Mavops — Secure. Zero-friction. Enterprise-ready.
         </div>
       </div>
     </div>

@@ -560,7 +560,7 @@ Here is everything to deploy TimeTracker to {org.name}'s Macs.
   2. timetracker_config_{org.slug}.sh — run as root (writes
      /Library/Application Support/TimeTracker/config.plist with your org token)
   3. The browser-extension profile — mavops-browser-extension.mobileconfig,
-     staged by the pkg in /Library/Application Support/MavOps/. It
+     staged by the pkg in /Library/Application Support/Mavops/. It
      force-installs and enables the Chrome extension silently.
 
 The agent reads the config on first run and pairs itself to the right person
@@ -575,7 +575,7 @@ Apple Silicon (M1 or later) only.
 Staff review and submit time at https://timetracker.mavops.ai. Each person
 gets their own setup link by email — there is nothing for you to distribute.
 
-Dan Russell | MavOps AI | dan@mavops.ai
+Dan Russell | Mavops AI | dan@mavops.ai
 '''
     else:
         body = f'''Hi {hi},
@@ -606,7 +606,7 @@ Anyone who doesn't see it can use "Forgot?" on the sign-in page.
 
 Let me know if you hit anything during deployment.
 
-Dan Russell | MavOps AI | dan@mavops.ai
+Dan Russell | Mavops AI | dan@mavops.ai
 '''
     return body
 

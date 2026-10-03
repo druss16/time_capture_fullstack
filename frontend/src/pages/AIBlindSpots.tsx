@@ -14,7 +14,7 @@
  * (user_count=1) or a firm-wide pattern (user_count=many) — the latter is the
  * higher-leverage fix.
  *
- * Intended as a MavOps-admin / power-user tool more than a customer feature,
+ * Intended as a Mavops-admin / power-user tool more than a customer feature,
  * but harmless to expose to firm owners.
  */
 import { useCallback, useEffect, useState } from "react";
@@ -81,7 +81,7 @@ export default function AIBlindSpots({
 
   // Rule-creation dialog + the org's clients (for the route dropdown).
   const [ruleTheme, setRuleTheme] = useState<RuleTheme | null>(null);
-  // Non-staff "Flag to MavOps" flow: which theme's note box is open, and the note.
+  // Non-staff "Flag to Mavops" flow: which theme's note box is open, and the note.
   const [flaggingIdx, setFlaggingIdx] = useState<number | null>(null);
   const [flagNote, setFlagNote] = useState("");
   const [flaggedKeys, setFlaggedKeys] = useState<Set<string>>(new Set());
@@ -116,7 +116,7 @@ export default function AIBlindSpots({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `Failed (${res.status})`);
       setFlaggedKeys((prev) => new Set(prev).add(t.label));
-      setToast(json.message || "Sent to MavOps — thanks!");
+      setToast(json.message || "Sent to Mavops — thanks!");
       setFlaggingIdx(null);
       setFlagNote("");
     } catch (e: any) {
@@ -315,7 +315,7 @@ export default function AIBlindSpots({
                     ) : flaggedKeys.has(t.label) ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600">
                         <CheckCircle2 className="h-3 w-3" />
-                        Flagged to MavOps
+                        Flagged to Mavops
                       </span>
                     ) : flaggingIdx === i ? (
                       <div className="w-full max-w-xs flex flex-col items-end gap-1.5">
@@ -338,7 +338,7 @@ export default function AIBlindSpots({
                             disabled={flagSaving}
                             className="inline-flex items-center gap-1 text-[11px] font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-md px-2.5 py-1 disabled:opacity-50"
                           >
-                            {flagSaving ? "Sending…" : "Send to MavOps"}
+                            {flagSaving ? "Sending…" : "Send to Mavops"}
                           </button>
                         </div>
                       </div>
@@ -347,7 +347,7 @@ export default function AIBlindSpots({
                         onClick={() => { setFlaggingIdx(i); setFlagNote(""); }}
                         className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-violet-700 border border-slate-200 hover:border-violet-300 rounded-md px-2 py-1 transition-colors"
                       >
-                        Flag to MavOps
+                        Flag to Mavops
                       </button>
                     )}
                   </div>

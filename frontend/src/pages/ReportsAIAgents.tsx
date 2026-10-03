@@ -6,7 +6,7 @@
  * tracker booked to a person while nobody's hands were on the machine.
  *
  * Its own numbers on its own page — never added to Time Summary, timesheets,
- * billing or analytics. Owners only, and hidden per firm until MavOps turns it
+ * billing or analytics. Owners only, and hidden per firm until Mavops turns it
  * on; the server answers 404/403 otherwise and this page says so.
  *
  * "It was me" / "It was an agent" are RECORD ONLY: they shrink the list and

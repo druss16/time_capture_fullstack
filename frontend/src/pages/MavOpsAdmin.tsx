@@ -128,7 +128,7 @@ function PasswordGate({ onUnlock }: { onUnlock: () => void }) {
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Mono', monospace" }}>
       <div style={{ border: `1px solid ${T.teal}`, padding: "48px 56px", maxWidth: 400, width: "100%", borderRadius: 8, background: T.surface, animation: shake ? "shake 0.4s ease" : "none" }}>
-        <div style={{ color: T.teal, fontSize: 11, letterSpacing: 4, marginBottom: 32, textTransform: "uppercase" as const }}>MavOps Internal</div>
+        <div style={{ color: T.teal, fontSize: 11, letterSpacing: 4, marginBottom: 32, textTransform: "uppercase" as const }}>Mavops Internal</div>
         <div style={{ color: T.text, fontSize: 22, fontWeight: 700, marginBottom: 8, fontFamily: "'DM Sans', sans-serif" }}>Admin Access</div>
         <div style={{ color: T.textSub, fontSize: 13, marginBottom: 32 }}>TimeTracker Operations · All Orgs</div>
         <input type="password" value={input} autoFocus
@@ -3508,7 +3508,7 @@ export default function MavOpsAdmin() {
       {/* ── Header ── */}
       <div style={{ borderBottom: `1px solid ${T.border}`, padding: "14px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ ...mono, color: T.teal, fontSize: 12, letterSpacing: 3, textTransform: "uppercase" as const, fontWeight: 600 }}>MavOps</div>
+          <div style={{ ...mono, color: T.teal, fontSize: 12, letterSpacing: 3, textTransform: "uppercase" as const, fontWeight: 600 }}>Mavops</div>
           <div style={{ color: T.border }}>|</div>
           <div style={{ fontSize: 14, color: T.textSub }}>Operations · All Orgs</div>
           {orgs.length > 0 && <div style={{ ...mono, fontSize: 12, color: T.textMuted }}>{orgs.length} orgs</div>}

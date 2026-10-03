@@ -3,7 +3,7 @@
  *
  * Two views, never a blend: there is deliberately no "both" option, because
  * agent hours must never be added into human totals. The toggle only renders
- * when the AI agent report is available to this user (firm owner, and MavOps
+ * when the AI agent report is available to this user (firm owner, and Mavops
  * has switched it on for the firm); everyone else sees Reports as before.
  */
 import { useEffect, useState } from "react";

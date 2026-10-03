@@ -1,11 +1,11 @@
 # tracker/views_reports.py
 """
-Simple high-level reporting for customer firms + MavOps admin.
+Simple high-level reporting for customer firms + Mavops admin.
 
 ONE endpoint, TWO consumers:
   - Customer web account: role-gated (manager/owner/admin see all employees in
     their org; members see only themselves).
-  - MavOps admin dashboard: staff/superuser pass ?org_id= to impersonate any org
+  - Mavops admin dashboard: staff/superuser pass ?org_id= to impersonate any org
     (reuses get_request_org_override, same as the rest of views.py).
 
 Design goals:
@@ -239,7 +239,7 @@ def _resolve_scope(request, org):
 
     Returns: (can_see_all: bool, forced_user_id: int | None)
 
-    - Staff/superuser (MavOps admin via ?org_id=) → see all in target org.
+    - Staff/superuser (Mavops admin via ?org_id=) → see all in target org.
     - owner/admin/manager → see all employees in their org.
     - member → forced to their own user_id, regardless of any param sent.
     """
@@ -1709,15 +1709,15 @@ def reports_create_rule(request):
         return Response({"error": "No organization found"}, status=404)
 
     # Permission: firm-wide rules affect EVERYONE at the firm and route time
-    # onto client invoices, so creation is restricted to MavOps staff for now.
+    # onto client invoices, so creation is restricted to Mavops staff for now.
     # (Interim gate — the planned propose+approval queue will let firm users
-    # propose rules that MavOps/owners approve before they fire. Until that
+    # propose rules that Mavops/owners approve before they fire. Until that
     # ships, only staff may create, so a manager can't mis-route the whole
     # firm's time.)
     if not request.user.is_staff:
         return Response(
-            {"error": "Firm-wide rules can only be created by MavOps staff. "
-                      "Please flag this activity to your MavOps contact."},
+            {"error": "Firm-wide rules can only be created by Mavops staff. "
+                      "Please flag this activity to your Mavops contact."},
             status=403,
         )
 
@@ -1851,7 +1851,7 @@ def reports_create_rule(request):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Rule suggestions — firm users flag a blind spot; MavOps reviews & creates
+# Rule suggestions — firm users flag a blind spot; Mavops reviews & creates
 # ──────────────────────────────────────────────────────────────────────────
 # NOTE: requires the RuleSuggestion model (migration 0118). Import is done
 # lazily inside the functions so this module still imports cleanly before the
@@ -1866,7 +1866,7 @@ def reports_submit_suggestion(request):
     Body: { label, app_hint, title_hint, minutes, block_count, user_count, note?, org_id? }
 
     Any authenticated firm user may submit (it's a problem report, not a rule).
-    Stores a RuleSuggestion and best-effort emails MavOps. The email failing
+    Stores a RuleSuggestion and best-effort emails Mavops. The email failing
     never blocks the record from saving.
     """
     from tracker.models import RuleSuggestion  # lazy (post-migration)
@@ -1919,7 +1919,7 @@ def reports_submit_suggestion(request):
     return Response({
         "created": True,
         "suggestion_id": suggestion.id,
-        "message": "Sent to MavOps — thanks! We'll review this and set up a rule.",
+        "message": "Sent to Mavops — thanks! We'll review this and set up a rule.",
     })
 
 
@@ -1928,7 +1928,7 @@ def reports_submit_suggestion(request):
 def reports_list_suggestions(request):
     """
     GET /api/reports/suggestions/?status=pending&org_id=
-    Staff-only. Lists rule suggestions for review in MavOps Admin.
+    Staff-only. Lists rule suggestions for review in Mavops Admin.
     """
     from tracker.models import RuleSuggestion  # lazy
 

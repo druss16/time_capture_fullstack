@@ -212,7 +212,7 @@ def _wrap_html(tone_or_gradient, header_icon, header_title, body_html,
         '<span style="color:#ffffff;font-size:15px;font-weight:700;'
         'letter-spacing:-0.01em;">TimeTracker</span>'
         '<span style="color:rgba(255,255,255,0.72);font-size:12px;">'
-        ' by MavOps</span></td></tr>'
+        ' by Mavops</span></td></tr>'
 
         # The only per-email colour, and only where the news genuinely differs.
         '<tr><td style="height:3px;background:' + accent +
@@ -231,7 +231,7 @@ def _wrap_html(tone_or_gradient, header_icon, header_title, body_html,
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
         ' border="0" style="max-width:600px;"><tr>'
         '<td style="padding:16px 28px 0;text-align:center;color:' + INK_FAINT +
-        ';font-size:12px;line-height:1.5;">TimeTracker by MavOps &middot; '
+        ';font-size:12px;line-height:1.5;">TimeTracker by Mavops &middot; '
         '<a href="mailto:info@mavops.ai" style="color:' + TEAL +
         ';text-decoration:none;">info@mavops.ai</a></td></tr></table>'
 
@@ -294,7 +294,7 @@ def send_added_to_org(
             </p>
         </div>
         {_btn(login_url, "#2B9D90 0%,#237F74 100%", "Log In to TimeTracker &rarr;")}
-        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by Mavops</p>'''
 
     html = _wrap_html("#2B9D90 0%,#237F74 100%", "🎉", f"You've been added to {org_name}!", body)
 
@@ -306,7 +306,7 @@ Log in at: {login_url}
 Username: {username}
 Password: Use your existing TimeTracker password
 
-- TimeTracker by MavOps"""
+- TimeTracker by Mavops"""
 
     return send_email(
         to_email=to_email,
@@ -346,7 +346,7 @@ def send_seat_overage_notice(
             </p>
         </div>
         {_btn(billing_url, "#2B9D90 0%,#237F74 100%", "Add seats &rarr;")}
-        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by MavOps</p>'''
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin-bottom:0;">TimeTracker by Mavops</p>'''
 
     html = _wrap_html("#F59E0B 0%,#D97706 100%", "⚠️", "You're over your seat count", body)
 
@@ -359,7 +359,7 @@ added members will be paused until you do.
 
 Add seats: {billing_url}
 
-- TimeTracker by MavOps"""
+- TimeTracker by Mavops"""
 
     return send_email(
         to_email=to_email,
@@ -923,7 +923,7 @@ def send_rule_suggestion_notification(
     suggestion_id: int = None,
 ):
     """
-    Notify MavOps that a firm user flagged an uncategorized activity as a
+    Notify Mavops that a firm user flagged an uncategorized activity as a
     candidate for a routing/categorization rule. Best-effort — callers wrap
     this in try/except so a failed email never blocks the suggestion saving.
     """
@@ -945,7 +945,7 @@ def send_rule_suggestion_notification(
       </table>
       {note_html}
       <p style="color:#94a3b8;font-size:12px;margin-top:16px;">
-        Review in MavOps Admin → Rule Suggestions{f' (#{suggestion_id})' if suggestion_id else ''}.
+        Review in Mavops Admin → Rule Suggestions{f' (#{suggestion_id})' if suggestion_id else ''}.
       </p>
     </div>
     """

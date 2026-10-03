@@ -7,7 +7,7 @@
 // committed on its own, which nothing re-examines afterwards, so a block on the
 // wrong client stays silent until the client is billed for it.
 //
-// This runs the same detector as the MavOps Mismatches tab (one shared core on
+// This runs the same detector as the Mavops Mismatches tab (one shared core on
 // the server), pointed at the weeks in front of the reviewer.
 //
 

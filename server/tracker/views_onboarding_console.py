@@ -5,7 +5,7 @@ API for the Onboarding Console — /api/onboard/.
 
 THE FIREWALL. Every operator endpoint requires membership of the
 "Onboarding Operator" group (or superuser). is_staff alone is NOT enough, and
-being an operator grants nothing in MavOps admin: the two consoles are
+being an operator grants nothing in Mavops admin: the two consoles are
 separate on purpose, so a future hire can onboard firms without being handed
 View-as, cross-org Daily Review, or device kill switches. Auth is the web
 login's bearer token only — never an agent key — and the prefix is exempt
@@ -490,10 +490,10 @@ class PublicIntake(APIView):
     def get(self, request, raw):
         intake = self._get(raw)
         if not intake or intake.revoked_at:
-            return Response({'error': 'This link is no longer valid. Ask MavOps for a new one.'},
+            return Response({'error': 'This link is no longer valid. Ask Mavops for a new one.'},
                             status=404)
         if not intake.submitted_at and intake.expires_at <= timezone.now():
-            return Response({'error': 'This link has expired. Ask MavOps for a new one.'},
+            return Response({'error': 'This link has expired. Ask Mavops for a new one.'},
                             status=410)
         return Response(self._payload(intake))
 

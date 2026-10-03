@@ -1,6 +1,6 @@
 // src/pages/MavOpsCompanyReview.tsx
 /**
- * MavOps → Daily Review → "Needs You" — one firm's whole review queue, every
+ * Mavops → Daily Review → "Needs You" — one firm's whole review queue, every
  * user in a single list, actionable from the admin console.
  *
  * Why it works this way
@@ -13,7 +13,7 @@
  * one thing this view must never do.
  *
  * So it doesn't. It fans `today-time` out across the firm's members using the
- * existing MavOps view-as identity swap (X-View-As-User, see
+ * existing Mavops view-as identity swap (X-View-As-User, see
  * tracker/impersonation.py), runs each payload through the *same* `deriveLanes`
  * the real screen uses, and concatenates the Needs-You lanes into one queue.
  * Writes go back through the same per-block endpoints under the same header, so
@@ -937,7 +937,7 @@ export default function MavOpsCompanyReview({ apiFetch, flash, filterOrg, setFil
       );
     }
     const p = row.item;
-    // TWO different things, and MavOps wants both.
+    // TWO different things, and Mavops wants both.
     //
     //   why_explanation     the QUESTION, in one line — "the title names a
     //                       client, but 10 on your roster answer to it".

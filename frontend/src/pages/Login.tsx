@@ -134,7 +134,7 @@ export default function Login() {
           <img src="/timetracker-icon-mono-white.svg" alt="TimeTracker" className="w-10 h-10" />
           <div className="leading-none">
             <p className="text-[17px] font-bold text-white tracking-tight">TimeTracker</p>
-            <p className="text-[11px] text-white/50 mt-0.5">by MavOps</p>
+            <p className="text-[11px] text-white/50 mt-0.5">by Mavops</p>
           </div>
         </Link>
 
@@ -189,7 +189,7 @@ export default function Login() {
         </div>
 
         <p className="relative z-10 text-[11px] text-white/30">
-          © {new Date().getFullYear()} MavOps. All rights reserved.
+          © {new Date().getFullYear()} Mavops. All rights reserved.
         </p>
       </div>
 

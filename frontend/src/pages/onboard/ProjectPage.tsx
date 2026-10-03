@@ -1,6 +1,6 @@
 // src/pages/onboard/ProjectPage.tsx — one firm's onboarding: the playbook as a
 // live checklist, the verify_firm report, contacts, and the audit trail.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Circle, MinusCircle,
@@ -8,6 +8,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { onboardApi, type Phase, type ProjectDetail, type Step, type VerifyResult } from "./api";
+
+type Pending = { done?: boolean; not_applicable?: boolean };
+type OnPending = (key: string, patch: Pending | null) => void;
 import ActionDialog from "./StepActions";
 import {
   ErrorNote, INSTALL_PATHS, Modal, Pill, WHO_LABEL, fmtDate, inputClass, labelClass,
@@ -28,6 +31,18 @@ export default function ProjectPage({ id }: { id: number }) {
   const [openPhases, setOpenPhases] = useState<Record<string, boolean>>({});
   const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [verifying, setVerifying] = useState(false);
+  // Ticks the server has not confirmed yet. Kept here, not in the row, so the
+  // progress bar and phase counts move on the click too. Each entry is cleared
+  // by its own save once the reload after it has landed — not by any reload,
+  // or a quick second tick would flicker back when the first one's data came in.
+  const [pending, setPending] = useState<Record<string, Pending>>({});
+  const onPending = useCallback<OnPending>((key, patch) => {
+    setPending((cur) => {
+      const next = { ...cur };
+      if (patch) next[key] = { ...next[key], ...patch }; else delete next[key];
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -46,9 +61,11 @@ export default function ProjectPage({ id }: { id: number }) {
 
   const refresh = useCallback(() => { load(); runVerify(); }, [load, runVerify]);
 
+  const checklist = useMemo(() => p && withPending(p.checklist, pending), [p, pending]);
+
   if (!p) return <div className="p-10 text-center text-sm text-slate-500">{err || "Loading…"}</div>;
 
-  const { done, total } = p.checklist.progress;
+  const { done, total } = checklist!.progress;
   const pct = total ? Math.round((done / total) * 100) : 0;
 
   return (
@@ -92,10 +109,10 @@ export default function ProjectPage({ id }: { id: number }) {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-3">
-          {p.checklist.phases.map((ph) => (
-            <PhaseCard key={ph.key} phase={ph} open={!!openPhases[ph.key]} current={ph.key === p.checklist.current_phase}
+          {checklist!.phases.map((ph) => (
+            <PhaseCard key={ph.key} phase={ph} open={!!openPhases[ph.key]} current={ph.key === checklist!.current_phase}
               onToggle={() => setOpenPhases({ ...openPhases, [ph.key]: !openPhases[ph.key] })}
-              projectId={p.id} onAction={setAction} onChanged={load} />
+              projectId={p.id} onAction={setAction} onChanged={load} onPending={onPending} />
           ))}
         </div>
         <aside className="space-y-4">
@@ -111,9 +128,9 @@ export default function ProjectPage({ id }: { id: number }) {
   );
 }
 
-function PhaseCard({ phase, open, current, onToggle, projectId, onAction, onChanged }: {
+function PhaseCard({ phase, open, current, onToggle, projectId, onAction, onChanged, onPending }: {
   phase: Phase; open: boolean; current: boolean; onToggle: () => void;
-  projectId: number; onAction: (a: string) => void; onChanged: () => void;
+  projectId: number; onAction: (a: string) => void; onChanged: () => Promise<void>; onPending: OnPending;
 }) {
   return (
     <section className={cn("rounded-2xl border bg-white", current ? "border-primary/40 shadow-sm" : "border-slate-200")}>
@@ -128,36 +145,41 @@ function PhaseCard({ phase, open, current, onToggle, projectId, onAction, onChan
       </button>
       {open && (
         <ul className="divide-y divide-slate-100 border-t border-slate-100">
-          {phase.steps.map((s) => <StepRow key={s.key} step={s} projectId={projectId} onAction={onAction} onChanged={onChanged} />)}
+          {phase.steps.map((s) => <StepRow key={s.key} step={s} projectId={projectId} onAction={onAction} onChanged={onChanged} onPending={onPending} />)}
         </ul>
       )}
     </section>
   );
 }
 
-function StepRow({ step, projectId, onAction, onChanged }: {
-  step: Step; projectId: number; onAction: (a: string) => void; onChanged: () => void;
+function StepRow({ step, projectId, onAction, onChanged, onPending }: {
+  step: Step; projectId: number; onAction: (a: string) => void; onChanged: () => Promise<void>; onPending: OnPending;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState(step.note);
   const [err, setErr] = useState<string | null>(null);
   const tickable = !step.live;
-  // Optimistic: the circle changes on click. Saving is quick, but the
-  // checklist reload behind it re-runs every live check, which took seconds.
-  // The pending value is dropped once fresh data arrives, or on a failed save.
-  const [pending, setPending] = useState<{ done?: boolean; not_applicable?: boolean } | null>(null);
-  useEffect(() => { setPending(null); }, [step.done, step.not_applicable]);
-  const done = pending?.done ?? step.done;
-  const na = pending?.not_applicable ?? step.not_applicable;
+  // `step` already carries any pending tick (applied by the page), so the
+  // circle, the bar and the counts all change on the click together.
+  const done = step.done;
+  const na = step.not_applicable;
 
   const mark = async (body: { done?: boolean; not_applicable?: boolean; note?: string }) => {
     setErr(null);
-    const optimistic: { done?: boolean; not_applicable?: boolean } = {};
-    if (body.done !== undefined) optimistic.done = body.done;
-    if (body.not_applicable !== undefined) optimistic.not_applicable = body.not_applicable;
-    if (Object.keys(optimistic).length) setPending((p) => ({ ...p, ...optimistic }));
-    try { await onboardApi.mark(projectId, step.key, body); onChanged(); }
-    catch (e) { setPending(null); setErr(e instanceof Error ? e.message : String(e)); }
+    const patch: Pending = {};
+    if (body.done !== undefined) patch.done = body.done;
+    if (body.not_applicable !== undefined) patch.not_applicable = body.not_applicable;
+    const optimistic = Object.keys(patch).length > 0;
+    if (optimistic) onPending(step.key, patch);
+    try {
+      await onboardApi.mark(projectId, step.key, body);
+      await onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      // Fresh data is in (or the save failed): the server's value stands.
+      if (optimistic) onPending(step.key, null);
+    }
   };
 
   const icon = na ? <MinusCircle className="h-5 w-5 text-slate-300" />
@@ -399,4 +421,25 @@ function DeletePanel({ p }: { p: ProjectDetail }) {
       )}
     </section>
   );
+}
+
+/** The server's checklist with unconfirmed ticks applied, counts recomputed
+ *  the same way the server computes them (N/A steps don't count). */
+function withPending(c: ProjectDetail["checklist"], pending: Record<string, Pending>): ProjectDetail["checklist"] {
+  if (!Object.keys(pending).length) return c;
+  let done = 0, total = 0;
+  let current: string | null = null;
+  const phases = c.phases.map((ph) => {
+    const steps = ph.steps.map((st) => {
+      const pd = pending[st.key];
+      return pd ? { ...st, ...pd } : st;
+    });
+    const open = steps.filter((st) => !st.done && !st.not_applicable).length;
+    for (const st of steps) {
+      if (!st.not_applicable) { total += 1; if (st.done) done += 1; }
+    }
+    if (current === null && open > 0) current = ph.key;
+    return { ...ph, steps, open, done: open === 0 };
+  });
+  return { phases, progress: { done, total }, current_phase: current ?? "postlaunch" };
 }

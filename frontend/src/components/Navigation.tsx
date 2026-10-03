@@ -20,6 +20,7 @@ import {
   BarChart2,
   PieChart,
   Target,
+  ClipboardCheck,
 } from 'lucide-react';
 
 import { safeFetchJson, API_BASE } from "@/lib/api";
@@ -35,6 +36,8 @@ interface UserInfo {
   org_name: string | null;
   is_authenticated: boolean;
   mdm_managed?: boolean;
+  /** Holds the Onboarding Operator role (MavOps-internal console). */
+  is_onboarding_operator?: boolean;
   /** Firm works Client → Project in TimeTracker (agencies). */
   local_projects?: boolean;
 }
@@ -219,6 +222,15 @@ export default function Navigation() {
                         >
                           <Settings className="w-4 h-4 text-slate-400" />
                           <span className="text-sm font-medium text-slate-700">Settings</span>
+                        </button>
+                      )}
+                      {userInfo?.is_onboarding_operator && (
+                        <button
+                          onClick={() => handleNavigation('/onboard')}
+                          className="w-full px-4 py-2 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                        >
+                          <ClipboardCheck className="w-4 h-4 text-slate-400" />
+                          <span className="text-sm font-medium text-slate-700">Onboarding Console</span>
                         </button>
                       )}
                       {!mdmManaged && (

@@ -3037,6 +3037,14 @@ from rest_framework.response import Response
 
 # Replace your whoami view in tracker/views.py with this:
 
+def _is_onboarding_operator(user):
+    try:
+        from tracker.views_onboarding_console import is_operator
+        return is_operator(user)
+    except Exception:  # noqa: BLE001 — a nav hint must never break whoami
+        return False
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def whoami(request):
@@ -3089,6 +3097,8 @@ def whoami(request):
             "last_name": user.last_name or "",
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
+            # Shows the Onboarding Console link; the console enforces it itself.
+            "is_onboarding_operator": _is_onboarding_operator(user),
             "role": role,
             "org_id": org.id if org else None,
             "org_name": org.name if org else None,

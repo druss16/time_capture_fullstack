@@ -365,3 +365,49 @@ class VerifyTests(ConsoleBase):
         with self.assertRaises(SystemExit):             # blockers → exit 1, as before
             call_command('verify_firm', org=p.organization.slug, stdout=buf)
         self.assertIn('marketing (36 categories)', buf.getvalue())
+
+
+class RoleGroupOrgTests(TestCase):
+    def test_granting_operator_role_creates_no_organization(self):
+        from django.core.management import call_command
+        u = User.objects.create_user('dan', 'dan@mavops.test', 'x')
+        before = Organization.objects.count()
+        call_command('grant_onboarding_operator', 'dan@mavops.test', stdout=open(os.devnull, 'w'))
+        self.assertEqual(Organization.objects.count(), before)
+        self.assertFalse(OrganizationMembership.objects.filter(user=u).exists())
+
+    def test_other_groups_still_map_to_orgs(self):
+        u = User.objects.create_user('amy', 'amy@firm.test', 'x')
+        u.groups.add(Group.objects.create(name='Acme Firm'))
+        self.assertTrue(OrganizationMembership.objects.filter(
+            user=u, organization__name='Acme Firm').exists())
+
+    def test_cleanup_removes_empty_role_org_only(self):
+        from io import StringIO
+        from django.core.management import call_command
+        u = User.objects.create_user('dan', 'dan@mavops.test', 'x')
+        phantom = Organization.objects.create(name=OPERATOR_GROUP, slug='onboarding-operator')
+        OrganizationMembership.objects.create(user=u, organization=phantom, role='member')
+        call_command('remove_role_group_orgs', stdout=StringIO())          # dry run
+        self.assertTrue(Organization.objects.filter(id=phantom.id).exists())
+        call_command('remove_role_group_orgs', apply=True, stdout=StringIO())
+        self.assertFalse(Organization.objects.filter(id=phantom.id).exists())
+        self.assertTrue(User.objects.filter(id=u.id).exists())
+
+    def test_cleanup_refuses_org_with_real_clients(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from tracker.models import Client
+        phantom = Organization.objects.create(name=OPERATOR_GROUP, slug='onboarding-operator')
+        Client.objects.create(org=phantom, name='Real Client', code='REAL')
+        out = StringIO()
+        call_command('remove_role_group_orgs', apply=True, stdout=out)
+        self.assertTrue(Organization.objects.filter(id=phantom.id).exists())
+        self.assertIn('NOT deleting', out.getvalue())
+
+    def test_whoami_flags_operator(self):
+        u = User.objects.create_user('dan', 'dan@mavops.test', 'x')
+        u.groups.add(Group.objects.get_or_create(name=OPERATOR_GROUP)[0])
+        self.assertTrue(_client_for(u).get('/api/whoami/').json().get('is_onboarding_operator'))
+        other = User.objects.create_user('x', 'x@firm.test', 'x')
+        self.assertFalse(_client_for(other).get('/api/whoami/').json().get('is_onboarding_operator'))

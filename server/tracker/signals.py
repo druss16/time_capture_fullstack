@@ -238,9 +238,17 @@ def auto_create_org_membership(sender, instance, action, pk_set, **kwargs):
     
     user = instance
     
+    from tracker.models_onboarding_console import ROLE_GROUPS
+
     for group_id in pk_set:
         try:
             group = Group.objects.get(id=group_id)
+            # Some groups are roles, not firms. Granting the Onboarding
+            # Operator role made an organization called "Onboarding Operator"
+            # and put the operator in it — where get_user_org's unordered
+            # .first() could land them.
+            if group.name in ROLE_GROUPS:
+                continue
             
             # Find or create Organization with same name as Group. The billing
             # fields live on OrgProfile, not Organization: passing them as

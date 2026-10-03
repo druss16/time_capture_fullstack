@@ -68,7 +68,7 @@ function fmtDate(iso: string | null): string {
 
 // ── Client picker ────────────────────────────────────────────────────────────
 // A firm can have hundreds of clients, so this is a type-to-narrow list rather
-// than a <select>. Same behaviour as the Daily Review / MavOps pickers, in the
+// than a <select>. Same behaviour as the Daily Review / Mavops pickers, in the
 // Settings look.
 
 function ClientPicker({

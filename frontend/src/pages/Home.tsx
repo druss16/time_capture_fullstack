@@ -260,7 +260,7 @@ const HERO_SVG = `<svg viewBox="0 -8 340 520" width="100%" xmlns="http://www.w3.
     <rect x="148" y="382" width="76" height="14" rx="7" fill="rgba(43,157,144,.25)" stroke="rgba(43,157,144,.5)" stroke-width="1"/>
     <text font-family="DM Sans,system-ui,sans-serif" font-size="7.5" font-weight="700" fill="#2B9D90" x="186" y="392.5" text-anchor="middle">↑ top margin</text>
   </g>
-  <text font-family="DM Sans,system-ui,sans-serif" font-size="6.5" fill="rgba(255,255,255,.1)" x="163" y="498" text-anchor="middle">TimeTracker · MavOps AI</text>
+  <text font-family="DM Sans,system-ui,sans-serif" font-size="6.5" fill="rgba(255,255,255,.1)" x="163" y="498" text-anchor="middle">TimeTracker · Mavops AI</text>
 </g>
 </svg>`
 
@@ -875,7 +875,7 @@ export default function Home() {
             <img src="/timetracker-icon.svg" alt="TimeTracker" />
             <div style={{display:"flex",alignItems:"baseline",gap:"6px"}}>
               <span className="nav-logo-name">TimeTracker</span>
-              <span className="nav-logo-by">by MavOps</span>
+              <span className="nav-logo-by">by Mavops</span>
             </div>
           </div>
           <div className="nav-links">
@@ -1013,12 +1013,12 @@ export default function Home() {
           <div className="footer-logo">
             <img src="/timetracker-icon.svg" alt=""/>
             <span className="footer-logo-name">TimeTracker</span>
-            <span className="footer-by">by MavOps AI</span>
+            <span className="footer-by">by Mavops AI</span>
           </div>
           <div className="footer-links">
             <a href="/privacy.html">Privacy</a><a href="/eula.html">Terms</a><a href="mailto:info@mavops.ai">Contact</a>
           </div>
-          <p className="footer-copy">© 2025 MavOps AI</p>
+          <p className="footer-copy">© 2025 Mavops AI</p>
         </div>
       </footer>
     </div>

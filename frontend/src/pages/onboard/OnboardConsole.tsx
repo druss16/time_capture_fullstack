@@ -1,7 +1,7 @@
 // src/pages/onboard/OnboardConsole.tsx
-// The Onboarding Console — MavOps' own tool for onboarding firms at scale.
+// The Onboarding Console — Mavops' own tool for onboarding firms at scale.
 // Standalone (no AppLayout, no org nav): it is not part of any firm's app and
-// not part of MavOps admin. Access is the server's "Onboarding Operator" role.
+// not part of Mavops admin. Access is the server's "Onboarding Operator" role.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ClipboardCheck, Loader2, Lock, Plus } from "lucide-react";
@@ -33,19 +33,19 @@ export default function OnboardConsole() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
           <Link to="/onboard" className="flex items-center gap-2 font-semibold">
             <ClipboardCheck className="h-5 w-5 text-primary" /> Onboarding Console
-            <span className="hidden text-xs font-normal text-slate-400 sm:inline">MavOps internal</span>
+            <span className="hidden text-xs font-normal text-slate-400 sm:inline">Mavops internal</span>
           </Link>
           {who && <span className="text-xs text-slate-500">{who}</span>}
         </div>
       </header>
       {gate === "loading" && <div className="p-10 text-center text-sm text-slate-500">Loading…</div>}
       {gate === "signin" && (
-        <Gate title="Sign in first" body="Sign in to TimeTracker with your MavOps account, then come back here.">
+        <Gate title="Sign in first" body="Sign in to TimeTracker with your Mavops account, then come back here.">
           <a className={primaryBtnClass} href={`/login?next=${encodeURIComponent(window.location.pathname)}`}>Sign in</a>
         </Gate>
       )}
       {gate === "denied" && (
-        <Gate title="No access" body="The Onboarding Console needs the Onboarding Operator role. Being staff or a MavOps admin is not enough on its own. Ask Dan to run grant_onboarding_operator for your email." />
+        <Gate title="No access" body="The Onboarding Console needs the Onboarding Operator role. Being staff or a Mavops admin is not enough on its own. Ask Dan to run grant_onboarding_operator for your email." />
       )}
       {gate === "ok" && (id ? <ProjectPage id={Number(id)} /> : <Board />)}
     </div>

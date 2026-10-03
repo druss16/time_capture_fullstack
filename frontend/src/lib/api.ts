@@ -84,7 +84,7 @@ export async function safeFetchJson<T = any>(input: string, init: RequestInit = 
       ...(init.headers as Record<string, string> | undefined),
     };
 
-    // ── MavOps "View as" ──────────────────────────────────────────────────
+    // ── Mavops "View as" ──────────────────────────────────────────────────
     // The server swaps request.user during authentication, so this one header
     // is the entire client contract — no per-endpoint ?org_id=/?user_id= to
     // append, and no view left behind because it never opted in.

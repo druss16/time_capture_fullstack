@@ -1,6 +1,6 @@
 // src/lib/viewAs.ts
 /**
- * MavOps "View as" — client side.
+ * Mavops "View as" — client side.
  *
  * The server swaps identity during authentication (see tracker/impersonation.py),
  * so the only thing the client owes it is one header on every API request:
@@ -23,7 +23,7 @@ const KEY_ORG_NAME = "impersonating_org_name";
 export const VIEW_AS_HEADER = "X-View-As-User";
 
 /**
- * Paths that must always run as the real admin. The MavOps console is the one
+ * Paths that must always run as the real admin. The Mavops console is the one
  * the admin uses to *stop* viewing as someone — sending the header there would
  * lock them out of it, since the target user is not staff. localStorage is
  * shared across tabs, so this matters the moment a second tab is open.
@@ -120,7 +120,7 @@ export function installViewAsFetch(): void {
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
     // An explicit header from the caller wins over the ambient session. The
-    // MavOps company review fans one request out across every member of a firm
+    // Mavops company review fans one request out across every member of a firm
     // and names the owner per request; without this the admin's own (unrelated)
     // view-as session in localStorage would overwrite all of them and every
     // read/write would land on one user.

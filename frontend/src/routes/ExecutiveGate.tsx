@@ -5,7 +5,7 @@
  * upgrade CTA when the org is not on the Executive plan.
  *
  * Plan is resolved the same way as BillingPage: read /settings/org/ with a
- * /billing/subscription-status/ fallback. Under MavOps view-as those endpoints
+ * /billing/subscription-status/ fallback. Under Mavops view-as those endpoints
  * already answer for the target user, so the gate reflects what they see.
  */
 

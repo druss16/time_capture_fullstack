@@ -21,7 +21,7 @@ export const INSTALL_PATHS: { value: string; label: string }[] = [
 ];
 
 export const WHO_LABEL: Record<string, string> = {
-  us: "MavOps", firm: "The firm", firm_it: "Firm's IT", system: "Automatic",
+  us: "Mavops", firm: "The firm", firm_it: "Firm's IT", system: "Automatic",
 };
 
 export function Modal({ title, subtitle, onClose, children, wide }: {

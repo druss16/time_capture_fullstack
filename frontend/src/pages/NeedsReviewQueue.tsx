@@ -271,7 +271,7 @@ export default function NeedsReviewQueue({
               {data.headline.pct}% of everything waiting on review. Turning this
               into a routing rule teaches TimeTracker to handle it on its own next
               time, which is how the override rate keeps dropping. Flag it to
-              MavOps from the blind-spots view to set one up.
+              Mavops from the blind-spots view to set one up.
             </p>
           </div>
         </div>

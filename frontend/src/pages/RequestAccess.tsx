@@ -97,7 +97,7 @@ export default function RequestAccess() {
             <img src="/timetracker-icon.svg" alt="TimeTracker" />
             <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
               <span className="nav-logo-name">TimeTracker</span>
-              <span className="nav-logo-by">by MavOps</span>
+              <span className="nav-logo-by">by Mavops</span>
             </div>
           </Link>
           <Link to="/" className="back-link">

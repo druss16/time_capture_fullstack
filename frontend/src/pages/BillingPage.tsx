@@ -214,7 +214,7 @@ const BillingPage: React.FC<{ section?: Section }> = ({ section = 'timesheet' })
         const response = await safeFetchJson<WhoamiResponse>(`${API_BASE}/whoami/`);
         setUserInfo(response);
 
-        // No view-as special case: under MavOps view-as the server resolves
+        // No view-as special case: under Mavops view-as the server resolves
         // request.user to the target, so the plan below is genuinely theirs.
         // Faking 'executive' here would misreport what the customer is paying
         // for on the very page that exists to show it.

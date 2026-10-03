@@ -180,7 +180,7 @@ function ImpersonationBanner() {
           <>⚠ View-as is NOT active on the server — this is your own account.</>
         ) : (
           <>
-            👁 MavOps Admin — acting as <strong>{confirmed?.username || session.userName}</strong>
+            👁 Mavops Admin — acting as <strong>{confirmed?.username || session.userName}</strong>
             {confirmed?.role ? <> ({confirmed.role})</> : null} @{" "}
             <strong>{confirmed?.org || session.orgName}</strong>
             {" — writes are real."}
@@ -269,7 +269,7 @@ export default function App() {
                 <Route path="/daily" element={<MaybeProtected><AppLayout><DailyReview /></AppLayout></MaybeProtected>} />
                 <Route path="/reports" element={<MaybeProtected><AppLayout><ReportsSummary /></AppLayout></MaybeProtected>} />
                 <Route path="/reports/blind-spots" element={<MaybeProtected><AdminRoute><AppLayout><AIBlindSpots /></AppLayout></AdminRoute></MaybeProtected>} />
-                {/* Owners only, hidden per firm until MavOps enables it — the server enforces both */}
+                {/* Owners only, hidden per firm until Mavops enables it — the server enforces both */}
                 <Route path="/reports/ai-agents" element={<MaybeProtected><AppLayout><ReportsAIAgents /></AppLayout></MaybeProtected>} />
                 <Route path="/timesheet" element={<MaybeProtected><AppLayout><BillingPage section="timesheet" /></AppLayout></MaybeProtected>} />
                 <Route path="/fees" element={<MaybeProtected><AppLayout><BillingPage section="fees" /></AppLayout></MaybeProtected>} />
@@ -302,10 +302,10 @@ export default function App() {
                 <Route path="/onboarding" element={<OnboardingWizard />} />
                 <Route path="/onboarding/signup" element={<Navigate to="/request-access" replace />} />
 
-                {/* MavOps Internal Admin — standalone, no AppLayout, no auth wrapper */}
+                {/* Mavops Internal Admin — standalone, no AppLayout, no auth wrapper */}
                 <Route path="/mavops-admin" element={<MavOpsAdmin />} />
 
-                {/* Onboarding Console — MavOps internal, its own role (not MavOps admin) */}
+                {/* Onboarding Console — Mavops internal, its own role (not Mavops admin) */}
                 <Route path="/onboard" element={<OnboardConsole />} />
                 <Route path="/onboard/:id" element={<OnboardConsole />} />
 

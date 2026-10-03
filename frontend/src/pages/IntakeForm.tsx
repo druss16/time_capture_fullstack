@@ -108,7 +108,7 @@ export default function IntakeForm() {
         <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
           <div>
-            <div className="font-semibold text-emerald-900">Thank you — this is with MavOps now.</div>
+            <div className="font-semibold text-emerald-900">Thank you — this is with Mavops now.</div>
             <div className="mt-1 text-sm text-emerald-800">We'll be in touch about install day. Need to change something? Ask us for an edit link; your answers are kept.</div>
           </div>
         </div>
@@ -204,8 +204,8 @@ export default function IntakeForm() {
           </button>
           <button className={primaryBtnClass} disabled={!!saving || a.team.length === 0}
             title={a.team.length === 0 ? "Add at least one person first" : undefined}
-            onClick={() => window.confirm("Send this to MavOps? You won't be able to edit it afterwards without asking us.") && save(true)}>
-            {saving === "submit" && <Loader2 className="h-4 w-4 animate-spin" />} Send to MavOps
+            onClick={() => window.confirm("Send this to Mavops? You won't be able to edit it afterwards without asking us.") && save(true)}>
+            {saving === "submit" && <Loader2 className="h-4 w-4 animate-spin" />} Send to Mavops
           </button>
         </div>
       )}
@@ -218,7 +218,7 @@ function Shell({ firm, children }: { firm?: string; children: React.ReactNode })
     <div className="min-h-screen bg-slate-50 font-[Inter,system-ui,sans-serif] text-slate-900">
       <div className="mx-auto max-w-5xl space-y-5 px-4 py-8 sm:px-6">
         <header>
-          <div className="text-xs font-semibold uppercase tracking-wider text-primary">TimeTracker · MavOps</div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-primary">TimeTracker · Mavops</div>
           <h1 className="mt-1 text-2xl font-semibold">{firm ? `Getting ${firm} set up` : "Getting set up"}</h1>
           {firm && <p className="mt-1 text-sm text-slate-600">About 20 minutes. Several people can fill this in — it saves as you go.</p>}
         </header>

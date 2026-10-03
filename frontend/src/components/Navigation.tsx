@@ -101,7 +101,7 @@ export default function Navigation() {
     navigate(path);
   };
 
-  // No localStorage patch-over here any more: under MavOps view-as, whoami
+  // No localStorage patch-over here any more: under Mavops view-as, whoami
   // already answers as the target user, so userInfo IS the person being viewed
   // — name, org, role and the nav items those gate. The banner above the nav
   // is what says whose account this is.
@@ -149,7 +149,7 @@ export default function Navigation() {
               <img src="/timetracker-icon-mono-white-blue.svg" alt="TimeTracker" className="w-9 h-9" />
               <div className="hidden sm:block">
                 <span className="text-base font-bold text-white tracking-tight">TimeTracker</span>
-                <span className="text-xs text-slate-400 block -mt-0.5">by MavOps</span>
+                <span className="text-xs text-slate-400 block -mt-0.5">by Mavops</span>
               </div>
             </Link>
 

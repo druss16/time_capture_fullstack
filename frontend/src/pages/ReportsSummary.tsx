@@ -352,7 +352,7 @@ export default function ReportsSummary({
     return p.toString();
   }, [period, orgIdOverride, customMode, appliedStart, appliedEnd]);
 
-  // People | AI agents toggle: only for owners at firms where MavOps has
+  // People | AI agents toggle: only for owners at firms where Mavops has
   // turned the agent report on. Everyone else sees Reports exactly as before.
   const aiAgentsAvailable = useAiAgentsReportAvailable();
 

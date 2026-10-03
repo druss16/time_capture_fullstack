@@ -124,6 +124,20 @@ def _auto_classify_block(sender, instance: Block, created: bool, **kwargs):
 # Auto-create "Internal" client for new organizations
 # ────────────────────────────────────────────────────────────────────────────────
 
+def ensure_internal_tax_client(org):
+    from tracker.models import Client
+    client, _ = Client.objects.get_or_create(
+        org=org,
+        code='INTERNAL_TAX',
+        defaults={
+            'name': 'Internal - Tax',
+            'is_active': True,
+            'visibility': 'all',
+        }
+    )
+    return client
+
+
 @receiver(post_save, sender=Organization, dispatch_uid="tracker.org.create_internal_client")
 def create_internal_client(sender, instance, created, **kwargs):
     """
@@ -150,18 +164,14 @@ def create_internal_client(sender, instance, created, **kwargs):
                 'visibility': 'all',
             }
         )
-        # After the existing 'Internal' client creation
-        Client.objects.get_or_create(
-            org=instance,
-            code='INTERNAL_TAX',
-            defaults={
-                'name': 'Internal - Tax',
-                'is_active': True,
-                'visibility': 'all',
-            }
-        )
+        # 'Internal - Tax' is a CPA firm's own-tax bucket (UltraTax routing,
+        # the tax-returns lens). An agency or law firm has no use for it, so
+        # only CPA firms get one; ensure_internal_tax_client adds it if a firm
+        # is switched to CPA later.
+        if instance.industry_type == 'cpa':
+            ensure_internal_tax_client(instance)
 
-        logger.info(f"[ORG] Created 'Internal' + 'Internal - Tax' clients for org: {instance.name}")
+        logger.info(f"[ORG] Created internal client(s) for org: {instance.name}")
     except Exception as e:
         logger.warning(f"[ORG] Failed to create Internal client for {instance.name}: {e}")
 

@@ -739,6 +739,9 @@ def mavops_set_org_industry(request, org_id):
     previous = getattr(org, 'industry_type', None) or 'general'
     org.industry_type = industry_type
     org.save(update_fields=['industry_type', 'updated_at'])
+    if industry_type == 'cpa':
+        from tracker.signals import ensure_internal_tax_client
+        ensure_internal_tax_client(org)
 
     created = []
     if request.data.get('seed_task_types', True):

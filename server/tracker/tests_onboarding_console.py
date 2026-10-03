@@ -593,3 +593,34 @@ class InternalClientsTests(ConsoleBase):
         Client.objects.create(org=p.organization, name='Internal Revenue Service', code='IRS')
         st = {s['key']: s for ph in evaluate(p)['phases'] for s in ph['steps']}
         self.assertEqual(st['clients']['detail'], '1 active')
+
+
+class InternalTaxClientTests(ConsoleBase):
+    def _codes(self, org):
+        from tracker.models import Client
+        return set(Client.objects.filter(org=org).values_list('code', flat=True))
+
+    def test_only_cpa_firms_get_internal_tax(self):
+        cpa = self.make_project('cpa', 'windows_gpo', 'CPA Co').organization
+        agency = self.make_project('marketing', 'mac_hand', 'Agency Co').organization
+        law = self.make_project('legal', 'windows_gpo', 'Law Co').organization
+        self.assertEqual(self._codes(cpa), {'INTERNAL', 'INTERNAL_TAX'})
+        self.assertEqual(self._codes(agency), {'INTERNAL'})
+        self.assertEqual(self._codes(law), {'INTERNAL'})
+
+    def test_cleanup_removes_unused_and_keeps_used(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from tracker.models import Block, Client
+        agency = self.make_project('marketing', 'mac_hand', 'Agency Co').organization
+        busy = self.make_project('legal', 'windows_gpo', 'Busy Law').organization
+        unused = Client.objects.create(org=agency, code='INTERNAL_TAX', name='Internal - Tax')
+        used = Client.objects.create(org=busy, code='INTERNAL_TAX', name='Internal - Tax')
+        now = timezone.now()
+        Block.objects.create(org=busy, user=self.operator, client=used, start=now,
+                             end=now + timedelta(minutes=5), device_id='d', hostname='h')
+        call_command('remove_internal_tax_non_cpa', stdout=StringIO())
+        self.assertTrue(Client.objects.filter(id=unused.id).exists())     # dry run
+        call_command('remove_internal_tax_non_cpa', apply=True, stdout=StringIO())
+        self.assertFalse(Client.objects.filter(id=unused.id).exists())
+        self.assertTrue(Client.objects.filter(id=used.id).exists())

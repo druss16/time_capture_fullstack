@@ -1,16 +1,16 @@
 // src/pages/onboard/ProjectPage.tsx — one firm's onboarding: the playbook as a
 // live checklist, the verify_firm report, contacts, and the audit trail.
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Circle, MinusCircle,
-  RefreshCw, Zap,
+  RefreshCw, Trash2, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { onboardApi, type Phase, type ProjectDetail, type Step, type VerifyResult } from "./api";
 import ActionDialog from "./StepActions";
 import {
-  ErrorNote, INSTALL_PATHS, Pill, WHO_LABEL, fmtDate, inputClass, labelClass,
+  ErrorNote, INSTALL_PATHS, Modal, Pill, WHO_LABEL, fmtDate, inputClass, labelClass,
   primaryBtnClass, secondaryBtnClass,
 } from "./shared";
 
@@ -102,6 +102,7 @@ export default function ProjectPage({ id }: { id: number }) {
           <HealthPanel verify={verify} busy={verifying} onRun={runVerify} />
           <DetailsPanel p={p} onSaved={load} />
           <AuditPanel id={p.id} stamp={p.last_activity_at} />
+          <DeletePanel p={p} />
         </aside>
       </div>
 
@@ -321,6 +322,69 @@ function AuditPanel({ id, stamp }: { id: number; stamp: string }) {
               </li>
             ))}
         </ul>
+      )}
+    </section>
+  );
+}
+
+function DeletePanel({ p }: { p: ProjectDetail }) {
+  const nav = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [check, setCheck] = useState<Awaited<ReturnType<typeof onboardApi.deleteCheck>> | null>(null);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const start = async () => {
+    setOpen(true); setTyped(""); setErr(null); setCheck(null);
+    try { setCheck(await onboardApi.deleteCheck(p.id)); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  const run = async () => {
+    if (!check) return;
+    setBusy(true); setErr(null);
+    try {
+      await onboardApi.deleteProject(p.id, { confirm_name: typed, delete_firm: check.firm_created_here });
+      nav("/onboard");
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
+  };
+
+  const label = check?.firm_created_here === false ? "Remove from console" : "Delete firm";
+  return (
+    <section className="rounded-2xl border border-red-200 bg-white p-4">
+      <div className="text-sm font-semibold text-slate-900">Delete</div>
+      <p className="mt-1 text-xs text-slate-500">For a firm started by mistake. Blocked once time is captured or anyone has signed in.</p>
+      <button className={secondaryBtnClass + " mt-3 border-red-200 py-1.5 text-red-700 hover:bg-red-50"} onClick={start}>
+        <Trash2 className="h-4 w-4" /> Delete onboarding…
+      </button>
+      {open && (
+        <Modal title={check ? `${label}: ${p.org.name}?` : "Checking…"} onClose={() => setOpen(false)}
+          subtitle={check?.firm_created_here === false
+            ? "This firm existed before its onboarding started. Only the checklist is removed — the firm, its people and its data stay."
+            : "Deletes the firm, its checklist, imported clients and service codes, and staff accounts that were never used."}>
+          <div className="space-y-4">
+            {check && check.blockers.length > 0 ? (
+              <ErrorNote message={`Can't delete — ${check.blockers.join("; ")}.`} />
+            ) : check && (
+              <>
+                {check.firm_created_here && (
+                  <div className="text-sm text-slate-600">{check.members} member(s) · {check.clients} client(s) will be removed.</div>
+                )}
+                <div>
+                  <label className={labelClass}>Type <span className="normal-case text-slate-900">{p.org.name}</span> to confirm</label>
+                  <input autoFocus className={inputClass} value={typed} onChange={(e) => setTyped(e.target.value)} />
+                </div>
+              </>
+            )}
+            <ErrorNote message={err} />
+            <div className="flex justify-end gap-2">
+              <button className={secondaryBtnClass} onClick={() => setOpen(false)}>Cancel</button>
+              <button className={primaryBtnClass + " bg-red-600"} onClick={run}
+                disabled={!check || check.blockers.length > 0 || typed.trim() !== p.org.name || busy}>
+                {label}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </section>
   );

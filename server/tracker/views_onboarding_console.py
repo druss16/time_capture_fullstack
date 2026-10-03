@@ -412,6 +412,21 @@ def deploy_kit(request, pk):
     return Response(kit)
 
 
+@operator_view(['GET', 'POST'])
+def delete_project(request, pk):
+    """GET: what a delete would do. POST {confirm_name, delete_firm}: do it."""
+    p = _project(pk)
+    if request.method == 'GET':
+        return Response(svc.deletion_check(p))
+    try:
+        result = svc.delete_onboarding(
+            p, request.user, confirm_name=request.data.get('confirm_name'),
+            delete_firm=bool(request.data.get('delete_firm')))
+    except ConsoleError as e:
+        return _err(e)
+    return Response(result)
+
+
 @operator_view(['POST'])
 def go_live(request, pk):
     p = _project(pk)

@@ -23,6 +23,7 @@ urlpatterns = [
     path('projects/<int:pk>/stripe/', v.stripe_setup, name='onboard-stripe'),
     path('projects/<int:pk>/deploy-kit/', v.deploy_kit, name='onboard-deploy-kit'),
     path('projects/<int:pk>/go-live/', v.go_live, name='onboard-go-live'),
+    path('projects/<int:pk>/delete/', v.delete_project, name='onboard-delete'),
     path('projects/<int:pk>/intake/', v.intake_link, name='onboard-intake-link'),
     path('projects/<int:pk>/intake/reopen/', v.intake_reopen, name='onboard-intake-reopen'),
     # The firm's side: no login, the token in the path is the whole credential.

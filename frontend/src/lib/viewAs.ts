@@ -29,7 +29,7 @@ export const VIEW_AS_HEADER = "X-View-As-User";
  * shared across tabs, so this matters the moment a second tab is open.
  * The server enforces the same list; this keeps the client honest too.
  */
-const NEVER_VIEW_AS = ["/api/mavops/", "/api/support/", "/api/auth/"];
+const NEVER_VIEW_AS = ["/api/mavops/", "/api/support/", "/api/auth/", "/api/onboard/"];
 
 export interface ViewAsSession {
   userId: string;

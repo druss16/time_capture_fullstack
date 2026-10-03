@@ -49,6 +49,8 @@ const WhiteGloveOnboarding = lazyWithRetry(() => import("./settings/WhiteGloveOn
 const Home = lazyWithRetry(() => import("./Home"));
 const RequestAccess = lazyWithRetry(() => import("./RequestAccess"));
 const MavOpsAdmin = lazyWithRetry(() => import("./MavOpsAdmin"));
+const OnboardConsole = lazyWithRetry(() => import("./onboard/OnboardConsole"));
+const IntakeForm = lazyWithRetry(() => import("./IntakeForm"));
 const DashboardV2 = lazyWithRetry(() => import("./DashboardV2"));
 const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
 const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
@@ -243,6 +245,8 @@ export default function App() {
                 <Route path="/" element={<HomeOrRedirect />} />
                 <Route path="/request-access" element={<RequestAccess />} />
                 <Route path="/invite/:token" element={<AcceptInvite />} />
+                {/* A firm's onboarding intake — no login, the link is the credential */}
+                <Route path="/intake/:token" element={<IntakeForm />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password/:uid/:token" element={<ResetPassword />} />
 
@@ -300,6 +304,10 @@ export default function App() {
 
                 {/* MavOps Internal Admin — standalone, no AppLayout, no auth wrapper */}
                 <Route path="/mavops-admin" element={<MavOpsAdmin />} />
+
+                {/* Onboarding Console — MavOps internal, its own role (not MavOps admin) */}
+                <Route path="/onboard" element={<OnboardConsole />} />
+                <Route path="/onboard/:id" element={<OnboardConsole />} />
 
                 {/* 404 */}
                 <Route path="*" element={<NotFound />} />

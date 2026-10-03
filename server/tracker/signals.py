@@ -12,8 +12,9 @@ from django.db import transaction
 from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
 from django.utils import timezone
+from django.utils.text import slugify
 
-from tracker.models import Block, Organization, OrganizationMembership
+from tracker.models import Block, Organization, OrganizationMembership, OrgProfile
 from tracker.utils.monitoring import capture_exception
 
 from django.contrib.auth.models import User, Group
@@ -241,17 +242,21 @@ def auto_create_org_membership(sender, instance, action, pk_set, **kwargs):
         try:
             group = Group.objects.get(id=group_id)
             
-            # Find or create Organization with same name as Group
-            org, org_created = Organization.objects.get_or_create(
-                name=group.name,
-                defaults={
-                    'billing_email': '',
-                    'billing_contact': '',
-                }
-            )
-            
-            if org_created:
+            # Find or create Organization with same name as Group. The billing
+            # fields live on OrgProfile, not Organization: passing them as
+            # Organization defaults raised FieldError on every create, so
+            # this signal never made an org or a membership.
+            org = Organization.objects.filter(name=group.name).order_by('id').first()
+            if org is None:
+                base_slug = slugify(group.name)[:40] or 'org'
+                slug, counter = base_slug, 1
+                while Organization.objects.filter(slug=slug).exists():
+                    slug = f"{base_slug}-{counter}"
+                    counter += 1
+                org = Organization.objects.create(name=group.name, slug=slug)
                 logger.info(f"[ORG] Created Organization: {org.name}")
+
+            OrgProfile.objects.get_or_create(org=org)
             
             # Create OrganizationMembership if it doesn't exist
             membership, mem_created = OrganizationMembership.objects.get_or_create(

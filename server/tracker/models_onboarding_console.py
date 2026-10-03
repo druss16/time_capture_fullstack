@@ -29,6 +29,11 @@ from django.utils import timezone
 
 OPERATOR_GROUP = 'Onboarding Operator'
 
+# Auth groups that are permission roles, not firms. tracker/signals.py turns
+# every other group a user joins into an Organization of the same name, so a
+# role group must be listed here or granting it creates a phantom firm.
+ROLE_GROUPS = frozenset({OPERATOR_GROUP})
+
 INSTALL_PATH_CHOICES = [
     ('windows_gpo', 'Windows — GPO logon script'),
     ('windows_hand', 'Windows — installed by hand'),

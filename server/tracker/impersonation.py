@@ -40,7 +40,7 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 #: across tabs, so without this an admin who starts a view-as in one tab would
 #: have the header attached to their MavOps console in the other tab — and lock
 #: themselves out of it, since the target user is not staff.
-_NEVER_SWAP_PREFIXES = ("/api/mavops/", "/api/support/", "/api/auth/")
+_NEVER_SWAP_PREFIXES = ("/api/mavops/", "/api/support/", "/api/auth/", "/api/onboard/")
 
 
 def _is_exempt(request):

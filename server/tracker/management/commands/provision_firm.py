@@ -67,6 +67,190 @@ from tracker.models_task_type_sets import CategoryTaskTypeMapping
 User = get_user_model()
 
 
+class MappingSuggestionError(Exception):
+    """A --suggest-mappings run that cannot produce a draft, said plainly."""
+
+
+def _canonical(org):
+    from tracker.industry_categories import get_categories_for_industry
+    return get_categories_for_industry(org.industry_type) or []
+
+
+def ai_mapping_suggestions(org):
+    """Ask the model to map every canonical category to one of the firm's codes.
+
+    Returns one row per canonical category:
+        {category, task_type_code, confidence, reasoning, invalid_code}
+    A code the firm does not have is cleared (and named in `invalid_code`),
+    never passed through. Writes nothing.
+    """
+    import json
+    import logging
+    from django.conf import settings
+
+    for noisy in ('openai', 'httpx', 'httpcore'):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    if not settings.OPENAI_API_KEY:
+        raise MappingSuggestionError(
+            'OPENAI_API_KEY not configured. Set it in .env or environment.'
+        )
+    task_types = list(TaskType.objects.filter(org=org, is_active=True).order_by('name'))
+    if not task_types:
+        raise MappingSuggestionError(
+            f'No TaskTypes found for {org.name}. Run --task-types first '
+            f'to provision the firm\'s vocabulary, then re-run --suggest-mappings.'
+        )
+    canonical = _canonical(org)
+    if not canonical:
+        raise MappingSuggestionError(
+            f'No canonical categories for industry_type="{org.industry_type}". '
+            f'Check that industry_type is set correctly (e.g., "cpa").'
+        )
+
+    tt_lines = []
+    for tt in task_types:
+        billable = 'billable' if tt.is_billable else 'non-billable'
+        tt_lines.append(f'  - {tt.code} | {tt.name} | {billable}')
+    firm_codes_block = '\n'.join(tt_lines)
+    canonical_block = '\n'.join(f'  {i+1}. {c}' for i, c in enumerate(canonical))
+
+    # Worded for the firm's own vertical. It used to say "CPA" to a law firm
+    # and an agency too, which the marketing playbook listed as a known gap.
+    from tracker.industry_categories import INDUSTRY_TYPES
+    firm_kind = dict(INDUSTRY_TYPES).get(org.industry_type, 'professional services firm')
+    system_prompt = (
+        f'You are an expert at mapping {firm_kind} work categories to a firm\'s '
+        'billing service codes (also called task type codes). Given a '
+        'firm\'s billing codes and a list of canonical categories, you '
+        'produce a JSON mapping from each canonical category to the '
+        'best-fit firm code.'
+    )
+
+    user_prompt = f"""A firm ({firm_kind}) uses these billing service codes:
+
+{firm_codes_block}
+
+For each of the following {len(canonical)} canonical work categories, select the BEST matching firm code from the list above.
+
+CANONICAL CATEGORIES:
+{canonical_block}
+
+RULES:
+- Use ONLY codes from the firm's list above. Never invent codes.
+- If multiple canonical categories naturally fit the same firm code, use the same code for all of them. That is fine and expected.
+- For "Idle" and "Personal/Non-Billable" categories, strongly prefer non-billable firm codes.
+- If a canonical category has no reasonable firm-code match, use null for the code and explain why in reasoning.
+
+OUTPUT FORMAT: JSON only, no commentary, no markdown fences. Object with one key per canonical category. Each value is an object with "code", "confidence" (HIGH/MEDIUM/LOW), and "reasoning" (one short sentence).
+
+Example structure:
+{{
+  "Tax Preparation": {{"code": "PREP1040", "confidence": "HIGH", "reasoning": "Direct match"}},
+  "Tax Planning":    {{"code": "PREP1040", "confidence": "MEDIUM", "reasoning": "Firm does not distinguish planning from prep"}}
+}}
+
+Confidence guidance:
+- HIGH: obvious match, no review needed
+- MEDIUM: reasonable match but worth a glance
+- LOW: best guess, definitely review
+"""
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise MappingSuggestionError('openai SDK not installed. Run: pip install openai')
+
+    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    model = getattr(settings, 'AI_CLASSIFY_MODEL', 'gpt-4o-mini')
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.1,  # Low temp for consistency
+        )
+        raw_content = response.choices[0].message.content
+    except Exception as e:
+        raise MappingSuggestionError(f'OpenAI API call failed: {e}')
+
+    try:
+        suggestions = json.loads(raw_content)
+    except json.JSONDecodeError as e:
+        raise MappingSuggestionError(f'OpenAI returned invalid JSON ({e}). Try re-running.')
+
+    valid_codes = {tt.code for tt in task_types}
+    rows = []
+    for category in canonical:
+        suggestion = suggestions.get(category, {})
+        if not isinstance(suggestion, dict):
+            suggestion = {'code': None, 'confidence': 'LOW',
+                          'reasoning': 'Missing from AI response'}
+        code = suggestion.get('code')
+        confidence = (suggestion.get('confidence') or 'LOW').upper()
+        reasoning = suggestion.get('reasoning') or ''
+        invalid = None
+        if code and code not in valid_codes:
+            invalid = code
+            code = None
+            confidence = 'LOW'
+            reasoning = f'AI suggested invalid code; needs manual review. ({reasoning})'
+        rows.append({
+            'category': category,
+            'task_type_code': code,
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'invalid_code': invalid,
+        })
+    return rows
+
+
+def invite_candidates(org):
+    """Members who have never signed in — the only people an invite is for.
+
+    Having a password is not the test: every account created under the old
+    temp-password flow has one whether or not anyone ever opened the email.
+    Anyone who has actually logged in needs a password reset, not an invite.
+    """
+    out = []
+    for m in (OrganizationMembership.objects.filter(organization=org)
+              .select_related('user').order_by('user__first_name')):
+        u = m.user
+        if u.email and u.last_login is None:
+            out.append((m, u))
+    return out
+
+
+def issue_invites(org, inviter):
+    """Mint a setup link for every never-signed-in member; try to email each.
+
+    Returns one row per person with the link — the link is the deliverable,
+    whether or not mail went out.
+    """
+    from tracker.views_onboarding import _issue_invite
+
+    rows = []
+    for m, u in invite_candidates(org):
+        # Nothing depends on a password that has never been used, so retire
+        # it as we go rather than leaving a live credential in an old inbox.
+        if u.has_usable_password():
+            u.set_unusable_password()
+            u.save(update_fields=['password'])
+        invite_url, email_sent = _issue_invite(org, u, m.role, inviter)
+        rows.append({
+            'name': f'{u.first_name} {u.last_name}'.strip() or u.username,
+            'email': u.email,
+            'role': m.role,
+            'invite_url': invite_url,
+            'expires': (timezone.now() + timedelta(days=7)).strftime('%Y-%m-%d'),
+            'emailed': 'yes' if email_sent else 'no',
+        })
+    return rows
+
+
 class Command(BaseCommand):
     help = 'White-glove provisioning: import team roster, clients, and device maps from CSV'
 
@@ -272,8 +456,6 @@ class Command(BaseCommand):
         who has actually logged in is left alone — they need a password reset,
         not an invite.
         """
-        from tracker.views_onboarding import _issue_invite
-
         self.stdout.write(f'\n  Issuing setup links...')
 
         inviter = None
@@ -292,15 +474,7 @@ class Command(BaseCommand):
                 'Pass --invited-by <email>.'
             )
 
-        candidates = []
-        for m in (OrganizationMembership.objects.filter(organization=org)
-                  .select_related('user').order_by('user__first_name')):
-            u = m.user
-            if not u.email:
-                continue
-            if u.last_login is not None:
-                continue          # they have really signed in — leave them be
-            candidates.append((m, u))
+        candidates = invite_candidates(org)
 
         if not candidates:
             self.stdout.write('    Everyone has signed in already — nothing to send.')
@@ -314,25 +488,11 @@ class Command(BaseCommand):
             ))
             return
 
-        rows, emailed = [], 0
-        for m, u in candidates:
-            # Nothing depends on a password that has never been used, so retire
-            # it as we go rather than leaving a live credential in an old inbox.
-            if u.has_usable_password():
-                u.set_unusable_password()
-                u.save(update_fields=['password'])
-            invite_url, email_sent = _issue_invite(org, u, m.role, inviter)
-            emailed += 1 if email_sent else 0
-            rows.append({
-                'name': f'{u.first_name} {u.last_name}'.strip() or u.username,
-                'email': u.email,
-                'role': m.role,
-                'invite_url': invite_url,
-                'expires': (timezone.now() + timedelta(days=7)).strftime('%Y-%m-%d'),
-                'emailed': 'yes' if email_sent else 'no',
-            })
+        rows = issue_invites(org, inviter)
+        emailed = sum(1 for r in rows if r['emailed'] == 'yes')
+        for r in rows:
             self.stdout.write(
-                f'    {"✓ emailed" if email_sent else "• link only"}  {u.email}'
+                f'    {"✓ emailed" if r["emailed"] == "yes" else "• link only"}  {r["email"]}'
             )
 
         out_path = out_path or f'invite_links_{org.slug}.csv'
@@ -876,164 +1036,29 @@ class Command(BaseCommand):
           3. docker compose cp api:/app/X_..._DRAFT.csv ./
           4. Review/edit the draft, save as final
           5. provision_firm --org X --category-mappings X.csv
+
+        The Onboarding Console calls ai_mapping_suggestions() directly and
+        shows the rows as an editable grid instead of a file.
         """
-        import json
         import csv as csv_module
-        from django.conf import settings
-        from tracker.industry_categories import get_categories_for_industry
 
-        # Suppress noisy HTTP/SDK debug logging during the API call
-        import logging
-        for noisy in ('openai', 'httpx', 'httpcore'):
-            logging.getLogger(noisy).setLevel(logging.WARNING)
-
-        # ── Step 1: Validate prereqs ──────────────────────────────────────
-        if not settings.OPENAI_API_KEY:
-            raise CommandError(
-                'OPENAI_API_KEY not configured. Set it in .env or environment.'
-            )
-
-        task_types = list(
-            TaskType.objects.filter(org=org, is_active=True).order_by('name')
-        )
-        if not task_types:
-            raise CommandError(
-                f'No TaskTypes found for {org.name}. Run --task-types first '
-                f'to provision the firm\'s vocabulary, then re-run --suggest-mappings.'
-            )
-
-        canonical = get_categories_for_industry(org.industry_type)
-        if not canonical:
-            raise CommandError(
-                f'No canonical categories for industry_type="{org.industry_type}". '
-                f'Check that industry_type is set correctly (e.g., "cpa").'
-            )
-
+        canonical_n = len(_canonical(org))
         self.stdout.write(self.style.NOTICE(
-            f'Mapping {len(canonical)} canonical categories → '
-            f'{len(task_types)} firm TaskTypes\n'
+            f'Mapping {canonical_n} canonical categories → '
+            f'{TaskType.objects.filter(org=org, is_active=True).count()} firm TaskTypes\n'
         ))
-
-        # ── Step 2: Build the prompt ──────────────────────────────────────
-        tt_lines = []
-        for tt in task_types:
-            billable = 'billable' if tt.is_billable else 'non-billable'
-            tt_lines.append(f'  - {tt.code} | {tt.name} | {billable}')
-        firm_codes_block = '\n'.join(tt_lines)
-
-        canonical_block = '\n'.join(f'  {i+1}. {c}' for i, c in enumerate(canonical))
-
-        system_prompt = (
-            'You are an expert at mapping CPA work categories to a firm\'s '
-            'billing service codes (also called task type codes). Given a '
-            'firm\'s billing codes and a list of canonical categories, you '
-            'produce a JSON mapping from each canonical category to the '
-            'best-fit firm code.'
-        )
-
-        user_prompt = f"""A CPA firm uses these billing service codes:
-
-{firm_codes_block}
-
-For each of the following {len(canonical)} canonical work categories, select the BEST matching firm code from the list above.
-
-CANONICAL CATEGORIES:
-{canonical_block}
-
-RULES:
-- Use ONLY codes from the firm's list above. Never invent codes.
-- If multiple canonical categories naturally fit the same firm code, use the same code for all of them. That is fine and expected.
-- For "Idle" and "Personal/Non-Billable" categories, strongly prefer non-billable firm codes.
-- If a canonical category has no reasonable firm-code match, use null for the code and explain why in reasoning.
-
-OUTPUT FORMAT: JSON only, no commentary, no markdown fences. Object with one key per canonical category. Each value is an object with "code", "confidence" (HIGH/MEDIUM/LOW), and "reasoning" (one short sentence).
-
-Example structure:
-{{
-  "Tax Preparation": {{"code": "PREP1040", "confidence": "HIGH", "reasoning": "Direct match"}},
-  "Tax Planning":    {{"code": "PREP1040", "confidence": "MEDIUM", "reasoning": "Firm does not distinguish planning from prep"}}
-}}
-
-Confidence guidance:
-- HIGH: obvious match, no review needed
-- MEDIUM: reasonable match but worth a glance
-- LOW: best guess, definitely review
-"""
-
-        # ── Step 3: Call OpenAI ───────────────────────────────────────────
+        self.stdout.write('Calling OpenAI...')
         try:
-            from openai import OpenAI
-        except ImportError:
-            raise CommandError(
-                'openai SDK not installed. Run: pip install openai'
-            )
-
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        model = getattr(settings, 'AI_CLASSIFY_MODEL', 'gpt-4o-mini')
-
-        self.stdout.write(f'Calling OpenAI ({model})...')
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': user_prompt},
-                ],
-                response_format={'type': 'json_object'},
-                temperature=0.1,  # Low temp for consistency
-            )
-            raw_content = response.choices[0].message.content
-        except Exception as e:
-            raise CommandError(f'OpenAI API call failed: {e}')
-
-        # ── Step 4: Parse response ────────────────────────────────────────
-        try:
-            suggestions = json.loads(raw_content)
-        except json.JSONDecodeError as e:
-            self.stderr.write(self.style.ERROR(
-                f'Failed to parse OpenAI JSON: {e}'
-            ))
-            self.stderr.write(f'Raw response was:\n{raw_content}')
-            raise CommandError('OpenAI returned invalid JSON. Try re-running.')
-
-        # ── Step 5: Validate codes against firm's actual TaskTypes ────────
-        valid_codes = {tt.code for tt in task_types}
-        rows = []
-        invalid_count = 0
-
-        for category in canonical:
-            suggestion = suggestions.get(category, {})
-            if not isinstance(suggestion, dict):
-                suggestion = {
-                    'code': None,
-                    'confidence': 'LOW',
-                    'reasoning': 'Missing from AI response',
-                }
-
-            code = suggestion.get('code')
-            confidence = (suggestion.get('confidence') or 'LOW').upper()
-            reasoning = suggestion.get('reasoning') or ''
-
-            # Validate the suggested code actually exists
-            if code and code not in valid_codes:
+            rows = ai_mapping_suggestions(org)
+        except MappingSuggestionError as e:
+            raise CommandError(str(e))
+        invalid_count = sum(1 for r in rows if r.get('invalid_code'))
+        for r in rows:
+            if r.get('invalid_code'):
                 self.stderr.write(self.style.WARNING(
-                    f'  AI suggested unknown code "{code}" for '
-                    f'"{category}" — clearing.'
+                    f'  AI suggested unknown code "{r["invalid_code"]}" for '
+                    f'"{r["category"]}" — cleared.'
                 ))
-                code = None
-                confidence = 'LOW'
-                reasoning = (
-                    f'AI suggested invalid code; needs manual review. '
-                    f'({reasoning})'
-                )
-                invalid_count += 1
-
-            rows.append({
-                'category': category,
-                'task_type_code': code,
-                'confidence': confidence,
-                'reasoning': reasoning,
-            })
 
         # ── Step 6: Print color-coded preview ─────────────────────────────
         self.stdout.write(self.style.NOTICE(

@@ -350,6 +350,7 @@ REST_FRAMEWORK = {
         "ui_write": "60/minute",
         "ai_generate": "20/minute",
         "public_hello": "120/minute",
+        "onboard_intake": "30/minute",
         "anon": "100/minute",
         "user": "1000/minute",
     },

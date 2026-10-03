@@ -38,6 +38,7 @@ urlpatterns = [
     # copy had drifted (wrong company, no Google section), so redirect to it.
     path('privacy/', RedirectView.as_view(url='https://timetracker.mavops.ai/privacy.html', permanent=False), name='privacy'),
     path('api/deploy/', include('tracker.urls_deployment')),
+    path('api/onboard/', include('tracker.urls_onboarding_console')),  # Onboarding Console (own firewall)
     path('api/mobile/', include('mobile.urls')),  # ← add this
     # path('api/events/', include('django_eventstream.urls'), name='events'),   # disabled until ASGI — SSE kills sync gunicorn workers
 ]

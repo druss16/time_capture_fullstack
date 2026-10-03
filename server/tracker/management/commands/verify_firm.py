@@ -26,6 +26,7 @@ Usage:
     python manage.py verify_firm --org tl-wall --quiet   # only problems
 """
 
+import io
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
@@ -64,6 +65,11 @@ class Command(BaseCommand):
 
     # ── reporting helpers ────────────────────────────────────────────────
     def _line(self, label, state, detail, quiet):
+        # Recorded as data too, so the Onboarding Console renders the very
+        # same lines the terminal prints — one set of checks, two readers.
+        rows = getattr(self, '_rows', None)
+        if rows is not None:
+            rows.append({'label': label, 'state': state, 'detail': detail})
         if quiet and state == OK:
             return
         style = {
@@ -86,18 +92,7 @@ class Command(BaseCommand):
         self.stdout.write(f'{"=" * 62}\n')
 
         results = []
-        for check in (
-            self._check_config,
-            self._check_token,
-            self._check_team,
-            self._check_activation,
-            self._check_clients,
-            self._check_task_types,
-            self._check_mappings,
-            self._check_pairing,
-            self._check_pipeline,
-            self._check_fees,
-        ):
+        for check in self._checks():
             results.extend(check(org, quiet))
 
         blockers = [r for r in results if r[0] == BAD]
@@ -123,6 +118,20 @@ class Command(BaseCommand):
             raise SystemExit(1)
 
     # ── checks ───────────────────────────────────────────────────────────
+    def _checks(self):
+        return (
+            self._check_config,
+            self._check_token,
+            self._check_team,
+            self._check_activation,
+            self._check_clients,
+            self._check_task_types,
+            self._check_mappings,
+            self._check_pairing,
+            self._check_pipeline,
+            self._check_fees,
+        )
+
     def _check_config(self, org, quiet):
         """industry_type first: it is the one that fails without saying so."""
         out = []
@@ -414,3 +423,24 @@ class Command(BaseCommand):
                             f'manage.py set_engagement_budgets --org {org.id} --template '
                             f'> fees.csv, then --csv fees.csv (dry run) and --apply'))
         return out
+
+
+def run_checks(org):
+    """Every check as data: {'lines': [...], 'issues': [...]}.
+
+    `lines` are the status rows the command prints; `issues` are the blockers
+    and warnings with the fix each one names. A check that raises is reported
+    as a blocker rather than taking the whole report down with it.
+    """
+    cmd = Command(stdout=io.StringIO(), stderr=io.StringIO())
+    cmd._rows = []
+    issues = []
+    for check in cmd._checks():
+        try:
+            for state, label, fix in check(org, True):
+                issues.append({'state': state, 'label': label, 'fix': fix})
+        except Exception as e:                      # noqa: BLE001
+            name = check.__name__.replace('_check_', '')
+            cmd._rows.append({'label': name, 'state': BAD, 'detail': f'check failed: {e}'})
+            issues.append({'state': BAD, 'label': name, 'fix': f'check failed: {e}'})
+    return {'lines': cmd._rows, 'issues': issues}

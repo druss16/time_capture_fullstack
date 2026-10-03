@@ -4996,6 +4996,11 @@ from tracker.models_project_budgets import (  # noqa: F401, E402
     CurrentProject, OrgFeatureFlag, ProjectBudget,
 )
 
+# Onboarding Console — MavOps' internal firm-onboarding tool (see models_onboarding_console.py)
+from tracker.models_onboarding_console import (  # noqa: F401, E402
+    OnboardingProject, OnboardingStepState, OnboardingAuditEvent, OnboardingIntake,
+)
+
 
 
 

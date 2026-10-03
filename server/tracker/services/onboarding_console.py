@@ -62,6 +62,32 @@ def _unique_slug(name):
     return slug
 
 
+_ENTITY_SUFFIXES = {'inc', 'incorporated', 'llc', 'llp', 'pllc', 'pc', 'pa', 'ltd',
+                    'limited', 'co', 'company', 'corp', 'corporation', 'the'}
+
+
+def _firm_key(name):
+    """'The Smith & Co., LLC' and 'smith and co' compare equal."""
+    words = re.findall(r'[a-z0-9]+', (name or '').lower().replace('&', ' and '))
+    return ' '.join(w for w in words if w not in _ENTITY_SUFFIXES)
+
+
+def find_existing_firm(name):
+    """An organization that is already this firm, by name, or None.
+
+    Creating a second org for a firm that exists splits its people, clients
+    and time across two tenants — and nothing errors when it happens.
+    """
+    from tracker.models import Organization
+    key = _firm_key(name)
+    if not key:
+        return None
+    for org in Organization.objects.only('id', 'name', 'slug'):
+        if _firm_key(org.name) == key:
+            return org
+    return None
+
+
 @transaction.atomic
 def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
                    org_id=None, slug=None, target_go_live=None):
@@ -100,6 +126,12 @@ def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
         name = (name or '').strip()
         if not name:
             raise ConsoleError('Firm name is required.')
+        existing = find_existing_firm(name)
+        if existing:
+            raise ConsoleError(
+                f'"{existing.name}" already exists in TimeTracker (org #{existing.id}, '
+                f'{existing.slug}). Choose "Firm already in TimeTracker" instead of '
+                f'creating a second one.')
         slug = slugify(slug)[:50] if slug else _unique_slug(name)
         if Organization.objects.filter(slug=slug).exists():
             raise ConsoleError(f'Slug "{slug}" is taken.')

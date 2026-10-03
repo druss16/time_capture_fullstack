@@ -14,11 +14,14 @@ export const VERTICALS: { value: string; label: string; defaultPath: string }[] 
 ];
 
 export const INSTALL_PATHS: { value: string; label: string }[] = [
-  { value: "windows_gpo", label: "Windows — GPO logon script" },
-  { value: "windows_hand", label: "Windows — by hand" },
-  { value: "mac_hand", label: "Mac — by hand" },
-  { value: "mac_mdm", label: "Mac — MDM" },
+  { value: "windows_gpo", label: "Windows - GPO logon script" },
+  { value: "windows_hand", label: "Windows - by hand" },
+  { value: "mac_hand", label: "Mac - by hand" },
+  { value: "mac_mdm", label: "Mac - MDM" },
 ];
+
+export const installPathLabel = (value: string) =>
+  INSTALL_PATHS.find((o) => o.value === value)?.label ?? value;
 
 export const WHO_LABEL: Record<string, string> = {
   us: "Mavops", firm: "The firm", firm_it: "Firm's IT", system: "Automatic",

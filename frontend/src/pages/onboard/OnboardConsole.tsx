@@ -9,7 +9,7 @@ import { cn } from "@/lib/design-system";
 import { onboardApi, type ProjectSummary } from "./api";
 import ProjectPage from "./ProjectPage";
 import {
-  ErrorNote, INSTALL_PATHS, Modal, Pill, VERTICALS, daysSince, fmtDate,
+  ErrorNote, INSTALL_PATHS, Modal, installPathLabel, Pill, VERTICALS, daysSince, fmtDate,
   inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
 } from "./shared";
 
@@ -128,7 +128,7 @@ function ProjectCard({ p }: { p: ProjectSummary }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate font-semibold text-slate-900">{p.org.name}</div>
-          <div className="mt-0.5 text-xs text-slate-500">{p.vertical_label} · {p.install_path_label}</div>
+          <div className="mt-0.5 text-xs text-slate-500">{p.vertical_label} · {installPathLabel(p.install_path)}</div>
         </div>
         {p.status === "live" ? <Pill tone="green">Live</Pill> : p.status === "paused" ? <Pill tone="amber">Paused</Pill>
           : p.status === "cancelled" ? <Pill>Cancelled</Pill> : <Pill tone="blue">{phase?.title ?? "—"}</Pill>}

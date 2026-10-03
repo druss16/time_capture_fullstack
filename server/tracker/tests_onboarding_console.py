@@ -89,6 +89,15 @@ class ProjectTests(ConsoleBase):
         self.assertEqual(org.plan, 'none')
         self.assertTrue(OnboardingAuditEvent.objects.filter(action='project.create').exists())
 
+    def test_duplicate_firm_refused(self):
+        Organization.objects.create(name='Smith & Co., LLC', slug='smith-co')
+        r = self.api.post('/api/onboard/projects/', {
+            'name': 'smith and co', 'vertical': 'cpa', 'install_path': 'windows_gpo'},
+            format='json')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('already exists', r.json()['error'])
+        self.assertEqual(Organization.objects.filter(slug__startswith='smith').count(), 1)
+
     def test_unknown_vertical_refused(self):
         r = self.api.post('/api/onboard/projects/', {
             'name': 'X', 'vertical': 'plumbing', 'install_path': 'mac_hand'}, format='json')

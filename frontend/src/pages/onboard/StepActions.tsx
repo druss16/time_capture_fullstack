@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2, Sparkles, Upload } from "lucide-react";
 import { onboardApi, type IssuedInvite, type KitFile, type ProjectDetail, type RosterRow } from "./api";
 import {
-  CopyButton, DownloadButton, ErrorNote, Modal, OutputLog, Pill, fmtDate,
+  CopyButton, DownloadButton, ErrorNote, Modal, OutputLog, Pill, fmtDate, installPathLabel,
   inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
 } from "./shared";
 
@@ -527,7 +527,7 @@ function DeployKitDialog({ project, onClose, onChanged }: Props) {
   }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Modal title="Deployment kit" wide onClose={onClose}
-      subtitle={<>Everything IT needs for {project.install_path_label}, filled in with token <code>{kit?.token ?? "…"}</code>.</>}>
+      subtitle={<>Everything IT needs for {installPathLabel(project.install_path)}, filled in with token <code>{kit?.token ?? "…"}</code>.</>}>
       <ErrorNote message={err} />
       {kit && (
         <div className="space-y-2">

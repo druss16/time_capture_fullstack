@@ -454,7 +454,17 @@ def _intake_summary(i):
         'submitted_at': i.submitted_at.isoformat() if i.submitted_at else None,
         'revoked_at': i.revoked_at.isoformat() if i.revoked_at else None,
         'payload': i.payload,
+        'sent': _sent_summary(i),
     }
+
+
+def _sent_summary(i):
+    ev = svc.intake_sent_event(i)
+    if not ev:
+        return None
+    return {'to': ev.detail.get('to'), 'how': ev.detail.get('how'),
+            'at': ev.created_at.isoformat(),
+            'by': ev.actor.get_full_name() or ev.actor.email if ev.actor else None}
 
 
 def _frontend_base():
@@ -478,6 +488,30 @@ def intake_reopen(request, pk):
     intake, raw = OnboardingIntake.mint(p)
     svc.audit(p, request.user, 'intake.reopen', intake_id=intake.id)
     return Response({'url': f'{_frontend_base()}/intake/{raw}', **_intake_summary(intake)})
+
+
+@operator_view(['POST'])
+def intake_send(request, pk):
+    """Email the firm a fresh intake link. The link is returned either way."""
+    p = _project(pk)
+    try:
+        r = svc.send_intake(p, request.user, to_email=request.data.get('email'),
+                            contact_name=request.data.get('name') or '')
+    except ConsoleError as e:
+        return _err(e)
+    return Response({'url': r['url'], 'emailed': r['emailed'], 'to': r['to'],
+                     **_intake_summary(r['intake'])})
+
+
+@operator_view(['POST'])
+def intake_mark_sent(request, pk):
+    """Record that the current link went out some other way."""
+    p = _project(pk)
+    try:
+        intake = svc.mark_intake_sent_by_hand(p, request.user, to=request.data.get('to') or '')
+    except ConsoleError as e:
+        return _err(e)
+    return Response(_intake_summary(intake))
 
 
 # ── Intake (the firm's side — public, token only) ────────────────────────

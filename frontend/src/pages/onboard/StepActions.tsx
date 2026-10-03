@@ -561,19 +561,39 @@ const ANSWER_LABEL: Record<string, string> = {
 // ── Intake link ────────────────────────────────────────────────────────────
 
 function IntakeDialog({ project, onClose, onChanged }: Props) {
+  const contact = project.contacts?.owner?.email ? project.contacts.owner : (project.contacts?.billing || {});
+  const [email, setEmail] = useState(contact.email || "");
+  const [name, setName] = useState(contact.name || "");
   const [url, setUrl] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ emailed: boolean; to: string } | null>(null);
+  const [markedByHand, setMarkedByHand] = useState(false);
+  const [busy, setBusy] = useState<"" | "send" | "link" | "mark">("");
   const [err, setErr] = useState<string | null>(null);
   const intake = project.intake;
   const payload = intake?.payload || {};
   const counts = useMemo(() => ({
     team: (payload.team || []).length, services: (payload.services || []).length, clients: (payload.clients || []).length,
   }), [payload]);
+  const submitted = !!intake?.submitted_at;
 
-  const issue = async (reopen: boolean) => {
-    setBusy(true); setErr(null);
-    try { const r = reopen ? await onboardApi.reopenIntake(project.id) : await onboardApi.issueIntake(project.id); setUrl(r.url || null); onChanged(); }
-    catch (e) { setErr(msg(e)); } finally { setBusy(false); }
+  const send = async () => {
+    setBusy("send"); setErr(null); setResult(null); setMarkedByHand(false);
+    try {
+      const r = await onboardApi.sendIntake(project.id, email, name);
+      setUrl(r.url || null); setResult({ emailed: r.emailed, to: r.to }); onChanged();
+    } catch (e) { setErr(msg(e)); } finally { setBusy(""); }
+  };
+  const linkOnly = async () => {
+    setBusy("link"); setErr(null); setResult(null); setMarkedByHand(false);
+    try {
+      const r = submitted ? await onboardApi.reopenIntake(project.id) : await onboardApi.issueIntake(project.id);
+      setUrl(r.url || null); onChanged();
+    } catch (e) { setErr(msg(e)); } finally { setBusy(""); }
+  };
+  const markSent = async () => {
+    setBusy("mark"); setErr(null);
+    try { await onboardApi.markIntakeSent(project.id, email ? `${email} (sent by hand)` : ""); setMarkedByHand(true); onChanged(); }
+    catch (e) { setErr(msg(e)); } finally { setBusy(""); }
   };
 
   return (
@@ -586,6 +606,9 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
               {intake.submitted_at ? <Pill tone="green">Submitted {fmtDate(intake.submitted_at)}</Pill>
                 : intake.is_open ? <Pill tone="blue">Open until {fmtDate(intake.expires_at)}</Pill>
                 : <Pill tone="amber">Expired or replaced</Pill>}
+              {intake.is_open && (intake.sent
+                ? <Pill tone="green">Sent to {intake.sent.to} · {fmtDate(intake.sent.at)}</Pill>
+                : <Pill tone="amber">Not sent yet</Pill>)}
               {intake.last_saved_at && !intake.submitted_at && <Pill>Last saved {fmtDate(intake.last_saved_at)}</Pill>}
             </div>
             {intake.last_saved_at && (
@@ -604,21 +627,45 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
               </dl>
             )}
           </div>
-        ) : <p className="text-sm text-slate-600">No link issued yet.</p>}
+        ) : <p className="text-sm text-slate-600">No link sent yet.</p>}
 
+        <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+          <div className="text-sm font-semibold text-slate-900">{submitted ? "Reopen for edits and send" : "Send to the firm"}</div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div><label className={labelClass}>Name</label>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
+            <div><label className={labelClass}>Email</label>
+              <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@firm.com" /></div>
+          </div>
+          <p className="text-xs text-slate-500">Sends a fresh link — any earlier open link stops working, and anything already filled in carries over.</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button className={secondaryBtnClass} disabled={!!busy} onClick={linkOnly}>
+              {busy === "link" && <Loader2 className="h-4 w-4 animate-spin" />} Just make a link
+            </button>
+            <button className={primaryBtnClass} disabled={!!busy || !email.trim()} onClick={send}>
+              {busy === "send" && <Loader2 className="h-4 w-4 animate-spin" />} Send by email
+            </button>
+          </div>
+        </div>
+
+        {result?.emailed && (
+          <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Emailed to {result.to}. The step is ticked.</div>
+        )}
+        {result && !result.emailed && (
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Couldn't email {result.to}. Copy the link below and send it yourself, then mark it sent.</div>
+        )}
         {url && (
           <div className="space-y-1.5 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">New link — shown once</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">The link — shown once</div>
             <div className="flex items-center gap-2"><code className="min-w-0 flex-1 truncate text-xs">{url}</code><CopyButton text={url} /></div>
-            <div className="text-xs text-emerald-800">Any earlier open link stops working. Answers carry over.</div>
+            {!result?.emailed && (markedByHand
+              ? <div className="text-xs text-emerald-800">Marked as sent. The step is ticked.</div>
+              : <button className={secondaryBtnClass + " py-1 text-xs"} disabled={!!busy} onClick={markSent}>I sent it myself</button>)}
           </div>
         )}
         <ErrorNote message={err} />
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex justify-end">
           <button className={secondaryBtnClass} onClick={onClose}>Close</button>
-          {intake?.submitted_at
-            ? <button className={primaryBtnClass} disabled={busy} onClick={() => issue(true)}>Reopen for edits (new link)</button>
-            : <button className={primaryBtnClass} disabled={busy} onClick={() => issue(false)}>{intake ? "Issue a new link" : "Create intake link"}</button>}
         </div>
       </div>
     </Modal>

@@ -840,3 +840,58 @@ def delete_onboarding(project, actor, *, confirm_name, delete_firm):
     # The project's own audit trail goes with it; this record outlives it.
     audit(None, actor, 'project.delete', **summary)
     return summary
+
+
+# ── Sending the intake link ──────────────────────────────────────────────
+
+def intake_sent_event(intake):
+    """The audit record saying this intake link actually went out, if any."""
+    from tracker.models_onboarding_console import OnboardingAuditEvent
+    return (OnboardingAuditEvent.objects
+            .filter(project=intake.project, action='intake.sent', detail__intake_id=intake.id)
+            .order_by('-created_at').first())
+
+
+def send_intake(project, actor, *, to_email, contact_name=''):
+    """Mint a fresh intake link and email it. Returns {url, emailed, to}.
+
+    A new link every time: only a hash of the old one is stored, so it cannot
+    be re-sent — and minting retires the old one while keeping the answers.
+    If the email fails the link is still returned so it can go by hand, but
+    the link is not recorded as sent.
+    """
+    from django.core.validators import validate_email
+    from django.core.exceptions import ValidationError
+    from tracker.email_service import send_intake_link
+    from tracker.models_onboarding_console import OnboardingIntake
+
+    to_email = (to_email or '').strip()
+    try:
+        validate_email(to_email)
+    except ValidationError:
+        raise ConsoleError('Enter a valid email address.')
+    intake, raw = OnboardingIntake.mint(project)
+    url = f"{getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai').rstrip('/')}/intake/{raw}"
+    emailed = False
+    try:
+        emailed = bool(send_intake_link(
+            to_email=to_email, firm_name=project.organization.name, intake_url=url,
+            contact_name=(contact_name or '').strip() or None,
+            expires_on=f'{intake.expires_at:%B %-d}'))
+    except Exception:                                   # noqa: BLE001
+        emailed = False
+    if emailed:
+        audit(project, actor, 'intake.sent', intake_id=intake.id, to=to_email, how='email')
+    else:
+        audit(project, actor, 'intake.send_failed', intake_id=intake.id, to=to_email)
+    return {'url': url, 'emailed': emailed, 'to': to_email, 'intake': intake}
+
+
+def mark_intake_sent_by_hand(project, actor, *, to=''):
+    from tracker.models_onboarding_console import OnboardingIntake
+    intake = OnboardingIntake.objects.filter(project=project).first()
+    if not intake or not intake.is_open:
+        raise ConsoleError('There is no open intake link to mark as sent.')
+    audit(project, actor, 'intake.sent', intake_id=intake.id,
+          to=(to or '').strip() or 'sent by hand', how='hand')
+    return intake

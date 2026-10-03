@@ -457,6 +457,55 @@ Questions? {help_url} or reply to this email.
     )
 
 
+def send_intake_link(to_email: str, firm_name: str, intake_url: str,
+                     contact_name: str = None, expires_on: str = None):
+    """Ask a new firm to fill in its onboarding intake.
+
+    The link is single-use per firm and needs no login, so it says plainly
+    that it should not be forwarded outside the firm.
+    """
+    hello = f"Hi {contact_name}," if contact_name else "Hi,"
+    until = f" It stays open until {expires_on}." if expires_on else ""
+    plain = f"""{hello}
+
+To get {firm_name} set up on TimeTracker, we need a few details from you:
+your team, the services you bill for, and who we should work with.
+It takes about 20 minutes and saves as you go, so several people can fill it in.
+
+Open the form:
+{intake_url}
+
+No login is needed. Please keep the link within {firm_name}.{until}
+
+Questions? Just reply to this email.
+
+- Dan Russell, Mavops"""
+
+    body = (
+        f'<p style="margin:0 0 10px;">{hello}</p>'
+        f'<p style="margin:0 0 6px;">To get <strong style="color:{INK};">{firm_name}</strong> '
+        f'set up on TimeTracker, we need a few details from you: your team, the '
+        f'services you bill for, and who we should work with.</p>'
+        f'<p style="margin:0;">It takes about 20 minutes and saves as you go, so '
+        f'several people can fill it in.</p>'
+        + _btn(intake_url, 'brand', 'Open the setup form')
+        + f'<p style="margin:0 0 6px;color:{INK_FAINT};font-size:13px;">No login is '
+        f'needed. Please keep the link within {firm_name}.{until}</p>'
+        f'<p style="margin:18px 0 0;color:{INK_FAINT};font-size:13px;'
+        f'word-break:break-all;">Button not working? Paste this into your '
+        f'browser:<br>{intake_url}</p>'
+    )
+    html = _wrap_html('brand', '', f'Getting {firm_name} set up', body,
+                      preheader='A short form so we can set up TimeTracker for your firm.')
+    return send_email(
+        to_email=to_email,
+        subject=f"Getting {firm_name} set up on TimeTracker",
+        html_content=html,
+        plain_content=plain,
+        categories=["onboarding", "intake"],
+    )
+
+
 # ---------- 2b. Password reset ----------
 
 def send_password_reset(

@@ -26,6 +26,8 @@ urlpatterns = [
     path('projects/<int:pk>/delete/', v.delete_project, name='onboard-delete'),
     path('projects/<int:pk>/intake/', v.intake_link, name='onboard-intake-link'),
     path('projects/<int:pk>/intake/reopen/', v.intake_reopen, name='onboard-intake-reopen'),
+    path('projects/<int:pk>/intake/send/', v.intake_send, name='onboard-intake-send'),
+    path('projects/<int:pk>/intake/mark-sent/', v.intake_mark_sent, name='onboard-intake-mark-sent'),
     # The firm's side: no login, the token in the path is the whole credential.
     path('intake/<str:raw>/', v.PublicIntake.as_view(), name='onboard-public-intake'),
 ]

@@ -89,6 +89,42 @@ class ProjectTests(ConsoleBase):
         self.assertEqual(org.plan, 'none')
         self.assertTrue(OnboardingAuditEvent.objects.filter(action='project.create').exists())
 
+    def test_create_with_go_live_date_lands_on_the_firm(self):
+        body = {'name': 'More Than Cars', 'vertical': 'marketing', 'install_path': 'mac_hand',
+                'seat_count': 1, 'target_go_live': '2026-10-06'}
+        r = self.api.post('/api/onboard/projects/', body, format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()['target_go_live'], '2026-10-06')
+        p = OnboardingProject.objects.get(id=r.json()['id'])
+        r = self.api.patch(f'/api/onboard/projects/{p.id}/', {'target_go_live': '2026-11-01'},
+                           format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['target_go_live'], '2026-11-01')
+        r = self.api.patch(f'/api/onboard/projects/{p.id}/', {'target_go_live': 'soon'},
+                           format='json')
+        self.assertEqual(r.status_code, 400)
+
+    def test_soft_deleted_firm_does_not_block_its_slug(self):
+        old = Organization.objects.create(name='More Than Cars', slug='more-than-cars')
+        old.soft_delete()
+        r = self.api.post('/api/onboard/projects/', {
+            'name': 'More Than Cars', 'vertical': 'marketing', 'install_path': 'mac_hand'},
+            format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()['org']['slug'], 'more-than-cars-2')
+
+    def test_create_delete_create(self):
+        body = {'name': 'More Than Cars', 'vertical': 'marketing', 'install_path': 'mac_hand',
+                'target_go_live': '2026-10-06'}
+        a = self.api.post('/api/onboard/projects/', body, format='json')
+        self.assertEqual(a.status_code, 201, a.content)
+        OnboardingProject.objects.update(created_at=timezone.now() - timedelta(minutes=10))
+        d = self.api.post(f"/api/onboard/projects/{a.json()['id']}/delete/",
+                          {'confirm_name': 'More Than Cars', 'delete_firm': True}, format='json')
+        self.assertEqual(d.status_code, 200, d.content)
+        b = self.api.post('/api/onboard/projects/', body, format='json')
+        self.assertEqual(b.status_code, 201, b.content)
+
     def test_double_submit_returns_the_same_firm(self):
         body = {'name': 'More Than Cars', 'vertical': 'marketing',
                 'install_path': 'mac_hand', 'seat_count': 8}

@@ -36,6 +36,28 @@ TASK_TYPE_COLUMNS = ['name', 'code', 'is_billable', 'default_rate']
 ROLES = {'owner', 'admin', 'manager', 'member'}
 
 
+def parse_go_live(value):
+    """'2026-10-06' (what the browser sends) → date; blank → None.
+
+    Assigning the raw string to the DateField saved fine but left a str on
+    the instance, and building the response called .isoformat() on it — so
+    the firm was created and the operator got a 500 instead of its page.
+    """
+    from datetime import date
+    from django.utils.dateparse import parse_date
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        parsed = parse_date(str(value).strip())
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        raise ConsoleError(f'"{value}" is not a date (use YYYY-MM-DD).')
+    return parsed
+
+
 class ConsoleError(Exception):
     """An action the console refuses, with the reason to show the operator."""
 
@@ -56,7 +78,8 @@ def _unique_slug(name):
     from tracker.models import Organization
     base = slugify(name)[:40] or 'firm'
     slug, n = base, 2
-    while Organization.objects.filter(slug=slug).exists():
+    # all_objects: the unique constraint covers soft-deleted orgs too.
+    while Organization.all_objects.filter(slug=slug).exists():
         slug = f'{base[:37]}-{n}'
         n += 1
     return slug
@@ -160,7 +183,7 @@ def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
                 f'{existing.slug}). Choose "Firm already in TimeTracker" instead of '
                 f'creating a second one.')
         slug = slugify(slug)[:50] if slug else _unique_slug(name)
-        if Organization.objects.filter(slug=slug).exists():
+        if Organization.all_objects.filter(slug=slug).exists():
             raise ConsoleError(f'Slug "{slug}" is taken.')
         org = Organization.objects.create(
             name=name, slug=slug, plan='none',
@@ -171,7 +194,7 @@ def create_project(*, actor, vertical, install_path, name=None, seat_count=1,
 
     project = OnboardingProject.objects.create(
         organization=org, install_path=install_path, owner=actor, created_by=actor,
-        target_go_live=target_go_live or None,
+        target_go_live=parse_go_live(target_go_live),
     )
     audit(project, actor, 'project.create', org_id=org.id, org=org.name,
           vertical=vertical, install_path=install_path, adopted=bool(org_id),

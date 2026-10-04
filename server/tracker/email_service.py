@@ -731,46 +731,32 @@ def send_timesheet_reminder(
 
     blocks_word = 'block needs' if unassigned_count == 1 else 'blocks need'
 
+    # No "nothing captured" email. A day with no time is usually a day off,
+    # and a daily nag reaches everyone who is on vacation.
     if total_hours < 0.1:
-        tone = 'warn'
-        title = 'No time was captured'
-        body = (
-            _p(f'Hi {_e(user_name)},', last=True)
-            + _panel(f'<strong>Nothing was captured on {_e(date_str)}.</strong><br>'
-                     'If you worked that day, check that the TimeTracker desktop '
-                     'app is running on your computer.', 'warn')
-            + _btn(review_url, 'brand', 'Open Daily Review')
-        )
-        plain = f"""Hi {user_name},
+        logger.info(f"[EMAIL] Daily reminder skipped for {to_email}: no time captured")
+        return False
 
-Nothing was captured on {date_str}. If you worked that day, check that the TimeTracker desktop app is running on your computer.
-
-Open Daily Review: {review_url}
-
-- TimeTracker"""
-        subj = f"No time captured on {date_str}"
-        pre = 'Check that the desktop app is running.'
-    else:
-        tone = 'brand'
-        title = 'Review your time'
-        rows = [(_e(name), _fmt_hours(hrs)) for name, hrs in client_breakdown]
-        unassigned_html = _panel(
-            f'<strong>{unassigned_count} {blocks_word}</strong> a client before '
-            'you can submit.', 'warn',
-        ) if unassigned_count else ''
-        body = (
-            _p(f'Hi {_e(user_name)},')
-            + _p(f'You captured {_strong(_fmt_hours(total_hours))} on {_e(date_str)}. '
-                 'Give it a quick look before it goes on your timesheet.', last=True)
-            + _rows(rows, heading=('Client', 'Time'),
-                    empty='No clients assigned yet',
-                    total=_fmt_hours(total_hours))
-            + unassigned_html
-            + _btn(review_url, 'brand', 'Open Daily Review')
-        )
-        unassigned_line = (f"\n{unassigned_count} {blocks_word} a client before you can submit.\n"
-                           if unassigned_count else "")
-        plain = f"""Hi {user_name},
+    tone = 'brand'
+    title = 'Review your time'
+    rows = [(_e(name), _fmt_hours(hrs)) for name, hrs in client_breakdown]
+    unassigned_html = _panel(
+        f'<strong>{unassigned_count} {blocks_word}</strong> a client before '
+        'you can submit.', 'warn',
+    ) if unassigned_count else ''
+    body = (
+        _p(f'Hi {_e(user_name)},')
+        + _p(f'You captured {_strong(_fmt_hours(total_hours))} on {_e(date_str)}. '
+             'Give it a quick look before it goes on your timesheet.', last=True)
+        + _rows(rows, heading=('Client', 'Time'),
+                empty='No clients assigned yet',
+                total=_fmt_hours(total_hours))
+        + unassigned_html
+        + _btn(review_url, 'brand', 'Open Daily Review')
+    )
+    unassigned_line = (f"\n{unassigned_count} {blocks_word} a client before you can submit.\n"
+                       if unassigned_count else "")
+    plain = f"""Hi {user_name},
 
 You captured {_fmt_hours(total_hours)} on {date_str}:
 
@@ -779,9 +765,9 @@ You captured {_fmt_hours(total_hours)} on {date_str}:
 Open Daily Review: {review_url}
 
 - TimeTracker"""
-        subj = f"Review your time for {date_str}"
-        pre = f'{_fmt_hours(total_hours)} captured' + (
-            f' · {unassigned_count} {blocks_word} a client' if unassigned_count else '')
+    subj = f"Review your time for {date_str}"
+    pre = f'{_fmt_hours(total_hours)} captured' + (
+        f' · {unassigned_count} {blocks_word} a client' if unassigned_count else '')
 
     html = _wrap_html(tone, '', title, body, preheader=pre,
                       subtitle=_e(date_str), footer_note=_prefs_note())

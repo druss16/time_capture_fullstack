@@ -62,6 +62,12 @@ def send_daily_timesheet_reminders_task(self):
                 total_minutes = sum(b.minutes or 0 for b in blocks)
                 total_hours = total_minutes / 60
 
+                # Nothing captured usually means a day off. A daily "no time
+                # captured" email nags people on vacation, so say nothing.
+                if total_hours < 0.1:
+                    skipped_count += 1
+                    continue
+
                 unassigned_count = blocks.filter(client__isnull=True).count()
 
                 client_hours = {}

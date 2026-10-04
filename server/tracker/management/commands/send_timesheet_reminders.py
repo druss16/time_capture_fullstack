@@ -45,7 +45,6 @@ User = get_user_model()
 REMINDER_FROM_EMAIL = getattr(settings, 'TIMESHEET_REMINDER_FROM_EMAIL',
                               settings.DEFAULT_FROM_EMAIL or 'noreply@timetracker.mavops.ai')
 WEB_APP_URL = getattr(settings, 'TIMETRACKER_WEB_URL', 'https://timetracker.mavops.ai')
-MIN_HOURS_TO_SKIP = getattr(settings, 'TIMESHEET_REMINDER_MIN_HOURS_TO_SKIP', None)
 
 
 class Command(BaseCommand):
@@ -220,7 +219,8 @@ class Command(BaseCommand):
 
             total_hours = round(total_minutes / 60, 2)
 
-            if MIN_HOURS_TO_SKIP is not None and total_hours <= 0:
+            # No time usually means a day off; never email about it.
+            if total_hours <= 0:
                 continue
 
             entries = [
@@ -303,16 +303,11 @@ class Command(BaseCommand):
         entries = summary.get('entries', [])
         total_hours = summary.get('total_hours', 0)
 
-        if entries:
-            table = _rows(
-                [(_e(e['client_name']), f"{e['hours']:.1f} hrs") for e in entries],
-                heading=('Client', 'Hours'),
-                total=f"{total_hours:.1f} hrs",
-            )
-        else:
-            table = _panel('<strong>No time was captured.</strong> If you worked '
-                           'that day, check that the TimeTracker desktop app is running.',
-                           'warn')
+        table = _rows(
+            [(_e(e['client_name']), f"{e['hours']:.1f} hrs") for e in entries],
+            heading=('Client', 'Hours'),
+            total=f"{total_hours:.1f} hrs",
+        )
 
         body = (
             _p(f'Hi {_e(display_name)},')

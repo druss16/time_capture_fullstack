@@ -907,11 +907,12 @@ def send_auto_submit_notification(
     billable_hours,
     total_amount,
 ):
-    """Notify user their timesheet was auto-submitted on Tuesday."""
-    try:
-        total_amount_fmt = f"{float(total_amount):,.2f}"
-    except (TypeError, ValueError):
-        total_amount_fmt = "0.00"
+    """Notify user their timesheet was auto-submitted on Tuesday.
+
+    total_amount is accepted for existing callers and not shown. Firms bill
+    from Clio / Karbon / their own system, not from TimeTracker, so a dollar
+    figure here reads as an invoice the person never sent.
+    """
     url = _frontend_url() + "/timesheet"
 
     body = (
@@ -919,8 +920,7 @@ def send_auto_submit_notification(
         + _p(f'Your timesheet for {_strong(_e(week_start_str) + " &ndash; " + _e(week_end_str))} '
              'was submitted automatically.', last=True)
         + _stats([('Total', _fmt_hours(total_hours)),
-                  ('Billable', _fmt_hours(billable_hours)),
-                  ('Amount', f'${total_amount_fmt}')])
+                  ('Billable', _fmt_hours(billable_hours))])
         + _p('Your manager will review it shortly. Need a change? Ask them to send '
              'it back to you.', last=True)
         + _btn(url, 'brand', 'View timesheet')
@@ -936,7 +936,6 @@ Your timesheet for {week_start_str} - {week_end_str} was automatically submitted
 
 Total time: {_fmt_hours(total_hours)}
 Billable time: {_fmt_hours(billable_hours)}
-Amount: ${total_amount_fmt}
 
 Your manager will review and approve it shortly.
 

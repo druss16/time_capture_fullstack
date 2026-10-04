@@ -547,9 +547,9 @@ def send_onboarding_invitation(
     the invite is single-use and expires, so a forwarded or archived message
     cannot be replayed into an account.
 
-    Order matters. Set password -> land in the app -> download -> pair. The
-    download used to come first, which left people staring at an agent they
-    could not sign into yet.
+    The desktop app is already on the person's computer — the firm's IT
+    deploys it — so the email never asks them to download or install
+    anything. Choosing a password is the only step left for them.
     """
     help_url = f"{_frontend_url()}/help"
     who = f"{invited_by} has invited you" if invited_by else "You have been invited"
@@ -563,7 +563,7 @@ It works once and expires in {expires_days} days.
 
 What happens next:
   1. Choose your password (30 seconds)
-  2. We walk you through installing the desktop app
+  2. The desktop app is already on your computer — nothing to install
   3. Your billable time starts capturing automatically
 
 Questions? {help_url} or reply to this email.
@@ -581,8 +581,8 @@ Questions? {help_url} or reply to this email.
         f'</td></tr>'
         for n, t, d in [
             (1, 'Choose your password', 'You pick it &mdash; we never email one.'),
-            (2, 'Install the desktop app',
-                'We hand you the right download and a code to connect it.'),
+            (2, 'The desktop app is already installed',
+                'Your firm put it on your computer, so there is nothing to download.'),
             (3, 'Your time starts capturing',
                 'It runs quietly in the background and sorts work by client.'),
         ]
@@ -591,7 +591,7 @@ Questions? {help_url} or reply to this email.
     body = (
         _p(f'{_e(who)} to join {_strong(_e(org_name))}.')
         + _p('TimeTracker captures your billable time automatically, so you never '
-             'have to remember to log hours. Setup takes about two minutes.', last=True)
+             'have to remember to log hours. All you need to do is choose a password.', last=True)
         + _btn(invite_url, 'brand', 'Set your password')
         + _fine(f'This link works once and expires in {expires_days} days.', top=0)
         + f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
@@ -603,7 +603,7 @@ Questions? {help_url} or reply to this email.
 
     html = _wrap_html(
         'brand', '', f'Welcome to {_e(org_name)}', body,
-        preheader='Choose a password and finish setup — takes about two minutes.',
+        preheader='Choose a password and you are done. The desktop app is already installed.',
     )
 
     return send_email(

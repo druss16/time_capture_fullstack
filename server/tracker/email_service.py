@@ -1152,8 +1152,12 @@ Revise timesheet: {url}
 
 
 # ============================================================================
-# RULE SUGGESTION NOTIFICATION
+# ACTIVITY FLAGGED FOR REVIEW
 # ============================================================================
+# Firms never create rules. A firm owner/admin/manager flags activity the
+# classifier keeps missing, and Mavops decides what, if anything, to do. The
+# function name and SendGrid category keep the old "rule suggestion" wording
+# so existing callers and SendGrid stats are unaffected.
 
 def send_rule_suggestion_notification(
     *,
@@ -1167,41 +1171,43 @@ def send_rule_suggestion_notification(
     suggestion_id: int = None,
 ):
     """
-    Notify Mavops that a firm user flagged an uncategorized activity as a
-    candidate for a routing/categorization rule. Best-effort — callers wrap
-    this in try/except so a failed email never blocks the suggestion saving.
+    Tell Mavops a firm flagged uncategorized activity for review. Best-effort
+    — callers wrap this in try/except so a failed email never blocks the flag
+    saving.
     """
     hours = round((minutes or 0) / 60, 1)
     ref = f' (#{suggestion_id})' if suggestion_id else ''
 
     body = (
-        _p(f'From {_strong(_e(submitted_by))} at {_strong(_e(org_name))}.', last=True)
+        _p(f'{_strong(_e(submitted_by))} at {_strong(_e(org_name))} flagged activity '
+           'that keeps landing uncategorized.', last=True)
         + _rows([
             ('Activity', _e(label)),
             ('Uncategorized time', f'{hours}h ({minutes} min)'),
             ('Blocks', str(block_count)),
             ('Employees affected', str(user_count)),
         ])
-        + (_panel(_label('Note from submitter')
+        + (_panel(_label('Their note')
                   + f'<div style="margin-top:4px;">{_e(note)}</div>', 'brand')
            if note else '')
-        + _fine(f'Review in Mavops Admin &rarr; Rule Suggestions{ref}.')
+        + _fine(f'Nothing has changed in their time. Review it in Mavops Admin '
+                f'&rarr; Rule Suggestions{ref}.')
     )
-    html = _wrap_html('brand', '', 'New rule suggestion', body,
+    html = _wrap_html('brand', '', 'Activity flagged for review', body,
                       preheader=f'{_e(label)} — {_e(org_name)}')
 
-    plain = f"""New rule suggestion from {submitted_by} at {org_name}
+    plain = f"""Activity flagged for review by {submitted_by} at {org_name}
 
 Activity: {label}
 Uncategorized time: {hours}h ({minutes} min)
 Blocks: {block_count}
 Employees affected: {user_count}
 {f"{chr(10)}Note: {note}{chr(10)}" if note else ""}
-Review in Mavops Admin → Rule Suggestions{ref}."""
+Nothing has changed in their time. Review it in Mavops Admin → Rule Suggestions{ref}."""
 
     return send_email(
         to_email=getattr(settings, "SUGGESTIONS_NOTIFY_EMAIL", "support@mavops.ai"),
-        subject=f"Rule suggestion from {org_name}: {label}",
+        subject=f"Activity flagged by {org_name}: {label}",
         html_content=html,
         plain_content=plain,
         from_name="TimeTracker",

@@ -1865,15 +1865,25 @@ def reports_submit_suggestion(request):
     POST /api/reports/suggest-rule/
     Body: { label, app_hint, title_hint, minutes, block_count, user_count, note?, org_id? }
 
-    Any authenticated firm user may submit (it's a problem report, not a rule).
-    Stores a RuleSuggestion and best-effort emails Mavops. The email failing
-    never blocks the record from saving.
+    Firm owners, admins and managers may submit — the same roles the AI Blind
+    Spots page (its only caller) is shown to — plus Mavops staff viewing as the
+    firm. It is a flag for Mavops to look at, never a rule: nothing changes in
+    anyone's time until Mavops staff create one. Stores a RuleSuggestion and
+    best-effort emails Mavops. The email failing never blocks the record.
     """
     from tracker.models import RuleSuggestion  # lazy (post-migration)
 
     org = get_request_org_override(request)
     if not org:
         return Response({"error": "No organization found"}, status=404)
+
+    user = request.user
+    if not (user.is_staff or user.is_superuser or OrganizationMembership.objects.filter(
+            user=user, organization=org, role__in=["owner", "admin", "manager"]).exists()):
+        return Response(
+            {"error": "Only firm owners, admins and managers can flag activity to Mavops."},
+            status=403,
+        )
 
     data = request.data or {}
     label = (data.get("label") or "").strip()
@@ -1919,7 +1929,7 @@ def reports_submit_suggestion(request):
     return Response({
         "created": True,
         "suggestion_id": suggestion.id,
-        "message": "Sent to Mavops — thanks! We'll review this and set up a rule.",
+        "message": "Sent to Mavops — thanks. We'll take a look.",
     })
 
 

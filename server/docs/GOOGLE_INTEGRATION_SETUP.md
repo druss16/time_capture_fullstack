@@ -66,7 +66,16 @@ Use a Google account that belongs to MavOps (not to a customer).
      - `openid`
      - `.../auth/userinfo.email` (shown for `email`)
      - `https://www.googleapis.com/auth/gmail.metadata` — **restricted**
-     - `https://www.googleapis.com/auth/calendar.events.readonly` — sensitive
+     - `https://www.googleapis.com/auth/calendar.events.owned.readonly` — sensitive
+
+     Nothing else. Google verification requires a **strict string match**
+     between this list and what `google.build_auth_url` requests; a leftover
+     `calendar.readonly` here is what bounced the first submission
+     (2026-10). The sync only reads `calendars/primary/events`, a calendar the
+     user owns, so `calendar.events.owned.readonly` is the narrowest scope
+     that works — `calendar.events.readonly` covers every calendar the user
+     can see and was rejected as broader than needed. Connections made under
+     the old scope keep syncing (the scope is only checked at connect time).
    - **Publishing status:** see §4. Do not leave the app in *Testing* for real
      users: refresh tokens issued to a Testing-status app with these scopes
      **expire after 7 days**, which shows up here as every connection flipping
@@ -87,7 +96,7 @@ What each connect flow asks for (built in `google.build_auth_url`):
 | Flow | Scopes requested | Redirect URI |
 |---|---|---|
 | Gmail | `openid email gmail.metadata` | `.../api/google/gmail/auth/callback/` |
-| Google Calendar | `openid email calendar.events.readonly` | `.../api/google/calendar/auth/callback/` |
+| Google Calendar | `openid email calendar.events.owned.readonly` | `.../api/google/calendar/auth/callback/` |
 
 Both send `access_type=offline`, `prompt=consent` (a refresh token is only
 issued on a consent screen) and `include_granted_scopes=true` (a person who
@@ -171,7 +180,7 @@ Order matters — Render auto-deploys code on merge, **migrations are manual**.
 ## 4. Google verification — `gmail.metadata` is a RESTRICTED scope
 
 - `gmail.metadata` is on Google's **restricted** scope list;
-  `calendar.events.readonly` is **sensitive**.
+  `calendar.events.owned.readonly` is **sensitive**.
 - **Public availability** (any Google user can connect) requires Google's
   OAuth app verification, and for restricted scopes additionally an
   **annual third-party security assessment** (CASA, performed by a

@@ -255,16 +255,35 @@ const MatterLane = ({ date, range, onChanged, onQueue }: {
   // Capped for the same reason as the timesheet banner: a lane is a queue you
   // work down, not a wall you scroll past.
   const [shown, setShown] = useState(8);
+  // "Also filed N from the same folder" — one pick settles a whole deliverable.
+  const [note, setNote] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  const fetchQueue = useCallback(() => {
     // Same window as the rest of the page, so "This week" catches up on the
     // week's unfiled time too, not just today's.
     const { start, end } = rangeBounds(date, range);
     const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
-    safeFetchJson(`${API_BASE}/blocks/needs-matter/?${qs}`)
+    return safeFetchJson(`${API_BASE}/blocks/needs-matter/?${qs}`);
+  }, [date, range]);
+
+  const load = useCallback(() => {
+    setNote(null);
+    fetchQueue()
       .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
       .catch(() => { setRows([]); setTotal(0); });
-  }, [date, range]);
+  }, [fetchQueue]);
+
+  // A pick that filed other rows too: drop the ones that left, keeping the
+  // order of the rest so the list does not shuffle under someone working it.
+  const pruneFiled = useCallback(() => {
+    fetchQueue()
+      .then((d: any) => {
+        const still = new Set((d?.blocks ?? []).map((b: any) => b.id));
+        setRows((prev) => prev.filter((x) => still.has(x.id)));
+        setTotal(d?.total_minutes ?? 0);
+      })
+      .catch(() => {});
+  }, [fetchQueue]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { onQueue?.(rows.length, total); }, [rows.length, total, onQueue]);
@@ -292,6 +311,11 @@ const MatterLane = ({ date, range, onChanged, onQueue }: {
 
       {open && (
         <div className="border-t border-amber-200/70 px-3 pb-2 pt-2">
+          {note && (
+            <div className="mb-1 rounded-md bg-primary/10 px-2 py-1 font-sans text-[11.5px] font-medium text-primary">
+              {note}
+            </div>
+          )}
           {rows.slice(0, shown).map((r) => (
             <div key={r.id} className="flex items-center gap-2 py-1">
               <span className="w-[110px] shrink-0 truncate font-sans text-[12px] font-semibold text-foreground">
@@ -305,13 +329,17 @@ const MatterLane = ({ date, range, onChanged, onQueue }: {
               </span>
               <MatterPicker
                 blockIds={[r.id]}
-                onAssigned={() => {
+                onAssigned={(_projectId, folderFiled = 0) => {
                   // The row leaves immediately. Reloading the lane here meant a
                   // visible flicker and, worse, the list re-ordering under
                   // someone working down it. The lane refetches on the next date
                   // change or natural refresh.
                   setRows((prev) => prev.filter((x) => x.id !== r.id));
                   setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
+                  if (folderFiled > 0) {
+                    setNote(`Also filed ${folderFiled} more from the same folder`);
+                    pruneFiled();
+                  }
                   onChanged();
                 }}
               />

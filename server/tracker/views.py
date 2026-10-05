@@ -7476,11 +7476,13 @@ def set_block_matter(request, block_id):
     already carry a project, so a correction here teaches every future document
     in the same folder — the person trains the system by doing the thing they
     wanted to do anyway. `learns_folder` says whether that will happen, so the
-    UI can tell them.
+    UI can tell them. The rest of that folder's unfiled time — anyone's, same
+    client — is filed at once (`folder_filed` says how many), so one pick
+    settles a deliverable instead of waiting for the sweep.
 
     project_id=null clears it, for a pick made in error.
     """
-    from tracker.services.matter_attribution import folder_key
+    from tracker.services.matter_attribution import file_folder_siblings, folder_key
 
     try:
         block = Block.objects.get(id=block_id, user=request.user, deleted_at__isnull=True)
@@ -7513,12 +7515,19 @@ def set_block_matter(request, block_id):
     block.project = project
     block.save(update_fields=['project'], force_classifier=True)
 
+    try:
+        folder_filed = file_folder_siblings(block, project)
+    except Exception as e:      # the pick itself landed; the spread is a bonus
+        logger.warning('folder sibling filing failed for block %s: %s', block.id, e, exc_info=True)
+        folder_filed = 0
+
     return Response({
         'ok': True,
         'block_id': block.id,
         'project_id': project.id,
         'project_name': project.name,
         'learns_folder': bool(folder_key(block.file_path or '')),
+        'folder_filed': folder_filed,
     })
 
 

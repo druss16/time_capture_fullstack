@@ -28,7 +28,7 @@ Rules, each one load-bearing:
 import logging
 import secrets
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import requests
 from django.conf import settings
@@ -206,6 +206,14 @@ def sso_providers(request):
 def sso_start(request, provider):
     if provider not in enabled_providers():
         return _to_login('unavailable')
+    # The nonce cookie must be set on the host the provider returns to. The SPA
+    # may call the API on another name (timetracker-api-k375.onrender.com vs
+    # api.timetracker.mavops.ai); a cookie set there never reaches the callback
+    # and every sign-in fails as "expired". Hop to the callback's host first.
+    callback = urlsplit(_redirect_uri(provider))
+    if request.get_host().lower() != callback.netloc.lower():
+        return HttpResponseRedirect(
+            f'{callback.scheme}://{callback.netloc}{request.get_full_path()}')
     nonce = secrets.token_urlsafe(24)
     state = signing.dumps({'p': provider, 'n': nonce,
                            'next': _safe_next(request.GET.get('next'))}, salt=STATE_SALT)

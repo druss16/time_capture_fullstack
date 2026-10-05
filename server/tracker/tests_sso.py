@@ -22,6 +22,9 @@ SSO = dict(
     SSO_MICROSOFT_CLIENT_ID='ms-id', SSO_MICROSOFT_CLIENT_SECRET='ms-secret',
     SSO_GOOGLE_CLIENT_ID='g-id', SSO_GOOGLE_CLIENT_SECRET='g-secret',
     FRONTEND_URL='https://app.test',
+    # Same host as the test client, so /start/ sets its cookie instead of hopping.
+    SSO_MICROSOFT_REDIRECT_URI='http://testserver/api/auth/sso/microsoft/callback/',
+    SSO_GOOGLE_REDIRECT_URI='http://testserver/api/auth/sso/google/callback/',
 )
 
 
@@ -134,6 +137,16 @@ class SSOFlowTests(TestCase):
         with override_settings(SSO_PROVIDERS=['google']):
             r = self.c.get('/api/auth/sso/microsoft/start/')
         self.assertEqual(self.login_error(r), 'unavailable')
+
+    def test_start_hops_to_the_callback_host_before_setting_the_cookie(self):
+        with override_settings(SSO_GOOGLE_REDIRECT_URI='https://api.example.test/api/auth/sso/google/callback/',
+                               ALLOWED_HOSTS=['*']):
+            r = self.c.get('/api/auth/sso/google/start/', {'next': '/reports'},
+                           HTTP_HOST='other-name.onrender.test')
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r['Location'],
+                         'https://api.example.test/api/auth/sso/google/start/?next=%2Freports')
+        self.assertNotIn(views_sso.NONCE_COOKIE, r.cookies)
 
     def test_next_is_kept_on_site(self):
         for bad in ('https://evil.test', '//evil.test', '/\\evil.test'):

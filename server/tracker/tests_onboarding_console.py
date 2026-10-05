@@ -238,6 +238,19 @@ class ImportTests(ConsoleBase):
             organization=p.organization).count(), 2)
         self.assertTrue(OnboardingAuditEvent.objects.filter(action='import.team').exists())
 
+    def test_blank_hostname_still_creates_the_member(self):
+        # A by-hand install pairs by code and reports its own hostname.
+        p = self.make_project()
+        csv = ('email,display_name,role,billing_rate,cost_rate,machine_hostname,windows_username\n'
+               'pat@agency.test,Pat Lee,member,125,55,,\n')
+        r = self.api.post(f'/api/onboard/projects/{p.id}/import/',
+                          {'kind': 'team', 'csv': csv, 'dry_run': False}, format='json')
+        self.assertTrue(r.json()['ok'], r.json())
+        self.assertTrue(OrganizationMembership.objects.filter(
+            organization=p.organization, user__email='pat@agency.test').exists())
+        self.assertFalse(DeviceProvisioningMap.objects.filter(
+            organization=p.organization).exists())
+
     def test_bad_header_is_reported_not_raised(self):
         p = self.make_project()
         r = self.api.post(f'/api/onboard/projects/{p.id}/import/',

@@ -233,7 +233,7 @@ def _pair_from_provisioning_map(org, prov, match_method, hostname, os_username,
     user, created = User.objects.get_or_create(
         email=email,
         defaults={
-            'username': email.split('@')[0],
+            'username': email,  # username IS the email, system-wide
             'first_name': display_name.split(' ')[0] if display_name else '',
             'last_name': ' '.join(display_name.split(' ')[1:]) if display_name else '',
             'is_active': True,

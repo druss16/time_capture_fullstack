@@ -109,9 +109,10 @@ function ImportDialog({ kind, project, onClose, onChanged }: Props & { kind: "te
           className={inputClass + " font-mono text-xs"} />
         {kind === "team" && (
           <p className="text-xs text-slate-500">
-            <code>machine_hostname</code> is required — rows without one are skipped. On a Mac it is the Local hostname
-            from System Settings → General → Sharing, uppercased, without <code>.local</code>. Only give <code>owner</code> to
-            the person who controls billing; cost and margin are owner-only.
+            <code>machine_hostname</code> is only needed when IT deploys the agent with an org token — leave it blank
+            for installs by hand; the agent reports its own hostname when it pairs. If you do fill it, on a Mac it is the
+            Local hostname from System Settings → General → Sharing, uppercased, without <code>.local</code>. Only give{" "}
+            <code>owner</code> to the person who controls billing; cost and margin are owner-only.
           </p>
         )}
         <label className="flex items-center gap-2 text-sm text-slate-700">

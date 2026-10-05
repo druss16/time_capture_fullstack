@@ -124,6 +124,66 @@ def qb_time_sync(request):
     return Response({'synced': True, 'message': message, 'stats': stats})
 
 
+# A month of one firm's time is a few hundred rows — a handful of batched
+# writes. Wider than that is a backfill and should be asked for on purpose.
+MAX_PUSH_DAYS = 31
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_push(request):
+    """
+    Send confirmed time to QuickBooks Time as timesheets.
+
+    Body: {start_date, end_date (YYYY-MM-DD), user_ids?: [int], dry_run?: bool}
+
+    dry_run returns the plan and writes nothing. A real run re-plans from what
+    QuickBooks Time holds right now rather than trusting the preview, so a
+    timesheet someone entered in between is netted, not duplicated.
+    Inline rather than queued: batched, a month is a few requests.
+    """
+    from datetime import datetime
+
+    from tracker.integrations.qb_time.client import QBTimeAuthError, QBTimeError
+    from tracker.integrations.qb_time.push import build_push_plan, execute_push
+
+    org, denied = _require_admin(request, 'send time to QuickBooks Time')
+    if denied:
+        return denied
+    integration, err = get_integration(org, 'qb_time')
+    if err:
+        return err
+
+    try:
+        start = datetime.strptime(str(request.data.get('start_date') or ''), '%Y-%m-%d').date()
+        end = datetime.strptime(str(request.data.get('end_date') or ''), '%Y-%m-%d').date()
+    except ValueError:
+        return error_response('start_date and end_date are required as YYYY-MM-DD.')
+    if end < start:
+        return error_response('end_date is before start_date.')
+    if (end - start).days + 1 > MAX_PUSH_DAYS:
+        return error_response(f'Send at most {MAX_PUSH_DAYS} days at a time.')
+
+    user_ids = request.data.get('user_ids') or None
+    if user_ids is not None and not (
+            isinstance(user_ids, list) and all(isinstance(u, int) for u in user_ids)):
+        return error_response('user_ids must be a list of user ids.')
+    dry_run = bool(request.data.get('dry_run', False))
+
+    try:
+        plan = build_push_plan(integration, start, end, user_ids=user_ids)
+        if dry_run:
+            return Response({'dry_run': True, **plan})
+        result = execute_push(integration, plan)
+    except QBTimeAuthError as e:
+        return error_response(f'{e}', 401, 'reconnect_required')
+    except QBTimeError as e:
+        logger.warning('QB Time push failed for org %s: %s', org.id, e)
+        return error_response(f'QuickBooks Time push failed: {e}'[:300], 502, 'push_failed')
+
+    return Response({'dry_run': False, 'window': plan['window'], **result})
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def qb_time_disconnect(request):

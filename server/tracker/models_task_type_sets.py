@@ -486,6 +486,46 @@ class ExternalStaffMapping(models.Model):
         return f'{self.integration.provider}: {self.user.username} ↔ {self.external_code or self.external_id}'
 
 
+class QbtPushedTimesheet(models.Model):
+    """
+    A QuickBooks Time timesheet that TimeTracker created.
+
+    Its one job is to tell OUR timesheets from ones a person entered, so a
+    re-run never mistakes our own push for a conflict and a retraction never
+    touches somebody's hand-entered time. Never an input to the arithmetic —
+    the push nets day totals against what QuickBooks Time really holds.
+
+    Its own table rather than a column on Block on purpose: Block is read by
+    nearly every request, so a new Block column 500s the whole app in the
+    minutes between Render deploying the code and the migration being run.
+    `block_ids` is plain JSON for the same reason — an FK onto Block would put
+    this table in Block's delete path.
+    """
+    integration = models.ForeignKey(
+        'tracker.Integration',
+        on_delete=models.CASCADE,
+        related_name='qbt_pushed_timesheets',
+    )
+    timesheet_id = models.CharField(max_length=64)
+    qbt_user_id = models.CharField(max_length=64)
+    jobcode_id = models.CharField(max_length=64)
+    day = models.DateField()
+    minutes = models.PositiveIntegerField(default=0)
+    block_ids = models.JSONField(default=list, blank=True)
+    # Set when a later run took this timesheet down to nothing.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['integration', 'timesheet_id']]
+        indexes = [models.Index(fields=['integration', 'day'])]
+
+    def __str__(self):
+        return f'QBT timesheet {self.timesheet_id}: {self.minutes}m on {self.day}'
+
+
 class CategoryTaskTypeMapping(models.Model):
     """
     Maps a canonical classifier category string to an org's TaskType.

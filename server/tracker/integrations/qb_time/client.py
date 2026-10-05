@@ -81,6 +81,34 @@ def records(payload: dict, endpoint: str) -> list:
     return []
 
 
+def row_results(payload: dict, endpoint: str) -> list:
+    """Per-row outcomes of a batch write, in the order the rows were sent.
+
+    QuickBooks Time answers a batch with one object per row, keyed "1", "2", …
+    by position, each carrying `_status_code` (200 = done) and, on failure,
+    `_status_message` / `_status_extra`. Keys are sorted numerically so the
+    order is the request's order however the JSON object was serialised.
+    """
+    block = ((payload or {}).get('results') or {}).get(endpoint) or {}
+    if isinstance(block, list):
+        return block
+    if isinstance(block, dict):
+        def pos(key):
+            return (0, int(key)) if str(key).isdigit() else (1, str(key))
+        return [block[k] for k in sorted(block, key=pos)]
+    return []
+
+
+def row_ok(row: dict) -> bool:
+    return int((row or {}).get('_status_code') or 0) == 200
+
+
+def row_error(row: dict) -> str:
+    row = row or {}
+    parts = [str(row.get(k) or '').strip() for k in ('_status_message', '_status_extra')]
+    return ' — '.join(p for p in parts if p) or f"HTTP {row.get('_status_code') or '?'}"
+
+
 class QBTimeClient:
     def __init__(self, integration, *, session=None, sleep=time.sleep):
         if integration.provider != 'qb_time':
@@ -130,23 +158,54 @@ class QBTimeClient:
 
     # ── Requests ─────────────────────────────────────────────────────────
     def get(self, endpoint: str, **params) -> dict:
+        return self._request('GET', endpoint, params=params)
+
+    def post(self, endpoint: str, data: list) -> dict:
+        """Create records. QuickBooks Time takes a batch under `data` and
+        reports each row's outcome separately — read them with `row_results`."""
+        return self._request('POST', endpoint, json={'data': data})
+
+    def put(self, endpoint: str, data: list) -> dict:
+        return self._request('PUT', endpoint, json={'data': data})
+
+    def delete(self, endpoint: str, ids: list) -> dict:
+        return self._request('DELETE', endpoint, params={'ids': ','.join(str(i) for i in ids)})
+
+    def _request(self, method: str, endpoint: str, *, params=None, json=None) -> dict:
         self._ensure_fresh_token()
         url = f'{API_BASE}/{endpoint}'
         refreshed = False
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                resp = self.http.get(url, params=params, timeout=DEFAULT_TIMEOUT, headers={
-                    'Authorization': f'Bearer {self.integration.access_token}',
-                    'Accept': 'application/json',
-                })
+                resp = self.http.request(
+                    method, url, params=params, json=json, timeout=DEFAULT_TIMEOUT, headers={
+                        'Authorization': f'Bearer {self.integration.access_token}',
+                        'Accept': 'application/json',
+                    })
             except requests.RequestException as e:
+                if method != 'GET':
+                    # A write may have landed before the connection dropped.
+                    # Retrying could create it twice; the next push run nets
+                    # against whatever is really there instead.
+                    raise QBTimeError(f'QB Time {method} {endpoint} network error: {e}')
                 logger.warning('QB Time GET %s network error (%d/%d): %s',
                                endpoint, attempt, MAX_RETRIES, e)
                 self._sleep(2 ** attempt)
                 continue
 
-            if resp.status_code == 200:
+            # 207: a batch write where some rows failed — still a readable body.
+            if resp.status_code in (200, 207):
                 return resp.json()
+            if method != 'GET' and 400 <= resp.status_code < 500 and resp.status_code not in (401, 429):
+                # A batch where every row failed can come back as a 4xx that
+                # still names each row's reason. Those reasons are the useful
+                # part ("jobcode not assigned to user"), so hand them back.
+                try:
+                    body = resp.json()
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and body.get('results'):
+                    return body
             if resp.status_code == 401 and not refreshed:
                 refreshed = True
                 self._ensure_fresh_token(force=True)
@@ -161,12 +220,12 @@ class QBTimeClient:
                 # Plan or feature not enabled for this account (e.g. Projects
                 # is an Elite feature). Callers treat this as "no data here".
                 raise QBTimeNotAvailable(f'QB Time {endpoint}: HTTP {resp.status_code}')
-            if resp.status_code >= 500:
+            if resp.status_code >= 500 and method == 'GET':
                 self._sleep(2 ** attempt)
                 continue
-            raise QBTimeError(f'QB Time {endpoint}: HTTP {resp.status_code} {resp.text[:200]}')
+            raise QBTimeError(f'QB Time {method} {endpoint}: HTTP {resp.status_code} {resp.text[:200]}')
 
-        raise QBTimeError(f'QB Time {endpoint}: gave up after {MAX_RETRIES} attempts.')
+        raise QBTimeError(f'QB Time {method} {endpoint}: gave up after {MAX_RETRIES} attempts.')
 
     def paginated(self, endpoint: str, **params):
         """Every record of a collection, page by page."""

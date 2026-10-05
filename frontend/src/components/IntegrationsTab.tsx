@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { safeFetchJson } from '@/lib/api';
 import { fetchWhoAmI } from '@/lib/whoami';
+import QbTimePushPanel from './QbTimePushPanel';
 import {
   Link2,
   Unlink,
@@ -1118,6 +1119,10 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
             </p>
           </div>
         </div>
+      )}
+
+      {qbTimeStatus.connected && (
+        <QbTimePushPanel apiBase={API_BASE} onSuccess={onSuccess} onError={onError} />
       )}
 
       {/* Import Clients Modal */}

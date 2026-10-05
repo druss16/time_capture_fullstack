@@ -5001,6 +5001,9 @@ from tracker.models_onboarding_console import (  # noqa: F401, E402
     OnboardingProject, OnboardingStepState, OnboardingAuditEvent, OnboardingIntake,
 )
 
+# Sign in with Microsoft / Google (see models_sso.py)
+from tracker.models_sso import SocialLogin  # noqa: F401, E402
+
 
 
 

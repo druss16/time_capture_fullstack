@@ -483,6 +483,29 @@ GOOGLE_CALENDAR_REDIRECT_URI = os.getenv(
 
 FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
+# Sign in with Microsoft / Google (tracker/views_sso.py). OFF until listed here,
+# e.g. SSO_PROVIDERS=microsoft,google — the SocialLogin migration ships with the
+# code but runs by hand on Render, so enable only after it has been applied.
+#
+# Each provider asks for openid/email/profile only — no Graph, no Gmail — so no
+# tenant admin consent is needed. Credentials default to the existing calendar
+# (Microsoft) and Gmail/Calendar (Google) app registrations, resolved as a PAIR
+# exactly like MS_GRAPH_MAIL_*. Either way the callback URI below must be added
+# to that app's redirect URIs.
+SSO_PROVIDERS = [p.strip() for p in os.getenv('SSO_PROVIDERS', '').split(',') if p.strip()]
+SSO_MICROSOFT_CLIENT_ID = os.getenv('SSO_MICROSOFT_CLIENT_ID', '')
+SSO_MICROSOFT_CLIENT_SECRET = os.getenv('SSO_MICROSOFT_CLIENT_SECRET', '')
+SSO_MICROSOFT_REDIRECT_URI = os.getenv(
+    'SSO_MICROSOFT_REDIRECT_URI',
+    'https://api.timetracker.mavops.ai/api/auth/sso/microsoft/callback/',
+)
+SSO_GOOGLE_CLIENT_ID = os.getenv('SSO_GOOGLE_CLIENT_ID', '')
+SSO_GOOGLE_CLIENT_SECRET = os.getenv('SSO_GOOGLE_CLIENT_SECRET', '')
+SSO_GOOGLE_REDIRECT_URI = os.getenv(
+    'SSO_GOOGLE_REDIRECT_URI',
+    'https://api.timetracker.mavops.ai/api/auth/sso/google/callback/',
+)
+
 
 SUGGESTIONS_NOTIFY_EMAIL = "support@mavops.ai"
 # -----------------------------------------------------

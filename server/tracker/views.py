@@ -3292,25 +3292,31 @@ def auth_login(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    return Response(issue_login_payload(request, user))
+
+
+def issue_login_payload(request, user):
+    """Log `user` in and mint a 14-day AuthToken. Shared by password and SSO
+    sign-in (views_sso.sso_exchange) so the SPA gets one response shape."""
     # Log them in (creates session)
     login(request, user)
-    
+
     # Generate token and store in database
     from tracker.models import AuthToken, OrganizationMembership
-    
+
     token_value = secrets.token_urlsafe(32)
     expires_at = timezone.now() + timedelta(days=14)
-    
+
     AuthToken.objects.create(
         user=user,
         token=token_value,
         expires_at=expires_at
     )
-    
+
     # Get org/role info
     membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
-    
-    return Response({
+
+    return {
         "ok": True,
         "token": token_value,
         "user": {
@@ -3325,7 +3331,7 @@ def auth_login(request):
             "slug": membership.organization.slug,
         } if membership else None,
         "role": membership.role if membership else None,
-    })
+    }
 
 
 from django.views.decorators.csrf import csrf_exempt

@@ -80,7 +80,8 @@ export const MatterPicker: React.FC<{
   blockIds: number[];
   label?: string;
   tone?: 'resolved' | 'needed';
-  onAssigned?: (projectId: number) => void;
+  // folderFiled: other blocks the server filed from the same folder in the same pick.
+  onAssigned?: (projectId: number, folderFiled?: number) => void;
 }> = ({ blockIds, label, tone = 'needed', onAssigned }) => {
   const terms = useTerminology();
   const word = terms.project.toLowerCase();
@@ -111,12 +112,14 @@ export const MatterPicker: React.FC<{
     setError(null);
     try {
       // Every block in the row, not just the one the options came from.
+      let folderFiled = 0;
       for (const id of blockIds) {
-        await safeFetchJson(`${API_BASE}/blocks/${id}/set-matter/`, {
+        const res: any = await safeFetchJson(`${API_BASE}/blocks/${id}/set-matter/`, {
           method: 'POST', body: JSON.stringify({ project_id: projectId }),
         });
+        folderFiled += Number(res?.folder_filed) || 0;
       }
-      onAssigned?.(projectId);
+      onAssigned?.(projectId, folderFiled);
     } catch (e: any) {
       // Without this the request failed, the row stayed unchanged, and nothing
       // said why — which is exactly how a server-side 500 looked like a button

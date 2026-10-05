@@ -327,6 +327,7 @@ urlpatterns = [
     path('integrations/qb_time/connect/', qb_time_views.qb_time_connect, name='qb-time-connect'),
     path('integrations/qb_time/callback/', qb_time_views.qb_time_callback, name='qb-time-callback'),
     path('integrations/qb_time/sync/', qb_time_views.qb_time_sync, name='qb-time-sync'),
+    path('integrations/qb_time/push/', qb_time_views.qb_time_push, name='qb-time-push'),
     path('integrations/qb_time/disconnect/', qb_time_views.qb_time_disconnect, name='qb-time-disconnect'),
     # Unauthenticated by necessity — Clio calls it. The token selects which
     # subscription's secret to verify the HMAC against; the HMAC authorizes.

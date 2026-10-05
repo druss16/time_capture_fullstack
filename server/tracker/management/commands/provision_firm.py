@@ -563,9 +563,9 @@ class Command(BaseCommand):
             hostname = row.get('machine_hostname', '').strip()
             win_user = row.get('windows_username', '').strip()
 
-            if not email or not hostname:
+            if not email:
                 self.stdout.write(self.style.WARNING(
-                    f'  Row {i}: Skipping — missing email or hostname'
+                    f'  Row {i}: Skipping — missing email'
                 ))
                 continue
 
@@ -579,7 +579,7 @@ class Command(BaseCommand):
                     user, created = User.objects.get_or_create(
                         email=email,
                         defaults={
-                            'username': email.split('@')[0],
+                            'username': email,  # username IS the email, system-wide
                             'first_name': display_name.split(' ')[0] if display_name else '',
                             'last_name': ' '.join(display_name.split(' ')[1:]) if display_name else '',
                             'is_active': True,
@@ -665,6 +665,12 @@ class Command(BaseCommand):
                     users_created[email] = None  # Placeholder for dry run
 
             # ─── Create device provisioning map ───
+            # Only zero-touch (MDM org-token) installs match on this. A by-hand
+            # install pairs with a code and the agent reports its own hostname,
+            # so a row without one still gets its user, just no map entry.
+            if not hostname:
+                self.stdout.write('    Device: no hostname — pairs by code; agent reports its own')
+                continue
             self.stdout.write(f'    Device: {hostname} ({win_user or "no win_user"})')
             if not dry_run:
                 prov, prov_created = DeviceProvisioningMap.objects.get_or_create(

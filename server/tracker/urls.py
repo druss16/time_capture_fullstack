@@ -6,6 +6,7 @@ from . import views
 from .integrations.clio import views as clio_views
 from .integrations.qb_time import views as qb_time_views
 from . import views_fee_basis
+from . import views_sso
 from . import views_week_coverage
 from . import views_day_review
 from . import views_capture_status
@@ -69,6 +70,11 @@ urlpatterns = [
     path("invite/", views.invite_team_member, name="invite_team_member"),
     path("auth/password-reset/", csrf_exempt(views.password_reset_request), name="password_reset_request"),
     path("auth/password-reset/confirm/", csrf_exempt(views.password_reset_confirm), name="password_reset_confirm"),
+    # Sign in with Microsoft / Google — see views_sso.py
+    path("auth/sso/providers/", views_sso.sso_providers, name="sso_providers"),
+    path("auth/sso/exchange/", views_sso.sso_exchange, name="sso_exchange"),
+    path("auth/sso/<str:provider>/start/", views_sso.sso_start, name="sso_start"),
+    path("auth/sso/<str:provider>/callback/", views_sso.sso_callback, name="sso_callback"),
     path("invite/<str:token>/", views.invite_details, name="invite_details"),
     path("invite/<str:token>/accept/", csrf_exempt(views.accept_invitation), name="accept_invitation"),
 

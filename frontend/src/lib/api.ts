@@ -13,7 +13,16 @@ export const API_ENDPOINTS = {
   authLogin: `${API_BASE}/auth/login/`,
   authLogout: `${API_BASE}/auth/logout/`,
   authSignup: `${API_BASE}/auth/signup/`,
+  ssoProviders: `${API_BASE}/auth/sso/providers/`,
+  ssoExchange: `${API_BASE}/auth/sso/exchange/`,
 } as const;
+
+/** Full-page navigation target that starts Microsoft/Google sign-in. */
+export function ssoStartUrl(provider: SSOProvider, next: string): string {
+  return `${API_BASE}/auth/sso/${provider}/start/?next=${encodeURIComponent(next)}`;
+}
+
+export type SSOProvider = "microsoft" | "google";
 
 // ============================================================================
 // v1.3.61 AUTH FIXES
@@ -31,6 +40,7 @@ function isAuthEndpoint(input: string): boolean {
   return (
     input.includes("/auth/login") ||
     input.includes("/auth/signup") ||
+    input.includes("/auth/sso/") ||
     input.includes("/get-csrf")
   );
 }

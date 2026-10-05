@@ -171,7 +171,7 @@ class OAuthTests(Base):
         q = parse_qs(urlparse(c.get('/api/google/calendar/auth/start/').json()['auth_url']).query)
         self.assertEqual(q['redirect_uri'], [GOOGLE_SETTINGS['GOOGLE_CALENDAR_REDIRECT_URI']])
         self.assertEqual(q['scope'][0].split(),
-                         ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events.readonly'])
+                         ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events.owned.readonly'])
 
     def _callback(self, token_body, path='/api/google/gmail/auth/callback/', provider='gmail'):
         row = UserIntegration.objects.create(
@@ -207,7 +207,7 @@ class OAuthTests(Base):
     def test_calendar_consent_landing_on_gmail_callback_still_uses_calendar_uri(self):
         r, row, post, gdelay, cdelay = self._callback(
             {'access_token': 'AT', 'refresh_token': 'RT', 'expires_in': 3600,
-             'scope': 'openid email https://www.googleapis.com/auth/calendar.events.readonly'},
+             'scope': 'openid email https://www.googleapis.com/auth/calendar.events.owned.readonly'},
             provider='google_calendar',
         )
         self.assertIn('gcal=connected', r['Location'])
@@ -241,7 +241,7 @@ class OAuthTests(Base):
         # union grant back from the Gmail flow.
         r, row, *_ = self._callback({
             'access_token': 'AT1', 'refresh_token': 'RT1', 'expires_in': 3599,
-            'scope': 'openid email https://www.googleapis.com/auth/calendar.events.readonly '
+            'scope': 'openid email https://www.googleapis.com/auth/calendar.events.owned.readonly '
                      'https://www.googleapis.com/auth/gmail.metadata',
         })
         self.assertIn('gmail=connected', r['Location'])

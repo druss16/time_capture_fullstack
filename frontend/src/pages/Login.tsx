@@ -2,7 +2,7 @@
 // UPDATED: Added CSRF token fetching on mount + sending token in POST request
 import { useEffect, useState, useRef } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
-import { API_ENDPOINTS, safeFetchJson } from "@/lib/api";
+import { API_ENDPOINTS, safeFetchJson, ssoStartUrl, type SSOProvider } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
 import { Eye, EyeOff, Clock, ArrowRight, Check } from "lucide-react";
 
@@ -12,6 +12,42 @@ const STATS = [
   { value: "2-way", label: "QuickBooks\n& Xero sync" },
 ];
 
+// Codes the API's SSO callback puts in ?sso_error= (views_sso.py).
+const SSO_ERRORS: Record<string, string> = {
+  no_account: "That account isn't set up in TimeTracker yet. Use the email your firm invited, or ask your admin to add you.",
+  disabled: "This account is disabled. Ask your firm's admin.",
+  cancelled: "Sign-in was cancelled.",
+  expired: "That sign-in took too long or was started in another browser. Please try again.",
+  unavailable: "That sign-in option isn't available. Use your email and password.",
+  provider: "Couldn't reach the sign-in provider. Please try again.",
+};
+
+const SSO_LABELS: Record<SSOProvider, string> = {
+  microsoft: "Sign in with Microsoft",
+  google: "Sign in with Google",
+};
+
+function ProviderMark({ provider }: { provider: SSOProvider }) {
+  if (provider === "microsoft") {
+    return (
+      <svg viewBox="0 0 21 21" className="w-[18px] h-[18px]" aria-hidden="true">
+        <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+        <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+        <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+        <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 48 48" className="w-[18px] h-[18px]" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z" />
+      <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z" />
+      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z" />
+    </svg>
+  );
+}
+
 export default function Login() {
   const nav = useNavigate();
   const loc = useLocation();
@@ -20,7 +56,11 @@ export default function Login() {
 
   const [form, setForm] = useState({ username: "", password: "" });
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const ssoError = new URLSearchParams(loc.search).get("sso_error");
+  const [err, setErr] = useState<string | null>(
+    ssoError ? SSO_ERRORS[ssoError] || SSO_ERRORS.provider : null
+  );
+  const [providers, setProviders] = useState<SSOProvider[]>([]);
   const [showPw, setShowPw] = useState(false);
   
   // NEW: CSRF token state
@@ -32,6 +72,13 @@ export default function Login() {
   // NEW: Fetch CSRF token on mount
   useEffect(() => {
     fetchCsrfToken();
+  }, []);
+
+  // Which "Sign in with …" buttons to show — none until the server enables them.
+  useEffect(() => {
+    safeFetchJson<{ providers?: SSOProvider[] }>(API_ENDPOINTS.ssoProviders, { credentials: "include" })
+      .then(j => setProviders(j?.providers || []))
+      .catch(() => setProviders([]));
   }, []);
 
   const fetchCsrfToken = async () => {
@@ -218,6 +265,26 @@ export default function Login() {
           {err && (
             <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm">
               {err}
+            </div>
+          )}
+
+          {providers.length > 0 && (
+            <div className="space-y-3">
+              {providers.map(p => (
+                <a
+                  key={p}
+                  href={ssoStartUrl(p, next)}
+                  className="w-full flex items-center justify-center gap-3 py-3.5 rounded-xl border border-border bg-card text-foreground text-sm font-semibold hover:bg-muted/60 transition-all"
+                >
+                  <ProviderMark provider={p} />
+                  {SSO_LABELS[p]}
+                </a>
+              ))}
+              <div className="flex items-center gap-3 text-xs text-muted-foreground pt-1">
+                <div className="flex-1 h-px bg-border/50" />
+                or use your password
+                <div className="flex-1 h-px bg-border/50" />
+              </div>
             </div>
           )}
 

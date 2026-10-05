@@ -72,6 +72,64 @@ class ParseTests(SimpleTestCase):
                                         ('title', 'BAG_Bayside_WebsiteRefresh.fig')], INDEX))
 
 
+# More Than Cars' real Dropbox layout (photographed 2026-10-05): a client folder
+# CODE_Name, and inside it one folder per deliverable CODE_date_ShortName_Deliverable.
+# The client's QuickBooks Time projects are billing buckets, not deliverables.
+MTC = build_index(
+    clients=[(7, 'Easterns Automotive Group', 'EASTERNSAU', []),
+             (8, 'Eastern Shore Dental', 'EASTERNSHO', []),
+             (9, 'Tom Gill Chevrolet', 'TOMGILLCHE', [])],
+    codes_extra=[],
+    projects=[(71, 7, 'Easterns KONETIQ Campaigns'), (72, 7, 'Konetiq Launch Ads'),
+              (91, 9, 'Truck Month')],
+)
+ROOT = '/Users/alannah/Library/CloudStorage/Dropbox-MoreThanCars/Congruent Team Folder 2018 +/_ServerRefresh_052021/Client-Work_2026'
+
+
+def mtc(path):
+    return resolve_text([('file_path', path)], MTC)
+
+
+class DatedShortNameTests(SimpleTestCase):
+    """CODE_2026-09_ShortName_Deliverable, with the code unknown to us."""
+
+    def test_date_segment_is_skipped_and_short_name_names_the_client(self):
+        p = f'{ROOT}/0074_Easterns-Auto-Group/0074_2026-09_Easterns-Auto_General-Collision-Center-Flyer-CDJR/hero.psd'
+        self.assertEqual(mtc(p)[:2], (7, None))       # client yes; a deliverable is not a project
+
+    def test_year_only_and_full_short_name(self):
+        self.assertEqual(mtc(f'{ROOT}/0074_2026_Easterns-Auto_Monthly-Nissan-New-Cars-Offer-Email/a.html')[:2], (7, None))
+        self.assertEqual(mtc(f'{ROOT}/0074_2026-01_Easterns-Auto-Group_VDP-Overlays/b.psd')[:2], (7, None))
+
+    def test_deliverable_equal_to_a_project_files_it(self):
+        self.assertEqual(mtc(f'{ROOT}/0074_2026-08_Easterns-Auto_Konetiq-Launch-Ads/c.psd')[:2], (7, 72))
+
+    def test_client_folder_alone(self):
+        self.assertEqual(mtc(f'{ROOT}/0074_Easterns-Auto-Group/contract.pdf')[:2], (7, None))
+        self.assertEqual(mtc(f'{ROOT}/0019_Tom-Gill-Chevrolet/logo.ai')[:2], (9, None))
+
+    def test_first_word_must_match_whole(self):
+        # "Eastern" is not "Easterns": Eastern Shore Dental, never Easterns Automotive.
+        self.assertEqual(mtc(f'{ROOT}/0031_2026-02_Eastern-Shore_Cleaning-Promo/x.psd')[:2], (8, None))
+
+    def test_short_name_fitting_two_clients_abstains(self):
+        idx = build_index([(7, 'Easterns Automotive Group', '', []), (10, 'Easterns Auto Body', '', [])], [], [])
+        self.assertIsNone(resolve_text([('file_path', '/d/0074_2026-09_Easterns-Auto_Flyer/x.psd')], idx))
+
+    def test_short_name_needs_a_client_number_in_front(self):
+        # Without a code-shaped first segment, only an exact name counts.
+        self.assertIsNone(mtc('/d/Notes_Easterns-Auto_Flyer/x.psd'))
+        self.assertIsNone(mtc('/d/Report_Easterns-Auto.docx'))
+
+    def test_two_part_names_need_more_than_one_word(self):
+        self.assertIsNone(mtc('/d/0074_Easterns/x.psd'))
+        self.assertIsNone(mtc('/d/12_Intro.mp4'))
+
+    def test_dates_are_not_mistaken_for_client_numbers(self):
+        self.assertIsNone(mtc('/d/2026_09_Recap/x.psd'))
+        self.assertIsNone(mtc('/d/2026_Easterns-Auto_Flyer/x.psd'))   # a year is not a client number
+
+
 class AttributionTests(TestCase):
     def setUp(self):
         self.org = Organization.objects.create(name='MTC', slug='mtc-nc', industry_type='marketing')

@@ -99,12 +99,7 @@ def onboarding_signup(request):
         )
         
         # 2. Create Owner User
-        username = email.split('@')[0][:30]
-        base_username = username
-        counter = 1
-        while User.objects.filter(username=username).exists():
-            username = f"{base_username}{counter}"
-            counter += 1
+        username = email.strip().lower()  # username IS the email, system-wide
         
         first_name = owner_name.split()[0] if owner_name else ''
         last_name = ' '.join(owner_name.split()[1:]) if owner_name and len(owner_name.split()) > 1 else ''
@@ -431,12 +426,7 @@ def _create_and_invite_user(org, email, role, name, invited_by):
     until they have been through the invite link.
     """
 
-    username = email.split('@')[0][:30]
-    base_username = username
-    counter = 1
-    while User.objects.filter(username=username).exists():
-        username = f"{base_username}{counter}"
-        counter += 1
+    username = email.strip().lower()  # username IS the email, system-wide
 
     first_name = name.split()[0] if name else ''
     last_name = ' '.join(name.split()[1:]) if name and len(name.split()) > 1 else ''

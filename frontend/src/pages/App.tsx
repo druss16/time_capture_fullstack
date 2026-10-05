@@ -42,6 +42,7 @@ const OrgAdminSettings = lazyWithRetry(() => import("./Settings"));
 const OrganizationSettings = lazyWithRetry(() => import("./OrganizationSettings"));
 const Devices = lazyWithRetry(() => import("./Devices"));
 const Login = lazyWithRetry(() => import("./Login"));
+const SSOComplete = lazyWithRetry(() => import("./SSOComplete"));
 const NotFound = lazyWithRetry(() => import("./NotFound"));
 const BillingPage = lazyWithRetry(() => import("./BillingPage"));
 const BudgetsPage = lazyWithRetry(() => import("./BudgetsPage"));
@@ -254,6 +255,7 @@ export default function App() {
                 {!AUTH_DISABLED && (
                   <>
                     <Route path="/login" element={<Login />} />
+                    <Route path="/auth/sso/complete" element={<SSOComplete />} />
                     {/* Self-serve signup is parked, not deleted. Onboarding is
                         white-glove right now, so the public front door asks for
                         a conversation instead of taking a card. The wizard is

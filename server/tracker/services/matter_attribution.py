@@ -211,20 +211,54 @@ def match_project_name(text: str, phrases: dict):
     return next(iter(pids)) if len(pids) == 1 else None
 
 
+# A per-person prefix in front of a shared folder: the home directory.
+_HOME_PREFIX = re.compile(r'^(?:[A-Za-z]:)?/(?:Users|home)/[^/]+(?=/|$)', re.I)
+# The root a sync client mounts a shared drive at. Named differently on every
+# machine ("Dropbox", "Dropbox (More Than Cars)", "CloudStorage/Dropbox-MTC",
+# "OneDrive - Firm"), so everything up to and including it is dropped.
+_SYNC_ROOT = re.compile(r'dropbox|onedrive|google ?drive|^my drive$|^shared drives$|icloud', re.I)
+
+
+def folder_parts(file_path: str) -> list:
+    """
+    The folders that identify where a file lives, the same on every machine.
+
+    Drops the person's home directory and the sync root, so Alannah's
+    /Users/alannah/Dropbox/Clients/X and Bob's C:/Users/bob/Dropbox (Firm)/Clients/X
+    are one folder. Rolls a deliverable's subfolders (Exports/, Links/) up into
+    the deliverable: the deepest folder named by convention (three or more
+    underscore-separated parts) is where a piece of work lives. Deepest, not
+    shallowest, so a firm whose top folder happens to look like a convention
+    ("Clients_All_2026") does not collapse every project into one key.
+    """
+    if not file_path:
+        return []
+    normalized = str(file_path).replace('\\', '/').rstrip('/')
+    if '/' not in normalized:
+        return []
+    normalized = _HOME_PREFIX.sub('', normalized)
+    parts = [p for p in normalized.split('/')[:-1] if p]
+    for i, part in enumerate(parts):        # the first one: a project may say "Dropbox"
+        if _SYNC_ROOT.search(part):
+            parts = parts[i + 1:]
+            break
+    for i in range(len(parts) - 1, -1, -1):
+        if len([s for s in parts[i].split('_') if s]) >= 3:
+            parts = parts[:i + 1]
+            break
+    return parts
+
+
 def folder_key(file_path: str) -> str:
     """
-    The containing folder of a file, normalized.
+    The folder a file belongs to, normalized (see folder_parts).
 
     Law firms file by matter — S:\\Clients\\Ridgeline\\Estate Planning\\motion.docx —
     so the folder is the unit that repeats across a matter's documents, while
-    the filename changes every time.
+    the filename changes every time. A file sitting at the sync root itself
+    has no key: the root is everybody's dumping ground.
     """
-    if not file_path:
-        return ''
-    normalized = str(file_path).replace('\\', '/').rstrip('/')
-    if '/' not in normalized:
-        return ''
-    return _normalize(normalized.rsplit('/', 1)[0])
+    return _normalize('/'.join(folder_parts(file_path)))
 
 
 def _filed_with_path(org):
@@ -453,6 +487,49 @@ def prune_filing_log() -> int:
         cur.execute("DELETE FROM tracker_blockfilinglog WHERE at < %s",
                     [timezone.now() - FILING_LOG_RETENTION])
         return cur.rowcount
+
+
+SIBLING_LOOKBACK_DAYS = 180
+SIBLING_SCAN_CAP = 5000
+
+
+def file_folder_siblings(block, project) -> int:
+    """
+    A person just put `block` on `project`: file the rest of its folder now.
+
+    The learned-folder tier would get there eventually, but only for work the
+    sweep still looks at (two days), so a deliverable started last week kept
+    every earlier file in Needs You. One pick per deliverable has to mean the
+    deliverable, for the whole team, at the moment of the pick.
+
+    Narrow on purpose: same org, same client as the project, no project yet,
+    the same folder by folder_key. A folder that already points at another
+    project is shared, and spreading a pick across it would be a guess — it
+    files nothing. Returns how many blocks it filed.
+    """
+    from tracker.models import Block
+
+    key = folder_key(getattr(block, 'file_path', '') or '')
+    if not key:
+        return 0
+    leaf = folder_parts(block.file_path)[-1]
+    qs = (
+        Block.objects
+        .filter(org_id=block.org_id, client_id=project.client_id,
+                start__gte=block.start - timedelta(days=SIBLING_LOOKBACK_DAYS),
+                file_path__icontains=leaf, deleted_at__isnull=True)
+        .exclude(classification_state='suppressed')
+        .exclude(id=block.id)
+        .only('id', 'file_path', 'project_id')[:SIBLING_SCAN_CAP]
+    )
+    same = [b for b in qs if folder_key(b.file_path) == key]
+    if any(b.project_id and b.project_id != project.id for b in same):
+        return 0
+    ids = [b.id for b in same if b.project_id is None]
+    if ids:
+        # .update(): the sanctioned system write, as attribute_matters_for_org does.
+        Block.objects.filter(id__in=ids).update(project_id=project.id)
+    return len(ids)
 
 
 def neighbour_matter(block, neighbours_by_user, window_minutes=90):

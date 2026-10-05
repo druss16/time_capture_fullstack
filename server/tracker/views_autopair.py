@@ -209,7 +209,7 @@ def _get_or_create_user(org, provision_match):
     user, created = User.objects.get_or_create(
         email=email,
         defaults={
-            'username': email.split('@')[0],
+            'username': email,  # username IS the email, system-wide
             'first_name': display_name.split(' ')[0] if display_name else '',
             'last_name': ' '.join(display_name.split(' ')[1:]) if display_name else '',
             'is_active': True,

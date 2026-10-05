@@ -91,7 +91,7 @@ DROP TABLE IF EXISTS tracker_blockfilinglog;
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0187_qbt_pushed_timesheet'),
+        ('tracker', '0188_social_login'),
     ]
 
     operations = [

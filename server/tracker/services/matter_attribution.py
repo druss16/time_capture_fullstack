@@ -346,7 +346,7 @@ def build_folder_index(org, since, exclude_block_ids=None) -> dict:
 # the index read 180 days of filed blocks each time (1.5s for a 100k-block firm,
 # before network) to get an answer that had barely moved. So each worker process
 # keeps the per-folder counts, and each tick applies only what changed since the
-# last one, read from tracker_blockfilinglog (migration 0188). A trigger writes
+# last one, read from tracker_blockfilinglog (migration 0189). A trigger writes
 # that log, because project_id is set by a dozen paths and several are bulk
 # .update()s that no signal or auto_now ever sees.
 #
@@ -437,7 +437,7 @@ def folder_index_for_org(org, lookback_days=FOLDER_LOOKBACK_DAYS, *, stats=None)
     since the last call rather than of the whole window.
 
     Falls back to the full build when the change log is not there (migration
-    0188 not applied yet — Render ships code before migrations), off Postgres,
+    0189 not applied yet — Render ships code before migrations), off Postgres,
     or inside a caller's transaction, where this cannot open its own snapshot.
     """
     from django.db import DatabaseError, connection, transaction

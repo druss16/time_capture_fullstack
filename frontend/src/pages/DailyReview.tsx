@@ -19,7 +19,7 @@ import { safeFetchJson } from "@/lib/api";
 import ManualTimeEntry from "@/components/ManualTimeEntry";
 import { cn } from "@/lib/design-system";
 import { useSearchParams, Link } from "react-router-dom";
-import CompactSummary from "@/components/CompactSummary";
+import CompactSummary, { ROW, CHIP } from "@/components/CompactSummary";
 import NoTimeYet from "@/components/NoTimeYet";
 import { MatterPicker } from "@/components/MatterPicker";
 import { useTerminology } from "@/lib/terminology";
@@ -254,7 +254,6 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
-  const [open, setOpen] = useState(true);
   // Capped for the same reason as the timesheet banner: a lane is a queue you
   // work down, not a wall you scroll past.
   const [shown, setShown] = useState(8);
@@ -307,70 +306,51 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
 
   const fmt = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
 
+  // Rendered INSIDE the Needs-you card (CompactSummary's projectRows), after its
+  // client questions, in the same row shape — one queue instead of two lanes.
   return (
-    <div className="mb-3 overflow-hidden rounded-[15px] border border-amber-200 bg-card">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-amber-50/60"
-      >
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500" />
-        <span className="font-sans text-[15px] font-bold tracking-[-0.01em] text-amber-800">Needs a {terms.project.toLowerCase()}</span>
-        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-          {fmt(total)} · {rows.length} {rows.length === 1 ? "activity" : "activities"}
-        </span>
-        <span className="flex-1" />
-        <span className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 font-sans text-[12px] font-medium text-muted-foreground">
-          {open ? "Hide" : "Show"}
-        </span>
-      </button>
-
-      {open && (
-        <div className="border-t border-amber-200/70 px-3 pb-2 pt-2">
-          {note && (
-            <div className="mb-1 rounded-md bg-primary/10 px-2 py-1 font-sans text-[11.5px] font-medium text-primary">
-              {note}
-            </div>
-          )}
-          {rows.slice(0, shown).map((r) => (
-            <div key={r.id} className="flex items-center gap-2 py-1">
-              <span className="w-[110px] shrink-0 truncate font-sans text-[12px] font-semibold text-foreground">
-                {r.client_name || "No client"}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground" title={r.label}>
-                {r.label}
-              </span>
-              <span className="w-[46px] shrink-0 text-right font-mono text-[12px] tabular-nums text-muted-foreground/70">
-                {fmt(r.minutes)}
-              </span>
-              <MatterPicker
-                blockIds={[r.id]}
-                onAssigned={(_projectId, folderFiled = 0) => {
-                  // The row leaves immediately. Reloading the lane here meant a
-                  // visible flicker and, worse, the list re-ordering under
-                  // someone working down it. The lane re-syncs, in place, with
-                  // the page's next reload.
-                  setRows((prev) => prev.filter((x) => x.id !== r.id));
-                  setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
-                  if (folderFiled > 0) {
-                    setNote(`Also filed ${folderFiled} more from the same folder`);
-                    sync();
-                  }
-                  onChanged();
-                }}
-              />
-            </div>
-          ))}
-          {rows.length > shown && (
-            <button
-              onClick={() => setShown((n) => n + 8)}
-              className="mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 underline-offset-2 hover:underline"
-            >
-              Show {Math.min(8, rows.length - shown)} more of {rows.length}
-            </button>
-          )}
+    <>
+      {note && (
+        <div className="mx-4 mt-2 rounded-md bg-primary/10 px-2 py-1 font-sans text-[11.5px] font-medium text-primary">
+          {note}
         </div>
       )}
-    </div>
+      {rows.slice(0, shown).map((r) => (
+        <div key={`proj${r.id}`} className={ROW}>
+          <span className={CHIP}>{fmt(r.minutes)}</span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-[12.5px] text-foreground" title={r.label}>{r.label}</div>
+            <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">
+              <span className="font-semibold text-foreground/80">{r.client_name || "No client"}</span>
+              {" · pick a "}{terms.project.toLowerCase()}
+            </div>
+          </div>
+          <MatterPicker
+            blockIds={[r.id]}
+            onAssigned={(_projectId, folderFiled = 0) => {
+              // The row leaves immediately. Reloading here meant a visible
+              // flicker and the list re-ordering under someone working down
+              // it; it re-syncs, in place, with the page's next reload.
+              setRows((prev) => prev.filter((x) => x.id !== r.id));
+              setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
+              if (folderFiled > 0) {
+                setNote(`Also filed ${folderFiled} more from the same folder`);
+                sync();
+              }
+              onChanged();
+            }}
+          />
+        </div>
+      ))}
+      {rows.length > shown && (
+        <button
+          onClick={() => setShown((n) => n + 8)}
+          className="mx-4 mb-3 mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 underline-offset-2 hover:underline"
+        >
+          Show {Math.min(8, rows.length - shown)} more of {rows.length}
+        </button>
+      )}
+    </>
   );
 };
 
@@ -1176,7 +1156,6 @@ export default function DailyReview() {
               </div>
             )}
           </div>
-          <MatterLane date={date} range={range} refreshTick={laneTick} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}
@@ -1190,6 +1169,10 @@ export default function DailyReview() {
             showToast={showToast}
             onIgnoreMismatch={ignoreMismatch}
             onInteractionChange={handleInteractionChange}
+            projectQueue={projectQueue}
+            projectRows={
+              <MatterLane date={date} range={range} refreshTick={laneTick} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
+            }
           />
         </div>
       </div>

@@ -1072,10 +1072,15 @@ export default function DailyReview() {
                 label="Billable"
                 valueClass="text-primary"
               />
+              {/* The same minutes as the Needs-you card and the progress bar:
+                  client questions AND project questions. needsReviewHours alone
+                  counted only unresolved clients, so it read 0m while the card
+                  said 37m of project picks were waiting. Total is unchanged —
+                  project-pending time is already inside billable. */}
               <StatCell
-                value={formatHours(needsReviewHours)}
+                value={formatHours(needsMin / 60)}
                 label="Needs review"
-                valueClass={needsReviewHours === 0 ? "text-teal-500" : "text-amber-500"}
+                valueClass={needsMin === 0 ? "text-teal-500" : "text-amber-500"}
               />
               <StatCell
                 value={formatHours(totalHours)}

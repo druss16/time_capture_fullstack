@@ -105,6 +105,39 @@ def _dropbox_root_index(low):
     return None
 
 
+# The user's own Desktop / Documents, the last-resort anchor. A small agency or
+# a solo bookkeeper keeps ~/Desktop/<Client>/<Project>/file.psd with no
+# "Clients" folder and no Dropbox, and without an anchor every one of those
+# files fell into the single coarse "docs" bucket — so ten seconds on
+# Desktop/Dauphin & Fantacone/D&F_trois.psd and the next three minutes on
+# Desktop/Nike/Spring Launch/Nike_test.psd became ONE Photoshop block, booked
+# to Dauphin & Fantacone.
+#
+# Recognised only where the OS puts these folders: directly in a home folder
+# (/Users/<x>/Desktop, C:\Users\<x>\Documents, /home/<x>/Desktop), or directly
+# in a OneDrive root that backs them up (C:\Users\<x>\OneDrive - Firm\Desktop,
+# ~/Library/CloudStorage/OneDrive-Firm/Documents). Downloads is left out: what
+# lands there is whatever a browser named it, not a folder the user filed.
+_HOME_WORK_FOLDERS = ("desktop", "documents")
+_ONEDRIVE_HOME_RE = re.compile(r"^onedrive(?:\s*-\s*.+)?$")
+_ONEDRIVE_CLOUDSTORAGE_RE = re.compile(r"^onedrive(?:-.+)?$")
+
+
+def _home_work_folder_index(low):
+    """Index of a home-level Desktop/Documents segment in a lowercased path, or None."""
+    for i, s in enumerate(low):
+        if s not in _HOME_WORK_FOLDERS or i < 2:
+            continue
+        if low[i - 2] in _HOME_PARENTS:
+            return i
+        parent = low[i - 1]
+        if i >= 3 and low[i - 3] in _HOME_PARENTS and _ONEDRIVE_HOME_RE.match(parent):
+            return i
+        if low[i - 2] == "cloudstorage" and _ONEDRIVE_CLOUDSTORAGE_RE.match(parent):
+            return i
+    return None
+
+
 def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
     """Return the client-level folder segment from a path, or '' if none.
 
@@ -118,18 +151,20 @@ def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
 
     A named clients-root anywhere in the path wins. Only when there is none is
     a Dropbox ROOT used as the anchor, so ``Dropbox/Firm/Clients/Acme/...`` is
-    still ``acme``, and org 21's paths are unchanged. Under a Dropbox root the
-    segment below must be a FOLDER — a file saved straight into Dropbox names
-    no client.
+    still ``acme``, and org 21's paths are unchanged. Only when there is no
+    Dropbox root either is the user's home-level Desktop / Documents used
+    (``~/Desktop/Nike/Spring Launch/x.psd`` -> ``nike``). Under a Dropbox or
+    home-folder anchor the segment below must be a FOLDER — a file saved
+    straight onto the Desktop names no client.
 
     GROUPING ONLY. The one caller is compaction._grouping_content_id, which
     uses this to split "docs" blocks at a folder boundary. It never picks a
     client. A top-level non-client Dropbox folder (Apps, Templates, Internal)
     just gets its own block.
 
-    Returns '' when the path has no recognized root (e.g. a file under
-    ``C:\\Users\\<name>\\OneDrive\\...``) — the caller then keeps the existing
-    coarse ``docs`` bucket, so those paths are unaffected.
+    Returns '' when the path has no recognized root (e.g. a file saved straight
+    into ``C:\\Users\\<name>\\OneDrive - Firm\\Documents``) — the caller then
+    keeps the existing coarse ``docs`` bucket, so those paths are unaffected.
     """
     if not file_path:
         return ""
@@ -142,7 +177,10 @@ def client_folder_bucket(file_path: str, roots=_CLIENT_ROOT_FOLDERS) -> str:
             break
     if anchor_idx is None:
         anchor_idx = _dropbox_root_index(low)
-        # Dropbox/<file> — the next segment must be a folder, not the file.
+        if anchor_idx is None:
+            anchor_idx = _home_work_folder_index(low)
+        # Dropbox/<file>, Desktop/<file> — the next segment must be a folder,
+        # not the file.
         if anchor_idx is not None and anchor_idx + 2 >= len(low):
             return ""
     if anchor_idx is None or anchor_idx + 1 >= len(low):

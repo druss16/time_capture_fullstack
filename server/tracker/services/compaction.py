@@ -95,6 +95,62 @@ GENERIC_TITLES = (
 )
 
 
+# How far back a path-less event may look for the path of the file it names.
+PATH_FILL_LOOKBACK = timedelta(minutes=30)
+# Photoshop / Illustrator decorate the document name: "Nike.psd @ 157% (RGB/8) *".
+_DOC_TITLE_DECORATION = _re_qb.compile(r"\s+@\s+.*$|\s*\*\s*$")
+
+
+def _doc_name_from_title(title: str) -> str:
+    return _DOC_TITLE_DECORATION.sub("", (title or "").strip()).strip().lower()
+
+
+def _fill_missing_paths(records, user) -> int:
+    """Give a path-less event the path of the file its title names.
+
+    Apps drop the document path for a moment — mid-save, a dialog, a tab
+    switch — while the title still names the file: at 16:45:50 Photoshop
+    reported "Adidas_test.psd" with no path, seven seconds after reporting it
+    with Adidas/Fall Launch/Adidas_test.psd. Without the path that one event
+    keyed apart from its folder's block and became its own project-less row.
+
+    Fill from the most recent event of the SAME app, at or before it and within
+    PATH_FILL_LOOKBACK, whose file name equals the title — first among this
+    run's events, then among already-compacted ones. Never guesses: no exact
+    file-name match, no fill. Returns how many were filled.
+    """
+    pathless = [r for r in records if not r["file_path"] and r["window_title"]]
+    if not pathless:
+        return 0
+
+    def _base(path):
+        return re.split(r"[\\/]", path)[-1].strip().lower()
+
+    # (app, file name) -> [(start, path)] from this run plus recent stored events.
+    seen = {}
+    for r in records:
+        if r["file_path"]:
+            seen.setdefault((r["app_name"], _base(r["file_path"])), []).append((r["start"], r["file_path"]))
+    earliest = min(r["start"] for r in pathless) - PATH_FILL_LOOKBACK
+    latest = max(r["start"] for r in pathless)
+    for app, path, start in (RawEvent.objects
+                             .filter(user=user, app_name__in={r["app_name"] for r in pathless},
+                                     start_ts__gte=earliest, start_ts__lte=latest)
+                             .exclude(file_path__isnull=True).exclude(file_path="")
+                             .values_list("app_name", "file_path", "start_ts")):
+        seen.setdefault((app or "", _base(path)), []).append((start, path))
+
+    filled = 0
+    for r in pathless:
+        name = _doc_name_from_title(r["window_title"])
+        prior = [(st, p) for st, p in seen.get((r["app_name"], name), ())
+                 if r["start"] - PATH_FILL_LOOKBACK <= st <= r["start"]]
+        if prior:
+            r["file_path"] = max(prior)[1]
+            filled += 1
+    return filled
+
+
 def _representative_index(items) -> int:
     """Index of the event that names a block: items are (seconds, file_path).
 
@@ -865,6 +921,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 if isinstance(getattr(event, "ctx", None), dict) else ""
             ),
         })
+
+    _fill_missing_paths(events_with_duration, user)
 
     # Split into sessions using REAL inter-event gaps (next.start - prev.end)
     sessions = []

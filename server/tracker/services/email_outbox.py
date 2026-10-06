@@ -89,6 +89,49 @@ def save_settings(*, mode=None, redirect_to=None, live_types=None, user=None):
     return read_settings()
 
 
+def org_modes() -> dict:
+    """{org_id: mode} for every company with its own setting."""
+    from tracker.models import OrgEmailSetting
+    return {o: m for o, m in OrgEmailSetting.objects.values_list('org_id', 'mode') if m in MODES}
+
+
+def set_org_mode(org_id: int, mode, user=None):
+    """mode None (or 'default') removes the company's setting: it follows the global mode."""
+    from tracker.models import OrgEmailSetting
+    if mode in (None, '', 'default'):
+        OrgEmailSetting.objects.filter(org_id=org_id).delete()
+        return None
+    if mode not in MODES:
+        raise ValueError(f'Unknown mode {mode!r}')
+    OrgEmailSetting.objects.update_or_create(
+        org_id=org_id, defaults={'mode': mode, 'updated_by_id': getattr(user, 'id', None)})
+    return mode
+
+
+def route_for(email_type: str, org_id, cfg) -> str:
+    """
+    Where one email goes: LIVE, REDIRECT or HOLD.
+
+      1. a type switched live globally sends for every company
+      2. otherwise the company's own setting, if it has one
+      3. otherwise the global mode
+    If the company's setting cannot be read, the email is held — never sent on
+    a guess.
+    """
+    if email_type in cfg['live_types']:
+        return LIVE
+    if org_id is not None:
+        try:
+            from tracker.models import OrgEmailSetting
+            own = OrgEmailSetting.objects.filter(org_id=org_id).values_list('mode', flat=True).first()
+        except Exception as e:
+            logger.error('[EMAIL] company email setting unreadable for org %s — holding: %s', org_id, e)
+            return HOLD
+        if own in MODES:
+            return own
+    return cfg['mode']
+
+
 def _redirect_address(cfg) -> str:
     from django.conf import settings
     return cfg.get('redirect_to') or getattr(settings, 'DEFAULT_REPLY_TO_EMAIL', '') or ''
@@ -158,9 +201,10 @@ def dispatch(*, to_email, subject, html_content, plain_content, from_email,
                      email_type, to_email, e)
         return False
 
-    if cfg['mode'] == LIVE or email_type in cfg['live_types']:
+    route = route_for(email_type, org_id, cfg)
+    if route == LIVE:
         return deliver(email)
-    if cfg['mode'] == REDIRECT:
+    if route == REDIRECT:
         target = _redirect_address(cfg)
         if target:
             ok = deliver(email, redirect_to=target)

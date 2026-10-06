@@ -2469,10 +2469,11 @@ def _email_row(e, *, full=False):
 @permission_classes([IsAuthenticated, IsStaff])
 def mavops_email_outbox(request):
     """
-    GET /api/mavops/email/?status=held&type=weekly_summary&limit=200
+    GET /api/mavops/email/?status=held&type=weekly_summary&org_id=30&limit=200
 
-    The global send mode, every email type with whether it is live and how many
-    are held, and the outbox itself (newest first, without bodies).
+    The global send mode, the companies with their own mode, every email type
+    with whether it is live and how many are held, and the outbox itself (newest
+    first, without bodies). org_id narrows the held counts and the outbox.
     """
     from django.conf import settings as dj_settings
     from tracker.models import OutboundEmail
@@ -2483,7 +2484,26 @@ def mavops_email_outbox(request):
     except Exception as e:
         return Response({'error': f'Email outbox not available yet (migration pending?): {e}'}, status=503)
 
-    held = dict(OutboundEmail.objects.filter(status='held')
+    try:
+        org_filter = int(request.query_params['org_id']) if request.query_params.get('org_id') else None
+    except ValueError:
+        return Response({'error': 'org_id must be a number'}, status=400)
+    scoped = OutboundEmail.objects.all()
+    if org_filter is not None:
+        scoped = scoped.filter(org_id=org_filter)
+
+    try:
+        overrides = outbox.org_modes()
+    except Exception as e:
+        logger.warning('[MAVOPS] company email settings unreadable: %s', e)
+        overrides = {}
+    names = dict(Organization.all_objects.filter(pk__in=list(overrides))
+                 .values_list('pk', 'name'))
+    org_overrides = sorted(
+        ({'org_id': o, 'org_name': names.get(o, f'org {o}'), 'mode': m} for o, m in overrides.items()),
+        key=lambda r: r['org_name'].lower())
+
+    held = dict(scoped.filter(status='held')
                 .order_by().values_list('email_type').annotate(n=Count('id')))
     known = {k for k, _, _ in outbox.EMAIL_TYPES}
     types = [{'key': k, 'label': label, 'description': desc,
@@ -2492,7 +2512,7 @@ def mavops_email_outbox(request):
     types += [{'key': k, 'label': k, 'description': '', 'live': k in cfg['live_types'], 'held': n}
               for k, n in held.items() if k not in known]
 
-    qs = OutboundEmail.objects.all()
+    qs = scoped
     status = request.query_params.get('status')
     if status:
         qs = qs.filter(status=status)
@@ -2503,11 +2523,12 @@ def mavops_email_outbox(request):
         limit = max(1, min(int(request.query_params.get('limit', 200)), 500))
     except ValueError:
         limit = 200
-    counts = dict(OutboundEmail.objects.order_by().values_list('status').annotate(n=Count('id')))
+    counts = dict(scoped.order_by().values_list('status').annotate(n=Count('id')))
 
     return Response({
         'settings': {**cfg, 'default_redirect_to': getattr(dj_settings, 'DEFAULT_REPLY_TO_EMAIL', '')},
         'sendgrid_configured': bool(getattr(dj_settings, 'SENDGRID_API_KEY', None)),
+        'org_overrides': org_overrides,
         'types': types,
         'counts': counts,
         'emails': [_email_row(e) for e in qs.defer('html_content', 'plain_content')[:limit]],
@@ -2543,6 +2564,29 @@ def mavops_email_settings(request):
     logger.info("[MAVOPS] email settings -> mode=%s live_types=%s by %s",
                 cfg['mode'], cfg['live_types'], request.user.email)
     return Response({'ok': True, 'settings': cfg})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_org_setting(request, org_id):
+    """
+    POST /api/mavops/email/org/<org_id>/  {"mode": "hold"|"redirect"|"live"|"default"}
+    One company's own email mode; "default" removes it so the company follows
+    the global mode again.
+    """
+    from tracker.services import email_outbox as outbox
+    org = Organization.all_objects.filter(pk=org_id).first()
+    if org is None:
+        return Response({'error': 'Not found'}, status=404)
+    d = request.data if isinstance(request.data, dict) else {}
+    try:
+        mode = outbox.set_org_mode(org.id, d.get('mode'), user=request.user)
+    except ValueError as e:
+        return Response({'error': str(e)}, status=400)
+    logger.info("[MAVOPS] email mode for org %s (%s) -> %s by %s",
+                org.id, org.name, mode or 'default', request.user.email)
+    return Response({'ok': True, 'org_id': org.id, 'org_name': org.name, 'mode': mode})
 
 
 @api_view(['GET'])

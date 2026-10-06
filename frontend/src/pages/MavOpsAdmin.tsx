@@ -4078,7 +4078,7 @@ export default function MavOpsAdmin() {
         )}
 
         {tab === "email" && (
-          <MavOpsEmailOutbox apiFetch={apiFetch} flash={flash} />
+          <MavOpsEmailOutbox apiFetch={apiFetch} flash={flash} orgs={orgs} filterOrg={filterOrg} />
         )}
 
         {/* ══ DAILY REVIEW — work the queue, or audit what was booked ══ */}

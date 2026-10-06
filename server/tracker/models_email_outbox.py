@@ -83,3 +83,25 @@ class OutboundEmail(models.Model):
 
     def __str__(self):
         return f'{self.email_type} to {self.to_email}: {self.status}'
+
+
+class OrgEmailSetting(models.Model):
+    """
+    One company's own email mode, overriding the global EmailSendSettings.mode.
+    No row means the company follows the global mode. Email types switched live
+    globally still send for every company — they are the vetted ones (password
+    reset), and a firm that wants no notifications still needs those.
+
+    org_id is a plain integer, not an FK: see the module docstring.
+    """
+    MODE_CHOICES = EmailSendSettings.MODE_CHOICES
+    org_id = models.IntegerField(unique=True)
+    mode = models.CharField(max_length=16, choices=MODE_CHOICES)
+    updated_by_id = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'tracker_orgemailsetting'
+
+    def __str__(self):
+        return f'org {self.org_id} email mode={self.mode}'

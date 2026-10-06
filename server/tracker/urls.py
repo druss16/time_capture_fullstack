@@ -424,6 +424,7 @@ urlpatterns = [
     path('mavops/orgs/<int:org_id>/industry/', views_mavops.mavops_set_org_industry, name='mavops-set-org-industry'),
     path('mavops/email/',                 views_mavops.mavops_email_outbox,  name='mavops-email-outbox'),
     path('mavops/email/settings/',        views_mavops.mavops_email_settings, name='mavops-email-settings'),
+    path('mavops/email/org/<int:org_id>/', views_mavops.mavops_email_org_setting, name='mavops-email-org-setting'),
     path('mavops/email/bulk/',            views_mavops.mavops_email_bulk,    name='mavops-email-bulk'),
     path('mavops/email/<int:email_id>/',  views_mavops.mavops_email_detail,  name='mavops-email-detail'),
     path('mavops/email/<int:email_id>/<str:action>/', views_mavops.mavops_email_action, name='mavops-email-action'),

@@ -585,3 +585,78 @@ def _apply_intake_contacts(intake):
     if not p.billing_model and answers.get('billing_model') in ('hourly', 'retainer', 'mix'):
         p.billing_model = answers['billing_model']
     p.save(update_fields=['contacts', 'billing_model', 'updated_at'])
+
+
+# ── Connect link (QuickBooks Online / QuickBooks Time) ───────────────────
+
+def _connect_summary(link):
+    if not link:
+        return {'link': None}
+    return {'link': {
+        'providers': link.providers, 'sent_to': link.sent_to,
+        'created_at': link.created_at.isoformat(), 'expires_at': link.expires_at.isoformat(),
+        'open': link.is_open,
+        'qbo_connected_at': link.qbo_connected_at.isoformat() if link.qbo_connected_at else None,
+        'qbt_connected_at': link.qbt_connected_at.isoformat() if link.qbt_connected_at else None,
+    }}
+
+
+@operator_view(['GET', 'POST'])
+def connect_link_view(request, pk):
+    """GET: the firm's current connect link. POST: issue a new one (retiring
+    the old), emailing it when an address is given. The raw link is returned
+    once, so it can also go by hand."""
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+    from tracker.models_onboarding_console import CONNECT_PROVIDERS, ConnectLink
+    from tracker.services import connect_link
+
+    p = _project(pk)
+    if request.method == 'GET':
+        return Response(_connect_summary(
+            ConnectLink.objects.filter(organization=p.organization).first()))
+
+    providers = [x for x in (request.data.get('providers') or []) if x in CONNECT_PROVIDERS]
+    if not providers:
+        return _err('Pick QuickBooks Online, QuickBooks Time, or both.')
+    email = (request.data.get('email') or '').strip()
+    if email:
+        try:
+            validate_email(email)
+        except ValidationError:
+            return _err('Enter a valid email address.')
+
+    link, raw = ConnectLink.mint(p.organization, providers, project=p,
+                                 created_by=request.user, sent_to=email)
+    emailed = bool(email) and connect_link.send(
+        link, raw, to_email=email, contact_name=request.data.get('name') or '')
+    svc.audit(p, request.user, 'connect_link.issue', link_id=link.id, providers=providers,
+              to=email or 'by hand', emailed=emailed)
+    return Response({'url': connect_link.link_url(raw), 'emailed': emailed, 'to': email,
+                     **_connect_summary(link)})
+
+
+class PublicConnect(APIView):
+    """The firm's side: no login, the token in the path is the whole credential."""
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_scope = 'onboard_intake'
+
+    def get(self, request, raw):
+        from tracker.services import connect_link
+        link = connect_link.get_open(raw)
+        if not link or link.revoked_at:
+            return Response({'error': 'This link is no longer valid. Ask Mavops for a new one.'},
+                            status=404)
+        return Response(connect_link.status(link))
+
+    def post(self, request, raw, provider):
+        from tracker.services import connect_link
+        link = connect_link.get_open(raw)
+        if not link or link.revoked_at:
+            return Response({'error': 'This link is no longer valid. Ask Mavops for a new one.'},
+                            status=404)
+        try:
+            return Response({'auth_url': connect_link.start(link, provider)})
+        except connect_link.ConnectLinkError as e:
+            return _err(e)

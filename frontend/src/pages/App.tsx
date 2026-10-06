@@ -52,6 +52,8 @@ const RequestAccess = lazyWithRetry(() => import("./RequestAccess"));
 const MavOpsAdmin = lazyWithRetry(() => import("./MavOpsAdmin"));
 const OnboardConsole = lazyWithRetry(() => import("./onboard/OnboardConsole"));
 const IntakeForm = lazyWithRetry(() => import("./IntakeForm"));
+const ConnectLink = lazyWithRetry(() => import("./ConnectLink"));
+const ConnectReturn = lazyWithRetry(() => import("./ConnectLink").then((m) => ({ default: m.ConnectReturn })));
 const DashboardV2 = lazyWithRetry(() => import("./DashboardV2"));
 const ReportsSummary = lazyWithRetry(() => import("./ReportsSummary"));
 const AIBlindSpots = lazyWithRetry(() => import("./AIBlindSpots"));
@@ -248,6 +250,9 @@ export default function App() {
                 <Route path="/invite/:token" element={<AcceptInvite />} />
                 {/* A firm's onboarding intake — no login, the link is the credential */}
                 <Route path="/intake/:token" element={<IntakeForm />} />
+                {/* The firm's QuickBooks admin approves the connection — no login, the link is the credential */}
+                <Route path="/connect/return" element={<ConnectReturn />} />
+                <Route path="/connect/:token" element={<ConnectLink />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password/:uid/:token" element={<ResetPassword />} />
 

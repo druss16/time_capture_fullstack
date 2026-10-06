@@ -3,7 +3,10 @@
 // re-implemented in the browser.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2, Sparkles, Upload } from "lucide-react";
-import { onboardApi, type IssuedInvite, type KitFile, type ProjectDetail, type RosterRow } from "./api";
+import {
+  onboardApi, type ConnectLinkInfo, type ConnectProvider, type IssuedInvite, type KitFile,
+  type ProjectDetail, type RosterRow,
+} from "./api";
 import {
   CopyButton, DownloadButton, ErrorNote, Modal, OutputLog, Pill, fmtDate, installPathLabel,
   inputClass, labelClass, primaryBtnClass, secondaryBtnClass,
@@ -25,6 +28,7 @@ export default function ActionDialog({ action, ...p }: Props & { action: string 
     case "stripe": return <StripeDialog {...p} />;
     case "deploy_kit": return <DeployKitDialog {...p} />;
     case "intake": return <IntakeDialog {...p} />;
+    case "connect_link": return <ConnectLinkDialog {...p} />;
     case "derive_aliases": return <AliasesDialog {...p} />;
     case "clio_trigger": return <ClioTriggerDialog {...p} />;
     case "go_live": return <GoLiveDialog {...p} />;
@@ -668,6 +672,101 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
         <div className="flex justify-end">
           <button className={secondaryBtnClass} onClick={onClose}>Close</button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Connect link (QuickBooks Online / QuickBooks Time) ─────────────────────
+
+const CONNECT_LABEL: Record<ConnectProvider, string> = {
+  quickbooks: "QuickBooks Online", qb_time: "QuickBooks Time",
+};
+
+function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
+  const qboAdmin = project.contacts?.qbo_admin || {};
+  const [email, setEmail] = useState(qboAdmin.email || "");
+  const [name, setName] = useState(qboAdmin.name || "");
+  const [providers, setProviders] = useState<ConnectProvider[]>(["quickbooks"]);
+  const [current, setCurrent] = useState<ConnectLinkInfo | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [result, setResult] = useState<{ emailed: boolean; to: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { onboardApi.connectLink(project.id).then((r) => setCurrent(r.link)).catch(() => {}); }, [project.id]);
+
+  const toggle = (p: ConnectProvider) =>
+    setProviders((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
+
+  const issue = async (send: boolean) => {
+    setBusy(true); setErr(null); setResult(null);
+    try {
+      const r = await onboardApi.issueConnectLink(project.id, { providers, email: send ? email : "", name });
+      setUrl(r.url); setCurrent(r.link);
+      if (send) setResult({ emailed: r.emailed, to: r.to });
+      onChanged();
+    } catch (e) { setErr(msg(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="QuickBooks connect link" onClose={onClose}
+      subtitle="For the firm's QuickBooks admin — usually the bookkeeper. No TimeTracker login; they click Connect and sign in to Intuit. Clients import as soon as QuickBooks Online is approved.">
+      <div className="space-y-4">
+        {current && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm">
+            {current.open ? <Pill tone="blue">Open until {fmtDate(current.expires_at)}</Pill> : <Pill tone="amber">Expired or replaced</Pill>}
+            {current.sent_to && <Pill>Sent to {current.sent_to}</Pill>}
+            {current.providers.includes("quickbooks") && (current.qbo_connected_at
+              ? <Pill tone="green">QuickBooks Online connected {fmtDate(current.qbo_connected_at)}</Pill>
+              : <Pill tone="amber">QuickBooks Online not yet</Pill>)}
+            {current.providers.includes("qb_time") && (current.qbt_connected_at
+              ? <Pill tone="green">QuickBooks Time connected {fmtDate(current.qbt_connected_at)}</Pill>
+              : <Pill tone="amber">QuickBooks Time not yet</Pill>)}
+          </div>
+        )}
+
+        <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+          <div>
+            <div className={labelClass}>Connect</div>
+            <div className="mt-1 flex flex-wrap gap-4 text-sm">
+              {(Object.keys(CONNECT_LABEL) as ConnectProvider[]).map((p) => (
+                <label key={p} className="flex items-center gap-2">
+                  <input type="checkbox" checked={providers.includes(p)} onChange={() => toggle(p)} /> {CONNECT_LABEL[p]}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              QuickBooks Time is one connection for the whole firm — it writes everyone's timesheets, matched by email.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div><label className={labelClass}>QuickBooks admin's name</label>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
+            <div><label className={labelClass}>Their email</label>
+              <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="bookkeeper@firm.com" /></div>
+          </div>
+          <p className="text-xs text-slate-500">A new link replaces any earlier one. It works for 7 days.</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button className={secondaryBtnClass} disabled={busy || providers.length === 0} onClick={() => issue(false)}>Just make a link</button>
+            <button className={primaryBtnClass} disabled={busy || providers.length === 0 || !email.trim()} onClick={() => issue(true)}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />} Send by email
+            </button>
+          </div>
+        </div>
+
+        {result?.emailed && <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Emailed to {result.to}.</div>}
+        {result && !result.emailed && (
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">Couldn't email {result.to}. Copy the link below and send it yourself.</div>
+        )}
+        {url && (
+          <div className="space-y-1.5 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">The link — shown once</div>
+            <div className="flex items-center gap-2"><code className="min-w-0 flex-1 truncate text-xs">{url}</code><CopyButton text={url} /></div>
+          </div>
+        )}
+        <ErrorNote message={err} />
+        <div className="flex justify-end"><button className={secondaryBtnClass} onClick={onClose}>Close</button></div>
       </div>
     </Modal>
   );

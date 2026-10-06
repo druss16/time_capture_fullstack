@@ -21,7 +21,7 @@ const ACTION_LABEL: Record<string, string> = {
   import_team: "Import", import_clients: "Import", import_task_types: "Import",
   mappings: "Open grid", invites: "Setup links", token: "Issue", pair_dry_run: "Check",
   stripe: "Set up", deploy_kit: "Build kit", intake: "Intake link", derive_aliases: "Run",
-  clio_trigger: "Set", go_live: "Mark live",
+  clio_trigger: "Set", go_live: "Mark live", connect_link: "Connect link",
 };
 
 export default function ProjectPage({ id }: { id: number }) {

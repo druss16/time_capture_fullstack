@@ -193,3 +193,65 @@ class OnboardingIntake(models.Model):
     def is_open(self):
         return (self.revoked_at is None and self.submitted_at is None
                 and self.expires_at > timezone.now())
+
+
+CONNECT_LINK_TTL = timedelta(days=7)
+CONNECT_PROVIDERS = ('quickbooks', 'qb_time')
+
+
+class ConnectLink(models.Model):
+    """A single unguessable link that lets a firm's QuickBooks admin connect
+    QuickBooks Online and/or QuickBooks Time without a TimeTracker login.
+
+    Intuit only lets someone with admin rights on the company approve a
+    connection, and at most firms that is a bookkeeper who will never use
+    TimeTracker. This link is the whole credential for one thing: starting the
+    Intuit OAuth flow for THIS firm. It cannot sign anyone in, read time, or
+    touch another firm. Only a SHA-256 of the token is stored.
+
+    The OAuth state minted for each provider is kept here so the shared
+    callbacks (views_integrations.quickbooks_callback,
+    qb_time/views.qb_time_callback) can tell a link-started grant from one
+    started in Settings and finish it accordingly.
+    """
+    organization = models.ForeignKey('tracker.Organization', on_delete=models.CASCADE,
+                                     related_name='connect_links')
+    project = models.ForeignKey(OnboardingProject, on_delete=models.SET_NULL,
+                                null=True, blank=True, related_name='connect_links')
+    token_hash = models.CharField(max_length=64, unique=True)
+    providers = models.JSONField(default=list)
+    sent_to = models.EmailField(blank=True, default='')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+                                   null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    qbo_state = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    qbt_state = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    qbo_connected_at = models.DateTimeField(null=True, blank=True)
+    qbt_connected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @staticmethod
+    def hash_token(raw):
+        return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+    @classmethod
+    def mint(cls, organization, providers, *, project=None, created_by=None, sent_to=''):
+        """Retire the firm's open links and return (link, raw_token)."""
+        now = timezone.now()
+        cls.objects.filter(organization=organization, revoked_at__isnull=True).update(revoked_at=now)
+        raw = secrets.token_urlsafe(32)
+        link = cls.objects.create(
+            organization=organization, project=project, token_hash=cls.hash_token(raw),
+            providers=[p for p in CONNECT_PROVIDERS if p in (providers or [])],
+            created_by=created_by, sent_to=(sent_to or '')[:254],
+            expires_at=now + CONNECT_LINK_TTL,
+        )
+        return link, raw
+
+    @property
+    def is_open(self):
+        return self.revoked_at is None and self.expires_at > timezone.now()

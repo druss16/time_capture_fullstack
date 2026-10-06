@@ -6,7 +6,7 @@ class Migration(migrations.Migration):
     """New tables only — safe in the gap between Render deploying and migrating."""
 
     dependencies = [
-        ('tracker', '0188_social_login'),
+        ('tracker', '0189_block_filing_log'),
     ]
 
     operations = [

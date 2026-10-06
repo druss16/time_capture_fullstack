@@ -5132,4 +5132,4 @@ class DayReview(models.Model):
         return f'{self.user} reviewed {self.day}'
 
 # Email outbox — MavOps holds, previews and releases transactional email (see models_email_outbox.py)
-from tracker.models_email_outbox import EmailSendSettings, OutboundEmail  # noqa: F401, E402
+from tracker.models_email_outbox import EmailSendSettings, OrgEmailSetting, OutboundEmail  # noqa: F401, E402

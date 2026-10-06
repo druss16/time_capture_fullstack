@@ -18,7 +18,8 @@ from rest_framework.test import APIClient
 
 from tracker.email_service import send_email, send_password_reset
 from tracker.models import (
-    AuthToken, EmailSendSettings, Organization, OrganizationMembership, OutboundEmail,
+    AuthToken, EmailSendSettings, Organization, OrganizationMembership, OrgEmailSetting,
+    OutboundEmail,
 )
 from tracker.services import email_outbox as outbox
 
@@ -211,3 +212,71 @@ class MavOpsEmailApiTests(TestCase):
         self.assertEqual(sg.call_count, 2)
         r = self.api.post('/api/mavops/email/bulk/', {'action': 'discard', 'ids': ids}, format='json')
         self.assertEqual((r.json()['done'], sorted(r.json()['skipped'])), ([], sorted(ids)))
+
+
+@override_settings(SENDGRID_API_KEY='test-key', DEFAULT_REPLY_TO_EMAIL='dan@mavops.test')
+class PerCompanyTests(TestCase):
+    """One company's own mode overrides the global one; globally live types still send."""
+
+    def setUp(self):
+        self.mtc = Organization.objects.create(name='More Than Cars', slug='mtc-percompany')
+        self.ham = Organization.objects.create(name='Hamilton CPA', slug='ham-percompany')
+        for name, org in (('sam', self.mtc), ('jo', self.ham)):
+            u = User.objects.create_user(name, f'{name}@{org.slug}.test', 'x')
+            OrganizationMembership.objects.create(user=u, organization=org)
+
+    def _route(self):
+        """Send one weekly summary to each firm; return {org_id: status}."""
+        with mock.patch(SENDGRID, side_effect=_ok):
+            _send(to='sam@mtc-percompany.test')
+            _send(to='jo@ham-percompany.test')
+        return dict(OutboundEmail.objects.values_list('org_id', 'status'))
+
+    def test_one_company_live_while_global_holds(self):
+        outbox.set_org_mode(self.mtc.id, 'live')
+        self.assertEqual(self._route(), {self.mtc.id: 'sent', self.ham.id: 'held'})
+
+    def test_one_company_held_while_global_live(self):
+        outbox.save_settings(mode='live')
+        outbox.set_org_mode(self.ham.id, 'hold')
+        self.assertEqual(self._route(), {self.mtc.id: 'sent', self.ham.id: 'held'})
+
+    def test_company_redirect(self):
+        outbox.save_settings(redirect_to='qa@mavops.test')
+        outbox.set_org_mode(self.mtc.id, 'redirect')
+        self.assertEqual(self._route(), {self.mtc.id: 'redirected', self.ham.id: 'held'})
+
+    def test_globally_live_type_beats_a_held_company(self):
+        outbox.save_settings(live_types=['password_reset'])
+        outbox.set_org_mode(self.mtc.id, 'hold')
+        with mock.patch(SENDGRID, side_effect=_ok) as sg:
+            send_password_reset('sam@mtc-percompany.test', 'Sam', 'https://x.test/r/1')
+        self.assertEqual(sg.call_count, 1)
+
+    def test_default_removes_the_override(self):
+        outbox.set_org_mode(self.mtc.id, 'live')
+        outbox.set_org_mode(self.mtc.id, 'default')
+        self.assertFalse(OrgEmailSetting.objects.exists())
+        self.assertEqual(self._route(), {self.mtc.id: 'held', self.ham.id: 'held'})
+
+    def test_unreadable_company_setting_holds(self):
+        outbox.save_settings(mode='live')
+        with mock.patch.object(OrgEmailSetting.objects, 'filter', side_effect=RuntimeError('no table')):
+            self.assertEqual(outbox.route_for('weekly_summary', self.mtc.id, outbox.read_settings()), 'hold')
+
+    def test_api_sets_lists_and_filters_by_company(self):
+        staff = User.objects.create_user('ops', 'ops@mavops.test', 'x', is_staff=True)
+        api = _client_for(staff)
+        r = api.post(f'/api/mavops/email/org/{self.mtc.id}/', {'mode': 'live'}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(api.post(f'/api/mavops/email/org/{self.mtc.id}/', {'mode': 'yolo'},
+                                  format='json').status_code, 400)
+        self.assertEqual(api.post('/api/mavops/email/org/999999/', {'mode': 'live'},
+                                  format='json').status_code, 404)
+        self._route()
+        d = api.get(f'/api/mavops/email/?org_id={self.ham.id}').json()
+        self.assertEqual(d['org_overrides'], [{'org_id': self.mtc.id, 'org_name': 'More Than Cars', 'mode': 'live'}])
+        self.assertEqual([e['org_id'] for e in d['emails']], [self.ham.id])
+        self.assertEqual(d['counts'], {'held': 1})
+        api.post(f'/api/mavops/email/org/{self.mtc.id}/', {'mode': 'default'}, format='json')
+        self.assertEqual(api.get('/api/mavops/email/').json()['org_overrides'], [])

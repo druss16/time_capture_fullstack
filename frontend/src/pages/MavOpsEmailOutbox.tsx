@@ -11,6 +11,10 @@
  *   · Live      — sent normally
  * An email type switched Live sends for real even under Hold — the way types go
  * live one at a time once they have been seen.
+ *
+ * A company can have its own mode, which wins over the global one for email to
+ * its people. Precedence: type switched live > company's own mode > global mode.
+ * The top-of-page org picker narrows the outbox to one company.
  */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 
@@ -32,14 +36,17 @@ interface EmailRow {
   status: Status; sent_to: string; sent_at: string | null; error: string; created_at: string;
 }
 interface EmailFull extends EmailRow { from_email: string; from_name: string; reply_to: string; html: string; plain: string; }
+interface OrgOverride { org_id: number; org_name: string; mode: Mode; }
 interface Outbox {
-  settings: Settings; sendgrid_configured: boolean; types: EmailType[];
+  settings: Settings; sendgrid_configured: boolean; types: EmailType[]; org_overrides: OrgOverride[];
   counts: Partial<Record<Status, number>>; emails: EmailRow[];
 }
 
 interface Props {
   apiFetch: (path: string, opts?: RequestInit) => Promise<any>;
   flash: (msg: string, type?: "ok" | "err") => void;
+  orgs: { id: number; name: string }[];
+  filterOrg: number | null;
 }
 
 const MODES: { key: Mode; label: string; help: string; color: string }[] = [
@@ -82,7 +89,7 @@ function Button({ label, onClick, color = T.teal, outline = false, disabled = fa
   );
 }
 
-export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
+export default function MavOpsEmailOutbox({ apiFetch, flash, orgs, filterOrg }: Props) {
   const [data, setData] = useState<Outbox | null>(null);
   const [unavailable, setUnavailable] = useState("");
   const [status, setStatus] = useState<"" | Status>("held");
@@ -91,11 +98,14 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
   const [preview, setPreview] = useState<EmailFull | null>(null);
   const [redirectTo, setRedirectTo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [addOrg, setAddOrg] = useState("");
+  const [addMode, setAddMode] = useState<Mode>("live");
 
   const load = useCallback(async () => {
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
     if (type) qs.set("type", type);
+    if (filterOrg) qs.set("org_id", String(filterOrg));
     try {
       const d: Outbox = await apiFetch(`/mavops/email/?${qs}`);
       setData(d); setUnavailable("");
@@ -106,7 +116,7 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
         ? "The email outbox isn't set up on the server yet — run the migration (tracker 0192). Until then NO email is sent."
         : "Failed to load the email outbox.");
     }
-  }, [apiFetch, status, type]);
+  }, [apiFetch, status, type, filterOrg]);
   useEffect(() => { load(); }, [load]);
 
   const typeLabel = useMemo(() => {
@@ -167,6 +177,19 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
     } finally { setBusy(false); }
   };
 
+  const setOrgMode = async (orgId: number, mode: Mode | "default", name: string) => {
+    if (mode === "live" && !window.confirm(
+      `Send every email for ${name} to its real recipients from now on?\n\nEmails already held stay held.`)) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/mavops/email/org/${orgId}/`, { method: "POST", body: JSON.stringify({ mode }) });
+      flash(mode === "default" ? `${name} follows the global setting again.`
+        : `${name}: ${MODES.find(m => m.key === mode)!.label}.`);
+      setAddOrg(""); await load();
+    } catch { flash(`Couldn't change ${name}'s email setting.`, "err"); }
+    finally { setBusy(false); }
+  };
+
   const bulk = async (action: "release" | "discard") => {
     const ids = [...selected];
     if (!ids.length) return;
@@ -203,7 +226,7 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
       <div style={card}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
           <span style={{ color: T.text, fontSize: 15, fontWeight: 600 }}>Outgoing email</span>
-          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>applies to every company</span>
+          <span style={{ color: T.textMuted, fontSize: 12, ...mono }}>every company, unless it has its own setting below</span>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {MODES.map(m => {
@@ -232,13 +255,54 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
             used by "Send to me" mode{!s.redirect_to && s.default_redirect_to ? ` — blank means ${s.default_redirect_to}` : ""}
           </span>
         </div>
+
+        <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 16, paddingTop: 14 }}>
+          <div style={{ color: T.text, fontSize: 13, fontWeight: 600 }}>Company settings</div>
+          <div style={{ color: T.textMuted, fontSize: 12, margin: "2px 0 10px" }}>
+            A company here uses its own setting instead of the one above, for email to its people.
+          </div>
+          {data.org_overrides.map(o => (
+            <div key={o.org_id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 0", flexWrap: "wrap" }}>
+              <span style={{ color: T.text, fontSize: 13, minWidth: 200, flex: "0 1 260px" }}>{o.org_name}</span>
+              {MODES.map(m => {
+                const on = o.mode === m.key;
+                return (
+                  <button key={m.key} disabled={busy || on} onClick={() => setOrgMode(o.org_id, m.key, o.org_name)} style={{
+                    background: on ? m.color + "22" : "transparent", border: `1px solid ${on ? m.color : T.border}`,
+                    color: on ? m.color : T.textMuted, fontSize: 11.5, padding: "4px 10px", borderRadius: 4,
+                    cursor: busy || on ? "default" : "pointer", ...mono,
+                  }}>{m.label}</button>
+                );
+              })}
+              <button disabled={busy} onClick={() => setOrgMode(o.org_id, "default", o.org_name)}
+                style={{ background: "none", border: "none", color: T.textMuted, fontSize: 11.5, cursor: "pointer", ...mono }}>
+                use global ×
+              </button>
+            </div>
+          ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+            <select value={addOrg} onChange={e => setAddOrg(e.target.value)} style={{ background: T.bg, border: `1px solid ${T.border}`, color: addOrg ? T.text : T.textMuted, fontSize: 12, padding: "6px 8px", borderRadius: 4, minWidth: 220, ...mono }}>
+              <option value="">add a company…</option>
+              {orgs.filter(o => !data.org_overrides.some(x => x.org_id === o.id))
+                .slice().sort((a, b) => a.name.localeCompare(b.name))
+                .map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+            <select value={addMode} onChange={e => setAddMode(e.target.value as Mode)} style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, fontSize: 12, padding: "6px 8px", borderRadius: 4, ...mono }}>
+              {MODES.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+            <Button label="add" outline disabled={busy || !addOrg} onClick={() => {
+              const org = orgs.find(o => o.id === Number(addOrg));
+              if (org) setOrgMode(org.id, addMode, org.name);
+            }} />
+          </div>
+        </div>
       </div>
 
       {/* ── Email types ── */}
       <div style={card}>
         <div style={{ color: T.text, fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Email types</div>
         <div style={{ color: T.textMuted, fontSize: 12, marginBottom: 12 }}>
-          A type switched <span style={{ color: T.green }}>live</span> goes to real recipients even while the mode above is Hold or Send to me.
+          A type switched <span style={{ color: T.green }}>live</span> goes to real recipients at every company, whatever the setting above or the company's own.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 8 }}>
           {data.types.map(t => {
@@ -281,6 +345,11 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
               <option value="">all types</option>
               {data.types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
             </select>
+            {filterOrg && (
+              <span style={{ color: T.teal, fontSize: 11.5, ...mono }}>
+                {orgs.find(o => o.id === filterOrg)?.name || `org ${filterOrg}`} only
+              </span>
+            )}
             <div style={{ flex: 1 }} />
             {selected.size > 0 && (
               <>

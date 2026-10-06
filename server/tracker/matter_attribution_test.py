@@ -153,6 +153,26 @@ if _ok:
     check("bare filename has no folder", folder_key('motion.docx') == '')
     check("empty path is safe", folder_key('') == '')
 
+    # Compaction keys a project firm's document blocks on folder_key, so it must
+    # split exactly where a project can change — and nowhere else.
+    fall = folder_key('/Users/danrussell/Desktop/Adidas/Fall Launch/Adidas_test.psd')
+    winter = folder_key('/Users/danrussell/Desktop/Adidas/Winter Sprint/Adidas_test_deux.psd')
+    check("two project folders of one client are two keys (Dan's Adidas test)",
+          fall and winter and fall != winter)
+    check("two files in one project folder share a key",
+          fall == folder_key('/Users/danrussell/Desktop/Adidas/Fall Launch/other.ai'))
+    mtc_root = '/Users/a/Library/CloudStorage/Dropbox-MoreThanCars/Team/Client-Work_2026/0074_Easterns-Auto-Group'
+    deliv = f'{mtc_root}/0074_2026-08_Easterns-Auto_Konetiq-Launch-Ads'
+    check("MTC: a deliverable's Exports/ stays in the deliverable's key",
+          folder_key(f'{deliv}/hero.psd') == folder_key(f'{deliv}/Exports/banner.png'))
+    check("MTC: two deliverables of one client are two keys",
+          folder_key(f'{deliv}/hero.psd')
+          != folder_key(f'{mtc_root}/0074_2026-09_Easterns-Auto_Collision-Flyer/a.psd'))
+    check("MTC: the same deliverable on two machines is one key",
+          folder_key(f'{deliv}/hero.psd') == folder_key(
+              'C:/Users/bob/Dropbox (More Than Cars)/Team/Client-Work_2026/0074_Easterns-Auto-Group/'
+              '0074_2026-08_Easterns-Auto_Konetiq-Launch-Ads/hero.psd'))
+
     folders = {folder_key('S:/Clients/Ridgeline/Estate Planning/a.docx'): 64}
     check("a learned folder attributes a new file in it",
           attribute_block(_B(file_path='S:/Clients/Ridgeline/Estate Planning/brand-new.docx'),

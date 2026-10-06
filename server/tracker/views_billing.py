@@ -2058,6 +2058,12 @@ class TimesheetClioPreviewView(APIView):
         })
 
 
+def _qb_time_result(timesheet):
+    """The QuickBooks Time push approve() queued, read back like _clio_result."""
+    from tracker.integrations.qb_time.push import timesheet_push_status
+    return timesheet_push_status(timesheet)
+
+
 def _clio_result(timesheet):
     """What to tell the client about the Clio push queued by the transition.
 
@@ -2139,6 +2145,7 @@ class TimesheetSubmitView(APIView):
             'total_amount': float(timesheet.total_amount),
             'submitted_at': timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
             'clio': clio_result,
+            'qb_time': _qb_time_result(timesheet),
         })
 
 
@@ -2191,6 +2198,7 @@ class TimesheetApproveView(APIView):
             'billable_hours': float(timesheet.billable_hours),
             'total_amount': float(timesheet.total_amount),
             'clio': clio_result,
+            'qb_time': _qb_time_result(timesheet),
         })
 
 

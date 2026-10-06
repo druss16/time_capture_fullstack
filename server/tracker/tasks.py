@@ -1979,6 +1979,9 @@ from tracker.integrations.qb_time.sync import (  # noqa: F401
     sync_qb_time_full,
     sync_all_qb_time_orgs,
 )
+from tracker.integrations.qb_time.push import (  # noqa: F401
+    push_timesheet_to_qb_time_task,
+)
 
 # Matter attribution sweep. services/ is not a `tasks` module, so
 # autodiscover_tasks() never walks it — same gap that left sync_clio_full

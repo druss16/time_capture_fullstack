@@ -43,8 +43,11 @@ out in batches of 50 — a firm's whole week is a handful of requests.
 """
 import logging
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
+from celery import shared_task
+from django.db import connection
 from django.utils import timezone
 
 from tracker.integrations.qb_time.client import (
@@ -53,6 +56,7 @@ from tracker.integrations.qb_time.client import (
 from tracker.models import Integration
 from tracker.models_task_type_sets import (
     ExternalClientMapping, ExternalMatterMapping, ExternalStaffMapping, QbtPushedTimesheet,
+    QbtPushSettings, QbtTimesheetPush,
 )
 
 logger = logging.getLogger(__name__)
@@ -388,3 +392,163 @@ def execute_push(integration: Integration, plan: dict, *, api=None) -> dict:
         'totals': {'entries': len(pushed), 'minutes': total,
                    'hours': round(total / 60.0, 2), 'errors': len(errors)},
     }
+
+
+# Namespace for this push's Postgres advisory lock ("QT"), so it cannot collide
+# with any other advisory lock taken on the same integration id.
+_LOCK_NAMESPACE = 0x5154
+
+
+@contextmanager
+def push_lock(integration: Integration):
+    """
+    One push per firm at a time.
+
+    The delta is only safe run after run: two pushes planning at once both see
+    "QuickBooks Time holds nothing yet" and both write the hour. An approval and
+    an admin's manual send can overlap, so every write path takes this lock.
+
+    Blocking, not try-and-skip: a push is a few requests, and the second one
+    re-plans after the first has finished, so it nets to nothing instead of
+    being lost. Session-level so it holds across the push's autocommit writes;
+    the connection closing releases it if a worker dies mid-push.
+    """
+    if connection.vendor != 'postgresql':
+        yield
+        return
+    with connection.cursor() as cur:
+        cur.execute('SELECT pg_advisory_lock(%s, %s)', [_LOCK_NAMESPACE, integration.id])
+    try:
+        yield
+    finally:
+        with connection.cursor() as cur:
+            cur.execute('SELECT pg_advisory_unlock(%s, %s)', [_LOCK_NAMESPACE, integration.id])
+
+
+def push_trigger_for(integration) -> str:
+    """'approve' or 'off'. Never raises — an unmigrated table reads as off."""
+    if integration is None:
+        return 'off'
+    try:
+        row = QbtPushSettings.objects.filter(integration=integration).first()
+    except Exception as e:
+        logger.warning('QB Time push settings unreadable for integration %s: %s', integration.id, e)
+        return 'off'
+    return row.push_trigger if row else 'off'
+
+
+def push_timesheet(timesheet, integration: Integration, *, api=None) -> dict:
+    """
+    Send one person's week to QuickBooks Time. The approval path's entry point.
+
+    Exactly the admin panel's push narrowed to this timesheet's user and week,
+    so the two can never disagree about what a week contains.
+    """
+    week_end = timesheet.week_start + timedelta(days=6)
+    with push_lock(integration):
+        plan = build_push_plan(integration, timesheet.week_start, week_end,
+                               user_ids=[timesheet.user_id], api=api)
+        if not plan.get('entries'):
+            return {'pushed': [], 'reduced': [], 'errors': [], 'skipped': plan.get('skipped', []),
+                    'totals': {'entries': 0, 'minutes': 0, 'hours': 0.0, 'errors': 0}}
+        return execute_push(integration, plan, api=api)
+
+
+def _summary(result: dict) -> dict:
+    """What the timesheet screens show — counts plus the reasons, not raw rows."""
+    totals = result.get('totals') or {}
+    return {
+        'entries': totals.get('entries', 0),
+        'minutes': totals.get('minutes', 0),
+        'hours': totals.get('hours', 0.0),
+        'reduced': len(result.get('reduced') or []),
+        'errors': result.get('errors') or [],
+        'skipped': result.get('skipped') or [],
+    }
+
+
+@shared_task(name='tracker.push_timesheet_to_qb_time')
+def push_timesheet_to_qb_time_task(timesheet_id):
+    """
+    Send an approved timesheet to QuickBooks Time on a worker.
+
+    Safe to re-run: the push is a delta under push_lock, so a retry, a double
+    fire or an admin's manual send at the same moment cannot double the hours.
+    """
+    from tracker.integrations.qb_time.client import QBTimeAuthError
+    from tracker.models import Timesheet
+
+    try:
+        ts = Timesheet.objects.select_related('org').get(id=timesheet_id)
+    except Timesheet.DoesNotExist:
+        logger.error('QB Time push: timesheet %s not found', timesheet_id)
+        return {'error': 'timesheet_not_found'}
+
+    integration = Integration.objects.filter(
+        organization=ts.org, provider='qb_time', is_connected=True,
+    ).first()
+    if integration is None:
+        # Disconnected between approval and now — nothing to do, not a failure.
+        QbtTimesheetPush.objects.filter(timesheet_id=ts.id).delete()
+        return {'skipped': 'no_qb_time'}
+
+    def _record(status, result):
+        QbtTimesheetPush.objects.update_or_create(
+            integration=integration, timesheet_id=ts.id,
+            defaults={'status': status, 'result': result},
+        )
+
+    _record('running', {})
+    try:
+        result = _summary(push_timesheet(ts, integration))
+    except QBTimeAuthError as e:
+        _record('failed', {'error': f'QuickBooks Time needs reconnecting: {e}'[:300]})
+        return {'error': 'reconnect_required'}
+    except Exception as e:
+        logger.warning('QB Time push failed for timesheet %s: %s', ts.id, e, exc_info=True)
+        _record('failed', {'error': str(e)[:300]})
+        return {'error': str(e)[:300]}
+
+    _record('failed' if result['errors'] else 'done', result)
+    return result
+
+
+def queue_timesheet_push(timesheet) -> None:
+    """
+    Queue the push if this firm sends approved weeks to QuickBooks Time.
+
+    Called from Timesheet.approve() — the transition, not the endpoint, so an
+    owner's auto-approved week goes too. Never raises: QuickBooks Time holds a
+    copy of the approval, and a problem there must not undo it.
+    """
+    try:
+        integration = Integration.objects.filter(
+            organization_id=timesheet.org_id, provider='qb_time', is_connected=True,
+        ).first()
+        if push_trigger_for(integration) != 'approve':
+            return
+        QbtTimesheetPush.objects.update_or_create(
+            integration=integration, timesheet_id=timesheet.id,
+            defaults={'status': 'queued', 'result': {}},
+        )
+        push_timesheet_to_qb_time_task.delay(timesheet.id)
+    except Exception as e:
+        logger.warning('Could not queue QB Time push for timesheet %s: %s',
+                       timesheet.id, e, exc_info=True)
+        try:
+            QbtTimesheetPush.objects.filter(timesheet_id=timesheet.id).update(
+                status='failed', result={'error': f'Could not queue the push: {e}'[:300]},
+            )
+        except Exception:
+            pass
+
+
+def timesheet_push_status(timesheet) -> dict | None:
+    """The latest QB Time push for this timesheet, for the API response. None if never queued."""
+    try:
+        row = QbtTimesheetPush.objects.filter(timesheet_id=timesheet.id).order_by('-updated_at').first()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return {'status': row.status, 'queued': row.status == 'queued', **(row.result or {})}

@@ -145,7 +145,7 @@ def qb_time_push(request):
     from datetime import datetime
 
     from tracker.integrations.qb_time.client import QBTimeAuthError, QBTimeError
-    from tracker.integrations.qb_time.push import build_push_plan, execute_push
+    from tracker.integrations.qb_time.push import build_push_plan, execute_push, push_lock
 
     org, denied = _require_admin(request, 'send time to QuickBooks Time')
     if denied:
@@ -171,10 +171,14 @@ def qb_time_push(request):
     dry_run = bool(request.data.get('dry_run', False))
 
     try:
-        plan = build_push_plan(integration, start, end, user_ids=user_ids)
         if dry_run:
+            plan = build_push_plan(integration, start, end, user_ids=user_ids)
             return Response({'dry_run': True, **plan})
-        result = execute_push(integration, plan)
+        # Plan and write under the firm's push lock, so an approval sending the
+        # same week at this moment cannot also write the hours.
+        with push_lock(integration):
+            plan = build_push_plan(integration, start, end, user_ids=user_ids)
+            result = execute_push(integration, plan)
     except QBTimeAuthError as e:
         return error_response(f'{e}', 401, 'reconnect_required')
     except QBTimeError as e:
@@ -182,6 +186,33 @@ def qb_time_push(request):
         return error_response(f'QuickBooks Time push failed: {e}'[:300], 502, 'push_failed')
 
     return Response({'dry_run': False, 'window': plan['window'], **result})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_push_trigger(request):
+    """Choose whether approved timesheets go to QuickBooks Time on their own.
+
+    Body: {push_trigger: 'approve' | 'off'}. Off by default — see QbtPushSettings
+    for why connecting QuickBooks Time must not start writing timesheets.
+    """
+    from tracker.models_task_type_sets import QbtPushSettings
+
+    org, denied = _require_admin(request, 'change when time is sent to QuickBooks Time')
+    if denied:
+        return denied
+    integration, err = get_integration(org, 'qb_time')
+    if err:
+        return err
+
+    value = (request.data.get('push_trigger') or '').strip()
+    valid = [v for v, _ in QbtPushSettings.TRIGGER_CHOICES]
+    if value not in valid:
+        return error_response(f'push_trigger must be one of {valid}', 400)
+
+    QbtPushSettings.objects.update_or_create(integration=integration, defaults={'push_trigger': value})
+    logger.info('Org %s set QB Time push_trigger=%s by %s', org.id, value, request.user)
+    return Response({'push_trigger': value})
 
 
 @api_view(['POST'])

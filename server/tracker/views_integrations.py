@@ -1442,6 +1442,9 @@ def integrations_status(request):
                 integrations[provider]['last_synced'] = (
                     i.last_synced_at.isoformat() if i.last_synced_at else None
                 )
+                # Whether approved weeks go to QuickBooks Time on their own.
+                from tracker.integrations.qb_time.push import push_trigger_for
+                integrations[provider]['push_trigger'] = push_trigger_for(i)
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}
 

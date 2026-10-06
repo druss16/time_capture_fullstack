@@ -526,6 +526,71 @@ class QbtPushedTimesheet(models.Model):
         return f'QBT timesheet {self.timesheet_id}: {self.minutes}m on {self.day}'
 
 
+class QbtPushSettings(models.Model):
+    """
+    When a firm's approved weeks go to QuickBooks Time on their own.
+
+    Off until an admin turns it on. Unlike Clio — connected for the push — a
+    firm connects QuickBooks Time first to READ customers, projects and
+    estimates, so writing timesheets on approval has to be a choice made after
+    seeing the push preview, never a side effect of connecting.
+
+    Its own table, not a column on Integration or Organization: both are read
+    on requests that must keep working in the minutes between Render deploying
+    this code and the migration running (Clio's webhooks resolve Integration).
+    """
+    TRIGGER_CHOICES = [
+        ('off', 'Only when an admin sends it'),
+        ('approve', 'When a manager approves the timesheet'),
+    ]
+    integration = models.OneToOneField(
+        'tracker.Integration',
+        on_delete=models.CASCADE,
+        related_name='qbt_push_settings',
+    )
+    push_trigger = models.CharField(max_length=16, choices=TRIGGER_CHOICES, default='off')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'QBT push for integration {self.integration_id}: {self.push_trigger}'
+
+
+class QbtTimesheetPush(models.Model):
+    """
+    The outcome of sending one approved TimeTracker timesheet to QuickBooks Time.
+
+    The Clio equivalent lives on Timesheet (clio_push_status/result); this is a
+    table of its own for the deploy-before-migrate gap above. `timesheet_id` is
+    a plain integer rather than an FK so this table never joins Timesheet's
+    delete path.
+    """
+    STATUS_CHOICES = [
+        ('queued', 'Queued'),
+        ('running', 'Sending to QuickBooks Time'),
+        ('done', 'Sent'),
+        ('failed', 'Failed'),
+    ]
+    integration = models.ForeignKey(
+        'tracker.Integration',
+        on_delete=models.CASCADE,
+        related_name='qbt_timesheet_pushes',
+    )
+    timesheet_id = models.PositiveIntegerField()
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='queued')
+    result = models.JSONField(
+        default=dict, blank=True,
+        help_text='Counts, skips and errors from the last push, for display.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['integration', 'timesheet_id']]
+
+    def __str__(self):
+        return f'QBT push of timesheet {self.timesheet_id}: {self.status}'
+
+
 class CategoryTaskTypeMapping(models.Model):
     """
     Maps a canonical classifier category string to an org's TaskType.

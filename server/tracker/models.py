@@ -3521,6 +3521,9 @@ class Timesheet(models.Model):
             approved_by=approved_by
         )
         self._queue_clio_push('approve', force_conflicts)
+        # Same transition, same reason: an owner's auto-approved week must go too.
+        from tracker.integrations.qb_time.push import queue_timesheet_push
+        queue_timesheet_push(self)
         # An owner approving their own week is bookkeeping, not news.
         if approved_by and approved_by.id != self.user_id:
             self._queue_notify('approved', actor=approved_by)

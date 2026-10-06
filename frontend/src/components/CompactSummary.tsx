@@ -17,7 +17,7 @@
  *   amber = unassigned · mono = text captured off screen · sans = product voice ·
  *   every triage row leads with its minutes.
  */
-import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import { ChevronRight, ChevronDown, Check, X, Search, Scissors, GripVertical, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import { safeFetchJson } from "@/lib/api";
@@ -56,6 +56,10 @@ type Props = {
    *  re-renders the row the popover is pinned to and the choice is lost, so the
    *  parent holds its auto-refresh while this is true and reconciles after. */
   onInteractionChange?: (active: boolean) => void;
+  /** "Pick a project" rows, rendered last inside Needs you (a client has to be
+   *  settled before its project can be) — one queue, one count, one "done". */
+  projectRows?: ReactNode;
+  projectQueue?: { count: number; minutes: number };
 };
 
 function useSystemDark(): boolean {
@@ -91,11 +95,13 @@ type MoveState = {
 export default function CompactSummary({
   lanes, availableClients, availableCategories, busy,
   autoFiled, onConfirmRows, onHideRows, onRevertRows, onRefresh, showToast, onIgnoreMismatch,
-  onInteractionChange,
+  onInteractionChange, projectRows, projectQueue,
 }: Props) {
   const sysDark = useSystemDark();
   const terms = useTerminology();
   const { certain, needsYou } = lanes;
+  const needsCount = needsYou.count + (projectQueue?.count ?? 0);
+  const needsMinutes = needsYou.minutes + (projectQueue?.minutes ?? 0);
 
   const [certainOpen, setCertainOpen] = useState(false);
 
@@ -694,7 +700,7 @@ export default function CompactSummary({
           {...laneDnd("needsYou")}
           className={cn("overflow-hidden rounded-[15px] border bg-card shadow-[0_8px_22px_-16px_rgba(16,27,46,0.28)] transition-colors",
             dragLane && dragLane !== "needsYou" ? "border-primary/50" : "border-border/70")}>
-          <div className={cn("flex items-center gap-3 px-4 py-3.5", needsYou.count > 0 && "border-b border-border/70")}>
+          <div className={cn("flex items-center gap-3 px-4 py-3.5", needsCount > 0 && "border-b border-border/70")}>
             <span
               draggable
               onDragStart={() => setDragLane("needsYou")}
@@ -703,20 +709,22 @@ export default function CompactSummary({
               className="-ml-1 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing">
               <GripVertical className="h-3.5 w-3.5" />
             </span>
-            <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", needsYou.count > 0 ? "bg-amber-500" : "bg-primary")} />
+            <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", needsCount > 0 ? "bg-amber-500" : "bg-primary")} />
             <span className={cn("font-sans text-[15px] font-bold tracking-[-0.01em]",
-              needsYou.count > 0 ? "text-amber-600 dark:text-amber-400" : "text-primary")}>
+              needsCount > 0 ? "text-amber-600 dark:text-amber-400" : "text-primary")}>
               Needs you
             </span>
             <span className="font-mono text-[11.5px] text-muted-foreground">
-              {needsYou.count > 0
-                ? `${needsYou.count} ${needsYou.count === 1 ? "item" : "items"} · ${fmtMin(needsYou.minutes)}`
+              {needsCount > 0
+                ? `${needsCount} ${needsCount === 1 ? "item" : "items"} · ${fmtMin(needsMinutes)}`
                 : "nothing — you’re done"}
             </span>
           </div>
 
-          {needsYou.count > 0 && (
-            <div className="flex flex-col">
+          {/* Always mounted: the project rows load their own queue, so they must
+              render even when nothing else needs you. Empty, this is zero height. */}
+          <div className="flex flex-col">
+            {needsYou.count > 0 && (<>
               {/* "Which one?" first — the only rows where nothing can proceed
                   without an answer — then unassigned + pending, then mismatches. */}
               {needsYou.ambiguous.map((g) => (
@@ -768,8 +776,9 @@ export default function CompactSummary({
                   onKeep={() => onIgnoreMismatch([sc.block_id])}
                 />
               ))}
-            </div>
-          )}
+            </>)}
+            {projectRows}
+          </div>
         </section>
       </div>
 
@@ -980,8 +989,8 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
 
 // ── Shared row + pill styles (quiet + sharpened) ────────────────────────────
 // Inset hairline via ::before, hidden on the first row of the lane.
-const ROW = "group relative flex items-start gap-3 bg-card px-4 py-3.5 before:absolute before:left-[68px] before:right-4 before:top-0 before:h-px before:bg-border/60 before:content-[''] first:before:hidden";
-const CHIP = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-muted px-1 py-1 text-center font-mono text-[10px] font-bold tabular-nums text-muted-foreground";
+export const ROW = "group relative flex items-start gap-3 bg-card px-4 py-3.5 before:absolute before:left-[68px] before:right-4 before:top-0 before:h-px before:bg-border/60 before:content-[''] first:before:hidden";
+export const CHIP = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-muted px-1 py-1 text-center font-mono text-[10px] font-bold tabular-nums text-muted-foreground";
 const CHIP_AMBER = "mt-0.5 min-w-[40px] shrink-0 rounded-md bg-amber-500/[0.14] px-1 py-1 text-center font-mono text-[10px] font-bold tabular-nums text-amber-600 dark:text-amber-400";
 // Fixed widths so the action buttons line up into clean columns across rows.
 const PILL_TEAL = "inline-flex w-[212px] items-center justify-center gap-1 rounded-full border border-primary/50 bg-primary/[0.14] px-3 py-1.5 font-sans text-[11px] font-bold text-primary shadow-[0_1px_2px_rgba(16,27,46,0.05)] transition-colors hover:bg-primary/20 disabled:opacity-50";

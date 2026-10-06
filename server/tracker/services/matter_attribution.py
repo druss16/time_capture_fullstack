@@ -386,6 +386,63 @@ def folder_key(file_path: str) -> str:
     return _normalize('/'.join(folder_parts(file_path)))
 
 
+def _filed_with_path(org):
+    from tracker.models import Block
+    return (Block.objects
+            .filter(org=org, project__isnull=False)
+            .exclude(file_path=''))
+
+
+def _count_folders(rows, counts=None, sign=1, touched=None) -> dict:
+    """Fold (file_path, project_id) rows into folder -> {project_id: blocks}."""
+    from collections import Counter
+
+    counts = {} if counts is None else counts
+    # The same document recurs across dozens of blocks; key each path once.
+    for (file_path, project_id), n in Counter(rows).items():
+        key = folder_key(file_path)
+        if key:
+            per = counts.setdefault(key, {})
+            per[project_id] = per.get(project_id, 0) + sign * n
+            if touched is not None:
+                touched.add(key)
+    return counts
+
+
+def _folder_counts(org, since, exclude_block_ids=None) -> dict:
+    qs = _filed_with_path(org).filter(start__gte=since)
+    if exclude_block_ids:
+        qs = qs.exclude(id__in=exclude_block_ids)
+
+    # Paged by pk, not .iterator(): server-side cursors do not survive the Neon
+    # connection pooler, and this failed with InvalidCursorName on every run.
+    # The failure was invisible — full_sync catches attribution errors so a
+    # problem here cannot break a sync that worked — so matter attribution
+    # silently did nothing at all rather than reporting a fault. No GROUP BY
+    # either: sorting the paths costs the database more than counting them here.
+    def rows():
+        last = 0
+        while True:
+            page = list(qs.filter(pk__gt=last).order_by('pk')
+                        .values_list('pk', 'file_path', 'project_id')[:5000])
+            for _pk, file_path, project_id in page:
+                yield file_path, project_id
+            if len(page) < 5000:
+                return
+            last = page[-1][0]
+
+    return _count_folders(rows())
+
+
+def _index_from_counts(counts) -> dict:
+    out = {}
+    for key, per in counts.items():
+        live = [pid for pid, n in per.items() if n > 0]
+        if len(live) == 1:
+            out[key] = live[0]
+    return out
+
+
 def build_folder_index(org, since, exclude_block_ids=None) -> dict:
     """
     folder -> project_id, learned from blocks already attributed.
@@ -399,33 +456,162 @@ def build_folder_index(org, since, exclude_block_ids=None) -> dict:
     A folder that has pointed at two different matters is dropped. Shared
     folders exist ("Correspondence", "Admin") and guessing between them would
     bill the wrong client.
+
+    Reads every filed block since `since`. The scheduled sweep goes through
+    folder_index_for_org instead, which keeps this answer and moves it forward.
     """
-    from tracker.models import Block
+    return _index_from_counts(_folder_counts(org, since, exclude_block_ids))
 
-    qs = (
-        Block.objects
-        .filter(org=org, project__isnull=False, start__gte=since)
-        .exclude(file_path='')
-        .only('id', 'file_path', 'project_id')
-        .order_by('pk')          # keyset paging pages by pk; be explicit
+
+# ----------------------------------------------------------------------------
+# The learned-folder index, kept between ticks
+# ----------------------------------------------------------------------------
+#
+# The sweep runs every few minutes for every firm with projects, and rebuilding
+# the index read 180 days of filed blocks each time (1.5s for a 100k-block firm,
+# before network) to get an answer that had barely moved. So each worker process
+# keeps the per-folder counts, and each tick applies only what changed since the
+# last one, read from tracker_blockfilinglog (migration 0189). A trigger writes
+# that log, because project_id is set by a dozen paths and several are bulk
+# .update()s that no signal or auto_now ever sees.
+#
+# The result is exactly build_folder_index's, not an approximation of it:
+#   - a new filing ('a' in the log) adds one block to its folder;
+#   - the window's trailing edge subtracts blocks that have aged past it;
+#   - anything that could REMOVE a contribution ('o': re-file, unfile, path or
+#     start change, delete) rebuilds from scratch. Those are rare — new time
+#     is filed far more often than filed time is changed — so rebuilds are too.
+# Reads run in one REPEATABLE READ transaction and take exactly the log entries
+# the previous snapshot could not see, so out-of-order commits are never lost.
+#
+# In-process rather than the Django cache: the counts run to megabytes for a big
+# firm, and pickling them in and out each tick cost more than the advance.
+
+FOLDER_LOOKBACK_DAYS = 180
+# A full rebuild at least this often, as a backstop. Also bounds how far back an
+# advance may need the log, which is pruned after FILING_LOG_RETENTION.
+FOLDER_STATE_MAX_AGE = timedelta(hours=6)
+FILING_LOG_RETENTION = timedelta(hours=24)
+# More new filings than this in one tick and a rebuild is the cheaper read.
+FOLDER_MAX_DELTA = 20000
+
+# (org_id, lookback_days) -> {'snapshot', 'since', 'built_at', 'counts', 'index'}
+_FOLDER_STATE = {}
+
+
+def _advance_folder_state(cur, org, state, since, now) -> bool:
+    """
+    Move `state` forward to the current snapshot, in place. False when only a
+    rebuild is exact; the caller then discards the (possibly half-moved) state.
+    """
+    if state['since'] > since or now - state['built_at'] > FOLDER_STATE_MAX_AGE:
+        return False
+    prev_snapshot = state['snapshot']
+    cur.execute(
+        "SELECT block_id, kind FROM tracker_blockfilinglog"
+        " WHERE org_id = %s AND xid >= pg_snapshot_xmin(%s::pg_snapshot)"
+        " AND NOT pg_visible_in_snapshot(xid, %s::pg_snapshot)",
+        [org.id, prev_snapshot, prev_snapshot],
     )
-    if exclude_block_ids:
-        qs = qs.exclude(id__in=exclude_block_ids)
+    added = set()
+    for block_id, kind in cur.fetchall():
+        if kind != 'a':
+            return False
+        added.add(block_id)
+    if len(added) > FOLDER_MAX_DELTA:
+        return False
 
-    # keyset_iter, not .iterator(): server-side cursors do not survive the Neon
-    # connection pooler, and this failed with InvalidCursorName on every run.
-    # The failure was invisible — full_sync catches attribution errors so a
-    # problem here cannot break a sync that worked — so matter attribution
-    # silently did nothing at all rather than reporting a fault.
-    from tracker.utils.db_iter import keyset_iter
+    counts, touched = state['counts'], set()
+    ids = sorted(added)
+    for i in range(0, len(ids), 2000):
+        _count_folders(
+            _filed_with_path(org).filter(id__in=ids[i:i + 2000], start__gte=since)
+            .values_list('file_path', 'project_id'),
+            counts, touched=touched,
+        )
+    # The trailing edge. A block in this range that is not a new filing was
+    # counted last time with these same values: had they changed, its log
+    # entry would be an 'o' and we would be rebuilding.
+    _count_folders(
+        ((p, pid) for bid, p, pid in _filed_with_path(org)
+         .filter(start__gte=state['since'], start__lt=since)
+         .values_list('id', 'file_path', 'project_id') if bid not in added),
+        counts, sign=-1, touched=touched,
+    )
 
-    seen = defaultdict(set)
-    for b in keyset_iter(qs, chunk_size=2000):
-        key = folder_key(b.file_path)
-        if key:
-            seen[key].add(b.project_id)
+    index = state['index']
+    for key in touched:
+        per = {pid: n for pid, n in counts[key].items() if n}
+        if any(n < 0 for n in per.values()):
+            logger.warning('folder index for org %s went negative at %r; rebuilding', org.id, key)
+            return False
+        if per:
+            counts[key] = per
+        else:
+            del counts[key]
+        if len(per) == 1:
+            index[key] = next(iter(per))
+        else:
+            index.pop(key, None)
+    return True
 
-    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+def folder_index_for_org(org, lookback_days=FOLDER_LOOKBACK_DAYS, *, stats=None) -> dict:
+    """
+    build_folder_index(org, now - lookback_days), at the cost of what changed
+    since the last call rather than of the whole window.
+
+    Falls back to the full build when the change log is not there (migration
+    0189 not applied yet — Render ships code before migrations), off Postgres,
+    or inside a caller's transaction, where this cannot open its own snapshot.
+    """
+    from django.db import DatabaseError, connection, transaction
+
+    now = timezone.now()
+    since = now - timedelta(days=lookback_days)
+    if connection.vendor != 'postgresql' or connection.in_atomic_block:
+        return build_folder_index(org, since)
+
+    # Popped, not read: a failed advance must not leave half-moved counts
+    # behind, and a concurrent caller should rebuild rather than share them.
+    state = _FOLDER_STATE.pop((org.id, lookback_days), None)
+    mode = 'advanced'
+    try:
+        with transaction.atomic():
+            with connection.cursor() as cur:
+                cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                cur.execute("SELECT to_regclass('tracker_blockfilinglog') IS NOT NULL,"
+                            " pg_current_snapshot()::text")
+                has_log, snapshot = cur.fetchone()
+                if not has_log:
+                    return build_folder_index(org, since)
+                if state is None or not _advance_folder_state(cur, org, state, since, now):
+                    mode = 'rebuilt'
+                    counts = _folder_counts(org, since)
+                    state = {'built_at': now, 'counts': counts,
+                             'index': _index_from_counts(counts)}
+    except DatabaseError as e:
+        logger.warning('folder index state unavailable for org %s (%s); full build', org.id, e)
+        return build_folder_index(org, since)
+
+    state['snapshot'], state['since'] = snapshot, since
+    _FOLDER_STATE[(org.id, lookback_days)] = state
+    if stats is not None:
+        stats['folder_index'] = mode
+    return dict(state['index'])
+
+
+def prune_filing_log() -> int:
+    """Drop change-log entries no kept state can still need."""
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute("SELECT to_regclass('tracker_blockfilinglog') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            return 0
+        cur.execute("DELETE FROM tracker_blockfilinglog WHERE at < %s",
+                    [timezone.now() - FILING_LOG_RETENTION])
+        return cur.rowcount
 
 
 SIBLING_LOOKBACK_DAYS = 180
@@ -679,7 +865,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
 
     # Learned folders reach further back than the blocks being attributed: a
     # folder settled months ago should still teach today's work.
-    folder_index = build_folder_index(org, timezone.now() - timedelta(days=max(days, 180)))
+    folder_index = folder_index_for_org(org, max(days, FOLDER_LOOKBACK_DAYS), stats=stats)
 
     # Temporal inference is opt-in per org, reusing the flag that already gates
     # Stage Sandwich for clients — the same trade, and the same firms who want it.
@@ -883,6 +1069,10 @@ def attribute_matters_recent(days: int = 2) -> dict:
         .values_list('id', flat=True)
     )
     totals = {'orgs': 0, 'scanned': 0, 'attributed': 0, 'client_corrected': 0}
+    try:
+        totals['filing_log_pruned'] = prune_filing_log()
+    except Exception as e:
+        logger.warning('Filing log prune failed: %s', e)
     for org in Organization.objects.filter(id__in=list(org_ids)):
         try:
             s = attribute_matters_for_org(org, days=days)

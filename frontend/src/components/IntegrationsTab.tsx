@@ -69,7 +69,7 @@ interface ProviderStatus {
   region?: string | null;     // Clio — tokens are not portable across regions
   last_sync_status?: string | null;  // Clio: pending / success / partial / failed
   last_sync_error?: string | null;
-  push_trigger?: 'approve' | 'submit' | null;  // Clio — when time is written
+  push_trigger?: 'approve' | 'submit' | 'off' | null;  // Clio / QB Time — when time is written
   // Clio — are new clients arriving on their own, or only on the hourly sweep?
   live_sync?: 'active' | 'partial' | 'pending' | 'failed' | 'off' | null;
   live_sync_error?: string | null;
@@ -1122,7 +1122,8 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
       )}
 
       {qbTimeStatus.connected && (
-        <QbTimePushPanel apiBase={API_BASE} onSuccess={onSuccess} onError={onError} />
+        <QbTimePushPanel apiBase={API_BASE} pushTrigger={qbTimeStatus.push_trigger}
+                         onSuccess={onSuccess} onError={onError} />
       )}
 
       {/* Import Clients Modal */}

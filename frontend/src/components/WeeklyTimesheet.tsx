@@ -618,6 +618,7 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
   // only has manual Clio entries for work we never saw: court, calls, travel.
   const [forcedConflicts, setForcedConflicts] = useState<string[]>([]);
   const [clioResult, setClioResult] = useState<any | null>(null);
+  const [qbTimeResult, setQbTimeResult] = useState<any | null>(null);
   const [search, setSearch]                 = useState('');
   const [view, setView]                     = useState<ViewMode>('summary');
   const [expanded, setExpanded]             = useState<Set<string>>(new Set());
@@ -1002,6 +1003,9 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
       // Confirm what actually reached Clio. The submit succeeded either way —
       // this only reports the copy that went to billing.
       if (res?.clio) setClioResult(res.clio);
+      // Only present when the submit auto-approved (an owner's own week) and
+      // the firm sends approved weeks to QuickBooks Time.
+      setQbTimeResult(res?.qb_time || null);
       fetchTimesheet();
       setOutstandingTick((t) => t + 1);
     } catch (err: any) {
@@ -1399,6 +1403,31 @@ const WeeklyTimesheet: React.FC<WeeklyTimesheetProps> = ({ submission }) => {
                       : clioResult.skipped?.length
                         ? `${clioResult.entries ?? 0} matter${clioResult.entries !== 1 ? 's' : ''} updated. ${clioResult.skipped.length} item${clioResult.skipped.length !== 1 ? 's' : ''} were not sent — open the timesheet to see why.`
                         : `${clioResult.entries ?? 0} matter${clioResult.entries !== 1 ? 's' : ''} updated in Clio.`
+              }
+            />
+          )}
+          {qbTimeResult && (
+            <Banner
+              type={qbTimeResult.error || qbTimeResult.errors?.length || qbTimeResult.status === 'failed' ? 'error' : 'info'}
+              title={
+                qbTimeResult.error || qbTimeResult.status === 'failed'
+                  ? 'Approved — but QuickBooks Time did not accept everything'
+                  : qbTimeResult.status === 'queued' || qbTimeResult.status === 'running'
+                    ? 'Approved — sending to QuickBooks Time'
+                    : qbTimeResult.entries > 0
+                      ? `Sent ${formatMinutes(qbTimeResult.minutes ?? 0)} to QuickBooks Time`
+                      : 'Approved — nothing new for QuickBooks Time'
+              }
+              message={
+                qbTimeResult.error
+                  ? `Your timesheet is approved. QuickBooks Time reported: ${qbTimeResult.error}`
+                  : qbTimeResult.errors?.length
+                    ? `Your timesheet is approved. ${qbTimeResult.errors.length} timesheet${qbTimeResult.errors.length === 1 ? ' was' : 's were'} refused by QuickBooks Time.`
+                    : qbTimeResult.status === 'queued' || qbTimeResult.status === 'running'
+                      ? 'Your time is being sent in the background.'
+                      : qbTimeResult.skipped?.length
+                        ? `${qbTimeResult.skipped.length} item${qbTimeResult.skipped.length !== 1 ? 's were' : ' was'} not sent — an admin can see why under Settings › Integrations.`
+                        : 'Your week is in QuickBooks Time.'
               }
             />
           )}

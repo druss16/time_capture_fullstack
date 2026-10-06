@@ -15,11 +15,17 @@ from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
-from tracker.integrations.qb_time.client import QBTimeError, row_error, row_ok, row_results
+from tracker.integrations.qb_time import push as push_mod
+from tracker.integrations.qb_time.client import (
+    QBTimeAuthError, QBTimeError, row_error, row_ok, row_results,
+)
 from tracker.integrations.qb_time.push import build_push_plan, decide_entry, execute_push
-from tracker.models import Block, Client, Integration, Organization, OrganizationMembership, Project
+from tracker.models import (
+    Block, Client, Integration, Organization, OrganizationMembership, Project, Timesheet,
+)
 from tracker.models_task_type_sets import (
     ExternalClientMapping, ExternalMatterMapping, ExternalStaffMapping, QbtPushedTimesheet,
+    QbtPushSettings, QbtTimesheetPush,
 )
 
 User = get_user_model()
@@ -283,3 +289,152 @@ class PushEndpointTests(TestCase):
         r = c.post('/api/integrations/qb_time/push/',
                    {'start_date': '2026-09-28', 'end_date': '2026-10-04'}, format='json')
         self.assertEqual(r.status_code, 403)
+
+
+WEEK = date(2026, 9, 28)  # Monday of DAY's week
+
+
+class ApprovalPushTests(TestCase):
+    """Approving a timesheet sends that person's week, when the firm has opted in."""
+
+    block = PushTests.block
+
+    def setUp(self):
+        PushTests.setUp(self)
+        self.manager = User.objects.create_user('mgr', email='mgr@mtc.test', password='x')
+        OrganizationMembership.objects.create(user=self.manager, organization=self.org, role='manager')
+        self.ts = Timesheet.objects.create(org=self.org, user=self.user, week_start=WEEK,
+                                           status='submitted')
+        # Neither neighbour on the transition is under test, and both reach a broker.
+        for name in ('_queue_notify', '_queue_clio_push'):
+            p = mock.patch.object(Timesheet, name)
+            p.start()
+            self.addCleanup(p.stop)
+        # QuickBooks Time is the fake; the worker runs inline.
+        p = mock.patch.object(push_mod, 'QBTimeClient', return_value=self.api)
+        p.start()
+        self.addCleanup(p.stop)
+        self.delay = mock.patch.object(
+            push_mod.push_timesheet_to_qb_time_task, 'delay',
+            side_effect=lambda tid: push_mod.push_timesheet_to_qb_time_task(tid)).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def turn_on(self):
+        QbtPushSettings.objects.create(integration=self.integration, push_trigger='approve')
+
+    def test_off_by_default_so_connecting_never_writes(self):
+        self.block(60, self.chevy)
+        self.ts.approve(approved_by=self.manager)
+        self.delay.assert_not_called()
+        self.assertFalse(QbtTimesheetPush.objects.exists())
+        self.assertEqual(self.api.timesheets, {})
+
+    def test_approve_sends_the_week(self):
+        self.turn_on()
+        self.block(60, self.chevy)
+        self.block(30, self.ford, self.launch)
+        self.ts.approve(approved_by=self.manager)
+
+        self.assertEqual(self.api.total(55, 2), 60)
+        self.assertEqual(self.api.total(55, 11), 30)
+        row = QbtTimesheetPush.objects.get(timesheet_id=self.ts.id)
+        self.assertEqual(row.status, 'done')
+        self.assertEqual((row.result['entries'], row.result['minutes']), (2, 90))
+
+    def test_only_this_person_and_week(self):
+        self.turn_on()
+        other = User.objects.create_user('bob', email='bob@mtc.test', password='x')
+        OrganizationMembership.objects.create(user=other, organization=self.org, role='member')
+        ExternalStaffMapping.objects.create(integration=self.integration, user=other, external_id='66')
+        self.block(60, self.chevy)
+        self.block(45, self.chevy, user=other)
+        self.block(20, self.chevy, at=T0 + timedelta(days=7))  # next week
+        self.ts.approve(approved_by=self.manager)
+
+        self.assertEqual(self.api.total(55, 2), 60)
+        self.assertEqual(self.api.total(66, 2), 0)
+        self.assertEqual(self.api.total(55, 2, day=DAY + timedelta(days=7)), 0)
+
+    def test_rerun_after_approval_adds_nothing(self):
+        self.turn_on()
+        self.block(60, self.chevy)
+        self.ts.approve(approved_by=self.manager)
+        result = push_mod.push_timesheet_to_qb_time_task(self.ts.id)
+        self.assertEqual(result['entries'], 0)
+        self.assertEqual(self.api.total(55, 2), 60)
+
+    def test_owner_auto_approve_sends_too(self):
+        self.turn_on()
+        self.block(60, self.chevy)
+        self.ts.status = 'draft'
+        self.ts.save()
+        with mock.patch.object(Timesheet, '_holds_misfiled_time', return_value=False):
+            self.ts.submit()
+        self.ts.refresh_from_db()
+        self.assertEqual(self.ts.status, 'approved')
+        self.assertEqual(self.api.total(55, 2), 60)
+
+    def test_qb_time_failure_never_undoes_the_approval(self):
+        self.turn_on()
+        self.block(60, self.chevy)
+        with mock.patch.object(self.api, 'paginated', side_effect=QBTimeAuthError('token revoked')):
+            self.ts.approve(approved_by=self.manager)
+        self.ts.refresh_from_db()
+        self.assertEqual(self.ts.status, 'approved')
+        row = QbtTimesheetPush.objects.get(timesheet_id=self.ts.id)
+        self.assertEqual(row.status, 'failed')
+        self.assertIn('reconnect', row.result['error'])
+
+    def test_queue_failure_never_undoes_the_approval(self):
+        self.turn_on()
+        self.delay.side_effect = RuntimeError('broker down')
+        self.ts.approve(approved_by=self.manager)
+        self.ts.refresh_from_db()
+        self.assertEqual(self.ts.status, 'approved')
+        self.assertEqual(QbtTimesheetPush.objects.get(timesheet_id=self.ts.id).status, 'failed')
+
+    def test_disconnected_is_not_a_failure(self):
+        self.turn_on()
+        Integration.objects.filter(id=self.integration.id).update(is_connected=False)
+        self.ts.approve(approved_by=self.manager)
+        self.delay.assert_not_called()
+
+    def test_approve_endpoint_reports_the_push(self):
+        self.turn_on()
+        self.block(60, self.chevy)
+        c = APIClient()
+        c.force_authenticate(self.manager)
+        r = c.post(f'/api/billing/timesheets/{self.ts.id}/approve/', {}, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data['qb_time']['status'], 'done')
+        self.assertEqual(r.data['qb_time']['minutes'], 60)
+
+
+class PushTriggerEndpointTests(TestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(name='MTC', slug='mtc-trig', industry_type='marketing')
+        self.owner = User.objects.create_user('own', email='own@mtc.test', password='x')
+        OrganizationMembership.objects.create(user=self.owner, organization=self.org, role='owner')
+        self.integration = Integration.objects.create(
+            organization=self.org, provider='qb_time', is_connected=True, access_token='t')
+        self.api = APIClient()
+        self.api.force_authenticate(self.owner)
+
+    def test_admin_turns_it_on_and_off(self):
+        self.assertEqual(push_mod.push_trigger_for(self.integration), 'off')
+        url = '/api/integrations/qb_time/push-trigger/'
+        r = self.api.post(url, {'push_trigger': 'approve'}, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(push_mod.push_trigger_for(self.integration), 'approve')
+        self.api.post(url, {'push_trigger': 'off'}, format='json')
+        self.assertEqual(push_mod.push_trigger_for(self.integration), 'off')
+        self.assertEqual(self.api.post(url, {'push_trigger': 'submit'}, format='json').status_code, 400)
+
+    def test_member_cannot_change_it(self):
+        member = User.objects.create_user('mem', email='mem@mtc.test', password='x')
+        OrganizationMembership.objects.create(user=member, organization=self.org, role='member')
+        c = APIClient()
+        c.force_authenticate(member)
+        r = c.post('/api/integrations/qb_time/push-trigger/', {'push_trigger': 'approve'}, format='json')
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(push_mod.push_trigger_for(self.integration), 'off')

@@ -6,7 +6,7 @@
 // has seen the number. Sending re-plans server-side, so time someone clocked in
 // QuickBooks Time between preview and send is netted rather than duplicated.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock, Loader2, Send } from 'lucide-react';
 import { safeFetchJson } from '@/lib/api';
 import {
@@ -86,13 +86,41 @@ function groupSkips(skips: Skip[]) {
   return [...out.entries()];
 }
 
+type PushTrigger = 'off' | 'approve';
+
 interface Props {
   apiBase: string;
+  /** From the integration status; 'off' until an admin turns it on. */
+  pushTrigger?: PushTrigger | string | null | undefined;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }
 
-const QbTimePushPanel: React.FC<Props> = ({ apiBase, onSuccess, onError }) => {
+const QbTimePushPanel: React.FC<Props> = ({ apiBase, pushTrigger, onSuccess, onError }) => {
+  const [trigger, setTrigger] = useState<PushTrigger>(pushTrigger === 'approve' ? 'approve' : 'off');
+  const [savingTrigger, setSavingTrigger] = useState(false);
+  useEffect(() => { setTrigger(pushTrigger === 'approve' ? 'approve' : 'off'); }, [pushTrigger]);
+
+  const changeTrigger = async (value: PushTrigger) => {
+    const before = trigger;
+    setTrigger(value);
+    setSavingTrigger(true);
+    try {
+      await safeFetchJson(`${apiBase}/integrations/qb_time/push-trigger/`, {
+        method: 'POST',
+        body: JSON.stringify({ push_trigger: value }),
+      });
+      onSuccess(value === 'approve'
+        ? 'Approved timesheets will now be sent to QuickBooks Time.'
+        : 'QuickBooks Time will only receive time you send from here.');
+    } catch (err: any) {
+      setTrigger(before);
+      onError(err?.message || 'Could not change when time is sent to QuickBooks Time');
+    } finally {
+      setSavingTrigger(false);
+    }
+  };
+
   const [[start, end], setRange] = useState<[string, string]>(lastWeek);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [result, setResult] = useState<PlanResponse | null>(null);
@@ -145,6 +173,28 @@ const QbTimePushPanel: React.FC<Props> = ({ apiBase, onSuccess, onError }) => {
       title="Send time to QuickBooks Time"
       sub="Confirmed time becomes timesheets on each client's or project's jobcode. Hours already in QuickBooks Time for the same person, jobcode and day are subtracted, so sending twice never doubles anything."
     >
+      {/* Off by default: the firm connected QuickBooks Time to read projects,
+          and should see a preview land correctly before approvals start writing. */}
+      <div className="mb-4 rounded-xl border border-slate-200/60 bg-white/70 p-3">
+        <label className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+          <span className="font-semibold text-slate-600">Send approved timesheets</span>
+          <select
+            value={trigger}
+            disabled={savingTrigger}
+            onChange={(e) => changeTrigger(e.target.value as PushTrigger)}
+            className={`${inputClass} w-auto`}
+          >
+            <option value="off">only when sent from here</option>
+            <option value="approve">automatically, when a timesheet is approved</option>
+          </select>
+        </label>
+        <p className="mt-2 text-xs text-slate-500">
+          {trigger === 'approve'
+            ? 'Each approved week goes to QuickBooks Time on its own, for that person and week only. Preview a week below first to check it lands where you expect.'
+            : 'Nothing is written to QuickBooks Time unless you send it below. Turn this on once a preview looks right.'}
+        </p>
+      </div>
+
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label className={labelClass} htmlFor="qbt-push-start">From</label>

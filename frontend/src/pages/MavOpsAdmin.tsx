@@ -7,6 +7,7 @@ import {
   ExplainBlockModal,
 } from "./MavOpsAdminRules";
 import MavOpsCompanyReview from "./MavOpsCompanyReview";
+import MavOpsEmailOutbox from "./MavOpsEmailOutbox";
 
 const API = "https://timetracker-api-k375.onrender.com/api";
 const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49.99, trial: 0, none: 0 };
@@ -3179,7 +3180,7 @@ export default function MavOpsAdmin() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("mavops_admin") === "1");
   const [token, setToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [tokenInput, setTokenInput] = useState(() => localStorage.getItem("auth_token") || "");
-  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping" | "agent-presence">("orgs");
+  const [tab, setTab] = useState<"orgs" | "devices" | "logs" | "errors" | "rules" | "mismatches" | "accuracy" | "daily-review" | "qbo-mapping" | "agent-presence" | "email">("orgs");
 
   // The Daily Review tab has two jobs: WORK the firm's queue ("Needs You" —
   // every user's pending picks in one actionable list) or AUDIT what was
@@ -3488,8 +3489,8 @@ export default function MavOpsAdmin() {
     return [d.machine_name, d.user, d.org_name].some(s => s.toLowerCase().includes(search.toLowerCase()));
   });
 
-  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "accuracy", "daily-review", "qbo-mapping", "agent-presence"] as const;
-  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping", "agent-presence": "Agent Presence" };
+  const TABS = ["orgs", "devices", "logs", "errors", "rules", "mismatches", "accuracy", "daily-review", "qbo-mapping", "agent-presence", "email"] as const;
+  const TAB_LABELS: Record<string, string> = { "daily-review": "Daily Review", "qbo-mapping": "QBO Mapping", "agent-presence": "Agent Presence", "email": "Email" };
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -4074,6 +4075,10 @@ export default function MavOpsAdmin() {
 
         {tab === "agent-presence" && (
           <AgentPresenceTab apiFetch={apiFetch} flash={flash} orgs={orgs} />
+        )}
+
+        {tab === "email" && (
+          <MavOpsEmailOutbox apiFetch={apiFetch} flash={flash} />
         )}
 
         {/* ══ DAILY REVIEW — work the queue, or audit what was booked ══ */}

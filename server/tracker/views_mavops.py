@@ -2434,3 +2434,199 @@ def mavops_ai_agent_report_flag(request):
     ids = enabled_org_ids()
     names = dict(Organization.objects.filter(pk__in=ids).values_list('pk', 'name'))
     return Response({'orgs': [{'id': i, 'name': names.get(i, f'org {i}')} for i in ids]})
+
+
+# ── Email outbox — hold, preview and release transactional email ─────────────
+
+def _email_row(e, *, full=False):
+    row = {
+        'id': e.id,
+        'type': e.email_type,
+        'to': e.to_email,
+        'subject': e.subject,
+        'org_id': e.org_id,
+        'org_name': e.org_name,
+        'status': e.status,
+        'sent_to': e.sent_to,
+        'sent_at': e.sent_at.isoformat() if e.sent_at else None,
+        'error': e.error,
+        'created_at': e.created_at.isoformat(),
+    }
+    if full:
+        row.update({
+            'from_email': e.from_email,
+            'from_name': e.from_name,
+            'reply_to': e.reply_to,
+            'html': e.html_content,
+            'plain': e.plain_content,
+            'categories': e.categories,
+        })
+    return row
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_outbox(request):
+    """
+    GET /api/mavops/email/?status=held&type=weekly_summary&limit=200
+
+    The global send mode, every email type with whether it is live and how many
+    are held, and the outbox itself (newest first, without bodies).
+    """
+    from django.conf import settings as dj_settings
+    from tracker.models import OutboundEmail
+    from tracker.services import email_outbox as outbox
+
+    try:
+        cfg = outbox.read_settings()
+    except Exception as e:
+        return Response({'error': f'Email outbox not available yet (migration pending?): {e}'}, status=503)
+
+    held = dict(OutboundEmail.objects.filter(status='held')
+                .order_by().values_list('email_type').annotate(n=Count('id')))
+    known = {k for k, _, _ in outbox.EMAIL_TYPES}
+    types = [{'key': k, 'label': label, 'description': desc,
+              'live': k in cfg['live_types'], 'held': held.get(k, 0)}
+             for k, label, desc in outbox.EMAIL_TYPES]
+    types += [{'key': k, 'label': k, 'description': '', 'live': k in cfg['live_types'], 'held': n}
+              for k, n in held.items() if k not in known]
+
+    qs = OutboundEmail.objects.all()
+    status = request.query_params.get('status')
+    if status:
+        qs = qs.filter(status=status)
+    email_type = request.query_params.get('type')
+    if email_type:
+        qs = qs.filter(email_type=email_type)
+    try:
+        limit = max(1, min(int(request.query_params.get('limit', 200)), 500))
+    except ValueError:
+        limit = 200
+    counts = dict(OutboundEmail.objects.order_by().values_list('status').annotate(n=Count('id')))
+
+    return Response({
+        'settings': {**cfg, 'default_redirect_to': getattr(dj_settings, 'DEFAULT_REPLY_TO_EMAIL', '')},
+        'sendgrid_configured': bool(getattr(dj_settings, 'SENDGRID_API_KEY', None)),
+        'types': types,
+        'counts': counts,
+        'emails': [_email_row(e) for e in qs.defer('html_content', 'plain_content')[:limit]],
+    })
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_settings(request):
+    """
+    POST /api/mavops/email/settings/  body: any of
+      {"mode": "hold"|"redirect"|"live", "redirect_to": "me@x", "live_types": ["password_reset"]}
+    """
+    from tracker.services import email_outbox as outbox
+    d = request.data if isinstance(request.data, dict) else {}
+    live_types = d.get('live_types')
+    if live_types is not None and not isinstance(live_types, list):
+        return Response({'error': 'live_types must be a list'}, status=400)
+    redirect_to = d.get('redirect_to')
+    if redirect_to:
+        from django.core.validators import validate_email
+        from django.core.exceptions import ValidationError
+        try:
+            validate_email(redirect_to.strip())
+        except ValidationError:
+            return Response({'error': f'{redirect_to!r} is not an email address'}, status=400)
+    try:
+        cfg = outbox.save_settings(mode=d.get('mode'), redirect_to=redirect_to,
+                                   live_types=live_types, user=request.user)
+    except ValueError as e:
+        return Response({'error': str(e)}, status=400)
+    logger.info("[MAVOPS] email settings -> mode=%s live_types=%s by %s",
+                cfg['mode'], cfg['live_types'], request.user.email)
+    return Response({'ok': True, 'settings': cfg})
+
+
+@api_view(['GET'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_detail(request, email_id):
+    """GET /api/mavops/email/<id>/ — one email with its HTML, for the preview."""
+    from tracker.models import OutboundEmail
+    e = OutboundEmail.objects.filter(pk=email_id).first()
+    if e is None:
+        return Response({'error': 'Not found'}, status=404)
+    return Response(_email_row(e, full=True))
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_action(request, email_id, action):
+    """
+    POST /api/mavops/email/<id>/release/   send it to the real recipient
+    POST /api/mavops/email/<id>/test/      send a copy to {"to"}, else the test inbox, else me
+    POST /api/mavops/email/<id>/discard/   never send it
+    """
+    from tracker.models import OutboundEmail
+    from tracker.services import email_outbox as outbox
+    e = OutboundEmail.objects.filter(pk=email_id).first()
+    if e is None:
+        return Response({'error': 'Not found'}, status=404)
+    try:
+        if action == 'release':
+            ok = outbox.release(e, user=request.user)
+        elif action == 'test':
+            to = ((request.data.get('to') if isinstance(request.data, dict) else None)
+                  or outbox.read_settings()['redirect_to'] or request.user.email)
+            ok = outbox.send_test(e, to, user=request.user)
+        elif action == 'discard':
+            outbox.discard(e, user=request.user)
+            ok = True
+        else:
+            return Response({'error': f'Unknown action {action!r}'}, status=400)
+    except ValueError as err:
+        return Response({'error': str(err)}, status=400)
+    logger.info("[MAVOPS] email #%s %s by %s -> %s", e.id, action, request.user.email, ok)
+    e.refresh_from_db()
+    body = {'ok': ok, 'email': _email_row(e)}
+    if not ok:
+        body['error'] = e.error or 'SendGrid did not accept the email'
+    return Response(body, status=200 if ok else 502)
+
+
+BULK_EMAIL_LIMIT = 50
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_email_bulk(request):
+    """
+    POST /api/mavops/email/bulk/  {"action": "release"|"discard", "ids": [...]}
+    Release sends one at a time, so it is capped at BULK_EMAIL_LIMIT per call.
+    """
+    from tracker.models import OutboundEmail
+    from tracker.services import email_outbox as outbox
+    d = request.data if isinstance(request.data, dict) else {}
+    action = d.get('action')
+    if action not in ('release', 'discard'):
+        return Response({'error': 'action must be release or discard'}, status=400)
+    try:
+        ids = [int(i) for i in (d.get('ids') or [])]
+    except (TypeError, ValueError):
+        return Response({'error': 'ids must be numbers'}, status=400)
+    if action == 'release' and len(ids) > BULK_EMAIL_LIMIT:
+        return Response({'error': f'Release at most {BULK_EMAIL_LIMIT} at a time'}, status=400)
+
+    done, failed = [], []
+    for e in OutboundEmail.objects.filter(pk__in=ids, status__in=outbox.RELEASABLE):
+        if action == 'discard':
+            outbox.discard(e, user=request.user)
+            done.append(e.id)
+        elif outbox.release(e, user=request.user):
+            done.append(e.id)
+        else:
+            failed.append(e.id)
+    skipped = sorted(set(ids) - set(done) - set(failed))
+    logger.info("[MAVOPS] email bulk %s by %s: %d done, %d failed",
+                action, request.user.email, len(done), len(failed))
+    return Response({'ok': not failed, 'done': done, 'failed': failed, 'skipped': skipped})

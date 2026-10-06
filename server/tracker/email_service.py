@@ -28,28 +28,58 @@ def send_email(
     categories: list = None,
 ):
     """
-    Send a transactional email via SendGrid REST API.
+    Queue a transactional email. Every email lands in the outbox
+    (services/email_outbox.py); MavOps Admin's Email tab decides whether it is
+    held, sent to a test inbox, or sent for real.
 
     Returns:
-        True if sent successfully, False otherwise
+        True if the email was accepted (sent, redirected, held for review, or
+        dropped as a duplicate of one just queued), False if it failed
+    """
+    from tracker.services.email_outbox import dispatch
+
+    return dispatch(
+        to_email=to_email,
+        subject=subject,
+        html_content=html_content,
+        plain_content=plain_content or _strip_html(html_content),
+        from_email=from_email or getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai'),
+        from_name=from_name,
+        reply_to=reply_to or getattr(settings, 'DEFAULT_REPLY_TO_EMAIL', 'dan@mavops.ai'),
+        categories=categories or [],
+    )
+
+
+def post_to_sendgrid(
+    to_email: str,
+    subject: str,
+    html_content: str,
+    plain_content: str,
+    from_email: str,
+    from_name: str,
+    reply_to: str = None,
+    categories: list = None,
+):
+    """
+    The one place that talks to SendGrid. Only the outbox calls this — anything
+    else would bypass MavOps' hold.
+
+    Returns:
+        (ok, http_status or None, error text)
     """
     import requests as req
 
     api_key = getattr(settings, 'SENDGRID_API_KEY', None)
     if not api_key:
         logger.error("[EMAIL] SENDGRID_API_KEY not configured")
-        return False
-
-    from_email = from_email or getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@mavops.ai')
-    reply_to = reply_to or getattr(settings, 'DEFAULT_REPLY_TO_EMAIL', 'dan@mavops.ai')
-    plain_text = plain_content or _strip_html(html_content)
+        return False, None, "SENDGRID_API_KEY not configured"
 
     payload = {
         "personalizations": [{"to": [{"email": to_email}]}],
         "from": {"email": from_email, "name": from_name},
         "subject": subject,
         "content": [
-            {"type": "text/plain", "value": plain_text},
+            {"type": "text/plain", "value": plain_content},
             {"type": "text/html", "value": html_content},
         ],
     }
@@ -71,12 +101,13 @@ def send_email(
             timeout=10,
         )
         logger.info(f"[EMAIL] Sent to {to_email} - status: {resp.status_code} - subject: {subject[:50]}")
-        if resp.status_code not in (200, 201, 202):
+        ok = resp.status_code in (200, 201, 202)
+        if not ok:
             logger.error(f"[EMAIL] SendGrid error: {resp.text}")
-        return resp.status_code in (200, 201, 202)
+        return ok, resp.status_code, ('' if ok else resp.text[:2000])
     except Exception as e:
         logger.error(f"[EMAIL] Failed to send to {to_email}: {e}")
-        return False
+        return False, None, str(e)[:2000]
 
 
 def _strip_html(html: str) -> str:

@@ -300,9 +300,26 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   useEffect(() => {
     if (refreshTick !== firstTick.current) sync();
   }, [refreshTick, sync]);
-  useEffect(() => { onQueue?.(rows.length, total); }, [rows.length, total, onQueue]);
+  // One line per (client, title): the same page or file captured in two
+  // blocks ("TimeTracker by Mavops — … Chrome", 3m + 7m) is one question, and
+  // one pick files every block behind it. First-seen order, so the list keeps
+  // its shape while someone works down it.
+  const groups = useMemo(() => {
+    const byKey = new Map<string, { key: string; ids: number[]; minutes: number; label: string;
+                                    client_name: string | null }>();
+    for (const r of rows) {
+      const key = `${r.client_id ?? ""}|${(r.label || "").trim().toLowerCase()}`;
+      const g = byKey.get(key);
+      if (g) { g.ids.push(r.id); g.minutes += r.minutes || 0; }
+      else byKey.set(key, { key, ids: [r.id], minutes: r.minutes || 0, label: r.label,
+                            client_name: r.client_name ?? null });
+    }
+    return [...byKey.values()];
+  }, [rows]);
 
-  if (rows.length === 0) return null;
+  useEffect(() => { onQueue?.(groups.length, total); }, [groups.length, total, onQueue]);
+
+  if (groups.length === 0) return null;
 
   const fmt = (m: number) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`);
 
@@ -315,24 +332,25 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
           {note}
         </div>
       )}
-      {rows.slice(0, shown).map((r) => (
-        <div key={`proj${r.id}`} className={ROW}>
+      {groups.slice(0, shown).map((r) => (
+        <div key={`proj${r.key}`} className={ROW}>
           <span className={CHIP}>{fmt(r.minutes)}</span>
           <div className="min-w-0 flex-1">
             <div className="truncate font-mono text-[12.5px] text-foreground" title={r.label}>{r.label}</div>
             <div className="mt-1 font-sans text-[11.5px] leading-snug text-muted-foreground">
               <span className="font-semibold text-foreground/80">{r.client_name || "No client"}</span>
               {" · pick a "}{terms.project.toLowerCase()}
+              {r.ids.length > 1 && ` · ${r.ids.length} entries`}
             </div>
           </div>
           <MatterPicker
-            blockIds={[r.id]}
+            blockIds={r.ids}
             onAssigned={(_projectId, folderFiled = 0) => {
               // The row leaves immediately. Reloading here meant a visible
               // flicker and the list re-ordering under someone working down
               // it; it re-syncs, in place, with the page's next reload.
-              setRows((prev) => prev.filter((x) => x.id !== r.id));
-              setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
+              setRows((prev) => prev.filter((x) => !r.ids.includes(x.id)));
+              setTotal((prev) => Math.max(0, prev - r.minutes));
               if (folderFiled > 0) {
                 setNote(`Also filed ${folderFiled} more from the same folder`);
                 sync();
@@ -342,12 +360,12 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
           />
         </div>
       ))}
-      {rows.length > shown && (
+      {groups.length > shown && (
         <button
           onClick={() => setShown((n) => n + 8)}
           className="mx-4 mb-3 mt-1 self-start rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 underline-offset-2 hover:underline"
         >
-          Show {Math.min(8, rows.length - shown)} more of {rows.length}
+          Show {Math.min(8, groups.length - shown)} more of {groups.length}
         </button>
       )}
     </>

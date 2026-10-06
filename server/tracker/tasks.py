@@ -427,6 +427,27 @@ def send_timesheet_reminders():
     }
 
 
+def _week_has_open_needs_you(org, user, start, end) -> bool:
+    """Is anything in this person's week still waiting in Needs You?
+
+    is_pending_review_block is the authority (Daily Review's own list). The SQL
+    filter only narrows what it judges — same prefilter as the Needs You tile.
+    No .only(): the predicate reaches fields three calls deep, and a deferred
+    one costs a query per block.
+    """
+    from django.db.models import Q
+    from tracker.models import Block
+    from tracker.views_reports import is_pending_review_block
+
+    candidates = (
+        Block.objects
+        .filter(org=org, user=user, day__gte=start, day__lte=end, deleted_at__isnull=True)
+        .filter(Q(is_categorized=False) | Q(classification_state='proposed'))
+        .exclude(classification_state='suppressed')
+    )
+    return any(is_pending_review_block(b) for b in candidates.iterator())
+
+
 @shared_task(name='tracker.submit_settled_timesheets')
 def submit_settled_timesheets():
     """Send a closed week the moment it is settled, instead of waiting for Tuesday.
@@ -442,6 +463,12 @@ def submit_settled_timesheets():
     "Reviewed" is deliberately not "committed" — 87% of committed time was
     committed by the classifier with nobody in the loop. It means a person
     either edited something that day, or said "Looks right" on it.
+
+    And reviewed is not enough on its own: opening a day in Daily Review marks
+    it seen even with items still sitting in Needs You. An early send is a
+    promise the week is finished, so it also needs that week's Needs You queue
+    to be EMPTY — the same predicate Daily Review draws its list with. Anything
+    still open and the week waits for Tuesday like everyone else's.
 
     Only runs for orgs with auto-submit on. A firm that submits by hand has
     chosen the ritual, and should not have it done for them.
@@ -479,6 +506,9 @@ def submit_settled_timesheets():
 
             reviewed = reviewed_days(ts.org, ts.user, ts.week_start, week_end)
             if not days_with_time.issubset(reviewed):
+                not_settled += 1
+                continue
+            if _week_has_open_needs_you(ts.org, ts.user, ts.week_start, week_end):
                 not_settled += 1
                 continue
 

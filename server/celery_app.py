@@ -214,6 +214,17 @@ app.conf.beat_schedule = {
         }
     },
     
+    # ✅ DAILY 6:30 AM: send last week early for anyone who has FINISHED it —
+    # every day with time reviewed and Needs You empty. A week finished over
+    # the weekend goes Monday 6:30 instead of Tuesday 9:00. Only firms with
+    # auto-submit on; each timesheet is submitted once (draft -> submitted).
+    # The task existed but was never scheduled until now.
+    'submit-settled-timesheets-daily': {
+        'task': 'tracker.submit_settled_timesheets',
+        'schedule': crontab(hour=6, minute=30),
+        'options': {'expires': 3600},
+    },
+
     # ✅ TUESDAY 9:00 AM: Auto-submit any remaining DRAFT timesheets
     # Marks with auto_submitted=True so managers know it wasn't manually reviewed
     'timesheet-auto-submit-tuesday': {

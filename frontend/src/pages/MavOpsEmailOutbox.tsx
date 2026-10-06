@@ -103,7 +103,7 @@ export default function MavOpsEmailOutbox({ apiFetch, flash }: Props) {
       setSelected(prev => new Set([...prev].filter(id => d.emails.some(e => e.id === id))));
     } catch (e: any) {
       setUnavailable(String(e?.message || e).includes("503")
-        ? "The email outbox isn't set up on the server yet — run the migration (tracker 0191). Until then NO email is sent."
+        ? "The email outbox isn't set up on the server yet — run the migration (tracker 0192). Until then NO email is sent."
         : "Failed to load the email outbox.");
     }
   }, [apiFetch, status, type]);

@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ('tracker', '0190_qbt_timesheet_push'),
+        ('tracker', '0191_connect_link'),
     ]
 
     operations = [

@@ -218,3 +218,23 @@ class ConnectLinkEmailCopyTests(ConsoleBase):
         cap = self._render(['QuickBooks Online', 'QuickBooks Time'])
         self.assertIn('click Connect next to each one', cap['html_content'])
         self.assertIn('Connect QuickBooks Online and QuickBooks Time', cap['html_content'])
+
+
+class QuickBooksStepTests(ConsoleBase):
+    def _step(self, p):
+        from tracker.onboarding_playbook import evaluate
+        return {s['key']: s for ph in evaluate(p)['phases'] for s in ph['steps']}['qbo_connected']
+
+    def test_quickbooks_time_alone_ticks_the_step(self):
+        p = self.make_project()
+        self.assertFalse(self._step(p)['done'])
+        Integration.objects.create(organization=p.organization, provider='qb_time', is_connected=True)
+        step = self._step(p)
+        self.assertTrue(step['done'])
+        self.assertEqual(step['detail'], 'QuickBooks Time connected')
+
+    def test_both_are_named(self):
+        p = self.make_project()
+        for prov in ('quickbooks', 'qb_time'):
+            Integration.objects.create(organization=p.organization, provider=prov, is_connected=True)
+        self.assertEqual(self._step(p)['detail'], 'QuickBooks Online + QuickBooks Time connected')

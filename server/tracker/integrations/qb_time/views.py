@@ -52,14 +52,23 @@ def qb_time_connect(request):
 def qb_time_callback(request):
     """Exchange the code for tokens. Reached by redirect, with no session."""
     code, state, error = request.GET.get('code'), request.GET.get('state'), request.GET.get('error')
+    # Started from a connect link (services/connect_link.py) rather than Settings?
+    from tracker.services import connect_link
+    link = connect_link.link_for_state('qb_time', state)
+
+    def fail(reason):
+        if link:
+            return redirect(connect_link.return_url('qb_time', False, reason))
+        return _fail(reason)
+
     if error:
-        return _fail(error)
+        return fail(error)
     if not code or not state:
-        return _fail('missing_code')
+        return fail('missing_code')
     try:
         integration = Integration.objects.get(oauth_state=state, provider='qb_time')
     except Integration.DoesNotExist:
-        return _fail('invalid_state')
+        return fail('invalid_state')
 
     try:
         resp = requests.post(grant_url(), data={
@@ -71,10 +80,10 @@ def qb_time_callback(request):
         }, timeout=30)
     except requests.RequestException as e:
         logger.error('QB Time token exchange failed: %s', e)
-        return _fail('token_exchange_failed')
+        return fail('token_exchange_failed')
     if resp.status_code != 200:
         logger.error('QB Time token exchange %s: %s', resp.status_code, resp.text[:300])
-        return _fail('token_exchange_failed')
+        return fail('token_exchange_failed')
 
     tokens = resp.json()
     apply_tokens(integration, tokens)
@@ -95,6 +104,9 @@ def qb_time_callback(request):
             f'Could not start the first import ({type(e).__name__}). Press Sync to run it now.')[:500]
         integration.save(update_fields=['last_sync_status', 'last_sync_error', 'updated_at'])
 
+    if link:
+        connect_link.finish(link, 'qb_time', integration)
+        return redirect(connect_link.return_url('qb_time', True))
     return _oauth_success_response('qb_time')
 
 

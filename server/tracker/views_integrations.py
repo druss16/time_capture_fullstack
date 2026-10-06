@@ -340,17 +340,20 @@ def quickbooks_connect(request):
         organization=org, provider='quickbooks',
         defaults={'oauth_state': state},
     )
+    return Response({'auth_url': quickbooks_auth_url(state)})
+
+
+def quickbooks_auth_url(state):
+    """Intuit's consent URL. Shared with the connect link (services/connect_link.py)."""
     params = {
         'client_id': settings.QUICKBOOKS_CLIENT_ID,
         'response_type': 'code',
         'scope': 'com.intuit.quickbooks.accounting',
         'redirect_uri': settings.QUICKBOOKS_REDIRECT_URI,
         'state': state,
-        'prompt': 'select_account',  # ← add this
-
+        'prompt': 'select_account',
     }
-    auth_url = f"https://appcenter.intuit.com/connect/oauth2?{urlencode(params)}"
-    return Response({'auth_url': auth_url})
+    return f"https://appcenter.intuit.com/connect/oauth2?{urlencode(params)}"
 
 
 @api_view(['GET'])
@@ -361,13 +364,22 @@ def quickbooks_callback(request):
     realm_id = request.GET.get('realmId')
     error = request.GET.get('error')
 
+    # Started from a connect link (services/connect_link.py) rather than Settings?
+    from tracker.services import connect_link
+    link = connect_link.link_for_state('quickbooks', state)
+
+    def fail(reason):
+        if link:
+            return redirect(connect_link.return_url('quickbooks', False, reason))
+        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={reason}")
+
     if error:
-        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error={error}")
+        return fail(error)
 
     try:
         integration = Integration.objects.get(oauth_state=state, provider='quickbooks')
     except Integration.DoesNotExist:
-        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=invalid_state")
+        return fail('invalid_state')
 
     try:
         resp = requests.post(
@@ -382,11 +394,11 @@ def quickbooks_callback(request):
         )
     except requests.RequestException as e:
         logger.error(f"QB token exchange failed: {e}")
-        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
+        return fail('token_exchange_failed')
 
     if resp.status_code != 200:
         logger.error(f"QB token exchange {resp.status_code}: {resp.text}")
-        return redirect(f"{settings.FRONTEND_URL}/settings?integration_error=token_exchange_failed")
+        return fail('token_exchange_failed')
 
     tokens = resp.json()
     integration.access_token = tokens['access_token']
@@ -406,6 +418,9 @@ def quickbooks_callback(request):
     except Exception as e:
         logger.warning(f"QB backfill enqueue failed for org {integration.organization_id}: {e}")
 
+    if link:
+        connect_link.finish(link, 'quickbooks', integration)
+        return redirect(connect_link.return_url('quickbooks', True))
     return _oauth_success_response('quickbooks')
 
 
@@ -501,11 +516,27 @@ def quickbooks_import(request):
     if not customer_ids:
         return error_response('No customers selected')
 
-    id_list = "', '".join(str(cid) for cid in customer_ids)
-    query = f"SELECT * FROM Customer WHERE Id IN ('{id_list}')"
-    data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+    result, err = import_qb_customers(org, integration, customer_ids)
     if err:
         return err
+    return Response(result)
+
+
+def import_qb_customers(org, integration, customer_ids=None):
+    """Create (or link by name) a Client per QuickBooks customer.
+
+    customer_ids=None imports every ACTIVE customer — the connect link's
+    hands-off first import (services/connect_link.py). Returns (result, err)
+    where err is an error Response from the QuickBooks call.
+    """
+    if customer_ids is None:
+        query = "SELECT * FROM Customer WHERE Active = true MAXRESULTS 1000"
+    else:
+        id_list = "', '".join(str(cid) for cid in customer_ids)
+        query = f"SELECT * FROM Customer WHERE Id IN ('{id_list}')"
+    data, err = qb_api_call(integration, 'GET', '/query', params={'query': query})
+    if err:
+        return None, err
 
     customers = data.get('QueryResponse', {}).get('Customer', [])
     imported, skipped, errors = [], [], []
@@ -548,14 +579,14 @@ def quickbooks_import(request):
     if imported:
         run_post_import_alias_derivation(org)
 
-    return Response({
+    return {
         'imported': imported, 'skipped': skipped, 'errors': errors,
         'summary': {
             'imported_count': len(imported),
             'skipped_count': len(skipped),
             'error_count': len(errors),
         },
-    })
+    }, None
 
 
 # ============================================================================

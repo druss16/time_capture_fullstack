@@ -110,7 +110,17 @@ export const onboardApi = {
     safeFetchJson<Intake & { emailed: boolean; to: string }>(`${BASE}/projects/${id}/intake/send/`, { method: "POST", ...json({ email, name }) }),
   markIntakeSent: (id: number, to: string) =>
     safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/mark-sent/`, { method: "POST", ...json({ to }) }),
+  connectLink: (id: number) => safeFetchJson<{ link: ConnectLinkInfo | null }>(`${BASE}/projects/${id}/connect-link/`),
+  issueConnectLink: (id: number, body: { providers: ConnectProvider[]; email: string; name: string }) =>
+    safeFetchJson<{ url: string; emailed: boolean; to: string; link: ConnectLinkInfo }>(
+      `${BASE}/projects/${id}/connect-link/`, { method: "POST", ...json(body) }),
 };
+
+export type ConnectProvider = "quickbooks" | "qb_time";
+export interface ConnectLinkInfo {
+  providers: ConnectProvider[]; sent_to: string; created_at: string; expires_at: string; open: boolean;
+  qbo_connected_at: string | null; qbt_connected_at: string | null;
+}
 
 export interface RosterRow {
   name: string; email: string; role: string; signed_in: boolean;
@@ -126,6 +136,27 @@ export async function intakeRequest(token: string, body?: unknown) {
   const res = await fetch(`${BASE}/intake/${encodeURIComponent(token)}/`, body === undefined
     ? { headers: { Accept: "application/json" } }
     : { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Something went wrong (${res.status}).`);
+  return data;
+}
+
+// ── Public connect link (no login) ─────────────────────────────────────────
+export interface ConnectStatus {
+  firm: string; expires_at: string; open: boolean;
+  providers: {
+    key: ConnectProvider; label: string; connected: boolean; configured: boolean;
+    clients?: number; sync_status?: string; unmatched?: { name: string; email: string }[];
+  }[];
+}
+
+export async function connectRequest(token: string, provider?: ConnectProvider) {
+  const url = provider
+    ? `${BASE}/connect/${encodeURIComponent(token)}/${provider}/start/`
+    : `${BASE}/connect/${encodeURIComponent(token)}/`;
+  const res = await fetch(url, provider
+    ? { method: "POST", headers: { Accept: "application/json" } }
+    : { headers: { Accept: "application/json" } });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Something went wrong (${res.status}).`);
   return data;

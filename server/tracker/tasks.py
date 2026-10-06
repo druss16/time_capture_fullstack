@@ -1978,6 +1978,7 @@ from tracker.integrations.clio.webhooks import (  # noqa: F401
 from tracker.integrations.qb_time.sync import (  # noqa: F401
     sync_qb_time_full,
     sync_all_qb_time_orgs,
+    check_qb_time_changes,
 )
 from tracker.integrations.qb_time.push import (  # noqa: F401
     push_timesheet_to_qb_time_task,

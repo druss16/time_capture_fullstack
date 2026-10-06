@@ -7749,6 +7749,12 @@ def split_block(request, block_id):
         if isinstance(a, dict):
             cid = a.get("client_id")
             cat = (a.get("category") or default_category)
+        elif separate:
+            # A slice nobody assigned — usually one the breakdown hides for being
+            # under a minute — stays on the kept block. Carving it out made a
+            # 10-second glance at D&F_trois.psd its own "1m" entry under the
+            # block's client (Nike), where nobody had put it.
+            continue
         else:
             cid, cat = default_client_id, default_category
         groups[(cid, cat, label) if separate else (cid, cat)].extend(ev_ids)

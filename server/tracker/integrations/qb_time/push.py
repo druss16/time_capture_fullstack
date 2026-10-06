@@ -26,6 +26,18 @@ When captured falls BELOW what we ourselves pushed (a block was recategorised
 to another client after we sent it), our own timesheets are cut back by the
 overshoot. Time a person entered is never touched.
 
+ONE ROW, WHOLE INCREMENTS
+------------------------
+Each (user, jobcode, day) total is rounded to the nearest ROUND_MINUTES before
+netting, so what lands in QuickBooks Time reads like a timesheet a person
+would keep — 0:06, 0:12 — not 0:01 and 0:02. Nearest rather than up: these
+hours feed payroll, and always rounding up would inflate every day.
+
+And a day stays ONE row of ours per jobcode. When more time arrives after a
+push, our existing timesheet grows to the new total rather than a second row
+appearing beside it; any extra rows of ours left over (from before this rule)
+are folded into the one kept. Time a person entered is still never touched.
+
 WHERE TIME GOES
 ---------------
 A block's project, if that project came from QuickBooks Time, else its
@@ -63,6 +75,8 @@ logger = logging.getLogger(__name__)
 
 # Below this the delta is rounding noise, not a timesheet worth writing.
 MIN_PUSH_MINUTES = 1
+# Day totals per jobcode are rounded to the nearest of this (6 min = 0.1 h).
+ROUND_MINUTES = 6
 # QuickBooks Time accepts up to 50 rows per write.
 WRITE_BATCH = 50
 NOTE_MAX = 500
@@ -75,7 +89,16 @@ SKIP_DETAIL = {
     'jobcode_inactive': 'Jobcode "{jobcode}" is archived in QuickBooks Time and takes no new time.',
     'already_in_qbt': 'QuickBooks Time already holds {already}m on "{jobcode}" for this day; '
                       'we captured {captured}m. Nothing to add.',
+    'under_increment': '{raw}m on "{jobcode}" rounds to nothing at {step}-minute increments.',
 }
+
+
+def round_minutes(minutes: int) -> int:
+    """Nearest ROUND_MINUTES, halves up: 2 -> 0, 3 -> 6, 8 -> 6, 9 -> 12."""
+    step = ROUND_MINUTES
+    if step <= 1:
+        return int(minutes)
+    return int((minutes + step // 2) // step * step)
 
 
 def _day_bounds(day, tz):
@@ -244,7 +267,8 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
     for (qbt_user_id, jobcode_id, day), blocks_in in sorted(groups.items(), key=lambda kv: str(kv[0])):
         jc = jobcodes.get(jobcode_id) or {}
         jobcode_name = jc.get('name') or jobcode_id
-        captured = sum(b.minutes or 0 for b in blocks_in)
+        captured_raw = sum(b.minutes or 0 for b in blocks_in)
+        captured = round_minutes(captured_raw)
         held = existing.get((qbt_user_id, jobcode_id, day), [])
         already = sum(e['minutes'] for e in held)
         ours = [e for e in held if e['ours'] and e['timesheet_id']]
@@ -257,6 +281,7 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
             'jobcode': jobcode_name,
             'day': str(day),
             'captured_minutes': captured,
+            'captured_raw_minutes': captured_raw,
             'already_in_qbt_minutes': already,
             'block_ids': [b.id for b in blocks_in],
         }
@@ -264,6 +289,12 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
         if blocks_in and jc and jc.get('active') is False:
             skipped.append({**base, 'minutes': captured, 'reason': 'jobcode_inactive',
                             'detail': SKIP_DETAIL['jobcode_inactive'].format(jobcode=jobcode_name)})
+            continue
+
+        if captured_raw and not captured and not ours:
+            skipped.append({**base, 'minutes': captured_raw, 'reason': 'under_increment',
+                            'detail': SKIP_DETAIL['under_increment'].format(
+                                raw=captured_raw, jobcode=jobcode_name, step=ROUND_MINUTES)})
             continue
 
         action, minutes, reason = decide_entry(captured, already, sum(e['minutes'] for e in ours))
@@ -288,8 +319,21 @@ def build_push_plan(integration: Integration, start_date, end_date, user_ids=Non
                                 already=already, captured=captured, jobcode=jobcode_name)})
             continue
 
+        # Already have a row of ours here: grow it to the new total and fold
+        # any other rows of ours into it, instead of adding another row.
+        grow = None
+        if ours:
+            keep, *rest = sorted(ours, key=lambda x: (-x['minutes'], x['timesheet_id']))
+            grow = {
+                'timesheet_id': keep['timesheet_id'],
+                'from_minutes': keep['minutes'],
+                'to_minutes': sum(e['minutes'] for e in ours) + minutes,
+                'merge': [{'timesheet_id': e['timesheet_id'], 'minutes': e['minutes']} for e in rest],
+            }
+
         entries.append({**base, 'action': 'push', 'push_minutes': minutes,
                         'push_hours': round(minutes / 60.0, 2),
+                        'grow': grow,
                         # QuickBooks Time only takes time on a jobcode with no
                         # sub-jobcodes in its own UI. Not refused here — the
                         # API is the judge — but named so a rejection is
@@ -340,8 +384,53 @@ def execute_push(integration: Integration, plan: dict, *, api=None) -> dict:
                             'timesheet_id': r['timesheet_id'],
                             'from_minutes': r['from_minutes'], 'to_minutes': r['to_minutes']})
 
+    # ── More time on a day we already pushed: grow our row ──────────────
+    grows = [e for e in plan.get('entries', []) if e.get('action') == 'push' and e.get('grow')]
+    for i in range(0, len(grows), WRITE_BATCH):
+        batch = grows[i:i + WRITE_BATCH]
+        try:
+            res = api.put('timesheets', [{
+                'id': int(e['grow']['timesheet_id']),
+                'duration': e['grow']['to_minutes'] * 60,
+                'notes': e['note'],
+            } for e in batch])
+        except QBTimeError as e:
+            for entry in batch:
+                _err(entry, 'api_error', e)
+            continue
+        rows = row_results(res, 'timesheets')
+        for n, entry in enumerate(batch):
+            row = rows[n] if n < len(rows) else None
+            if row is None or not row_ok(row):
+                _err(entry, 'rejected_by_qbt',
+                     row_error(row) if row else 'QuickBooks Time returned no result for this row.')
+                continue
+            g = entry['grow']
+            QbtPushedTimesheet.objects.filter(integration=integration, timesheet_id=g['timesheet_id']) \
+                .update(minutes=g['to_minutes'], block_ids=entry['block_ids'], deleted_at=None)
+            pushed.append({'user': entry.get('user'), 'jobcode': entry['jobcode'], 'day': entry['day'],
+                           'minutes': entry['push_minutes'], 'hours': entry['push_hours'],
+                           'timesheet_id': g['timesheet_id'], 'blocks': len(entry['block_ids']),
+                           'grew': True})
+            # Only once the kept row holds the whole total do the others go.
+            # A failed delete leaves an overshoot the next run reduces.
+            extra = [m['timesheet_id'] for m in g.get('merge') or []]
+            if not extra:
+                continue
+            try:
+                res = api.delete('timesheets', extra)
+            except QBTimeError as e:
+                _err(entry, 'merge_failed', e)
+                continue
+            for tid, r in zip(extra, row_results(res, 'timesheets')):
+                if row_ok(r):
+                    QbtPushedTimesheet.objects.filter(integration=integration, timesheet_id=tid) \
+                        .update(minutes=0, deleted_at=timezone.now())
+                else:
+                    _err(entry, 'merge_failed', row_error(r))
+
     # ── New time, in batches ────────────────────────────────────────────
-    to_push = [e for e in plan.get('entries', []) if e.get('action') == 'push']
+    to_push = [e for e in plan.get('entries', []) if e.get('action') == 'push' and not e.get('grow')]
     for i in range(0, len(to_push), WRITE_BATCH):
         batch = to_push[i:i + WRITE_BATCH]
         rows_out = [{

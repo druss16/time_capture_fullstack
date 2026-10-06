@@ -55,6 +55,7 @@ const REASON_LABEL: Record<string, string> = {
   user_not_mapped: 'Person not found in QuickBooks Time',
   jobcode_inactive: 'Jobcode archived',
   already_in_qbt: 'Already in QuickBooks Time',
+  under_increment: 'Under 3 minutes for the day',
 };
 
 const iso = (d: Date) =>
@@ -171,7 +172,7 @@ const QbTimePushPanel: React.FC<Props> = ({ apiBase, pushTrigger, onSuccess, onE
       className="mt-4"
       icon={<Send className="w-4 h-4" />}
       title="Send time to QuickBooks Time"
-      sub="Confirmed time becomes timesheets on each client's or project's jobcode. Hours already in QuickBooks Time for the same person, jobcode and day are subtracted, so sending twice never doubles anything."
+      sub="Confirmed time becomes one timesheet per person, jobcode and day, rounded to the nearest 6 minutes. Hours already in QuickBooks Time are subtracted and later time grows the same row, so sending twice never doubles anything."
     >
       {/* Off by default: the firm connected QuickBooks Time to read projects,
           and should see a preview land correctly before approvals start writing. */}

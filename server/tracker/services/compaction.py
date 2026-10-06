@@ -272,7 +272,8 @@ def _content_identifier(window_title: str, file_path: str, url: str) -> str:
     return ""
 
 
-def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
+def _grouping_content_id(window_title: str, file_path: str, url: str,
+                         by_folder: bool = False) -> str:
     """v2 (2026-06-29): coarse grouping identity that prevents fragmentation.
 
     Combines the per-app content_identity extractor with the coarse
@@ -297,7 +298,23 @@ def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
     # identities are untouched — and is a no-op when the path has no recognized
     # clients-root (client_folder_bucket returns ''), so user-folder / OneDrive
     # docs keep the existing coarse bucket.
+    #
+    # by_folder (firms that file time under PROJECTS): the boundary is the
+    # project, not the client. Two files in Desktop/Adidas/Fall Launch and
+    # Desktop/Adidas/Winter Sprint share the client folder, so a client-level
+    # key merged the Winter Sprint file into the Fall Launch block and it kept
+    # Fall Launch's project. Key on the file's own folder instead — the SAME
+    # folder_key the learned-folder project tier reads (home dir and sync root
+    # dropped, Exports/ and Links/ rolled up into a convention-named
+    # deliverable), so a block splits exactly where a project can change. A
+    # CPA firm keeps the client-level key: its subfolders are years and
+    # statements of one client, and splitting on them would only fragment.
     if file_path and (gk == "docs" or gk.startswith("docs:")):
+        if by_folder:
+            from tracker.services.matter_attribution import folder_key
+            fk = folder_key(file_path)
+            if fk:
+                return f"docs:dir={fk}"
         cf = client_folder_bucket(file_path)
         if cf:
             return f"docs:cf={cf}"
@@ -745,6 +762,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if not events:
         return 0
 
+    # Firms that file time under projects split document blocks per FOLDER,
+    # not per client (see _grouping_content_id). Decided once per run, and the
+    # grouping, existing-block and new-block keys below must all pass it, or a
+    # block grouped one way would merge into a block keyed the other.
+    try:
+        from tracker.services.projects import org_uses_projects
+        by_folder = org_uses_projects(org)
+    except Exception as e:
+        logger.warning(f"[COMPACT] org_uses_projects failed for org {getattr(org, 'id', None)}: {e}")
+        by_folder = False
+
     # Drop events covering time the agent's tracking loop never watched before
     # any block is built — a frozen agent must not mint a client block at all,
     # not merely a zero-minute one. They stay unlinked on purpose: they are the
@@ -936,6 +964,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     ev.get("window_title") or "",
                     ev.get("file_path") or "",
                     ev.get("url") or "",
+                    by_folder=by_folder,
                 )
             
             content_part = f"|{content_id}" if content_id else ""
@@ -1102,6 +1131,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 b.window_title or "",
                 b.file_path or "",
                 b.url or "",
+                by_folder=by_folder,
             )
         existing_content_part = f"|{existing_content_id}" if existing_content_id else ""
         # v2 (2026-06-29): mirror the grouping-key rule — when a coarse content
@@ -1140,6 +1170,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     block_data.get("window_title") or "",
                     block_data.get("file_path") or "",
                     block_data.get("url") or "",
+                    by_folder=by_folder,
                 )
             new_content_part = f"|{new_content_id}" if new_content_id else ""
             # v2 (2026-06-29): mirror grouping + existing-block keys — content

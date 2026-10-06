@@ -71,15 +71,27 @@ class FakeAPI:
 
     def put(self, endpoint, data):
         self.calls.append(('PUT', endpoint, data))
-        for row in data:
-            self.timesheets[str(row['id'])]['duration'] = row['duration']
-        return {'results': {'timesheets': {'1': {'_status_code': 200, 'id': data[0]['id']}}}}
+        out = {}
+        for n, row in enumerate(data, start=1):
+            ts = self.timesheets[str(row['id'])]
+            ts['duration'] = row['duration']
+            if 'notes' in row:
+                ts['notes'] = row['notes']
+            out[str(n)] = {'_status_code': 200, 'id': row['id']}
+        return {'results': {'timesheets': out}}
 
     def delete(self, endpoint, ids):
         self.calls.append(('DELETE', endpoint, ids))
-        for i in ids:
+        out = {}
+        for n, i in enumerate(ids, start=1):
             self.timesheets.pop(str(i), None)
-        return {'results': {'timesheets': {'1': {'_status_code': 200, 'id': int(ids[0])}}}}
+            out[str(n)] = {'_status_code': 200, 'id': int(i)}
+        return {'results': {'timesheets': out}}
+
+    def rows(self, user_id, jobcode_id, day=DAY):
+        return [t for t in self.timesheets.values()
+                if str(t['user_id']) == str(user_id) and str(t['jobcode_id']) == str(jobcode_id)
+                and t['date'] == str(day)]
 
     def total(self, user_id, jobcode_id, day=DAY):
         return sum(int(t['duration']) // 60 for t in self.timesheets.values()
@@ -116,7 +128,12 @@ class PureTests(SimpleTestCase):
 
 
 class PushTests(TestCase):
+    """The netting arithmetic, minute-exact. Rounding has its own tests below."""
+
     def setUp(self):
+        p = mock.patch.object(push_mod, 'ROUND_MINUTES', 1)
+        p.start()
+        self.addCleanup(p.stop)
         self.org = Organization.objects.create(name='MTC', slug='mtc-push', industry_type='marketing')
         self.user = User.objects.create_user('ann', email='ann@mtc.test', password='x',
                                              first_name='Ann', last_name='Lee')
@@ -179,6 +196,44 @@ class PushTests(TestCase):
         self.block(15, self.chevy, at=T0 + timedelta(hours=2))
         self.assertEqual(self.push()['pushed'][0]['minutes'], 15)
         self.assertEqual(self.api.total(55, 2), 75)
+
+    def test_later_time_grows_our_row_instead_of_adding_one(self):
+        self.block(60, self.chevy)
+        self.push()
+        [first] = self.api.rows(55, 2)
+
+        self.block(15, self.chevy, at=T0 + timedelta(hours=2))
+        result = self.push()
+        self.assertTrue(result['pushed'][0]['grew'])
+        self.assertEqual(self.api.rows(55, 2), [first], 'still the one row')
+        self.assertEqual(int(first['duration']) // 60, 75)
+        self.assertEqual(QbtPushedTimesheet.objects.get(timesheet_id=str(first['id'])).minutes, 75)
+        self.assertFalse(any(c[0] == 'POST' for c in self.api.calls[-2:]))
+
+    def test_growing_folds_old_fragments_into_one_row(self):
+        # Two rows of ours from before one-row-per-day (the 0:01 + 0:02 case).
+        for tid, mins in (('700', 1), ('701', 2)):
+            self.api.timesheets[tid] = {'id': int(tid), 'user_id': 55, 'jobcode_id': 2,
+                                        'date': '2026-09-29', 'duration': mins * 60,
+                                        'type': 'manual', 'notes': ''}
+            QbtPushedTimesheet.objects.create(integration=self.integration, timesheet_id=tid,
+                                              qbt_user_id='55', jobcode_id='2', day=DAY, minutes=mins)
+        self.block(10, self.chevy)
+        self.push()
+        rows = self.api.rows(55, 2)
+        self.assertEqual([(r['id'], int(r['duration']) // 60) for r in rows], [(701, 10)])
+        self.assertIsNotNone(QbtPushedTimesheet.objects.get(timesheet_id='700').deleted_at)
+
+    def test_growing_never_touches_hand_entered_rows(self):
+        self.api.timesheets['800'] = {'id': 800, 'user_id': 55, 'jobcode_id': 2, 'date': '2026-09-29',
+                                      'duration': 20 * 60, 'type': 'regular', 'notes': 'clocked'}
+        self.block(30, self.chevy)
+        self.push()                       # ours: 10
+        self.block(30, self.chevy, at=T0 + timedelta(hours=2))
+        self.push()                       # ours grows to 40
+        self.assertEqual(int(self.api.timesheets['800']['duration']) // 60, 20)
+        self.assertEqual(self.api.total(55, 2), 60)
+        self.assertEqual(len(self.api.rows(55, 2)), 2)
 
     def test_time_already_clocked_by_hand_is_netted(self):
         self.api.timesheets['500'] = {'id': 500, 'user_id': 55, 'jobcode_id': 2, 'date': '2026-09-29',
@@ -438,3 +493,51 @@ class PushTriggerEndpointTests(TestCase):
         r = c.post('/api/integrations/qb_time/push-trigger/', {'push_trigger': 'approve'}, format='json')
         self.assertEqual(r.status_code, 403)
         self.assertEqual(push_mod.push_trigger_for(self.integration), 'off')
+
+
+class RoundingTests(TestCase):
+    """Day totals per jobcode go to QuickBooks Time in whole 6-minute steps."""
+
+    block = PushTests.block
+
+    def setUp(self):
+        PushTests.setUp(self)
+        mock.patch.stopall()   # PushTests pins rounding to 1; these want the real 6
+
+    def push(self):
+        return execute_push(self.integration, build_push_plan(self.integration, DAY, DAY, api=self.api),
+                            api=self.api)
+
+    def test_round_to_nearest_tenth(self):
+        self.assertEqual([push_mod.round_minutes(m) for m in (0, 1, 2, 3, 5, 8, 9, 14, 15, 60)],
+                         [0, 0, 0, 6, 6, 6, 12, 12, 18, 60])
+
+    def test_day_total_is_rounded_not_each_block(self):
+        self.block(2, self.chevy)
+        self.block(2, self.chevy, at=T0 + timedelta(hours=1))
+        self.push()
+        self.assertEqual(self.api.total(55, 2), 6)   # 4 min -> 6, not 0 + 0
+
+    def test_a_sliver_is_skipped_with_a_reason(self):
+        self.block(2, self.chevy)
+        plan = build_push_plan(self.integration, DAY, DAY, api=self.api)
+        self.assertEqual(plan['entries'], [])
+        self.assertEqual(plan['skipped'][0]['reason'], 'under_increment')
+        self.assertIn('6-minute', plan['skipped'][0]['detail'])
+
+    def test_earlier_odd_pushes_are_tidied_to_increments(self):
+        # What the first live test left behind: 0:08 of ours on a jobcode.
+        self.api.timesheets['900'] = {'id': 900, 'user_id': 55, 'jobcode_id': 2, 'date': '2026-09-29',
+                                      'duration': 8 * 60, 'type': 'manual', 'notes': ''}
+        QbtPushedTimesheet.objects.create(integration=self.integration, timesheet_id='900',
+                                          qbt_user_id='55', jobcode_id='2', day=DAY, minutes=8)
+        self.block(8, self.chevy)
+        self.push()
+        self.assertEqual(self.api.total(55, 2), 6)
+        self.assertEqual(len(self.api.rows(55, 2)), 1)
+
+    def test_rounded_reruns_are_stable(self):
+        self.block(8, self.chevy)
+        self.push()
+        self.assertEqual(self.push()['totals']['entries'], 0)
+        self.assertEqual(self.api.total(55, 2), 6)

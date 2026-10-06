@@ -189,3 +189,11 @@ class ImportAllCustomersTests(ConsoleBase):
         self.assertIn('Active = true', call.call_args.kwargs['params']['query'])
         self.assertEqual(result['summary']['imported_count'], 2)
         self.assertEqual(Client.objects.filter(org=p.organization, imported_from='quickbooks').count(), 2)
+
+
+class ConnectLinkEmailTypeTests(ConsoleBase):
+    def test_outbox_files_it_as_its_own_type_not_an_invitation(self):
+        # categories=["onboarding", "connect_link"]: "onboarding" alone would
+        # file it under "Invitation to join" and release it with invitations.
+        from tracker.services.email_outbox import email_type_for
+        self.assertEqual(email_type_for(['onboarding', 'connect_link']), 'connect_link')

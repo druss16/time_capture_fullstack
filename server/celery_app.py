@@ -58,9 +58,18 @@ app.conf.beat_schedule = {
         'options': {'expires': 3000},
     },
 
-    # Hourly: pull every connected firm's QuickBooks Time customers, projects
-    # and estimates. QuickBooks Time sends no jobcode webhooks, so for these
-    # firms this sweep is how a new project becomes selectable.
+    # Every 3 minutes: QuickBooks Time has no webhooks, so ask its
+    # last-modified endpoint (one request per firm) and run the full sync only
+    # for firms whose customers, projects or users changed. This is how a new
+    # project becomes selectable within minutes.
+    'check-qb-time-changes': {
+        'task': 'tracker.check_qb_time_changes',
+        'schedule': crontab(minute='*/3'),
+        'options': {'expires': 150},
+    },
+
+    # Hourly backstop: a full sync for any firm the change check has not
+    # synced lately — catches edited estimates, which the check cannot see.
     'sync-qb-time-orgs-hourly': {
         'task': 'tracker.sync_all_qb_time_orgs',
         'schedule': crontab(minute=35),

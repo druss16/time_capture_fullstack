@@ -16,8 +16,11 @@ from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
 
-from tracker.integrations.qb_time.client import QBTimeNotAvailable, records
-from tracker.integrations.qb_time.sync import estimate_hours_by_project, full_sync, plan_tree
+from tracker.integrations.qb_time import sync as sync_mod
+from tracker.integrations.qb_time.client import QBTimeError, QBTimeNotAvailable, records
+from tracker.integrations.qb_time.sync import (
+    estimate_hours_by_project, full_sync, plan_tree, remote_changed_since,
+)
 from tracker.models import Block, Client, Integration, Organization, OrganizationMembership, Project
 from tracker.models_task_type_sets import ExternalMatterMapping, ExternalStaffMapping
 from tracker.services.projects import selectable_projects
@@ -240,3 +243,128 @@ class EndpointTests(TestCase):
     @override_settings(QBTIME_CLIENT_ID='')
     def test_not_configured(self):
         self.assertEqual(self.api.post('/api/integrations/qb_time/connect/').status_code, 503)
+
+
+class StampAPI:
+    """Answers last_modified_timestamps like the published reference."""
+
+    def __init__(self, stamps):
+        self.stamps = stamps
+        self.calls = []
+
+    def get(self, endpoint, **params):
+        self.calls.append((endpoint, params))
+        assert endpoint == 'last_modified_timestamps'
+        return {'results': {'last_modified_timestamps': dict(self.stamps)}}
+
+
+def iso(dt):
+    return dt.strftime('%Y-%m-%dT%H:%M:%S+00:00')
+
+
+class ChangeDetectionTests(SimpleTestCase):
+    def test_unchanged_since_last_sync(self):
+        api = StampAPI({'jobcodes': iso(T0 - timedelta(hours=2)), 'users': iso(T0 - timedelta(days=3))})
+        self.assertFalse(remote_changed_since(api, T0))
+        self.assertEqual(api.calls, [('last_modified_timestamps', {'endpoints': 'jobcodes,users'})])
+
+    def test_new_project_moves_jobcodes(self):
+        api = StampAPI({'jobcodes': iso(T0 + timedelta(minutes=1)), 'users': iso(T0 - timedelta(days=3))})
+        self.assertTrue(remote_changed_since(api, T0))
+
+    def test_new_user_counts(self):
+        api = StampAPI({'jobcodes': iso(T0 - timedelta(days=1)), 'users': iso(T0 + timedelta(seconds=5))})
+        self.assertTrue(remote_changed_since(api, T0))
+
+    def test_change_just_before_our_sync_is_not_trusted(self):
+        # Their clock may run behind ours; a change stamped 30s "before" our
+        # sync started may have landed after it.
+        api = StampAPI({'jobcodes': iso(T0 - timedelta(seconds=30)), 'users': iso(T0 - timedelta(days=1))})
+        self.assertTrue(remote_changed_since(api, T0))
+
+    def test_missing_stamp_syncs_rather_than_guesses(self):
+        self.assertTrue(remote_changed_since(StampAPI({'users': iso(T0 - timedelta(days=1))}), T0))
+
+    def test_never_synced_needs_no_request(self):
+        api = StampAPI({})
+        self.assertTrue(remote_changed_since(api, None))
+        self.assertEqual(api.calls, [])
+
+
+class ChangeCheckTaskTests(TestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(name='MTC', slug='mtc-cc', industry_type='marketing')
+        self.integration = Integration.objects.create(
+            organization=self.org, provider='qb_time', is_connected=True, access_token='t',
+            last_synced_at=T0, last_sync_status='success')
+        self.stamps = {'jobcodes': iso(T0 - timedelta(hours=1)), 'users': iso(T0 - timedelta(hours=1))}
+        p = mock.patch.object(sync_mod, 'QBTimeClient', side_effect=lambda i: StampAPI(self.stamps))
+        p.start()
+        self.addCleanup(p.stop)
+        self.queued = mock.patch.object(sync_mod.sync_qb_time_full, 'delay').start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_quiet_firm_is_left_alone(self):
+        out = sync_mod.check_qb_time_changes()
+        self.assertEqual(out['unchanged'], 1)
+        self.queued.assert_not_called()
+
+    def test_changed_firm_is_synced(self):
+        self.stamps['jobcodes'] = iso(T0 + timedelta(minutes=2))
+        out = sync_mod.check_qb_time_changes()
+        self.assertEqual(out['synced'], 1)
+        self.queued.assert_called_once_with(self.integration.id)
+
+    def test_disconnected_firm_is_not_asked(self):
+        Integration.objects.filter(id=self.integration.id).update(is_connected=False)
+        self.assertEqual(sync_mod.check_qb_time_changes()['unchanged'], 0)
+        self.queued.assert_not_called()
+
+    def test_failing_firm_backs_off(self):
+        # A failed sync leaves last_synced_at behind; without backing off every
+        # check would re-run a sync that is about to fail again.
+        self.stamps['jobcodes'] = iso(T0 + timedelta(minutes=2))
+        Integration.objects.filter(id=self.integration.id).update(last_sync_status='failed')
+        out = sync_mod.check_qb_time_changes()
+        self.assertEqual(out['backing_off'], 1)
+        self.queued.assert_not_called()
+
+    def test_check_error_skips_that_firm_only(self):
+        other_org = Organization.objects.create(name='B', slug='b-cc', industry_type='marketing')
+        Integration.objects.create(organization=other_org, provider='qb_time', is_connected=True,
+                                   access_token='t', last_synced_at=T0)
+        self.stamps['jobcodes'] = iso(T0 + timedelta(minutes=2))
+        calls = {'n': 0}
+
+        def client(integration):
+            calls['n'] += 1
+            if integration.id == self.integration.id:
+                raise QBTimeError('token expired')
+            return StampAPI(self.stamps)
+
+        with mock.patch.object(sync_mod, 'QBTimeClient', side_effect=client):
+            out = sync_mod.check_qb_time_changes()
+        self.assertEqual((out['errors'], out['synced']), (1, 1))
+
+    def test_sync_stamps_its_start_not_its_end(self):
+        # A jobcode created while the sync is fetching must still look newer
+        # than last_synced_at, so the stamp is the moment the sync began.
+        clock = {'now': T0 + timedelta(minutes=10)}
+
+        class SlowAPI(FakeAPI):
+            def paginated(self, endpoint, **params):
+                clock['now'] = T0 + timedelta(minutes=20)
+                return super().paginated(endpoint, **params)
+
+        with mock.patch('django.utils.timezone.now', side_effect=lambda: clock['now']):
+            full_sync(self.integration, api=SlowAPI({'jobcodes': [], 'users': []},
+                                                     unavailable=('projects',)))
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_sync_status, 'success')
+        self.assertEqual(self.integration.last_synced_at, T0 + timedelta(minutes=10))
+
+    def test_second_concurrent_sync_stands_down(self):
+        with mock.patch.object(sync_mod, '_try_sync_lock', return_value=False), \
+             mock.patch.object(sync_mod, 'full_sync') as full:
+            self.assertEqual(sync_mod.sync_qb_time_full(self.integration.id), {'skipped': 'already_running'})
+        full.assert_not_called()

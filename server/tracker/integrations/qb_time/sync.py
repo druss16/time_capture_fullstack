@@ -41,8 +41,9 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from tracker.integrations.qb_time.client import (
     QBTimeClient, QBTimeError, QBTimeNotAvailable,
@@ -159,6 +160,9 @@ def full_sync(integration: Integration, *, api=None) -> dict:
         'staff': {'matched': 0, 'unmatched': 0},
         'errors': [],
     }
+    # Stamped from the START: a jobcode edited while this sync runs must still
+    # look newer than last_synced_at to the change check, or it waits an hour.
+    started = timezone.now()
     try:
         api = api or QBTimeClient(integration)
         jobcodes = list(api.paginated('jobcodes', active='both'))
@@ -201,7 +205,7 @@ def full_sync(integration: Integration, *, api=None) -> dict:
             logger.warning('Attribution after QB Time sync failed: %s', e, exc_info=True)
             stats['attribution'] = {'error': str(e)[:200]}
 
-        integration.last_synced_at = timezone.now()
+        integration.last_synced_at = started
         integration.last_sync_status = 'success'
         integration.last_sync_error = ''
         integration.save(update_fields=[
@@ -384,23 +388,54 @@ def _sync_staff(integration, users: list) -> dict:
 # Celery
 # ============================================================================
 
+# Namespace for the sync's advisory lock ("QS"); the push uses "QT".
+_SYNC_LOCK_NAMESPACE = 0x5153
+
+
+def _try_sync_lock(integration_id: int) -> bool:
+    if connection.vendor != 'postgresql':
+        return True
+    with connection.cursor() as cur:
+        cur.execute('SELECT pg_try_advisory_lock(%s, %s)', [_SYNC_LOCK_NAMESPACE, integration_id])
+        return bool(cur.fetchone()[0])
+
+
+def _sync_unlock(integration_id: int) -> None:
+    if connection.vendor != 'postgresql':
+        return
+    with connection.cursor() as cur:
+        cur.execute('SELECT pg_advisory_unlock(%s, %s)', [_SYNC_LOCK_NAMESPACE, integration_id])
+
+
 @shared_task(name='tracker.sync_qb_time_full')
 def sync_qb_time_full(integration_id: int) -> dict:
+    """One firm's full sync, never two at once.
+
+    Every scheduled task currently fires twice, and the change check can land
+    on top of the hourly sweep or a Sync press. Two concurrent syncs could both
+    create the same new client, so the second one simply stands down — the
+    first is already fetching everything it would have.
+    """
     try:
         integration = Integration.objects.select_related('organization').get(
             id=integration_id, provider='qb_time')
     except Integration.DoesNotExist:
         return {'error': 'integration_not_found'}
-    return full_sync(integration)
+    if not _try_sync_lock(integration.id):
+        return {'skipped': 'already_running'}
+    try:
+        return full_sync(integration)
+    finally:
+        _sync_unlock(integration.id)
 
 
 @shared_task(name='tracker.sync_all_qb_time_orgs')
 def sync_all_qb_time_orgs(min_age_minutes: int = 45) -> dict:
-    """Hourly: keep every connected firm's project list current.
+    """Hourly backstop: a full sync for any firm not synced in the last 45 min.
 
-    QuickBooks Time has no webhooks for jobcodes, so this sweep IS the live
-    path — a project created at 10:05 is selectable by about 11:05, or at once
-    if someone presses Sync.
+    The live path is check_qb_time_changes. This sweep catches what that check
+    cannot see — chiefly an edited project estimate, which does not move the
+    jobcodes timestamp.
     """
     cutoff = timezone.now() - timedelta(minutes=min_age_minutes)
     queued = skipped = 0
@@ -412,3 +447,67 @@ def sync_all_qb_time_orgs(min_age_minutes: int = 45) -> dict:
         sync_qb_time_full.delay(integration.id)
         queued += 1
     return {'queued': queued, 'skipped': skipped}
+
+
+# ============================================================================
+# Change check — the nearest thing to a webhook QuickBooks Time offers
+# ============================================================================
+#
+# QuickBooks Time has no webhooks. What it has is one cheap endpoint that says
+# when anything in a collection last changed. Asking it every few minutes and
+# running the full sync only when the answer moved gets a new project into
+# TimeTracker within minutes, for one small request per firm per check.
+#
+# Projects are jobcodes underneath, so creating, renaming or archiving a
+# customer or project moves `jobcodes`; `users` covers staff matching.
+
+WATCHED_ENDPOINTS = ('jobcodes', 'users')
+# Their clock and ours are not the same clock. A change stamped this close
+# before our last sync started is treated as possibly missed — at worst one
+# extra sync.
+CLOCK_SKEW = timedelta(seconds=90)
+# A failing sync leaves last_synced_at behind, which would make every check
+# look like a change. Retry a failure this often, not every few minutes.
+FAILED_RETRY_AFTER = timedelta(minutes=15)
+
+
+def remote_changed_since(api, since) -> bool:
+    """Has anything we sync changed in QuickBooks Time since `since`? One request."""
+    if since is None:
+        return True
+    payload = api.get('last_modified_timestamps', endpoints=','.join(WATCHED_ENDPOINTS))
+    stamps = ((payload or {}).get('results') or {}).get('last_modified_timestamps') or {}
+    for name in WATCHED_ENDPOINTS:
+        changed_at = parse_datetime(str(stamps.get(name) or ''))
+        if changed_at is None:
+            # Missing or unreadable is not "unchanged" — sync rather than guess.
+            return True
+        if changed_at > since - CLOCK_SKEW:
+            return True
+    return False
+
+
+@shared_task(name='tracker.check_qb_time_changes')
+def check_qb_time_changes() -> dict:
+    """Every few minutes: sync any firm whose QuickBooks Time lists changed."""
+    now = timezone.now()
+    out = {'synced': 0, 'unchanged': 0, 'backing_off': 0, 'errors': 0}
+    for integration in Integration.objects.filter(provider='qb_time', is_connected=True):
+        if (integration.last_sync_status == 'failed'
+                and integration.updated_at and now - integration.updated_at < FAILED_RETRY_AFTER):
+            out['backing_off'] += 1
+            continue
+        try:
+            changed = remote_changed_since(QBTimeClient(integration), integration.last_synced_at)
+        except QBTimeError as e:
+            # The hourly sweep will try a full sync and record the failure on
+            # the card; a failed check alone must not spam the log or the API.
+            logger.info('QB Time change check failed for integration %s: %s', integration.id, e)
+            out['errors'] += 1
+            continue
+        if changed:
+            sync_qb_time_full.delay(integration.id)
+            out['synced'] += 1
+        else:
+            out['unchanged'] += 1
+    return out

@@ -36,6 +36,7 @@ KEY INVARIANTS
 """
 
 from __future__ import annotations
+import re
 from datetime import datetime, timedelta, date as date_type, timezone as dt_timezone
 from typing import Optional, List, Dict, Any
 from django.db import transaction
@@ -98,7 +99,7 @@ GENERIC_TITLES = (
 # How far back a path-less event may look for the path of the file it names.
 PATH_FILL_LOOKBACK = timedelta(minutes=30)
 # Photoshop / Illustrator decorate the document name: "Nike.psd @ 157% (RGB/8) *".
-_DOC_TITLE_DECORATION = _re_qb.compile(r"\s+@\s+.*$|\s*\*\s*$")
+_DOC_TITLE_DECORATION = re.compile(r"\s+@\s+.*$|\s*\*\s*$")
 
 
 def _doc_name_from_title(title: str) -> str:

@@ -98,12 +98,14 @@ STEPS = [
     Step('device_maps', 'provision', 'Every member has a machine hostname for auto-pair',
          'auto', check='device_maps', paths=AUTO_PAIR,
          help='Hostname case matters. A mismatch means that person pairs by hand.'),
-    Step('qbo_connected', 'provision', 'QuickBooks Online connected', 'action', who='firm',
+    # Key kept as qbo_connected so recorded step state survives the rename.
+    Step('qbo_connected', 'provision', 'QuickBooks connected (Online or Time)', 'action', who='firm',
          check='qbo_connected', action='connect_link', verticals=('marketing',),
-         help='Send the agency\'s QuickBooks admin a connect link — no TimeTracker login '
-              'needed; clients import the moment they approve. (Or an owner/admin connects '
-              'in Settings → Connections → Integrations.) For an agency, QuickBooks is its '
-              'OWN books — time in it is admin, never client work.'),
+         help='Send the agency\'s QuickBooks admin a connect link (no TimeTracker login) and '
+              'tick whichever they use. QuickBooks Time: clients, projects and the timesheet '
+              'push. QuickBooks Online: customers and invoices for Analytics. Either one ticks '
+              'this step. For an agency, QuickBooks is its OWN books — time in it is admin, '
+              'never client work.'),
     Step('clio_connected', 'provision', 'Clio connected (correct region)', 'auto', who='firm',
          check='clio_connected', verticals=('legal',),
          help='Settings → Connections → Integrations → Clio. Pick US / EU / AU correctly '
@@ -308,8 +310,12 @@ class Facts:
         return maps >= n, f'{maps} hostname(s) for {n} member(s)'
 
     def qbo_connected(self):
-        i = self._integration('quickbooks')
-        return bool(i and i.is_connected), 'connected' if i and i.is_connected else 'not connected'
+        """Either QuickBooks counts: QuickBooks Time alone brings clients,
+        projects and the timesheet push; Online adds invoices for Analytics."""
+        names = {'quickbooks': 'QuickBooks Online', 'qb_time': 'QuickBooks Time'}
+        on = [label for key, label in names.items()
+              if (i := self._integration(key)) and i.is_connected]
+        return bool(on), (' + '.join(on) + ' connected') if on else 'not connected'
 
     def clio_connected(self):
         i = self._integration('clio')

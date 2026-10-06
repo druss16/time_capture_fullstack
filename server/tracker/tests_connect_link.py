@@ -197,3 +197,24 @@ class ConnectLinkEmailTypeTests(ConsoleBase):
         # file it under "Invitation to join" and release it with invitations.
         from tracker.services.email_outbox import email_type_for
         self.assertEqual(email_type_for(['onboarding', 'connect_link']), 'connect_link')
+
+
+class ConnectLinkEmailCopyTests(ConsoleBase):
+    def _render(self, providers):
+        from tracker import email_service
+        cap = {}
+        with mock.patch.object(email_service, 'send_email', side_effect=lambda **k: cap.update(k) or True):
+            email_service.send_connect_link(to_email='kyle@agency.test', firm_name='Acme',
+                                            connect_url='https://app.test/connect/X',
+                                            providers=providers, contact_name='Kyle')
+        return cap
+
+    def test_one_service_reads_as_one_click(self):
+        cap = self._render(['QuickBooks Online'])
+        self.assertIn('about two minutes', cap['plain_content'])
+        self.assertIn('Copy and paste this link', cap['html_content'])
+
+    def test_two_services_say_connect_each(self):
+        cap = self._render(['QuickBooks Online', 'QuickBooks Time'])
+        self.assertIn('click Connect next to each one', cap['html_content'])
+        self.assertIn('Connect QuickBooks Online and QuickBooks Time', cap['html_content'])

@@ -94,6 +94,29 @@ GENERIC_TITLES = (
     "open or restore company",
 )
 
+
+def _representative_index(items) -> int:
+    """Index of the event that names a block: items are (seconds, file_path).
+
+    When the events carry file paths, the FILE with the most TOTAL time wins,
+    and its longest event represents it. Picking the single longest event let a
+    file seen in two long captures out-title one seen in many short ones: a
+    block that was 7m Adidas_test.psd and 2m Adidas_test_deux.psd was titled
+    "Adidas_test_deux.psd". Events without paths (QuickBooks screens, browser
+    tabs) keep the longest single event, as before — their titles vary per
+    screen, so summing by title would let a repeated screen take over.
+    """
+    totals: Dict[str, float] = {}
+    for sec, fp in items:
+        if fp:
+            totals[fp] = totals.get(fp, 0.0) + sec
+    if totals:
+        top = max(totals, key=totals.get)
+        candidates = [i for i, (_s, fp) in enumerate(items) if fp == top]
+    else:
+        candidates = list(range(len(items)))
+    return max(candidates, key=lambda i: items[i][0])
+
 # v1.3.62: QB company extraction for session continuity (see grouping loop).
 import re as _re_qb
 _QB_COMPACT_APPS = {'qbw', 'qbw.exe', 'qbw32', 'qbw32.exe'}
@@ -272,7 +295,8 @@ def _content_identifier(window_title: str, file_path: str, url: str) -> str:
     return ""
 
 
-def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
+def _grouping_content_id(window_title: str, file_path: str, url: str,
+                         by_folder: bool = False) -> str:
     """v2 (2026-06-29): coarse grouping identity that prevents fragmentation.
 
     Combines the per-app content_identity extractor with the coarse
@@ -297,7 +321,23 @@ def _grouping_content_id(window_title: str, file_path: str, url: str) -> str:
     # identities are untouched — and is a no-op when the path has no recognized
     # clients-root (client_folder_bucket returns ''), so user-folder / OneDrive
     # docs keep the existing coarse bucket.
+    #
+    # by_folder (firms that file time under PROJECTS): the boundary is the
+    # project, not the client. Two files in Desktop/Adidas/Fall Launch and
+    # Desktop/Adidas/Winter Sprint share the client folder, so a client-level
+    # key merged the Winter Sprint file into the Fall Launch block and it kept
+    # Fall Launch's project. Key on the file's own folder instead — the SAME
+    # folder_key the learned-folder project tier reads (home dir and sync root
+    # dropped, Exports/ and Links/ rolled up into a convention-named
+    # deliverable), so a block splits exactly where a project can change. A
+    # CPA firm keeps the client-level key: its subfolders are years and
+    # statements of one client, and splitting on them would only fragment.
     if file_path and (gk == "docs" or gk.startswith("docs:")):
+        if by_folder:
+            from tracker.services.matter_attribution import folder_key
+            fk = folder_key(file_path)
+            if fk:
+                return f"docs:dir={fk}"
         cf = client_folder_bucket(file_path)
         if cf:
             return f"docs:cf={cf}"
@@ -745,6 +785,17 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
     if not events:
         return 0
 
+    # Firms that file time under projects split document blocks per FOLDER,
+    # not per client (see _grouping_content_id). Decided once per run, and the
+    # grouping, existing-block and new-block keys below must all pass it, or a
+    # block grouped one way would merge into a block keyed the other.
+    try:
+        from tracker.services.projects import org_uses_projects
+        by_folder = org_uses_projects(org)
+    except Exception as e:
+        logger.warning(f"[COMPACT] org_uses_projects failed for org {getattr(org, 'id', None)}: {e}")
+        by_folder = False
+
     # Drop events covering time the agent's tracking loop never watched before
     # any block is built — a frozen agent must not mint a client block at all,
     # not merely a zero-minute one. They stay unlinked on purpose: they are the
@@ -936,6 +987,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     ev.get("window_title") or "",
                     ev.get("file_path") or "",
                     ev.get("url") or "",
+                    by_folder=by_folder,
                 )
             
             content_part = f"|{content_id}" if content_id else ""
@@ -989,7 +1041,8 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 and e["window_title"].lower().strip() not in GENERIC_TITLES
             ]
             if titled_events:
-                rep_event = max(titled_events, key=_ev_seconds)
+                rep_event = titled_events[_representative_index(
+                    [(_ev_seconds(e), e.get("file_path") or "") for e in titled_events])]
             else:
                 rep_event = app_events[0]
             window_title = rep_event["window_title"]
@@ -1102,6 +1155,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                 b.window_title or "",
                 b.file_path or "",
                 b.url or "",
+                by_folder=by_folder,
             )
         existing_content_part = f"|{existing_content_id}" if existing_content_id else ""
         # v2 (2026-06-29): mirror the grouping-key rule — when a coarse content
@@ -1140,6 +1194,7 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     block_data.get("window_title") or "",
                     block_data.get("file_path") or "",
                     block_data.get("url") or "",
+                    by_folder=by_folder,
                 )
             new_content_part = f"|{new_content_id}" if new_content_id else ""
             # v2 (2026-06-29): mirror grouping + existing-block keys — content
@@ -1220,16 +1275,28 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                     # string — a verbose throwaway must not hijack the title over
                     # the dominant work). Mirrors the create-path rule above.
                     # GENERIC_TITLES: module-level constant (shared with create path).
+                    #
+                    # The file_path / url come from the SAME event as the title,
+                    # exactly as on the create path. Refreshing only the title
+                    # desynced them: a block created on Fall Launch/Adidas_test.psd
+                    # that then gained more Winter Sprint/Adidas_test_deux.psd
+                    # time showed the deux title but kept the Fall Launch path —
+                    # and since the merge key is read from file_path, every new
+                    # Fall Launch minute kept landing under the deux row, while
+                    # the classifier and project tiers read a path the row's
+                    # title disagreed with.
                     _rows = RawEvent.objects.filter(block=locked).values_list(
-                        'window_title', 'start_ts', 'end_ts'
+                        'window_title', 'start_ts', 'end_ts', 'file_path', 'url'
                     )
                     _scored = []
-                    for _t, _st, _en in _rows:
+                    for _t, _st, _en, _fp, _u in _rows:
                         if not _t or _t.lower().strip() in GENERIC_TITLES:
                             continue
                         _dur = (_en - _st).total_seconds() if (_st and _en) else 0.0
-                        _scored.append((_dur, _t))
-                    new_title = max(_scored, key=lambda x: x[0])[1] if _scored else locked.window_title
+                        _scored.append((_dur, _t, _fp or "", _u or ""))
+                    _rep = (_scored[_representative_index([(x[0], x[2]) for x in _scored])]
+                            if _scored else None)
+                    new_title = _rep[1] if _rep else locked.window_title
 
                     update_fields = {
                         "start": updated_start,
@@ -1237,6 +1304,13 @@ def compact_day(user, day: date_type, hostname: Optional[str] = None, org=None) 
                         "minutes": updated_minutes,
                         "window_title": new_title,
                     }
+                    # Only when the representative event carries one: a QB block's
+                    # file_path is its company file, filled from elsewhere, and an
+                    # event without a path must not blank it.
+                    if _rep and _rep[2]:
+                        update_fields["file_path"] = _rep[2]
+                    if _rep and _rep[3]:
+                        update_fields["url"] = _rep[3]
 
                     if locked.billing_rate and updated_minutes:
                         update_fields["billing_amount"] = round(

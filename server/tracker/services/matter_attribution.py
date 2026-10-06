@@ -151,6 +151,38 @@ def match_matter_in_text(text: str, index: dict):
 # out of it, is too generic to read out of free text ("Ads", "SEO" alone).
 MIN_NAME_PHRASE = 4
 
+# Every firm spells a project its own way in its paths: "Spring Launch",
+# "Spring_Launch", "SpringLaunch", "SPRING-LAUNCH", "2026_SpringLaunch_v3",
+# "Launch - Spring". Names are therefore compared as WORDS, split on any
+# separator, on a case change (SpringLaunch, KONETIQCampaigns) and between
+# letters and digits (TruckMonth2026), with a plural's "s" dropped on both
+# sides ("Campaigns" folder, "Campaign" project).
+_NAME_WORD_SPLIT = re.compile(
+    r'[^A-Za-z0-9]+'
+    r'|(?<=[a-z])(?=[A-Z])'          # springLaunch
+    r'|(?<=[A-Z])(?=[A-Z][a-z])'     # KONETIQCampaigns
+    r'|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])')   # Month2026
+# Words that say nothing about WHICH project: joiners, and the dates and
+# version marks a file name carries regardless of the project.
+_NAME_FILLER = {'a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'with'}
+_NAME_NOISE = re.compile(r'^(?:(?:19|20)\d{2}|v\d+|rev\d+|final|draft|copy)$')
+
+
+def _stem(word: str) -> str:
+    if len(word) >= 3 and word.endswith('s') and not word.endswith('ss'):
+        return word[:-1]
+    return word
+
+
+def name_words(text: str) -> list:
+    """'KONETIQCampaigns_2026-v3' -> ['konetiq', 'campaigns']. Unstemmed."""
+    out = []
+    for w in _NAME_WORD_SPLIT.split(text or ''):
+        w = w.lower()
+        if w and w not in _NAME_FILLER and not _NAME_NOISE.match(w):
+            out.append(w)
+    return out
+
 
 def name_phrase(project_name: str, client_name: str = '') -> str:
     """
@@ -161,8 +193,8 @@ def name_phrase(project_name: str, client_name: str = '') -> str:
     has a client), so they are stripped: "ford spring launch" would otherwise
     never match a file called "Spring Launch storyboard.psd".
     """
-    client_words = _tokens(client_name)
-    words = [w for w in _normalize(project_name).split() if w not in client_words]
+    client_words = {_stem(w) for w in name_words(client_name)}
+    words = [w for w in name_words(project_name) if _stem(w) not in client_words]
     phrase = ' '.join(words)
     return phrase if len(phrase) >= MIN_NAME_PHRASE and not _YEAR_LIKE.match(phrase) else ''
 
@@ -194,21 +226,95 @@ def build_name_index(options_by_client, client_names) -> dict:
     return out
 
 
+def _single(hits: list, phrases: dict):
+    """The one project among `hits`, letting a longer name absorb one it contains."""
+    hits = [h for h in hits if not any(h != o and f' {h} ' in f' {o} ' for o in hits)]
+    pids = {phrases[h] for h in hits}
+    return next(iter(pids)) if len(pids) == 1 else None
+
+
 def match_project_name(text: str, phrases: dict):
     """
     Project id whose name appears in `text`, or None.
 
-    Whole words only. When one hit is contained in another ("social" inside
-    "social ads") the longer, more specific name wins; any other disagreement
-    abstains.
+    Whole words only, however the firm spells them (see _NAME_WORD_SPLIT):
+    "Spring Launch" is found in "SpringLaunch_storyboard.psd" and in
+    "2026_SPRING-LAUNCH". In order:
+
+      1. the name's words in a row;
+      2. the name run together into one word ("SPRINGLAUNCH");
+      3. every word of a name of two or more words, in any order
+         ("Launch - Spring", ".../Spring/Launch Assets/").
+
+    A later check runs only when the earlier one found nothing. When one hit is
+    contained in another ("social" inside "social ads") the longer, more
+    specific name wins; any other disagreement abstains.
     """
     if not text or not phrases:
         return None
-    padded = f' {_normalize(text)} '
-    hits = [ph for ph in phrases if f' {ph} ' in padded]
-    hits = [h for h in hits if not any(h != o and f' {h} ' in f' {o} ' for o in hits)]
-    pids = {phrases[h] for h in hits}
-    return next(iter(pids)) if len(pids) == 1 else None
+    words = [_stem(w) for w in name_words(text)]
+    if not words:
+        return None
+    padded = f" {' '.join(words)} "
+    present = set(words)
+    stems = {ph: [_stem(w) for w in ph.split()] for ph in phrases}
+
+    in_a_row = [ph for ph, st in stems.items() if f" {' '.join(st)} " in padded]
+    if in_a_row:
+        return _single(in_a_row, phrases)
+    run_together = [ph for ph in phrases
+                    if len(ph.split()) > 1 and ph.replace(' ', '') in present]
+    if run_together:
+        return _single(run_together, phrases)
+    any_order = [ph for ph, st in stems.items() if len(st) > 1 and set(st) <= present]
+    return _single(any_order, phrases) if any_order else None
+
+
+# A partial name match needs at least this many of the project's words, and
+# this share of them.
+PARTIAL_MIN_WORDS = 2
+PARTIAL_MIN_SHARE = 0.6
+
+
+def match_project_name_partial(text: str, phrases: dict):
+    """
+    Project id whose name `text` mostly states, or None. Weaker than
+    match_project_name, so it runs only after that found nothing.
+
+    Firms abbreviate and decorate: the project is "Konetiq Campaign Launch",
+    the folder "0074_Konetiq-Launch_Sept". It counts when the text carries at
+    least PARTIAL_MIN_WORDS of the name's words and PARTIAL_MIN_SHARE of them,
+    and at least one of those words belongs to NO other project of the client
+    ("konetiq" alone cannot choose between "Konetiq Campaign" and "Konetiq
+    Launch Ads"). The best-covered project must be the only one at that
+    coverage; a tie abstains.
+    """
+    if not text or not phrases:
+        return None
+    present = {_stem(w) for w in name_words(text)}
+    if not present:
+        return None
+    stems = {ph: {_stem(w) for w in ph.split()} for ph in phrases}
+    owners = defaultdict(set)
+    for ph, st in stems.items():
+        for w in st:
+            owners[w].add(phrases[ph])
+
+    scored = []
+    for ph, st in stems.items():
+        matched = st & present
+        if len(matched) < PARTIAL_MIN_WORDS or len(matched) / len(st) < PARTIAL_MIN_SHARE:
+            continue
+        if not any(len(owners[w]) == 1 for w in matched):
+            continue
+        scored.append((len(matched) / len(st), len(matched), phrases[ph]))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    best = scored[0]
+    if len(scored) > 1 and scored[1][:2] == best[:2] and scored[1][2] != best[2]:
+        return None
+    return best[2]
 
 
 # A per-person prefix in front of a shared folder: the home directory.
@@ -249,6 +355,25 @@ def folder_parts(file_path: str) -> list:
     return parts
 
 
+def named_part_of_path(file_path: str) -> str:
+    """
+    The path a project name is read from: without the home directory and the
+    sync root, whose words are on every file. "Dropbox (More Than Cars)" would
+    otherwise put "more", "than" and "cars" in front of a name tier on every
+    file the firm owns — enough, with one real word, to half-name "New Cars
+    Special". Keeps the file name, unlike folder_parts.
+    """
+    if not file_path:
+        return ''
+    path = _HOME_PREFIX.sub('', str(file_path).replace('\\', '/'))
+    parts = [p for p in path.split('/') if p]
+    for i, part in enumerate(parts[:-1]):
+        if _SYNC_ROOT.search(part):
+            parts = parts[i + 1:]
+            break
+    return '/'.join(parts)
+
+
 def folder_key(file_path: str) -> str:
     """
     The folder a file belongs to, normalized (see folder_parts).
@@ -259,6 +384,63 @@ def folder_key(file_path: str) -> str:
     has no key: the root is everybody's dumping ground.
     """
     return _normalize('/'.join(folder_parts(file_path)))
+
+
+def _filed_with_path(org):
+    from tracker.models import Block
+    return (Block.objects
+            .filter(org=org, project__isnull=False)
+            .exclude(file_path=''))
+
+
+def _count_folders(rows, counts=None, sign=1, touched=None) -> dict:
+    """Fold (file_path, project_id) rows into folder -> {project_id: blocks}."""
+    from collections import Counter
+
+    counts = {} if counts is None else counts
+    # The same document recurs across dozens of blocks; key each path once.
+    for (file_path, project_id), n in Counter(rows).items():
+        key = folder_key(file_path)
+        if key:
+            per = counts.setdefault(key, {})
+            per[project_id] = per.get(project_id, 0) + sign * n
+            if touched is not None:
+                touched.add(key)
+    return counts
+
+
+def _folder_counts(org, since, exclude_block_ids=None) -> dict:
+    qs = _filed_with_path(org).filter(start__gte=since)
+    if exclude_block_ids:
+        qs = qs.exclude(id__in=exclude_block_ids)
+
+    # Paged by pk, not .iterator(): server-side cursors do not survive the Neon
+    # connection pooler, and this failed with InvalidCursorName on every run.
+    # The failure was invisible — full_sync catches attribution errors so a
+    # problem here cannot break a sync that worked — so matter attribution
+    # silently did nothing at all rather than reporting a fault. No GROUP BY
+    # either: sorting the paths costs the database more than counting them here.
+    def rows():
+        last = 0
+        while True:
+            page = list(qs.filter(pk__gt=last).order_by('pk')
+                        .values_list('pk', 'file_path', 'project_id')[:5000])
+            for _pk, file_path, project_id in page:
+                yield file_path, project_id
+            if len(page) < 5000:
+                return
+            last = page[-1][0]
+
+    return _count_folders(rows())
+
+
+def _index_from_counts(counts) -> dict:
+    out = {}
+    for key, per in counts.items():
+        live = [pid for pid, n in per.items() if n > 0]
+        if len(live) == 1:
+            out[key] = live[0]
+    return out
 
 
 def build_folder_index(org, since, exclude_block_ids=None) -> dict:
@@ -274,33 +456,162 @@ def build_folder_index(org, since, exclude_block_ids=None) -> dict:
     A folder that has pointed at two different matters is dropped. Shared
     folders exist ("Correspondence", "Admin") and guessing between them would
     bill the wrong client.
+
+    Reads every filed block since `since`. The scheduled sweep goes through
+    folder_index_for_org instead, which keeps this answer and moves it forward.
     """
-    from tracker.models import Block
+    return _index_from_counts(_folder_counts(org, since, exclude_block_ids))
 
-    qs = (
-        Block.objects
-        .filter(org=org, project__isnull=False, start__gte=since)
-        .exclude(file_path='')
-        .only('id', 'file_path', 'project_id')
-        .order_by('pk')          # keyset paging pages by pk; be explicit
+
+# ----------------------------------------------------------------------------
+# The learned-folder index, kept between ticks
+# ----------------------------------------------------------------------------
+#
+# The sweep runs every few minutes for every firm with projects, and rebuilding
+# the index read 180 days of filed blocks each time (1.5s for a 100k-block firm,
+# before network) to get an answer that had barely moved. So each worker process
+# keeps the per-folder counts, and each tick applies only what changed since the
+# last one, read from tracker_blockfilinglog (migration 0189). A trigger writes
+# that log, because project_id is set by a dozen paths and several are bulk
+# .update()s that no signal or auto_now ever sees.
+#
+# The result is exactly build_folder_index's, not an approximation of it:
+#   - a new filing ('a' in the log) adds one block to its folder;
+#   - the window's trailing edge subtracts blocks that have aged past it;
+#   - anything that could REMOVE a contribution ('o': re-file, unfile, path or
+#     start change, delete) rebuilds from scratch. Those are rare — new time
+#     is filed far more often than filed time is changed — so rebuilds are too.
+# Reads run in one REPEATABLE READ transaction and take exactly the log entries
+# the previous snapshot could not see, so out-of-order commits are never lost.
+#
+# In-process rather than the Django cache: the counts run to megabytes for a big
+# firm, and pickling them in and out each tick cost more than the advance.
+
+FOLDER_LOOKBACK_DAYS = 180
+# A full rebuild at least this often, as a backstop. Also bounds how far back an
+# advance may need the log, which is pruned after FILING_LOG_RETENTION.
+FOLDER_STATE_MAX_AGE = timedelta(hours=6)
+FILING_LOG_RETENTION = timedelta(hours=24)
+# More new filings than this in one tick and a rebuild is the cheaper read.
+FOLDER_MAX_DELTA = 20000
+
+# (org_id, lookback_days) -> {'snapshot', 'since', 'built_at', 'counts', 'index'}
+_FOLDER_STATE = {}
+
+
+def _advance_folder_state(cur, org, state, since, now) -> bool:
+    """
+    Move `state` forward to the current snapshot, in place. False when only a
+    rebuild is exact; the caller then discards the (possibly half-moved) state.
+    """
+    if state['since'] > since or now - state['built_at'] > FOLDER_STATE_MAX_AGE:
+        return False
+    prev_snapshot = state['snapshot']
+    cur.execute(
+        "SELECT block_id, kind FROM tracker_blockfilinglog"
+        " WHERE org_id = %s AND xid >= pg_snapshot_xmin(%s::pg_snapshot)"
+        " AND NOT pg_visible_in_snapshot(xid, %s::pg_snapshot)",
+        [org.id, prev_snapshot, prev_snapshot],
     )
-    if exclude_block_ids:
-        qs = qs.exclude(id__in=exclude_block_ids)
+    added = set()
+    for block_id, kind in cur.fetchall():
+        if kind != 'a':
+            return False
+        added.add(block_id)
+    if len(added) > FOLDER_MAX_DELTA:
+        return False
 
-    # keyset_iter, not .iterator(): server-side cursors do not survive the Neon
-    # connection pooler, and this failed with InvalidCursorName on every run.
-    # The failure was invisible — full_sync catches attribution errors so a
-    # problem here cannot break a sync that worked — so matter attribution
-    # silently did nothing at all rather than reporting a fault.
-    from tracker.utils.db_iter import keyset_iter
+    counts, touched = state['counts'], set()
+    ids = sorted(added)
+    for i in range(0, len(ids), 2000):
+        _count_folders(
+            _filed_with_path(org).filter(id__in=ids[i:i + 2000], start__gte=since)
+            .values_list('file_path', 'project_id'),
+            counts, touched=touched,
+        )
+    # The trailing edge. A block in this range that is not a new filing was
+    # counted last time with these same values: had they changed, its log
+    # entry would be an 'o' and we would be rebuilding.
+    _count_folders(
+        ((p, pid) for bid, p, pid in _filed_with_path(org)
+         .filter(start__gte=state['since'], start__lt=since)
+         .values_list('id', 'file_path', 'project_id') if bid not in added),
+        counts, sign=-1, touched=touched,
+    )
 
-    seen = defaultdict(set)
-    for b in keyset_iter(qs, chunk_size=2000):
-        key = folder_key(b.file_path)
-        if key:
-            seen[key].add(b.project_id)
+    index = state['index']
+    for key in touched:
+        per = {pid: n for pid, n in counts[key].items() if n}
+        if any(n < 0 for n in per.values()):
+            logger.warning('folder index for org %s went negative at %r; rebuilding', org.id, key)
+            return False
+        if per:
+            counts[key] = per
+        else:
+            del counts[key]
+        if len(per) == 1:
+            index[key] = next(iter(per))
+        else:
+            index.pop(key, None)
+    return True
 
-    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+def folder_index_for_org(org, lookback_days=FOLDER_LOOKBACK_DAYS, *, stats=None) -> dict:
+    """
+    build_folder_index(org, now - lookback_days), at the cost of what changed
+    since the last call rather than of the whole window.
+
+    Falls back to the full build when the change log is not there (migration
+    0189 not applied yet — Render ships code before migrations), off Postgres,
+    or inside a caller's transaction, where this cannot open its own snapshot.
+    """
+    from django.db import DatabaseError, connection, transaction
+
+    now = timezone.now()
+    since = now - timedelta(days=lookback_days)
+    if connection.vendor != 'postgresql' or connection.in_atomic_block:
+        return build_folder_index(org, since)
+
+    # Popped, not read: a failed advance must not leave half-moved counts
+    # behind, and a concurrent caller should rebuild rather than share them.
+    state = _FOLDER_STATE.pop((org.id, lookback_days), None)
+    mode = 'advanced'
+    try:
+        with transaction.atomic():
+            with connection.cursor() as cur:
+                cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+                cur.execute("SELECT to_regclass('tracker_blockfilinglog') IS NOT NULL,"
+                            " pg_current_snapshot()::text")
+                has_log, snapshot = cur.fetchone()
+                if not has_log:
+                    return build_folder_index(org, since)
+                if state is None or not _advance_folder_state(cur, org, state, since, now):
+                    mode = 'rebuilt'
+                    counts = _folder_counts(org, since)
+                    state = {'built_at': now, 'counts': counts,
+                             'index': _index_from_counts(counts)}
+    except DatabaseError as e:
+        logger.warning('folder index state unavailable for org %s (%s); full build', org.id, e)
+        return build_folder_index(org, since)
+
+    state['snapshot'], state['since'] = snapshot, since
+    _FOLDER_STATE[(org.id, lookback_days)] = state
+    if stats is not None:
+        stats['folder_index'] = mode
+    return dict(state['index'])
+
+
+def prune_filing_log() -> int:
+    """Drop change-log entries no kept state can still need."""
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute("SELECT to_regclass('tracker_blockfilinglog') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            return 0
+        cur.execute("DELETE FROM tracker_blockfilinglog WHERE at < %s",
+                    [timezone.now() - FILING_LOG_RETENTION])
+        return cur.rowcount
 
 
 SIBLING_LOOKBACK_DAYS = 180
@@ -389,7 +700,10 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
                         by any route, including a human correcting it.
       2. number       — a matter number appears in the path, title or URL.
       2b. name        — a project kept in TimeTracker is named in the path,
-                        title or URL, among the block's OWN client's projects.
+                        title or URL, among the block's OWN client's projects,
+                        however the firm spells it (SpringLaunch, Launch-Spring).
+      2c. name_partial — most of one such name, including a word no other
+                        project of the client has.
       3. sole_matter  — the client has exactly one open matter. Deterministic:
                         there is nothing here to be wrong about.
       4. temporal     — both neighbours agree. Weakest, because it infers from
@@ -417,10 +731,17 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
 
     if name_index and block.client_id in name_index:
         phrases = name_index[block.client_id]
-        for field in ('file_path', 'window_title', 'title', 'url'):
-            matched = match_project_name(getattr(block, field, '') or '', phrases)
+        texts = [(field, getattr(block, field, '') or '')
+                 for field in ('file_path', 'window_title', 'title', 'url')]
+        texts[0] = ('file_path', named_part_of_path(texts[0][1]))
+        for field, text in texts:
+            matched = match_project_name(text, phrases)
             if matched:
                 return matched, 'name', f'project name found in {field}'
+        for field, text in texts:
+            matched = match_project_name_partial(text, phrases)
+            if matched:
+                return matched, 'name_partial', f'most of a project name found in {field}'
 
     if block.client_id:
         sole = sole_matter_by_client.get(block.client_id)
@@ -520,7 +841,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         'org_id': org.id, 'matters': len(mappings),
         'projects': sum(len(v) for v in options_by_client.values()),
         'scanned': 0,
-        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0, 'by_name': 0,
+        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0, 'by_name': 0, 'by_name_partial': 0,
         'by_sole_matter': 0, 'by_temporal': 0,
         'unmatched': 0, 'off_client': 0, 'client_corrected': 0, 'dry_run': dry_run,
     }
@@ -544,7 +865,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
 
     # Learned folders reach further back than the blocks being attributed: a
     # folder settled months ago should still teach today's work.
-    folder_index = build_folder_index(org, timezone.now() - timedelta(days=max(days, 180)))
+    folder_index = folder_index_for_org(org, max(days, FOLDER_LOOKBACK_DAYS), stats=stats)
 
     # Temporal inference is opt-in per org, reusing the flag that already gates
     # Stage Sandwich for clients — the same trade, and the same firms who want it.
@@ -748,6 +1069,10 @@ def attribute_matters_recent(days: int = 2) -> dict:
         .values_list('id', flat=True)
     )
     totals = {'orgs': 0, 'scanned': 0, 'attributed': 0, 'client_corrected': 0}
+    try:
+        totals['filing_log_pruned'] = prune_filing_log()
+    except Exception as e:
+        logger.warning('Filing log prune failed: %s', e)
     for org in Organization.objects.filter(id__in=list(org_ids)):
         try:
             s = attribute_matters_for_org(org, days=days)

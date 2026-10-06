@@ -7669,9 +7669,16 @@ def split_block(request, block_id):
     workbook) can be split so each slice books to its own client, instead of the
     whole block landing on one attribution.
 
-    Body: {"assignments": {"<slice label>": {"client_id": int|null, "category": str}}}
+    Body: {"assignments": {"<slice label>": {"client_id": int|null, "category": str}},
+           "separate": bool}
     where the labels are the breakdown slices the user saw (from /blocks/<id>/why/).
     Any slice not named keeps the block's current client.
+
+    separate=true makes every slice its own entry even when they share a client:
+    two files of one client in two project folders (Adidas/Fall Launch and
+    Adidas/Winter Sprint) merged into one block, and a client-only split had
+    nothing to tell apart. Each carved entry then gets its project from its own
+    folder through the attribution pass, run right after the split.
 
     Mechanics (migration-free, all-or-nothing):
       - regroup the block's sub-events by those same slice labels,
@@ -7703,6 +7710,7 @@ def split_block(request, block_id):
         )
 
     assignments = (request.data or {}).get("assignments") or {}
+    separate = bool((request.data or {}).get("separate"))
     if not isinstance(assignments, dict) or not assignments:
         return Response({"error": "assignments required"}, status=400)
 
@@ -7734,7 +7742,8 @@ def split_block(request, block_id):
 
     # Map each slice's events to its assigned (client, category); merge slices that
     # land on the same client+category into one group.
-    groups = defaultdict(list)  # (client_id, category) -> [event_id, ...]
+    # With separate=true the slice label joins the key, so every slice stays apart.
+    groups = defaultdict(list)  # (client_id, category[, label]) -> [event_id, ...]
     for label, ev_ids in slices.items():
         a = assignments.get(label)
         if isinstance(a, dict):
@@ -7742,7 +7751,7 @@ def split_block(request, block_id):
             cat = (a.get("category") or default_category)
         else:
             cid, cat = default_client_id, default_category
-        groups[(cid, cat)].extend(ev_ids)
+        groups[(cid, cat, label) if separate else (cid, cat)].extend(ev_ids)
 
     if len(groups) <= 1:
         return Response(
@@ -7763,7 +7772,7 @@ def split_block(request, block_id):
     created = []
     try:
         with transaction.atomic():
-            for (cid, cat), ev_ids in carve:
+            for (cid, cat, *_label), ev_ids in carve:
                 evs = list(
                     RawEvent.objects.filter(id__in=ev_ids)
                     .order_by("start_ts")
@@ -7795,7 +7804,7 @@ def split_block(request, block_id):
                 created.append({"id": nb.id, "client_id": cid, "minutes": nb.minutes})
 
             # Re-attribute the retained block to its group's client, on its remaining events.
-            keep_cid, keep_cat = keep_key
+            keep_cid, keep_cat = keep_key[0], keep_key[1]
             remaining = list(
                 RawEvent.objects.filter(id__in=keep_ev_ids)
                 .only("id", "start_ts", "end_ts", "window_title", "app_name", "file_path", "url")
@@ -7821,9 +7830,26 @@ def split_block(request, block_id):
             svc.recommit(block, user=user, override={
                 "client_id": keep_cid, "category": keep_cat, "is_billable": keep_cid is not None,
             })
+            # A project belongs to one client. If the kept piece moved client,
+            # its old project would put this time on the wrong client's bill.
+            if block.project_id and block.project.client_id != keep_cid:
+                block.project = None
+                block.save(update_fields=["project"], force_classifier=True)
     except Exception as e:
         log(f"[SPLIT] block {block_id} failed: {e}")
         return Response({"error": f"Split failed: {e}"}, status=500)
+
+    # Give the carved entries their projects now, from their own folders and
+    # names, rather than leaving them in "Needs a project" until the next sweep.
+    # The split itself has landed; a failure here only delays the project.
+    if created:
+        try:
+            from tracker.services.matter_attribution import attribute_matters_for_org
+            # Reach back to the split block's own day, however old it is.
+            age_days = (timezone.now() - block.start).days + 1 if block.start else 1
+            attribute_matters_for_org(org, days=max(1, age_days))
+        except Exception as e:
+            log(f"[SPLIT] project attribution after split of {block_id} failed: {e}")
 
     return Response({
         "success": True,

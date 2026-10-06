@@ -243,8 +243,11 @@ const StatCell = ({
 //
 // Only lists blocks whose client HAS matters to choose between — a client with
 // none is not a task, and including them would make this a queue people skip.
-const MatterLane = ({ date, range, onChanged, onQueue }: {
-  date: string; range: ViewRange; onChanged: () => void;
+const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
+  date: string; range: ViewRange;
+  /** Bumped each time the rest of the page reloads; the lane re-syncs with it. */
+  refreshTick: number;
+  onChanged: () => void;
   /** Reports what is waiting here, so the page headline counts it too. */
   onQueue?: (count: number, minutes: number) => void;
 }) => {
@@ -273,19 +276,31 @@ const MatterLane = ({ date, range, onChanged, onQueue }: {
       .catch(() => { setRows([]); setTotal(0); });
   }, [fetchQueue]);
 
-  // A pick that filed other rows too: drop the ones that left, keeping the
-  // order of the rest so the list does not shuffle under someone working it.
-  const pruneFiled = useCallback(() => {
+  // Bring the lane up to date without shuffling it under someone working it:
+  // rows that were filed (by a folder pick, or by the server's project pass
+  // since the last load) leave, rows still waiting keep their place, and new
+  // ones join at the end. The lane used to load only on mount, so a block the
+  // server filed a minute later sat here AND under its project in Certain.
+  const sync = useCallback(() => {
     fetchQueue()
       .then((d: any) => {
-        const still = new Set((d?.blocks ?? []).map((b: any) => b.id));
-        setRows((prev) => prev.filter((x) => still.has(x.id)));
+        const fresh: any[] = d?.blocks ?? [];
+        const byId = new Map(fresh.map((b) => [b.id, b]));
+        setRows((prev) => {
+          const kept = prev.filter((x) => byId.has(x.id)).map((x) => byId.get(x.id));
+          const known = new Set(prev.map((x) => x.id));
+          return [...kept, ...fresh.filter((b) => !known.has(b.id))];
+        });
         setTotal(d?.total_minutes ?? 0);
       })
       .catch(() => {});
   }, [fetchQueue]);
 
   useEffect(() => { load(); }, [load]);
+  const firstTick = useRef(refreshTick);
+  useEffect(() => {
+    if (refreshTick !== firstTick.current) sync();
+  }, [refreshTick, sync]);
   useEffect(() => { onQueue?.(rows.length, total); }, [rows.length, total, onQueue]);
 
   if (rows.length === 0) return null;
@@ -332,13 +347,13 @@ const MatterLane = ({ date, range, onChanged, onQueue }: {
                 onAssigned={(_projectId, folderFiled = 0) => {
                   // The row leaves immediately. Reloading the lane here meant a
                   // visible flicker and, worse, the list re-ordering under
-                  // someone working down it. The lane refetches on the next date
-                  // change or natural refresh.
+                  // someone working down it. The lane re-syncs, in place, with
+                  // the page's next reload.
                   setRows((prev) => prev.filter((x) => x.id !== r.id));
                   setTotal((prev) => Math.max(0, prev - (r.minutes || 0)));
                   if (folderFiled > 0) {
                     setNote(`Also filed ${folderFiled} more from the same folder`);
-                    pruneFiled();
+                    sync();
                   }
                   onChanged();
                 }}
@@ -483,6 +498,8 @@ export default function DailyReview() {
   const lastActionAt = useRef(0);
   // When today-time data last actually landed — bounds how stale the totals get.
   const lastLoadAt = useRef(0);
+  // Counts those landings, so the "Needs a project" lane re-syncs with them.
+  const [laneTick, setLaneTick] = useState(0);
   // True while a row-anchored editor (Change client, Split) is open. Reloading
   // then re-renders the row the popover is pinned to and the half-made choice is
   // gone, so reconciles WAIT — they don't get cancelled, just held, and the one
@@ -518,6 +535,7 @@ export default function DailyReview() {
     reloadAbort.current = ctl;
     const seq = ++reloadSeq.current;
     lastLoadAt.current = Date.now();
+    setLaneTick((t) => t + 1);
     heldPayload.current = null;  // superseded — and never paint one from another date
     try {
       const { start, end } = rangeBounds(date, range);
@@ -1158,7 +1176,7 @@ export default function DailyReview() {
               </div>
             )}
           </div>
-          <MatterLane date={date} range={range} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
+          <MatterLane date={date} range={range} refreshTick={laneTick} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
           <CompactSummary
             lanes={lanes}
             availableClients={availableClients}

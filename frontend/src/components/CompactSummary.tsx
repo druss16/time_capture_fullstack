@@ -296,6 +296,7 @@ export default function CompactSummary({
     new Set(Object.values(a).map((v) => (v == null ? "none" : v))).size;
   const postSplit = useCallback(async (
     bid: number, assignments: Record<string, { client_id: number | null; category: string }>,
+    separate = false,
   ) => {
     setSplitBusy(true);
     onHideRows([bid]);
@@ -303,7 +304,7 @@ export default function CompactSummary({
       await safeFetchJson(`${API_BASE}/blocks/${bid}/split/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignments }),
+        body: JSON.stringify({ assignments, separate }),
       });
       showToast("Split into separate entries", "success");
       setSplitFor(null);
@@ -313,10 +314,13 @@ export default function CompactSummary({
     } catch { onRevertRows([bid]); showToast("Couldn’t split this entry", "error"); }
     finally { setSplitBusy(false); }
   }, [onHideRows, onRevertRows, onRefresh, showToast]);
+  // Every activity on ONE client still splits: one entry per file, each then
+  // given its project from its own folder (two Adidas project folders merged
+  // into one block had no client difference to split on).
   const splitBlock = (bid: number, category: string) => {
     const a: Record<string, { client_id: number | null; category: string }> = {};
     Object.entries(splitAssign).forEach(([label, cid]) => { a[label] = { client_id: cid, category }; });
-    postSplit(bid, a);
+    postSplit(bid, a, splitDistinct(splitAssign) < 2);
   };
   // One-click apply a flagged split candidate: book each activity to the client
   // its filename names (the backend's per-slice guess).
@@ -564,13 +568,13 @@ export default function CompactSummary({
                                 ))}
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <button disabled={splitBusy || splitDistinct(splitAssign) < 2}
+                                <button disabled={splitBusy || Object.keys(splitAssign).length < 2}
                                   onClick={() => splitBlock(bid, r.category)}
                                   className="rounded-full bg-primary px-3 py-1 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40">
-                                  {splitBusy ? "Splitting…" : "Split into separate entries"}
+                                  {splitBusy ? "Splitting…" : splitDistinct(splitAssign) < 2 ? "Split into one entry per file" : "Split into separate entries"}
                                 </button>
                                 <button onClick={() => setSplitFor(null)} className="text-[11px] font-medium text-muted-foreground hover:text-foreground">Cancel</button>
-                                {splitDistinct(splitAssign) < 2 && (<span className="text-[10.5px] text-muted-foreground/70">Give two activities different clients.</span>)}
+                                {splitDistinct(splitAssign) < 2 && (<span className="text-[10.5px] text-muted-foreground/70">Same client: each file becomes its own entry, and its {terms.project.toLowerCase()} is picked from its folder.</span>)}
                               </div>
                             </div>
                           )}

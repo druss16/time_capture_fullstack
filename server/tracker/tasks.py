@@ -2098,6 +2098,20 @@ def compact_and_classify_org(self, org_id):
                 logger.error(f"[COMPACT-CLASSIFY] Block {b.id} failed: {e}")
                 continue
 
+        # The project, right behind the client. Waiting for the 2-minute
+        # attribute_matters_recent sweep left a block that already had its
+        # client sitting in "Needs a project" for minutes, which reads as
+        # broken. Only after this run classified something: a block the AI
+        # names later is still caught by that sweep. No-ops for a firm with
+        # no projects (attribute_matters_for_org returns before scanning).
+        if pending:
+            try:
+                from tracker.services.matter_attribution import attribute_matters_for_org
+                attribute_matters_for_org(org, days=1)
+            except Exception as e:
+                logger.warning(f"[COMPACT-CLASSIFY] Project attribution for org {org_id} failed: {e}",
+                               exc_info=True)
+
         ai_ids = list(Block.objects.filter(
             org=org,
             start__gte=start_utc,

@@ -223,8 +223,9 @@ const QbTimePushPanel: React.FC<Props> = ({ apiBase, pushTrigger, onSuccess, onE
                 <span className="font-bold">{pushes.length} timesheet{pushes.length === 1 ? '' : 's'}</span>
                 {' '}totalling <span className="font-bold">{hrs(plan.totals.minutes)}</span>
                 {reductions.length > 0 && (
-                  <> and <span className="font-bold">{reductions.length} correction{reductions.length === 1 ? '' : 's'}</span> to
-                  time we sent earlier that has since moved to another client</>
+                  // Not only refiled time: rounding and trimmed captures reduce too.
+                  <> and <span className="font-bold">{reductions.length} correction{reductions.length === 1 ? '' : 's'}</span>,
+                  cutting back time we sent earlier that TimeTracker no longer has there</>
                 )}.
               </p>
               <div className="max-h-64 overflow-auto rounded-lg border border-slate-200">

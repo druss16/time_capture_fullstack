@@ -28,6 +28,10 @@ urlpatterns = [
     path('projects/<int:pk>/intake/reopen/', v.intake_reopen, name='onboard-intake-reopen'),
     path('projects/<int:pk>/intake/send/', v.intake_send, name='onboard-intake-send'),
     path('projects/<int:pk>/intake/mark-sent/', v.intake_mark_sent, name='onboard-intake-mark-sent'),
+    path('projects/<int:pk>/connect-link/', v.connect_link_view, name='onboard-connect-link'),
     # The firm's side: no login, the token in the path is the whole credential.
     path('intake/<str:raw>/', v.PublicIntake.as_view(), name='onboard-public-intake'),
+    path('connect/<str:raw>/', v.PublicConnect.as_view(), name='onboard-public-connect'),
+    path('connect/<str:raw>/<str:provider>/start/', v.PublicConnect.as_view(),
+         name='onboard-public-connect-start'),
 ]

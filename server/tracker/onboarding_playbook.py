@@ -98,11 +98,12 @@ STEPS = [
     Step('device_maps', 'provision', 'Every member has a machine hostname for auto-pair',
          'auto', check='device_maps', paths=AUTO_PAIR,
          help='Hostname case matters. A mismatch means that person pairs by hand.'),
-    Step('qbo_connected', 'provision', 'QuickBooks Online connected', 'auto', who='firm',
-         check='qbo_connected', verticals=('marketing',),
-         help='The agency\'s QuickBooks admin connects it in Settings → Connections → '
-              'Integrations → QuickBooks, then Import Clients. For an agency, QuickBooks '
-              'is its OWN books — time in it is admin, never client work.'),
+    Step('qbo_connected', 'provision', 'QuickBooks Online connected', 'action', who='firm',
+         check='qbo_connected', action='connect_link', verticals=('marketing',),
+         help='Send the agency\'s QuickBooks admin a connect link — no TimeTracker login '
+              'needed; clients import the moment they approve. (Or an owner/admin connects '
+              'in Settings → Connections → Integrations.) For an agency, QuickBooks is its '
+              'OWN books — time in it is admin, never client work.'),
     Step('clio_connected', 'provision', 'Clio connected (correct region)', 'auto', who='firm',
          check='clio_connected', verticals=('legal',),
          help='Settings → Connections → Integrations → Clio. Pick US / EU / AU correctly '

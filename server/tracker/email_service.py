@@ -510,11 +510,16 @@ def send_connect_link(to_email: str, firm_name: str, connect_url: str, providers
     hello = f"Hi {contact_name}," if contact_name else "Hi,"
     until = f" It works until {expires_on}." if expires_on else ""
     what = " and ".join(providers) or "QuickBooks"
+    # Each service is its own Intuit approval, so two means two sign-ins.
+    steps = ("It takes about two minutes: open the link, click Connect, and sign in to "
+             "QuickBooks as you normally would." if len(providers) < 2 else
+             "It takes a few minutes: open the link, click Connect next to each one, and "
+             "sign in to QuickBooks as you normally would.")
     plain = f"""{hello}
 
 {firm_name} is setting up TimeTracker, and it needs to connect to {what}.
 Intuit only lets a QuickBooks admin approve that, which is why this came to you.
-It takes about two minutes: open the link, click Connect, and sign in to QuickBooks as you normally would.
+{steps}
 
 Open the link:
 {connect_url}
@@ -531,18 +536,17 @@ Questions? Just reply to this email.
         f'<p style="margin:0 0 6px;"><strong style="color:{INK};">{firm_name}</strong> is '
         f'setting up TimeTracker, and it needs to connect to {what}. Intuit only lets a '
         f'QuickBooks admin approve that, which is why this came to you.</p>'
-        f'<p style="margin:0;">It takes about two minutes: open the link, click Connect, and '
-        f'sign in to QuickBooks as you normally would.</p>'
+        f'<p style="margin:0;">{steps}</p>'
         + _btn(connect_url, 'brand', f'Connect {what}')
         + f'<p style="margin:0 0 6px;color:{INK_FAINT};font-size:13px;">No TimeTracker account '
         f'is needed, and the link can\'t be used to sign in. Please keep it within '
         f'{firm_name}.{until}</p>'
         f'<p style="margin:18px 0 0;color:{INK_FAINT};font-size:13px;'
-        f'word-break:break-all;">Button not working? Paste this into your '
-        f'browser:<br>{connect_url}</p>'
+        f'word-break:break-all;">Button not working? Copy and paste this link '
+        f'into your browser:<br>{connect_url}</p>'
     )
     html = _wrap_html('brand', '', f'Connect {firm_name} to {what}', body,
-                      preheader='Two minutes: approve the QuickBooks connection for TimeTracker.')
+                      preheader=f'A quick approval so TimeTracker can connect to {what}.')
     return send_email(
         to_email=to_email,
         subject=f"Approve the QuickBooks connection for {firm_name}",

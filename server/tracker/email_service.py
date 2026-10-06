@@ -204,6 +204,11 @@ def _preheader(text: str) -> str:
     )
 
 
+def _logo_url():
+    base = getattr(settings, 'FRONTEND_URL', 'https://timetracker.mavops.ai').rstrip('/')
+    return f'{base}/timetracker-icon-128.png'
+
+
 def _wrap_html(tone_or_gradient, header_icon, header_title, body_html,
                preheader=''):
     """The one shell every email uses.
@@ -239,11 +244,18 @@ def _wrap_html(tone_or_gradient, header_icon, header_title, body_html,
         # Wordmark bar: a slim band of brand rather than a gradient block with
         # an emoji in it. Gradients render unpredictably across clients, and
         # the emoji carried nothing the title did not already carry.
-        '<tr><td style="background:' + TEAL + ';padding:14px 28px;">'
+        # The app icon is a hosted PNG (Gmail and Outlook drop SVG); with images
+        # blocked the alt text and the wordmark still read correctly.
+        '<tr><td style="background:' + TEAL + ';padding:12px 28px;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+        '<td style="padding-right:10px;vertical-align:middle;">'
+        '<img src="' + _logo_url() + '" width="28" height="28" alt="TimeTracker"'
+        ' style="display:block;border:0;border-radius:7px;"></td>'
+        '<td style="vertical-align:middle;">'
         '<span style="color:#ffffff;font-size:15px;font-weight:700;'
         'letter-spacing:-0.01em;">TimeTracker</span>'
         '<span style="color:rgba(255,255,255,0.72);font-size:12px;">'
-        ' by Mavops</span></td></tr>'
+        ' by Mavops</span></td></tr></table></td></tr>'
 
         # The only per-email colour, and only where the news genuinely differs.
         '<tr><td style="height:3px;background:' + accent +

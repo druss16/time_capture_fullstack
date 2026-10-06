@@ -39,6 +39,7 @@ try:
         candidate_tokens, build_matter_index, match_matter_in_text, attribute_block,
         folder_key, neighbour_matter,
         name_phrase, build_name_index, match_project_name,
+        match_project_name_partial, named_part_of_path,
     )
     from tracker.services.projects import ProjectOption
     from datetime import datetime, timedelta
@@ -244,6 +245,68 @@ if _ok:
     check("name beats the sole-project inference",
           attribute_block(_B(title='Spring Launch', client_id=20), {}, {20: 999}, None,
                           name_index=nidx)[:2] == (201, 'name'))
+
+    print("Project names however the firm spells them:")
+    for label, text in (
+        ("CamelCase", 'Dropbox/Ford/SpringLaunch_storyboard_v3.psd'),
+        ("underscores", '/x/2026_Spring_Launch/hero.psd'),
+        ("hyphens and caps", '/x/FORD-SPRING-LAUNCH-hero.ai'),
+        ("run together, all caps", '/x/SPRINGLAUNCH/hero.psd'),
+        ("words in another order", '/x/Launch - Spring/hero.psd'),
+        ("words in different folders", '/x/Spring/Launch Assets/hero.psd'),
+        ("version and year noise", '/x/v3_SpringLaunch_2026_final.psd'),
+    ):
+        check(f"{label}: {text}", match_project_name(text, nidx[10]) == 101)
+    check("plural folder, singular project",
+          match_project_name('/x/Dealer_Events/a.psd', nidx[10]) == 105)
+    check("still whole words: 'springfield launcher' is not 'spring launch'",
+          match_project_name('/x/SpringfieldLauncher/a.psd', nidx[10]) is None)
+    check("a one-word name never matches out of order pieces",
+          match_project_name('/x/so cial.psd', {'social': 1}) is None)
+
+    print("Most of a project name (name_partial):")
+    mtc_opts = {7: [_opt(71, 7, 'Easterns KONETIQ Campaigns', mapped=True),
+                    _opt(72, 7, 'Konetiq Launch Ads', mapped=True),
+                    _opt(73, 7, 'Monthly New Car Specials', mapped=True)]}
+    midx = build_name_index(mtc_opts, {7: 'Easterns Automotive Group'})
+    check("client words stripped, CamelCase split",
+          midx[7].get('konetiq campaigns') == 71)
+    check("two of three words incl. a distinctive one",
+          match_project_name_partial('0074_2026-09_Easterns-Auto_Konetiq-Launch_Sept/hero.psd',
+                                     midx[7]) == 72)
+    check("only the shared word ('konetiq') -> abstain",
+          match_project_name_partial('0074_Konetiq_Sept/hero.psd', midx[7]) is None)
+    check("one word of a long name is not 'most of it'",
+          match_project_name_partial('0074_Specials_Recap/x.psd', midx[7]) is None)
+    check("abbreviated decorated name",
+          match_project_name_partial('/x/New-Car-Special_OCT/x.psd', midx[7]) == 73)
+    check("exact tier still wins first",
+          attribute_block(_B(file_path='/d/0074_Konetiq-Launch-Ads/c.psd', client_id=7),
+                          {}, {}, None, name_index=midx)[:2] == (72, 'name'))
+    check("partial tier fires below the exact one",
+          attribute_block(_B(file_path='/d/0074_Konetiq-Launch_Sept/c.psd', client_id=7),
+                          {}, {}, None, name_index=midx)[:2] == (72, 'name_partial'))
+    check("partial abstains, sole-project is not consulted for a multi-project client",
+          attribute_block(_B(file_path='/d/0074_Konetiq_Sept/c.psd', client_id=7),
+                          {}, {}, None, name_index=midx)[0] is None)
+
+    print("The sync root's words never count toward a name:")
+    check("Dropbox (More Than Cars) does not half-name 'New Car Specials'",
+          match_project_name_partial(
+              named_part_of_path('/Users/a/Dropbox (More Than Cars)/0074_New_Hire/x.psd'),
+              midx[7]) is None)
+    check("Mac CloudStorage root dropped too",
+          named_part_of_path('/Users/a/Library/CloudStorage/Dropbox-MoreThanCars/A/b.psd') == 'A/b.psd')
+    check("Windows home + Dropbox root dropped, file name kept",
+          named_part_of_path('C:\\Users\\bob\\Dropbox (MTC)\\A\\b.psd') == 'A/b.psd')
+    check("no sync root: home dropped only",
+          named_part_of_path('/Users/dan/Desktop/Adidas/Fall Launch/a.psd')
+          == 'Desktop/Adidas/Fall Launch/a.psd')
+    check("Dan's Adidas test: Fall Launch from the folder",
+          match_project_name(named_part_of_path('/Users/danrussell/Desktop/Adidas/Fall Launch/Adidas_test.psd'),
+                             build_name_index({5: [_opt(51, 5, 'Fall Launch', mapped=True),
+                                                   _opt(52, 5, 'Holiday Promo', mapped=True)]},
+                                              {5: 'Adidas'})[5]) == 51)
 
 print(f"\n{_passed} passed, {_failed} failed, {_skipped} skipped")
 sys.exit(1 if _failed else 0)

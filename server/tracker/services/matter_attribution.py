@@ -151,6 +151,38 @@ def match_matter_in_text(text: str, index: dict):
 # out of it, is too generic to read out of free text ("Ads", "SEO" alone).
 MIN_NAME_PHRASE = 4
 
+# Every firm spells a project its own way in its paths: "Spring Launch",
+# "Spring_Launch", "SpringLaunch", "SPRING-LAUNCH", "2026_SpringLaunch_v3",
+# "Launch - Spring". Names are therefore compared as WORDS, split on any
+# separator, on a case change (SpringLaunch, KONETIQCampaigns) and between
+# letters and digits (TruckMonth2026), with a plural's "s" dropped on both
+# sides ("Campaigns" folder, "Campaign" project).
+_NAME_WORD_SPLIT = re.compile(
+    r'[^A-Za-z0-9]+'
+    r'|(?<=[a-z])(?=[A-Z])'          # springLaunch
+    r'|(?<=[A-Z])(?=[A-Z][a-z])'     # KONETIQCampaigns
+    r'|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])')   # Month2026
+# Words that say nothing about WHICH project: joiners, and the dates and
+# version marks a file name carries regardless of the project.
+_NAME_FILLER = {'a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'with'}
+_NAME_NOISE = re.compile(r'^(?:(?:19|20)\d{2}|v\d+|rev\d+|final|draft|copy)$')
+
+
+def _stem(word: str) -> str:
+    if len(word) >= 3 and word.endswith('s') and not word.endswith('ss'):
+        return word[:-1]
+    return word
+
+
+def name_words(text: str) -> list:
+    """'KONETIQCampaigns_2026-v3' -> ['konetiq', 'campaigns']. Unstemmed."""
+    out = []
+    for w in _NAME_WORD_SPLIT.split(text or ''):
+        w = w.lower()
+        if w and w not in _NAME_FILLER and not _NAME_NOISE.match(w):
+            out.append(w)
+    return out
+
 
 def name_phrase(project_name: str, client_name: str = '') -> str:
     """
@@ -161,8 +193,8 @@ def name_phrase(project_name: str, client_name: str = '') -> str:
     has a client), so they are stripped: "ford spring launch" would otherwise
     never match a file called "Spring Launch storyboard.psd".
     """
-    client_words = _tokens(client_name)
-    words = [w for w in _normalize(project_name).split() if w not in client_words]
+    client_words = {_stem(w) for w in name_words(client_name)}
+    words = [w for w in name_words(project_name) if _stem(w) not in client_words]
     phrase = ' '.join(words)
     return phrase if len(phrase) >= MIN_NAME_PHRASE and not _YEAR_LIKE.match(phrase) else ''
 
@@ -194,21 +226,95 @@ def build_name_index(options_by_client, client_names) -> dict:
     return out
 
 
+def _single(hits: list, phrases: dict):
+    """The one project among `hits`, letting a longer name absorb one it contains."""
+    hits = [h for h in hits if not any(h != o and f' {h} ' in f' {o} ' for o in hits)]
+    pids = {phrases[h] for h in hits}
+    return next(iter(pids)) if len(pids) == 1 else None
+
+
 def match_project_name(text: str, phrases: dict):
     """
     Project id whose name appears in `text`, or None.
 
-    Whole words only. When one hit is contained in another ("social" inside
-    "social ads") the longer, more specific name wins; any other disagreement
-    abstains.
+    Whole words only, however the firm spells them (see _NAME_WORD_SPLIT):
+    "Spring Launch" is found in "SpringLaunch_storyboard.psd" and in
+    "2026_SPRING-LAUNCH". In order:
+
+      1. the name's words in a row;
+      2. the name run together into one word ("SPRINGLAUNCH");
+      3. every word of a name of two or more words, in any order
+         ("Launch - Spring", ".../Spring/Launch Assets/").
+
+    A later check runs only when the earlier one found nothing. When one hit is
+    contained in another ("social" inside "social ads") the longer, more
+    specific name wins; any other disagreement abstains.
     """
     if not text or not phrases:
         return None
-    padded = f' {_normalize(text)} '
-    hits = [ph for ph in phrases if f' {ph} ' in padded]
-    hits = [h for h in hits if not any(h != o and f' {h} ' in f' {o} ' for o in hits)]
-    pids = {phrases[h] for h in hits}
-    return next(iter(pids)) if len(pids) == 1 else None
+    words = [_stem(w) for w in name_words(text)]
+    if not words:
+        return None
+    padded = f" {' '.join(words)} "
+    present = set(words)
+    stems = {ph: [_stem(w) for w in ph.split()] for ph in phrases}
+
+    in_a_row = [ph for ph, st in stems.items() if f" {' '.join(st)} " in padded]
+    if in_a_row:
+        return _single(in_a_row, phrases)
+    run_together = [ph for ph in phrases
+                    if len(ph.split()) > 1 and ph.replace(' ', '') in present]
+    if run_together:
+        return _single(run_together, phrases)
+    any_order = [ph for ph, st in stems.items() if len(st) > 1 and set(st) <= present]
+    return _single(any_order, phrases) if any_order else None
+
+
+# A partial name match needs at least this many of the project's words, and
+# this share of them.
+PARTIAL_MIN_WORDS = 2
+PARTIAL_MIN_SHARE = 0.6
+
+
+def match_project_name_partial(text: str, phrases: dict):
+    """
+    Project id whose name `text` mostly states, or None. Weaker than
+    match_project_name, so it runs only after that found nothing.
+
+    Firms abbreviate and decorate: the project is "Konetiq Campaign Launch",
+    the folder "0074_Konetiq-Launch_Sept". It counts when the text carries at
+    least PARTIAL_MIN_WORDS of the name's words and PARTIAL_MIN_SHARE of them,
+    and at least one of those words belongs to NO other project of the client
+    ("konetiq" alone cannot choose between "Konetiq Campaign" and "Konetiq
+    Launch Ads"). The best-covered project must be the only one at that
+    coverage; a tie abstains.
+    """
+    if not text or not phrases:
+        return None
+    present = {_stem(w) for w in name_words(text)}
+    if not present:
+        return None
+    stems = {ph: {_stem(w) for w in ph.split()} for ph in phrases}
+    owners = defaultdict(set)
+    for ph, st in stems.items():
+        for w in st:
+            owners[w].add(phrases[ph])
+
+    scored = []
+    for ph, st in stems.items():
+        matched = st & present
+        if len(matched) < PARTIAL_MIN_WORDS or len(matched) / len(st) < PARTIAL_MIN_SHARE:
+            continue
+        if not any(len(owners[w]) == 1 for w in matched):
+            continue
+        scored.append((len(matched) / len(st), len(matched), phrases[ph]))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    best = scored[0]
+    if len(scored) > 1 and scored[1][:2] == best[:2] and scored[1][2] != best[2]:
+        return None
+    return best[2]
 
 
 # A per-person prefix in front of a shared folder: the home directory.
@@ -247,6 +353,25 @@ def folder_parts(file_path: str) -> list:
             parts = parts[:i + 1]
             break
     return parts
+
+
+def named_part_of_path(file_path: str) -> str:
+    """
+    The path a project name is read from: without the home directory and the
+    sync root, whose words are on every file. "Dropbox (More Than Cars)" would
+    otherwise put "more", "than" and "cars" in front of a name tier on every
+    file the firm owns — enough, with one real word, to half-name "New Cars
+    Special". Keeps the file name, unlike folder_parts.
+    """
+    if not file_path:
+        return ''
+    path = _HOME_PREFIX.sub('', str(file_path).replace('\\', '/'))
+    parts = [p for p in path.split('/') if p]
+    for i, part in enumerate(parts[:-1]):
+        if _SYNC_ROOT.search(part):
+            parts = parts[i + 1:]
+            break
+    return '/'.join(parts)
 
 
 def folder_key(file_path: str) -> str:
@@ -389,7 +514,10 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
                         by any route, including a human correcting it.
       2. number       — a matter number appears in the path, title or URL.
       2b. name        — a project kept in TimeTracker is named in the path,
-                        title or URL, among the block's OWN client's projects.
+                        title or URL, among the block's OWN client's projects,
+                        however the firm spells it (SpringLaunch, Launch-Spring).
+      2c. name_partial — most of one such name, including a word no other
+                        project of the client has.
       3. sole_matter  — the client has exactly one open matter. Deterministic:
                         there is nothing here to be wrong about.
       4. temporal     — both neighbours agree. Weakest, because it infers from
@@ -417,10 +545,17 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
 
     if name_index and block.client_id in name_index:
         phrases = name_index[block.client_id]
-        for field in ('file_path', 'window_title', 'title', 'url'):
-            matched = match_project_name(getattr(block, field, '') or '', phrases)
+        texts = [(field, getattr(block, field, '') or '')
+                 for field in ('file_path', 'window_title', 'title', 'url')]
+        texts[0] = ('file_path', named_part_of_path(texts[0][1]))
+        for field, text in texts:
+            matched = match_project_name(text, phrases)
             if matched:
                 return matched, 'name', f'project name found in {field}'
+        for field, text in texts:
+            matched = match_project_name_partial(text, phrases)
+            if matched:
+                return matched, 'name_partial', f'most of a project name found in {field}'
 
     if block.client_id:
         sole = sole_matter_by_client.get(block.client_id)
@@ -520,7 +655,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         'org_id': org.id, 'matters': len(mappings),
         'projects': sum(len(v) for v in options_by_client.values()),
         'scanned': 0,
-        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0, 'by_name': 0,
+        'by_clio_anchor': 0, 'by_folder': 0, 'by_number': 0, 'by_name': 0, 'by_name_partial': 0,
         'by_sole_matter': 0, 'by_temporal': 0,
         'unmatched': 0, 'off_client': 0, 'client_corrected': 0, 'dry_run': dry_run,
     }

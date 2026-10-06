@@ -7262,6 +7262,13 @@ def recategorize_block(request, block_id):
                 block.is_billable = not _is_nonbillable_category(new_category)
             except Client.DoesNotExist:
                 pass
+        # A project belongs to one client. Moving a block to another client
+        # (or to No client) used to keep the old one: D&F_trois.psd moved from
+        # Nike to Dauphin & Fantacone still pointed at Nike's "Spring Launch",
+        # so a D&F entry would report and push under a Nike project. Clear it;
+        # the project pass then picks one of the NEW client's projects.
+        if block.project_id and block.project.client_id != block.client_id:
+            block.project = None
 
     # Protect the manual decision from re-classification.
     block.categorized_by = 'correction'
@@ -7343,6 +7350,8 @@ def blocks_needing_matter(request):
     counts = {cid: len(opts) for cid, opts in selectable_projects(org).items()}
     can_create = org_tracks_local_projects(org)
 
+    from tracker.services.classification_service import IMMATERIAL_MAX_MINUTES
+
     if not counts and not can_create:
         return Response({'date': str(first), 'blocks': [], 'total_minutes': 0})
 
@@ -7369,7 +7378,11 @@ def blocks_needing_matter(request):
         'matter_options': counts.get(b.client_id, 0),
     } for b in blocks
         # The firm's own overhead clients have no projects to file under.
-        if not (b.client and is_internal_client_name(b.client.name))]
+        if not (b.client and is_internal_client_name(b.client.name))
+        # Same materiality floor as Needs You: a 13-second Finder glance at a
+        # client folder or a path-less flicker is not worth a decision. It
+        # still shows under its client as "No project yet".
+        and (b.minutes or 0) >= IMMATERIAL_MAX_MINUTES]
 
     return Response({
         'date': str(first),
@@ -7596,6 +7609,10 @@ def move_block_task_type(request, block_id):
                 return Response(
                     {"error": "Client not found for this organization"}, status=404
                 )
+        # Same rule as recategorize_block: another client's project must go.
+        # recommit below saves the whole row, so this reaches the database.
+        if block.project_id and block.project.client_id != block.client_id:
+            block.project = None
 
     # Preserve the real recorded duration (category_hours != end-start for
     # idle-capped / merged blocks), mirroring recategorize_block's fallback chain.

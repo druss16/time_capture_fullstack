@@ -88,11 +88,48 @@ def run():
         ("dropbox_file_at_root", "/Users/amy/Library/CloudStorage/Dropbox/notes.pdf", ""),
         ("dropbox_bare_root", "/Users/amy/Dropbox", ""),
         # Only real Dropbox root shapes — not any segment containing "dropbox".
-        ("dropbox_word_in_folder", "/Users/amy/Documents/Old Dropbox Export/Acme/x.pdf", ""),
-        ("dropbox_nested_not_root", "/Users/amy/Documents/Dropbox/Acme/x.pdf", ""),
+        ("dropbox_word_in_folder", "/Users/amy/Work/Old Dropbox Export/Acme/x.pdf", ""),
+        ("dropbox_nested_not_root", "/Users/amy/Work/Dropbox/Acme/x.pdf", ""),
         ("dropbox_dash_outside_cloudstorage", "/Users/amy/Dropbox-backup/Acme/x.pdf", ""),
         ("dropbox_cloudstorage_other_provider",
          "/Users/amy/Library/CloudStorage/OneDrive-Personal/Acme/x.pdf", ""),
+    ):
+        results.append(_check(name, client_folder_bucket(path), want))
+
+    # --- Home Desktop / Documents: the last-resort anchor ---
+    # The real case: ~10s on a D&F file, then Nike work, merged into one
+    # Photoshop block booked to Dauphin & Fantacone.
+    nike = "/Users/danrussell/Desktop/Nike/Spring Launch/Nike_test.psd"
+    dnf = "/Users/danrussell/Desktop/Dauphin & Fantacone/D&F_trois.psd"
+    results.append(_check("desktop_nike", client_folder_bucket(nike), "nike"))
+    results.append(_check("desktop_dnf", client_folder_bucket(dnf), "dauphin & fantacone"))
+    results.append(_check("desktop_two_clients_split",
+                          client_folder_bucket(nike) != client_folder_bucket(dnf), True))
+    results.append(_check(
+        "desktop_same_client_two_projects_same_bucket",
+        client_folder_bucket("/Users/dan/Desktop/Nike/Fall Promo/a.psd")
+        == client_folder_bucket(nike.replace("danrussell", "dan")), True))
+    for name, path, want in (
+        ("documents_mac", "/Users/amy/Documents/Aurelia Salon/logo.ai", "aurelia salon"),
+        ("desktop_windows", r"C:\Users\amy\Desktop\GrowU\EIN\a.pdf", "growu"),
+        ("documents_linux", "/home/amy/Documents/Acme/x.docx", "acme"),
+        ("onedrive_desktop_windows",
+         r"C:\Users\wayne\OneDrive - TL Wall Accounting\Desktop\Divine Mercy\x.xlsx", "divine mercy"),
+        ("onedrive_plain_documents", r"C:\Users\wayne\OneDrive\Documents\Acme\x.xlsx", "acme"),
+        ("onedrive_cloudstorage_mac",
+         "/Users/amy/Library/CloudStorage/OneDrive-Bright/Documents/Acme/x.pdf", "acme"),
+        # A file saved straight onto the Desktop names no client folder.
+        ("desktop_file_at_root", "/Users/amy/Desktop/notes.psd", ""),
+        ("desktop_bare", "/Users/amy/Desktop", ""),
+        # Only the HOME-level folder, not any segment named Desktop/Documents.
+        ("documents_nested_not_home", "/Volumes/Share/Documents/Acme/x.pdf", ""),
+        ("documents_deep_not_home", "/Users/amy/Projects/Documents/Acme/x.pdf", ""),
+        ("downloads_not_an_anchor", "/Users/amy/Downloads/Acme/x.pdf", ""),
+        # Named clients-root and Dropbox root still win over the Desktop.
+        ("desktop_inner_clients_root_wins",
+         "/Users/amy/Desktop/Work/Clients/Acme/x.pdf", "acme"),
+        ("dropbox_wins_over_documents",
+         "/Users/amy/Dropbox/Aurelia Salon/Documents/x.pdf", "aurelia salon"),
     ):
         results.append(_check(name, client_folder_bucket(path), want))
 

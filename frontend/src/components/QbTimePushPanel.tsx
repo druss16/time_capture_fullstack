@@ -293,9 +293,15 @@ const QbTimePushPanel: React.FC<Props> = ({ apiBase, pushTrigger, onSuccess, onE
           {(pushes.length > 0 || reductions.length > 0) && (
             <button type="button" className={primaryBtnClass} onClick={send} disabled={!!busy}>
               {busy === 'send' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              {pushes.length > 0
-                ? `Send ${hrs(plan.totals.minutes)} to QuickBooks Time`
-                : 'Apply corrections in QuickBooks Time'}
+              {/* Say everything the click writes — corrections cut real rows too. */}
+              {(() => {
+                const fixes = reductions.length
+                  ? `${reductions.length} correction${reductions.length === 1 ? '' : 's'}`
+                  : '';
+                if (!pushes.length) return `Apply ${fixes} in QuickBooks Time`;
+                const send = `Send ${hrs(plan.totals.minutes)}`;
+                return fixes ? `${send} and ${fixes} to QuickBooks Time` : `${send} to QuickBooks Time`;
+              })()}
             </button>
           )}
         </div>

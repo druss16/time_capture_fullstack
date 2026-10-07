@@ -1014,9 +1014,30 @@ class Client(models.Model):
     
     def save(self, *args, **kwargs):
         if not self.code and self.name:
-            self.code = self.name[:10].upper().replace(' ', '')[:10]
+            self.code = self._unique_code(self.name[:10].upper().replace(' ', '')[:10])
         super().save(*args, **kwargs)
-    
+
+    def _unique_code(self, base: str) -> str:
+        """`base`, or `base` with a number, so (org, code) stays unique.
+
+        The code is the name's first ten letters, so two clients that start
+        alike collide: MTC's QuickBooks Time sync died with an IntegrityError
+        on (org 44, "ANDREWDIF") after creating 23 of its customers, before it
+        ever reached projects. Every import path (QuickBooks, Xero, Clio,
+        QuickBooks Time, a manual add) creates clients through here.
+        """
+        taken = set(
+            Client.objects.filter(org_id=self.org_id, code__startswith=base[:8])
+            .exclude(pk=self.pk).values_list('code', flat=True)
+        )
+        if base not in taken:
+            return base
+        for n in range(2, 1000):
+            candidate = f"{base[:10 - len(str(n))]}{n}"
+            if candidate not in taken:
+                return candidate
+        return base  # 999 look-alikes: let the constraint say so
+
     def __str__(self):
         source = f" [{self.imported_from.upper()}]" if self.imported_from else ""
         return f"{self.name}{source}"

@@ -20,7 +20,7 @@ from tracker.utils.client_name_match import strip_app_chrome
 BRANDED = 'Re: proofs - me@agency.com - Agency Mail - High memory usage - 859 MB - Google Chrome - me@agency.com'
 
 
-class RefileTest(ComposeBase):
+class RefileBase(ComposeBase):
     def setUp(self):
         super().setUp()
         # The firm's own client — what a branded mailbox title used to name.
@@ -43,6 +43,9 @@ class RefileTest(ComposeBase):
         return refile_composed_gmail_blocks(
             self.user, self.org, self.T0 - timedelta(hours=1), self.T0 + timedelta(hours=2))
 
+
+
+class RefileTest(RefileBase):
     def test_late_mail_refiles_the_block_to_the_compose_client(self):
         b = self.filed_block(0, 10, self.own)
         self.sent('o1', 9, 'bob@acme.com', self.acme, 'acme.com')  # 9 of 10 min writing
@@ -122,3 +125,79 @@ class BrandedGmailTitleTest(SimpleTestCase):
             strip_app_chrome('Managed Payments - MAVOPS - Stripe - High memory usage - 1.2 GB - Google Chrome'
                              ' - dan@mavops.ai'),
             'Managed Payments - MAVOPS - Stripe')
+
+
+READING = 'Re: Q3 engagement letter - me@agency.com - Agency Mail - Google Chrome - me@agency.com'
+
+
+class ReadingTest(RefileBase):
+    """Stage 7b: the thread open in a Gmail block, matched to synced mail."""
+
+    def received(self, ext, minute, subject, client, domain):
+        from tracker.models import MailSignal
+        return MailSignal.objects.create(
+            org=self.org, user=self.user, provider='google', external_id=ext,
+            occurred_at=self.T0 + timedelta(minutes=minute), direction='in',
+            other_party_domain=domain, extracted_client=client,
+            to_recipients=[{'email': 'me@agency.com', 'name': ''}], cc_recipients=[],
+            from_address=f'jane@{domain}', subject=subject,
+        )
+
+    def classify(self, block):
+        from tracker.services.classification_service import ClassificationService
+        return ClassificationService(org=self.org, user=self.user).classify(block, skip_ai=True)
+
+    def test_reading_a_client_thread_files_the_block_to_that_client(self):
+        self.received('i1', -60, 'Q3 engagement letter', self.acme, 'acme.com')
+        b = self.filed_block(0, 12, None, window_title=READING, title=READING,
+                             classification_state='captured', is_categorized=False,
+                             state_changed_by=None)
+        d = self.classify(b)
+        self.assertEqual(d.client_id, self.acme.id)
+        self.assertEqual(d.recommended_state, 'committed')
+        reading = [s for s in d.matched_signals if (s.detail or {}).get('match_method') == 'gmail_reading']
+        self.assertEqual(len(reading), 1)
+        # Managers can read proposed_signals: domain + client, never the subject.
+        self.assertNotIn('engagement', reading[0].evidence.lower())
+        self.assertIn('acme.com', reading[0].evidence)
+
+    def test_late_thread_mail_refiles_a_reading_block(self):
+        b = self.filed_block(0, 12, self.own, window_title=READING, title=READING)
+        self.received('i1', 5, 'RE: Q3 Engagement Letter', self.acme, 'acme.com')
+        self.assertEqual(self.refile(), 1)
+        b.refresh_from_db()
+        self.assertEqual(b.client_id, self.acme.id)
+
+    def test_list_views_and_short_subjects_name_no_thread(self):
+        from tracker.services.mail_compose import open_message_subject
+        for title in ('Inbox (3) - me@agency.com - Agency Mail - Google Chrome',
+                      'Sent Mail - me@agency.com - Gmail - Google Chrome',
+                      'Search results - me@agency.com - Gmail - Google Chrome',
+                      'Re: hi - me@agency.com - Gmail - Google Chrome'):
+            b = self.block(0, 5)
+            b.window_title = b.title = title
+            self.assertEqual(open_message_subject(b), '', title)
+
+    def test_thread_with_two_clients_goes_to_review(self):
+        self.received('i1', -60, 'Q3 engagement letter', self.acme, 'acme.com')
+        self.received('i2', -30, 'Re: Q3 engagement letter', self.beta, 'betafoods.com')
+        b = self.filed_block(0, 12, None, window_title=READING, title=READING,
+                             classification_state='captured', is_categorized=False,
+                             state_changed_by=None)
+        d = self.classify(b)
+        self.assertNotEqual(d.recommended_state, 'committed')
+        self.assertTrue(d.needs_review)
+
+    def test_thread_on_an_unmapped_domain_says_nothing(self):
+        self.received('i1', -60, 'Q3 engagement letter', None, 'unmapped.io')
+        b = self.filed_block(0, 12, self.own, window_title=READING, title=READING)
+        self.assertEqual(self.refile(), 0)
+
+    def test_composing_beats_reading(self):
+        # Reading an Acme thread, but most of the block was writing to Beta.
+        self.received('i1', -60, 'Q3 engagement letter', self.acme, 'acme.com')
+        b = self.filed_block(0, 10, self.own, window_title=READING, title=READING)
+        self.sent('o1', 9, 'ann@betafoods.com', self.beta, 'betafoods.com')
+        self.refile()
+        b.refresh_from_db()
+        self.assertEqual(b.client_id, self.beta.id)

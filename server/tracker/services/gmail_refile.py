@@ -1,4 +1,4 @@
-"""Re-file Gmail blocks once the mail they were written for has synced.
+"""Re-file Gmail blocks once the mail they were written or read for has synced.
 
 Stage 7a files a Gmail block to the client the user was writing to — but only
 if the SENT message is already in MailSignal when the block is classified.
@@ -10,7 +10,9 @@ see, and nothing ever looked at it again. Compose time never reached a client.
 After every Gmail sync this looks at the user's recent Gmail blocks and, where
 Stage 7a's STRONG rule now holds — the sends in the block go to exactly one
 client and writing them covers >= 50% of the block — re-runs the classifier on
-that block. The classifier decides; this only supplies the second chance.
+that block. The same goes for READING: a block whose open thread (its tab
+title) is on one client's mail once that mail has synced (Stage 7b). The
+classifier decides; this only supplies the second chance.
 
 Never touched: blocks a person confirmed, edited or corrected, locked blocks,
 suppressed blocks, and blocks already on that client. If the full classifier
@@ -48,8 +50,19 @@ def strong_compose_client(block, attributions):
     return cid
 
 
+def strong_reading_client(block):
+    """Client id Stage 7b would file `block` to: its open thread has one client."""
+    from tracker.services.mail_compose import open_message_subject, thread_signals
+    subject = open_message_subject(block)
+    if not subject:
+        return None
+    clients = {r.extracted_client_id for r in thread_signals(block, subject) if r.extracted_client_id}
+    return clients.pop() if len(clients) == 1 else None
+
+
 def refile_composed_gmail_blocks(user, org, since, until=None) -> int:
-    """Re-classify Gmail blocks whose compose client is now known. Returns count re-filed."""
+    """Re-classify Gmail blocks whose compose or reading client is now known.
+    Returns the count re-filed."""
     from django.utils import timezone
     from tracker.models import Block
     from tracker.services.classification_service import ClassificationService
@@ -59,7 +72,7 @@ def refile_composed_gmail_blocks(user, org, since, until=None) -> int:
         return 0
     until = until or timezone.now()
     blocks, sends = load_context(user, since, until)
-    if not blocks or not sends:
+    if not blocks:
         return 0
 
     owned = {}
@@ -68,9 +81,12 @@ def refile_composed_gmail_blocks(user, org, since, until=None) -> int:
 
     targets = {}
     for b in blocks:
-        if b.id not in owned or b.end < since:
+        if b.end < since:
             continue
-        cid = strong_compose_client(b, owned[b.id])
+        # Composing to a client beats reading: it is what Stage 7a/7b do too.
+        cid = strong_compose_client(b, owned[b.id]) if b.id in owned else None
+        if cid is None:
+            cid = strong_reading_client(b)
         if cid and cid != b.client_id:
             targets[b.id] = cid
     if not targets:

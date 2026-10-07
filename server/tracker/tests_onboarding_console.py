@@ -426,6 +426,46 @@ class InviteAndStripeTests(ConsoleBase):
                                  seats=5, coupon_months=0, billing_email='bo@agency.test')
 
 
+class StripeBillingStartTests(ConsoleBase):
+    def _setup(self, p, **extra):
+        fake = mock.MagicMock()
+        fake.Customer.create.return_value = {'id': 'cus_1'}
+        fake.Subscription.create.return_value = {'id': 'sub_1'}
+        fake.error.StripeError = Exception
+        with mock.patch.dict('sys.modules', {'stripe': fake}), \
+             self.settings(STRIPE_SECRET_KEY='sk_test', STRIPE_PRICE_EXECUTIVE_MONTHLY='price_1'):
+            svc.setup_stripe(p.organization, plan='executive', interval='monthly', seats=1,
+                             coupon_months=0, billing_email='robin@agency.test', **extra)
+        return fake.Subscription.create.call_args.kwargs
+
+    def test_billing_start_is_a_trial_ending_noon_eastern_that_day(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        p = self.make_project()
+        day = (timezone.now() + timedelta(days=25)).astimezone(ZoneInfo('America/New_York')).date()
+        kwargs = self._setup(p, billing_starts=day.isoformat())
+        end = datetime.fromtimestamp(kwargs['trial_end'], ZoneInfo('America/New_York'))
+        self.assertEqual((end.date(), end.hour), (day, 12))
+
+    def test_no_billing_start_means_no_trial(self):
+        self.assertNotIn('trial_end', self._setup(self.make_project()))
+
+    def test_past_or_today_is_refused_before_stripe_is_called(self):
+        p = self.make_project()
+        with self.assertRaises(svc.ConsoleError):
+            self._setup(p, billing_starts=timezone.now().date().isoformat())
+        with self.assertRaises(svc.ConsoleError):
+            self._setup(p, billing_starts='not-a-date')
+
+    def test_subscribing_clears_an_app_side_trial(self):
+        p = self.make_project()
+        p.organization.trial_ends_at = timezone.now() + timedelta(days=30)
+        p.organization.save(update_fields=['trial_ends_at'])
+        self._setup(p)
+        p.organization.refresh_from_db()
+        self.assertIsNone(p.organization.trial_ends_at)
+
+
 class VerifyTests(ConsoleBase):
     def test_run_checks_returns_data_and_command_still_prints(self):
         from io import StringIO

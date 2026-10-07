@@ -459,7 +459,7 @@ function GoLiveDialog({ project, onClose, onChanged }: Props) {
 
 function StripeDialog({ project, onClose, onChanged }: Props) {
   const [cfg, setCfg] = useState<Awaited<ReturnType<typeof onboardApi.stripe>> | null>(null);
-  const [form, setForm] = useState({ plan: "professional", interval: "monthly", seats: project.org.seat_count, coupon_months: 0, billing_email: "" });
+  const [form, setForm] = useState({ plan: "professional", interval: "monthly", seats: project.org.seat_count, coupon_months: 0, billing_email: "", billing_starts: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ customer: string; subscription: string } | null>(null);
@@ -473,7 +473,9 @@ function StripeDialog({ project, onClose, onChanged }: Props) {
 
   const priceOk = cfg?.prices[`${form.plan}_${form.interval}`];
   const submit = async () => {
-    if (!window.confirm(`Create a real Stripe subscription for ${project.org.name}: ${form.seats} × ${form.plan} (${form.interval})${form.coupon_months ? `, ${form.coupon_months} months free` : ""}? Stripe will send the invoice to ${form.billing_email}.`)) return;
+    const starts = form.billing_starts ? `, free until billing starts ${form.billing_starts}` : "";
+    const when = form.billing_starts ? `the first invoice on ${form.billing_starts}` : "the invoice";
+    if (!window.confirm(`Create a real Stripe subscription for ${project.org.name}: ${form.seats} × ${form.plan} (${form.interval})${starts}${form.coupon_months ? `, ${form.coupon_months} months free` : ""}? Stripe will send ${when} to ${form.billing_email}.`)) return;
     setBusy(true); setErr(null);
     try { setDone(await onboardApi.setupStripe(project.id, form)); onChanged(); } catch (e) { setErr(msg(e)); } finally { setBusy(false); }
   };
@@ -504,6 +506,10 @@ function StripeDialog({ project, onClose, onChanged }: Props) {
               <input type="number" min={1} className={inputClass} value={form.seats} onChange={(e) => setForm({ ...form, seats: Number(e.target.value) })} /></div>
             <div><label className={labelClass}>Free months (coupon)</label>
               <input type="number" min={0} className={inputClass} value={form.coupon_months} onChange={(e) => setForm({ ...form, coupon_months: Number(e.target.value) })} /></div>
+            <div className="col-span-2"><label className={labelClass}>Billing starts on (optional)</label>
+              <input type="date" className={inputClass} value={form.billing_starts} min={new Date(Date.now() + 864e5).toISOString().slice(0, 10)}
+                onChange={(e) => setForm({ ...form, billing_starts: e.target.value })} />
+              <p className="mt-1 text-xs text-slate-500">Free until then (a Stripe trial): full access now, first invoice on this date, then monthly on that day. Blank = billing starts today.</p></div>
             <div className="col-span-2"><label className={labelClass}>Billing contact email</label>
               <input type="email" className={inputClass} value={form.billing_email} onChange={(e) => setForm({ ...form, billing_email: e.target.value })} /></div>
           </div>

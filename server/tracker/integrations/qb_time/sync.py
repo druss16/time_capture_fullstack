@@ -41,7 +41,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -222,6 +222,22 @@ def full_sync(integration: Integration, *, api=None) -> dict:
     return stats
 
 
+def _claim_mapping(model, integration, external_id, **link):
+    """(mapping, created) for one external id, safe against a concurrent sync.
+
+    Two syncs of one firm can overlap (the hourly sweep fires twice, and the
+    Sync button used to skip the lock): both saw no mapping, both created one,
+    and the second died on the (integration, external_id) unique constraint —
+    MTC's sync failed at 15:35 on customer 12160266. The savepoint lets the
+    loser read the winner's row and carry on.
+    """
+    try:
+        with transaction.atomic():
+            return model.objects.create(integration=integration, external_id=external_id, **link), True
+    except IntegrityError:
+        return model.objects.get(integration=integration, external_id=external_id), False
+
+
 def _sync_clients(integration, plan, stats) -> dict:
     """customer jobcode id -> Client."""
     org = integration.organization
@@ -251,10 +267,19 @@ def _sync_clients(integration, plan, stats) -> dict:
                                                imported_from='qb_time')
                 by_name[_norm(name)] = client
                 stats['created'] += 1
+                made_client = True
             else:
                 stats['matched'] += 1
-            mapping = ExternalClientMapping.objects.create(
-                integration=integration, client=client, external_id=jid)
+                made_client = False
+            mapping, fresh = _claim_mapping(ExternalClientMapping, integration, jid, client=client)
+            if not fresh:
+                # Another sync linked this customer first. Use its client; the
+                # twin made a moment ago carries no time yet, so it goes.
+                if made_client and client.id != mapping.client_id:
+                    client.delete()
+                    stats['created'] -= 1
+                client = mapping.client
+                by_name[_norm(name)] = client
             mappings[jid] = mapping
         mapping.external_name = name[:255]
         mapping.external_code = str(jc.get('short_code') or '')[:64]
@@ -316,8 +341,8 @@ def _sync_projects(integration, plan, clients, hours, stats):
                 if project.is_active != live:
                     project.is_active = live
                     project.save(update_fields=['is_active'])
-                mapping = ExternalMatterMapping.objects.create(
-                    integration=integration, project=project, external_id=jid)
+                mapping, _fresh = _claim_mapping(ExternalMatterMapping, integration, jid, project=project)
+                project = mapping.project
                 mappings[jid] = mapping
                 s['created'] += 1
 

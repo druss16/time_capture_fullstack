@@ -121,8 +121,16 @@ def qb_time_sync(request):
     if err:
         return err
 
-    from tracker.integrations.qb_time.sync import full_sync
-    stats = full_sync(integration)
+    from tracker.integrations.qb_time.sync import _sync_unlock, _try_sync_lock, full_sync
+    # The same per-firm lock the scheduled sync takes. Without it a press at
+    # :35 ran alongside the hourly sweep and both created the same links.
+    if not _try_sync_lock(integration.id):
+        return error_response('A QuickBooks Time sync is already running for this firm. '
+                              'Give it a minute, then refresh.', 409, 'sync_running')
+    try:
+        stats = full_sync(integration)
+    finally:
+        _sync_unlock(integration.id)
     if stats.get('errors'):
         return error_response(f"Sync failed: {stats['errors'][0]}"[:300], 502, 'sync_failed')
 

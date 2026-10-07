@@ -393,18 +393,27 @@ _subscription_active = True
 _subscription_check_interval = 1800  # Re-check every 30 min
 _last_subscription_check = 0.0
 
+def check_subscription_response_from_body(body):
+    """Check an already-read 403 body for subscription_inactive.
+
+    For callers that have consumed the HTTPError body themselves (it can only
+    be read once). Returns True if subscription is dead.
+    """
+    global _subscription_active
+    if "subscription_inactive" not in (body or ""):
+        return False
+    _subscription_active = False
+    log("[SUB] ⚠️ Subscription inactive — agent paused")
+    show_subscription_inactive_notification()
+    return True
+
 def check_subscription_response(http_error):
     """Check if a 403 is subscription_inactive. Returns True if subscription is dead."""
-    global _subscription_active
     if http_error.code != 403:
         return False
     try:
         body = http_error.read().decode("utf-8", errors="ignore")
-        if "subscription_inactive" in body:
-            _subscription_active = False
-            log("[SUB] ⚠️ Subscription inactive — agent paused")
-            show_subscription_inactive_notification()
-            return True
+        return check_subscription_response_from_body(body)
     except:
         pass
     return False

@@ -114,6 +114,66 @@ def test_file_shape():
     assert d == {"since": c.t, "until": c.t + 1800}, d
 
 
+# --- report outbox (Reports "Paused" column) --------------------------------
+
+def test_pause_and_resume_are_queued_as_one_record():
+    c = Clock()
+    p = fresh(c)
+    woke = []
+    p.on_change = lambda: woke.append(1)
+    p.pause(None)
+    start = c.t
+    assert p.pending_reports() == [{"started_at": start, "ended_at": None, "planned_until": None}]
+    c.advance(600)
+    p.resume()
+    assert p.pending_reports() == [{"started_at": start, "ended_at": start + 600,
+                                    "planned_until": None}]
+    assert len(woke) == 2, "the sender was not woken on each change"
+
+
+def test_timed_pause_reports_its_planned_end_not_when_noticed():
+    c = Clock()
+    p = fresh(c)
+    p.pause(15)
+    start = c.t
+    c.advance(3 * 3600)          # nobody looked for hours (Mac asleep)
+    assert not p.is_paused()
+    assert p.pending_reports() == [{"started_at": start, "ended_at": start + 900,
+                                    "planned_until": start + 900}]
+
+
+def test_confirmed_reports_leave_the_outbox():
+    p = fresh()
+    p.pause(30)
+    sent = p.pending_reports()
+    p.mark_reported(sent)
+    assert p.pending_reports() == []
+    assert not os.path.exists(p.outbox_path)
+
+
+def test_a_change_during_the_post_is_not_lost():
+    c = Clock()
+    p = fresh(c)
+    p.pause(None)
+    sent = p.pending_reports()        # the open pause goes out ...
+    c.advance(60)
+    p.resume()                        # ... and ends before the server answers
+    p.mark_reported(sent)
+    left = p.pending_reports()
+    assert len(left) == 1 and left[0]["ended_at"] is not None, left
+
+
+def test_unsent_reports_survive_a_restart():
+    c = Clock()
+    path = os.path.join(tempfile.mkdtemp(), "pause.json")
+    p = fresh(c, path)
+    p.pause(None)
+    c.advance(60)
+    p.resume()
+    again = fresh(c, path)
+    assert len(again.pending_reports()) == 1
+
+
 def test_menu_durations():
     assert [m for _, m in PS.DURATIONS] == [15, 30, 60, None]
 

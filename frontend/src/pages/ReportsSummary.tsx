@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import {
   Loader2, Download, Clock, AlertTriangle,
   ChevronDown, ChevronRight, Search, X, Maximize2, Minimize2, SlidersHorizontal, Check,
+  Pause,
 } from "lucide-react";
 import ReportsViewToggle, { useAiAgentsReportAvailable } from "@/components/reports/ReportsViewToggle";
 import { API_BASE } from "@/lib/api";
@@ -179,6 +180,9 @@ interface SummaryRow {
   billable_hours: number;
   non_billable_hours: number;
   uncategorized_hours?: number;   // server name kept; displayed as "Needs review"
+  // Time the person chose "Pause Tracking" in the desktop agent. Shown beside
+  // their hours, never inside Total or utilization. Employee rows only.
+  paused_hours?: number;
   utilization_pct: number;
   top_client: string | null;
   block_count: number;
@@ -915,13 +919,14 @@ export default function ReportsSummary({
           ) : (
             <>
               {/* column header — hidden on narrow screens where columns stack */}
-              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50/70 border-b border-border/70 text-[10.5px] font-bold uppercase tracking-[0.12em] text-slate-400">
+              <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(5,minmax(64px,.8fr))_20px] items-center gap-3 px-4 py-2.5 bg-slate-50/70 border-b border-border/70 text-[10.5px] font-bold uppercase tracking-[0.12em] text-slate-400">
                 <span />
                 <span>Employee</span>
                 <span>Mix</span>
                 <span className="text-right">Billable</span>
                 <span className="text-right">Non-bill</span>
                 <span className="text-right">Review</span>
+                <span className="text-right" title="Time paused from the TimeTracker menu bar — not counted in Total">Paused</span>
                 <span className="text-right">Util %</span>
                 <span />
               </div>
@@ -1050,6 +1055,11 @@ function EmployeeRow({
   const lengthPct = Math.max(8, (total / (maxTotal || 1)) * 100);
   const review = row.uncategorized_hours || 0;
   const util = row.utilization_pct ?? 0;
+  const paused = row.paused_hours || 0;
+  // Someone who only paused has no tracked time to name a client from.
+  const topLine = !row.total_hours && paused > 0
+    ? "Paused — no tracked time"
+    : `Most time on ${row.top_client || "Internal / Admin"}`;
   const hasBreakdown = Array.isArray(row.breakdown) && row.breakdown.length > 0;
   // Hide the "No Client" (unassigned) bucket from the per-employee breakdown —
   // it's not client work. The employee's header totals still include it; this
@@ -1079,15 +1089,13 @@ function EmployeeRow({
         className="w-full text-left px-4 py-3 hover:bg-slate-50/60 transition-colors"
       >
         {/* desktop: aligned columns */}
-        <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(4,minmax(64px,.8fr))_20px] items-center gap-3">
+        <div className="hidden md:grid grid-cols-[38px_minmax(150px,1.5fr)_1.4fr_repeat(5,minmax(64px,.8fr))_20px] items-center gap-3">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">
             {initials(row.label)}
           </span>
           <div className="min-w-0">
             <div className="text-sm font-bold text-slate-900 truncate">{row.label}</div>
-            <div className="text-[11px] text-slate-400 truncate">
-              Most time on {row.top_client || "Internal / Admin"}
-            </div>
+            <div className="text-[11px] text-slate-400 truncate">{topLine}</div>
           </div>
           <div>
             <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-100">
@@ -1123,6 +1131,19 @@ function EmployeeRow({
             )}
           </div>
           <div className="text-right">
+            {paused > 0 ? (
+              <span
+                className="inline-flex items-center gap-1 text-sm font-bold tabular-nums text-slate-500"
+                title="Paused from the TimeTracker menu bar — not counted in Total"
+              >
+                <Pause className="h-3 w-3" />
+                {fmtHours(paused)}
+              </span>
+            ) : (
+              <span className="text-sm text-slate-300">—</span>
+            )}
+          </div>
+          <div className="text-right">
             <div className="text-sm font-bold tabular-nums text-slate-700">{util}%</div>
           </div>
           <ChevronDown
@@ -1140,7 +1161,7 @@ function EmployeeRow({
               <div className="min-w-0">
                 <div className="text-sm font-bold text-slate-900 truncate">{row.label}</div>
                 <div className="text-[11px] text-slate-400 truncate">
-                  Most time on {row.top_client || "Internal / Admin"}
+                  {topLine}
                 </div>
               </div>
             </div>
@@ -1158,6 +1179,9 @@ function EmployeeRow({
             <span className="tabular-nums"><b className="text-slate-600 font-bold">{fmtHours(row.non_billable_hours)}</b> <span className="text-slate-400">non-bill</span></span>
             {review > 0 && (
               <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(review)}</b> review</span>
+            )}
+            {paused > 0 && (
+              <span className="tabular-nums"><b className="text-slate-500 font-bold">{fmtHours(paused)}</b> <span className="text-slate-400">paused</span></span>
             )}
             <span className="tabular-nums"><b className="text-slate-700 font-bold">{util}%</b> <span className="text-slate-400">util</span></span>
             <span className="tabular-nums"><b className="text-slate-700 font-bold">{fmtHours(total)}</b> <span className="text-slate-400">total</span></span>

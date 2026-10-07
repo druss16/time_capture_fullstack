@@ -3608,6 +3608,43 @@ def on_client_switch_from_menu(client_id: int, client_name: str):
         ai_switcher.on_manual_switch(client_id, client_name)
 
 # ---------------- Main loop ----------------
+def _start_startup_watchdog():
+    """StartupWatchdog whose stall handler logs every thread's stack,
+    reports 'startup_stall' to the server, and (unless the same stage keeps
+    stalling) exits non-zero so the LaunchAgent starts a fresh process."""
+    import startup_watchdog as _sw
+
+    def on_stall(stage, elapsed, restart):
+        stacks = _sw.all_thread_stacks()
+        log(f"[STARTUP] ⚠️ Stuck in '{stage}' for {int(elapsed)}s — "
+            f"{'restarting' if restart else 'NOT restarting (keeps stalling here)'}",
+            level="error")
+        log(f"[STARTUP] Thread stacks:\n{stacks}", level="error")
+        try:
+            report_error_to_backend(
+                "startup_stall",
+                f"Agent stuck in startup stage '{stage}' for {int(elapsed)}s",
+                stacks,
+                {"stage": stage, "elapsed_s": int(elapsed), "restart": restart,
+                 "app_version": APP_VERSION},
+            )
+        except Exception as e:
+            log(f"[STARTUP] could not report the stall: {e}")
+        try:
+            ship_logs_to_backend(tail_lines=200, trigger="startup_stall")
+        except Exception:
+            pass
+        if restart:
+            os._exit(1)   # non-zero → LaunchAgent KeepAlive starts us again
+
+    wd = _sw.StartupWatchdog(on_stall=on_stall, log=log)
+    if wd.previous:
+        log(f"[STARTUP] Last launch stalled in '{wd.previous.get('stage')}' "
+            f"({wd.previous.get('count')}x)")
+    wd.start()
+    return wd
+
+
 def run_agent():
     """Main agent function with GUI integration."""
     global API_KEY
@@ -3630,7 +3667,15 @@ def run_agent():
         except Exception as e:
             print(f"[INIT] Could not set activation policy: {e}")
 
+    # === STARTUP WATCHDOG ===
+    # Guards everything before the tracking loop (which mac_watchdog guards
+    # once it runs). See startup_watchdog.py — the 2026-10-07 macOS 26 freeze.
+    _startup = _start_startup_watchdog()
+
     # === FORCED UPDATE CHECK ===
+    # A forced update on a Mac waits on a dialog, so give it long. If it is
+    # left that long, the next launch skips it (update_checker marks it nagged).
+    _startup.stage("update_check", limit=600)
     from update_checker import check_for_update_blocking, start_background_checker
     check_for_update_blocking(API_BASE, APP_VERSION)
 
@@ -3639,6 +3684,7 @@ def run_agent():
     except Exception:
         pass
 
+    _startup.stage("context_bus")
     start_context_bus(CONTEXT_PORT)
 
     # Setup sleep/wake handler to prevent morning stalls
@@ -3713,6 +3759,7 @@ def run_agent():
     # Before the version bookkeeping below, so the relaunched process does
     # not see a "version change" and reset a perfectly good Accessibility
     # grant as stale.
+    _startup.stage("config")
     restart_if_orphaned()
 
     # === CHECK FOR VERSION UPGRADE ===
@@ -3791,6 +3838,7 @@ def run_agent():
             log("[MDM] Re-link was requested — skipping the org-token claim "
                 "so you can choose an account")
 
+        _startup.stage("mdm_claim")
         mdm_config = None if relink else get_mdm_config()
         if mdm_config:
             log("[MDM] Found a deployed configuration — claiming with the org token")
@@ -3821,6 +3869,8 @@ def run_agent():
         
         # Fallback to interactive pairing (GUI or terminal)
         if not key:
+            # Waiting on a person at the pairing window: never timed.
+            _startup.stage("pairing", limit=None)
             key = ensure_api_key_interactive(hostname)
             # Paired by hand just now: show the setup checklist once, right
             # after, even if nothing required is missing.
@@ -3832,12 +3882,22 @@ def run_agent():
             # so one cancelled pairing window stopped tracking until the next
             # login. Stay in the menu bar until a key exists instead.
             log("[PAIR] No device key — staying in the menu bar until paired")
+            _startup.done()   # the "⚠️ Pair" menu is up; nothing more to start
             run_unpaired_menu()
             return
 
     # After pairing, so a first-time user sees the pairing window before the
     # system Accessibility dialog rather than two dialogs racing.
-    start_permission_monitor(_VERSION_CHANGED)
+    # Skippable: capture works without it (titles fall back to the extension
+    # and AppleScript). If it hung the last launch, run without it this time.
+    if _startup.should_skip("permissions"):
+        log("[STARTUP] ⚠️ The permission check hung on the last launch — "
+            "starting without it this time")
+    else:
+        _startup.stage("permissions", skippable=True)
+        start_permission_monitor(_VERSION_CHANGED)
+    # First hello retries with backoff for ~50s plus request timeouts.
+    _startup.stage("hello", limit=240)
 
     # Hello (with key)
     if not hello(HELLO_URL, os_user, hostname, device_id):
@@ -3865,7 +3925,7 @@ def run_agent():
 
 
     # === SYNC INITIALIZATION ===
-    # === SYNC INITIALIZATION ===
+    _startup.stage("sync_init")
     sync = None
     api_key = config.get("api_key") or API_KEY
     if api_key:
@@ -4130,9 +4190,43 @@ def run_agent():
     if _pause.is_paused():
         log(f"[PAUSE] Starting paused ({_pause.status_label()})")
 
+    # Send every pause to the server for the Reports "Paused" column. Woken
+    # on each pause/resume; otherwise retries every 2 min, so a pause taken
+    # offline — or before the server's migration is applied (503) — still
+    # arrives. Only what the server confirms leaves the outbox.
+    _pause_wake = threading.Event()
+    _pause.on_change = _pause_wake.set
+
+    def _pause_sender():
+        def iso(ts):
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+        while True:
+            _pause_wake.wait(120)
+            _pause_wake.clear()
+            try:
+                _pause.is_paused()   # ends an expired timed pause, queueing it
+                pending = _pause.pending_reports()
+                if not pending:
+                    continue
+                http_post_json(
+                    f"{API_BASE}/agent/pauses/",
+                    {"pauses": [{"started_at": iso(r["started_at"]),
+                                 "ended_at": iso(r.get("ended_at")),
+                                 "planned_until": iso(r.get("planned_until"))}
+                                for r in pending]},
+                    api_headers(os_user, hostname), timeout=10)
+                _pause.mark_reported(pending)
+                log(f"[PAUSE] Reported {len(pending)} pause(s) to the server")
+            except urllib.error.HTTPError as e:
+                log(f"[PAUSE] Report not accepted (HTTP {e.code}) — will retry")
+            except Exception as e:
+                log(f"[PAUSE] Report failed ({e}) — will retry")
+
+    threading.Thread(target=_pause_sender, daemon=True, name="PauseReporter").start()
+    _pause_wake.set()   # anything left from before a restart goes now
+
     # === GUI INITIALIZATION (after pairing succeeds) ===
-    # === GUI INITIALIZATION (after pairing succeeds) ===
-    # === GUI INITIALIZATION (after pairing succeeds) ===
+    _startup.stage("gui_init")
     gui_menu_bar = None
     if GUI_AVAILABLE:
         try:
@@ -4940,6 +5034,7 @@ def run_agent():
     print("=== DEBUG: About to start tracking thread ===")  # ADD THIS LINE
     tracking_thread = threading.Thread(target=tracking_loop, daemon=False)
     tracking_thread.start()
+    _startup.done()
     print("[TRACKING] Started tracking thread")
 
     # === RE-CHECK FOR UPDATES EVERY HOUR ===

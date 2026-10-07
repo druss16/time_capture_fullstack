@@ -9241,9 +9241,14 @@ def agent_error_report(request):
     org = None
     if device_id:
         try:
-            device = AgentDevice.objects.select_related('user', 'org').get(device_id=device_id)
+            # AgentDevice has no org: it comes from the device's user. This
+            # used to select_related('org'), a FieldError — every report from
+            # a paired device was a 500 and never stored.
+            device = AgentDevice.objects.select_related('user').get(device_id=device_id)
             user = device.user
-            org = device.org
+            if user is not None:
+                from tracker.views_billing import get_user_org
+                org = get_user_org(user)
         except AgentDevice.DoesNotExist:
             pass
     

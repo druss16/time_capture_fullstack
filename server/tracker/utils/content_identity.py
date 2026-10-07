@@ -122,6 +122,24 @@ def strip_adobe_view_state(title: str, is_adobe: bool = False) -> str:
     return doc
 
 
+# Chrome's Memory Saver label, spliced into a heavy tab's title ahead of the
+# browser name: "Re: proofs - Gmail - High memory usage - 805 MB - Google
+# Chrome". It says nothing about the work, clutters every title it touches,
+# and its number changes from minute to minute — so one email read for ten
+# minutes arrived as several different titles.
+CHROME_MEMORY_LABEL_RE = re.compile(
+    r"\s*[-–—]\s*High memory usage\s*[-–—]\s*[\d.,]+\s*[KMGT]B\b", re.IGNORECASE)
+# The same, for Postgres REGEXP_REPLACE (strip_chrome_memory_label backfill).
+CHROME_MEMORY_LABEL_PG = r"\s*[-–—]\s*High memory usage\s*[-–—]\s*[0-9.,]+\s*[KMGT]B\M"
+
+
+def strip_chrome_memory_label(title: str) -> str:
+    """'x - High memory usage - 805 MB - Google Chrome' -> 'x - Google Chrome'."""
+    if not title or "memory usage" not in title.lower():
+        return title or ""
+    return CHROME_MEMORY_LABEL_RE.sub("", title)
+
+
 def normalize_ingested_title(title, bundle_id=None, app_name=None) -> str:
     """The window_title to STORE for an incoming agent event.
 
@@ -131,6 +149,7 @@ def normalize_ingested_title(title, bundle_id=None, app_name=None) -> str:
     the only way to guarantee a text layer's words reach none of them is to not
     store them in the field they all read. The stripped part is zoom, layer
     name and colour mode: nothing in it says which client the file belongs to.
+    Chrome's "High memory usage - N MB" label is dropped for the same reason.
 
     Covers agents that do not normalize themselves: every Windows agent and
     Mac agents before the release that added it.
@@ -142,7 +161,7 @@ def normalize_ingested_title(title, bundle_id=None, app_name=None) -> str:
         or (app_name and re.search(r"\b(?:photoshop|illustrator|indesign)\b",
                                    str(app_name), re.IGNORECASE))
     )
-    return strip_adobe_view_state(title, is_adobe=is_adobe)
+    return strip_chrome_memory_label(strip_adobe_view_state(title, is_adobe=is_adobe))
 
 
 def _clean_title(title: str) -> str:
@@ -150,7 +169,7 @@ def _clean_title(title: str) -> str:
     if not title:
         return ""
     t = title.translate(_ZW).strip()
-    t = strip_adobe_view_state(t)
+    t = strip_chrome_memory_label(strip_adobe_view_state(t))
     # Strip page-counter first (it sits before the browser suffix sometimes,
     # after it other times depending on Edge build), then suffix, then re-strip
     # counter in case order was reversed.

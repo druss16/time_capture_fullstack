@@ -136,6 +136,95 @@ def qb_time_sync(request):
     return Response({'synced': True, 'message': message, 'stats': stats})
 
 
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def qb_time_staff(request):
+    """
+    GET  — every QuickBooks Time user, whether and to whom they are linked,
+           and the firm's TimeTracker people to link them to.
+    POST {"external_id": "123", "user_id": 45 | null} — link or unlink one.
+
+    The sync links people by email only. A person whose QuickBooks Time email
+    is not their TimeTracker one (Alannah: a personal address in QBT,
+    alannah@morethancars.com here) stayed unlinked, and the push skipped her
+    time as user_not_mapped with no way to fix it short of a database edit.
+
+    The user list is read live: an unlinked QBT user has no row to store it in
+    (ExternalStaffMapping.user is required). A link made here survives later
+    syncs, which only ever touch email (or unique full-name) matches.
+    """
+    from django.contrib.auth import get_user_model
+    from tracker.integrations.qb_time.client import QBTimeClient, QBTimeError
+    from tracker.models import OrganizationMembership
+    from tracker.models_task_type_sets import ExternalStaffMapping
+
+    org, denied = _require_admin(request, 'link QuickBooks Time users')
+    if denied:
+        return denied
+    integration, err = get_integration(org, 'qb_time')
+    if err:
+        return err
+
+    members = {
+        m.user_id: m.user for m in
+        OrganizationMembership.objects.filter(organization=org).select_related('user')
+    }
+
+    def _person(u):
+        return {'id': u.id, 'name': u.get_full_name() or u.username, 'email': u.email or ''}
+
+    if request.method == 'POST':
+        external_id = str(request.data.get('external_id') or '').strip()
+        user_id = request.data.get('user_id')
+        if not external_id:
+            return error_response('external_id required', 400, 'bad_request')
+        if user_id in (None, '', 0):
+            ExternalStaffMapping.objects.filter(integration=integration, external_id=external_id).delete()
+            return Response({'ok': True, 'external_id': external_id, 'user': None})
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            return error_response('user_id must be a number', 400, 'bad_request')
+        if user_id not in members:
+            return error_response('That person is not in this firm.', 400, 'not_a_member')
+        # One QBT user per person and one person per QBT user: moving a link
+        # clears whatever either side was linked to before.
+        ExternalStaffMapping.objects.filter(integration=integration, user_id=user_id) \
+            .exclude(external_id=external_id).delete()
+        mapping, _ = ExternalStaffMapping.objects.update_or_create(
+            integration=integration, external_id=external_id,
+            defaults={'user_id': user_id, 'external_name': str(request.data.get('external_name') or '')[:255]},
+        )
+        return Response({'ok': True, 'external_id': external_id, 'user': _person(members[user_id])})
+
+    try:
+        qbt_users = list(QBTimeClient(integration).paginated('users', active='both'))
+    except QBTimeError as e:
+        return error_response(f'Could not read QuickBooks Time users: {e}'[:300], 502, 'qbt_error')
+
+    links = {m.external_id: m.user_id for m in
+             ExternalStaffMapping.objects.filter(integration=integration)}
+    users = []
+    for u in qbt_users:
+        ext = str(u.get('id') or '').strip()
+        if not ext:
+            continue
+        linked = links.get(ext)
+        users.append({
+            'external_id': ext,
+            'name': f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip() or ext,
+            'email': str(u.get('email') or ''),
+            'active': bool(u.get('active', True)),
+            'linked_user': _person(members[linked]) if linked in members else None,
+        })
+    # Unlinked active people first: that is the list someone came here to work.
+    users.sort(key=lambda r: (r['linked_user'] is not None, not r['active'], r['name'].lower()))
+    return Response({
+        'users': users,
+        'people': sorted((_person(u) for u in members.values()), key=lambda p: p['name'].lower()),
+    })
+
+
 # A month of one firm's time is a few hundred rows — a handful of batched
 # writes. Wider than that is a backfill and should be asked for on purpose.
 MAX_PUSH_DAYS = 31

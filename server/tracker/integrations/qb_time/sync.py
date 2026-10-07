@@ -359,27 +359,56 @@ def _sync_projects(integration, plan, clients, hours, stats):
 
 
 def _sync_staff(integration, users: list) -> dict:
-    """QB Time user ↔ TimeTracker member, by email only. Never creates a user."""
+    """
+    QB Time user ↔ TimeTracker member. Never creates a user.
+
+    In order: a link someone made by hand (the Team list on the card) is kept;
+    else the email; else the full name, when exactly one member of the firm has
+    it. The name step exists for people whose QuickBooks Time email is not
+    their work one (Alannah) — a name two members share links neither.
+
+    A person is linked to at most one QuickBooks Time user (the table is unique
+    on it). A second QBT user matching someone already linked is left alone,
+    not written — writing it raised IntegrityError and failed the whole sync.
+    """
     stats = {'matched': 0, 'unmatched': 0}
-    members = {m.user.email.strip().lower(): m.user for m in
-               OrganizationMembership.objects.filter(organization=integration.organization)
-               .select_related('user') if m.user.email}
+    member_users = [m.user for m in OrganizationMembership.objects
+                    .filter(organization=integration.organization).select_related('user')]
+    by_email = {u.email.strip().lower(): u for u in member_users if u.email}
+    by_name = {}
+    for u in member_users:
+        full = ' '.join((u.get_full_name() or '').lower().split())
+        if full:
+            by_name.setdefault(full, []).append(u)
+    existing = {m.external_id: m for m in ExternalStaffMapping.objects.filter(integration=integration)}
+    linked_users = {m.user_id: m.external_id for m in existing.values()}
     now = timezone.now()
     for u in users:
         ext = _id(u.get('id'))
-        email = str(u.get('email') or '').strip().lower()
-        user = members.get(email) if email else None
-        if not ext or user is None:
+        if not ext:
             stats['unmatched'] += 1
             continue
-        mapping, _ = ExternalStaffMapping.objects.get_or_create(
-            integration=integration, external_id=ext, defaults={'user': user})
+        email = str(u.get('email') or '').strip().lower()
+        name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()
+        mapping = existing.get(ext)
+        user = by_email.get(email) if email else None
+        if user is None and mapping is not None:
+            user = mapping.user            # a hand-made link stands
+        if user is None:
+            same_name = by_name.get(' '.join(name.lower().split()), [])
+            user = same_name[0] if len(same_name) == 1 else None
+        if user is None or linked_users.get(user.id, ext) != ext:
+            stats['unmatched'] += 1
+            continue
+        if mapping is None:
+            mapping = ExternalStaffMapping(integration=integration, external_id=ext, user=user)
         mapping.user = user
-        mapping.external_name = f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()[:255]
+        mapping.external_name = name[:255]
         mapping.external_email = email[:254]
         mapping.last_synced_at = mapping.last_seen_in_source = now
-        mapping.save(update_fields=['user', 'external_name', 'external_email',
-                                    'last_synced_at', 'last_seen_in_source', 'updated_at'])
+        mapping.save()
+        existing[ext] = mapping
+        linked_users[user.id] = ext
         stats['matched'] += 1
     return stats
 

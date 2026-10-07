@@ -474,6 +474,43 @@ _BROWSER_PROFILE_SUFFIX_RE = re.compile(
     re.I,
 )
 
+# Chrome's Memory Saver hover label, spliced into the tab title ahead of the
+# browser name: "… - High memory usage - 859 MB - Google Chrome".
+_BROWSER_MEMORY_LABEL_RE = re.compile(
+    r"\s*[-–—]\s*High memory usage\s*[-–—]\s*[\d.,]+\s*[KMG]B\b", re.I)
+
+# The mailbox segment of a webmail tab: "Inbox (3) - jane@acme.com - Gmail -
+# Google Chrome", or under a Workspace that renamed Gmail, "Re: proofs -
+# dan@mavops.ai - MavOps Mail - Google Chrome". That address and brand are the
+# MAILBOX OWNER, never the client the mail is about — yet "dan@mavops.ai -
+# MavOps Mail" filed every Gmail block at MavOps to its MAVOPS client. Removed
+# only when the brand segment sits right before the browser banner (or ends
+# the title), so a document called "Acme Mail plan" is left alone.
+_MAILBOX_SEGMENT_RE = re.compile(
+    r"\s*[-–—]\s*(?:[^\s@]+@[^\s@]+\s*[-–—]\s*)?[^-–—@]{0,40}?\bG?mail\b"
+    r"(?=\s*(?:[-–—]\s*(?:Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox)|$))",
+    re.I,
+)
+# Chrome's profile, trailing the browser name: "… - Google Chrome - dan@mavops.ai".
+_BROWSER_PROFILE_EMAIL_RE = re.compile(
+    r"\s*[-–—]\s*(?:Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox)\s*[-–—]\s*[^\s@]+@[^\s@]+\s*$",
+    re.I,
+)
+_BROWSER_NAME_RE = re.compile(r"Microsoft\s*Edge|Google\s+Chrome|Mozilla\s+Firefox", re.I)
+
+
+def strip_mailbox_owner(title: str) -> str:
+    """Drop what a browser tab says about the MAILBOX OWNER (not the content):
+    Chrome's memory label, the webmail mailbox segment, the profile email.
+    Non-browser titles come back unchanged. Shared by Stage 3 and the title
+    detector so neither scores the user's own address or mailbox brand."""
+    text = title or ""
+    if not _BROWSER_NAME_RE.search(text):
+        return text
+    text = _BROWSER_MEMORY_LABEL_RE.sub("", text)
+    text = _MAILBOX_SEGMENT_RE.sub("", text)
+    return _BROWSER_PROFILE_EMAIL_RE.sub("", text)
+
 # Zero-width and other invisible characters, stripped before anything is matched
 # or tokenised. Edge injects U+200B into its own banner — the real title above is
 # "Microsoft\u200b Edge" — so a literal "Microsoft Edge" pattern misses it, and
@@ -538,7 +575,7 @@ def strip_app_chrome(title: str) -> str:
     # name is its TEXT, so without this a Photoshop layer mentioning another
     # client would be scored as the client. Ingestion strips it from new
     # events; this covers titles stored before that.
-    text = strip_adobe_view_state(text)
+    text = strip_mailbox_owner(strip_adobe_view_state(text))
     # Loop: a title may carry a banner behind a profile segment behind another
     # dash. Each pass must match a browser name, so this cannot run away.
     previous = None

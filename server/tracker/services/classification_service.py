@@ -747,7 +747,8 @@ class ClassificationService:
         return decision
 
     @transaction.atomic
-    def apply(self, block, decision: ClassificationDecision, source: str = 'classifier'):
+    def apply(self, block, decision: ClassificationDecision, source: str = 'classifier',
+              propagate_current_client: bool = True):
         """
         Apply a classification decision to a block.
 
@@ -759,6 +760,8 @@ class ClassificationService:
             block: Block instance to update
             decision: ClassificationDecision from classify()
             source: One of the state_changed_by choices
+            propagate_current_client: False when re-filing PAST work (the
+                Gmail re-file), which must not move the user's live client.
 
         Returns:
             Updated block.
@@ -1147,7 +1150,15 @@ class ClassificationService:
         #   3. The decision came from Stage 7 with confidence >= 0.85 (strong)
         #   4. The user's CurrentClient hasn't been manually updated very
         #      recently (don't clobber a user who just switched)
-        self._propagate_mail_client_if_applicable(block, decision)
+        if propagate_current_client:
+            # Own savepoint: a failed write in here (CurrentClient.device_id is
+            # an IntegerField; agents send string ids) used to mark this whole
+            # atomic apply() for rollback and silently undo the classification.
+            try:
+                with transaction.atomic():
+                    self._propagate_mail_client_if_applicable(block, decision)
+            except Exception as e:
+                logger.warning(f"[STAGE-7-PROPAGATE] rolled back for block {block.pk}: {e}")
 
         return block
 
@@ -1217,7 +1228,7 @@ class ClassificationService:
                 # First-ever CurrentClient row for this user
                 CurrentClient.objects.create(
                     user=self.user,
-                    device_id=block.device_id or 0,
+                    device_id=int(block.device_id) if str(block.device_id or '').isdigit() else 0,
                     client_id=mail_client_id,
                     started_at=timezone.now(),
                 )
@@ -3215,9 +3226,10 @@ class ClassificationService:
         that hijack attribution when the user navigates QB Customer Center.
         Mirrors the agent's _strip_qb_screen_bracket logic.
         """
-        primary_title = ClassificationService._strip_qb_screen_bracket(
+        from tracker.utils.client_name_match import strip_mailbox_owner
+        primary_title = strip_mailbox_owner(ClassificationService._strip_qb_screen_bracket(
             block.window_title or block.title or ''
-        )
+        ))
         primary_parts = [
             primary_title,
             (block.url or ''),
@@ -3245,7 +3257,7 @@ class ClassificationService:
                 if not t:
                     continue
                 # v1.3.55: strip QB bracket from each event title too
-                stripped = ClassificationService._strip_qb_screen_bracket(t)
+                stripped = strip_mailbox_owner(ClassificationService._strip_qb_screen_bracket(t))
                 if stripped and stripped.lower() != block_title_lower:
                     context_parts.append(stripped)
         except Exception:

@@ -216,18 +216,26 @@ const StatCell = ({
   value,
   label,
   valueClass = "text-slate-800",
+  note,
 }: {
   value: string;
   label: string;
   valueClass?: string;
+  /** A caveat on this number that does not change it (e.g. part still needs a project). */
+  note?: string | undefined;
 }) => (
-  <div className="flex flex-col items-end">
+  <div className="relative flex flex-col items-end">
     <span className={cn("text-lg font-bold leading-none tabular-nums", valueClass)}>
       {value}
     </span>
     <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mt-0.5">
       {label}
     </span>
+    {note && (
+      <span className="absolute top-full mt-0.5 whitespace-nowrap text-[10px] font-semibold tabular-nums text-amber-600">
+        {note}
+      </span>
+    )}
   </div>
 );
 
@@ -386,6 +394,7 @@ export default function DailyReview() {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const terms = useTerminology();
   const [billableHours, setBillableHours] = useState(0);
   const [nonBillableHours, setNonBillableHours] = useState(0);
   const [needsReviewHours, setNeedsReviewHours] = useState(0);
@@ -901,8 +910,14 @@ export default function DailyReview() {
 
   // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
   const totalMin = Math.round(totalHours * 60);
-  const needsMin = lanes.needsYou.minutes + projectQueue.minutes;
+  // Three parts of one bar: sorted, client known but no project yet, and no
+  // client yet. Project time stays with its client — it is filed, just not to
+  // a project — so it is shown apart from "needs you", not lumped into it.
+  const clientNeedsMin = lanes.needsYou.minutes;
+  const projectNeedsMin = Math.min(projectQueue.minutes, Math.max(0, totalMin - clientNeedsMin));
+  const needsMin = clientNeedsMin + projectNeedsMin;
   const sortedMin = Math.max(0, totalMin - needsMin);
+  const projectPct = totalMin > 0 ? Math.round((projectNeedsMin / totalMin) * 100) : 0;
   // 100% is reserved for a truly-clear day (nothing in "Needs you"). While
   // anything remains, never round up to 100 — cap at 99 so 1m left still reads
   // 99%, not a misleading "100% sorted".
@@ -1065,22 +1080,31 @@ export default function DailyReview() {
               <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
             </button>
 
-            {/* Stats — Billable, Needs Review, Total. */}
+            {/* Stats — Billable (+ Non-billable) + Needs review = Total, always.
+                Needs review is ONLY time with no client yet. Time with a known
+                client but no project is the client's billable time — it is
+                counted there and flagged underneath, never added again here
+                (that double count read 26m + 41m = 43m). */}
             <div className="flex items-center gap-4 pl-3 border-l border-border/60">
               <StatCell
                 value={formatHours(billableHours)}
                 label="Billable"
                 valueClass="text-primary"
+                note={projectQueue.minutes > 0
+                  ? `${formatHours(projectQueue.minutes / 60)} needs a ${terms.project.toLowerCase()}`
+                  : undefined}
               />
-              {/* The same minutes as the Needs-you card and the progress bar:
-                  client questions AND project questions. needsReviewHours alone
-                  counted only unresolved clients, so it read 0m while the card
-                  said 37m of project picks were waiting. Total is unchanged —
-                  project-pending time is already inside billable. */}
+              {nonBillableHours > 0 && (
+                <StatCell
+                  value={formatHours(nonBillableHours)}
+                  label="Non-billable"
+                  valueClass="text-slate-500"
+                />
+              )}
               <StatCell
-                value={formatHours(needsMin / 60)}
+                value={formatHours(needsReviewHours)}
                 label="Needs review"
-                valueClass={needsMin === 0 ? "text-teal-500" : "text-amber-500"}
+                valueClass={needsReviewHours === 0 ? "text-teal-500" : "text-amber-500"}
               />
               <StatCell
                 value={formatHours(totalHours)}
@@ -1162,12 +1186,16 @@ export default function DailyReview() {
                 </div>
                 <div className="mt-2.5 flex h-3 overflow-hidden rounded-full bg-slate-200 shadow-[inset_0_1px_2px_rgba(16,27,46,0.09)]">
                   <div className="bg-gradient-to-r from-primary to-accent transition-all" style={{ width: `${sortedPct}%` }} />
-                  <div className="bg-amber-500 transition-all" style={{ width: `${100 - sortedPct}%` }} />
+                  <div className="bg-amber-300 transition-all" style={{ width: `${Math.min(projectPct, 100 - sortedPct)}%` }} />
+                  <div className="bg-amber-500 transition-all" style={{ width: `${Math.max(0, 100 - sortedPct - projectPct)}%` }} />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-slate-500">
                   <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-primary" /><span className="tabular-nums">{formatHours(sortedMin / 60)}</span> sorted</span>
-                  {needsMin > 0 && (
-                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(needsMin / 60)}</span> needs you</span>
+                  {projectNeedsMin > 0 && (
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-300" /><span className="tabular-nums">{formatHours(projectNeedsMin / 60)}</span> client known, needs a {terms.project.toLowerCase()}</span>
+                  )}
+                  {clientNeedsMin > 0 && (
+                    <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-[3px] bg-amber-500" /><span className="tabular-nums">{formatHours(clientNeedsMin / 60)}</span> needs you</span>
                   )}
                 </div>
                 {/* Caught up IS the end. This used to offer "Review & submit

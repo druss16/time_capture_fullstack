@@ -394,7 +394,8 @@ def stripe_setup(request, pk):
         result = svc.setup_stripe(p.organization, plan=d.get('plan'),
                                   interval=d.get('interval'), seats=d.get('seats'),
                                   coupon_months=d.get('coupon_months'),
-                                  billing_email=d.get('billing_email'))
+                                  billing_email=d.get('billing_email'),
+                                  billing_starts=d.get('billing_starts') or None)
     except ConsoleError as e:
         svc.audit(p, request.user, 'stripe.failed', error=str(e))
         return _err(e)

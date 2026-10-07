@@ -523,13 +523,19 @@ def stripe_config():
             'prices': prices}
 
 
-def setup_stripe(org, *, plan, interval, seats, coupon_months, billing_email):
+def setup_stripe(org, *, plan, interval, seats, coupon_months, billing_email,
+                 billing_starts=None):
     """Coupon → customer → subscription → link to the org, in one action.
 
     The playbook's Phase 3 was four screens in the Stripe dashboard and then a
     shell snippet pasted against production. The customer id is saved the
     moment it exists, so a retry after a failed subscription reuses it rather
     than creating a second customer.
+
+    billing_starts ('YYYY-MM-DD', optional) makes everything before that date
+    a Stripe trial: the subscription exists today and the firm has full
+    access, but the first invoice is created on that date and the cycle
+    renews on that day of the month from then on.
     """
     import stripe
 
@@ -551,6 +557,7 @@ def setup_stripe(org, *, plan, interval, seats, coupon_months, billing_email):
         raise ConsoleError('Seats and coupon months must be whole numbers.')
     if seats < 1:
         raise ConsoleError('At least one seat.')
+    trial_end = _billing_start_timestamp(billing_starts)
     if not (billing_email or '').strip():
         raise ConsoleError('A billing email is required — Stripe sends the invoice there.')
 
@@ -581,6 +588,8 @@ def setup_stripe(org, *, plan, interval, seats, coupon_months, billing_email):
         )
         if coupon_id:
             params['discounts'] = [{'coupon': coupon_id}]
+        if trial_end:
+            params['trial_end'] = trial_end
         sub = stripe.Subscription.create(**params)
     except stripe.error.StripeError as e:
         raise ConsoleError(f'Stripe refused it: {getattr(e, "user_message", None) or e}')
@@ -588,9 +597,37 @@ def setup_stripe(org, *, plan, interval, seats, coupon_months, billing_email):
     org.plan = plan
     org.seat_count = seats
     org.stripe_subscription_id = sub['id']
-    org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id'])
+    # Subscribed now: a leftover app-side trial date would show staff a
+    # "trial ends — subscribe now" banner (SubscriptionGuard) they can't act on.
+    org.trial_ends_at = None
+    org.save(update_fields=['plan', 'seat_count', 'stripe_subscription_id', 'trial_ends_at'])
     return {'customer': org.stripe_customer_id, 'subscription': sub['id'],
-            'coupon': coupon_id, 'plan': plan, 'seats': seats}
+            'coupon': coupon_id, 'plan': plan, 'seats': seats,
+            'billing_starts': billing_starts or None}
+
+
+def _billing_start_timestamp(raw):
+    """'YYYY-MM-DD' → Stripe trial_end (unix seconds), or None for 'today'.
+
+    Noon in the server's time zone (Eastern), so the date is the same date
+    everywhere in the US when the invoice is created.
+    """
+    from datetime import date, datetime, time
+    from zoneinfo import ZoneInfo
+
+    if not raw:
+        return None
+    try:
+        day = date.fromisoformat(str(raw))
+    except ValueError:
+        raise ConsoleError('Billing start must be a date (YYYY-MM-DD).')
+    tz = ZoneInfo(settings.TIME_ZONE)
+    today = timezone.now().astimezone(tz).date()
+    if day <= today:
+        raise ConsoleError('Billing start must be after today — leave it blank to start today.')
+    if (day - today).days > 730:
+        raise ConsoleError('Stripe allows at most two years before billing starts.')
+    return int(datetime.combine(day, time(12, 0), tzinfo=tz).timestamp())
 
 
 # ── Deployment kit ───────────────────────────────────────────────────────

@@ -134,6 +134,17 @@ class EndpointTests(Base):
         self.assertTrue(r.data['can_create'])
         self.assertEqual([x['id'] for x in r.data['blocks']], [b.id])
 
+    def test_queue_is_confirmed_time_only(self):
+        # A proposed client guess is a client question in Needs You, not a
+        # project question — listing it here counted its minutes twice.
+        self.block(self.ford, classification_state='proposed', is_categorized=False)
+        nb = self.block(self.ford, is_billable=False)
+        b = self.block(self.ford)
+        r = self.api.get('/api/blocks/needs-matter/', {'date': str(DAY)})
+        self.assertEqual(sorted(x['id'] for x in r.data['blocks']), sorted([nb.id, b.id]))
+        self.assertEqual(r.data['total_minutes'], 40)
+        self.assertEqual(r.data['billable_minutes'], 20)
+
     def test_queue_range_and_internal_client_excluded(self):
         # Every org is seeded with its own Internal client.
         internal = (Client.objects.filter(org=self.org, code='INTERNAL').first()

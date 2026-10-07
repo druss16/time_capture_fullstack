@@ -257,11 +257,12 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   refreshTick: number;
   onChanged: () => void;
   /** Reports what is waiting here, so the page headline counts it too. */
-  onQueue?: (count: number, minutes: number) => void;
+  onQueue?: (count: number, minutes: number, billableMinutes: number) => void;
 }) => {
   const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [billable, setBillable] = useState(0);
   // Capped for the same reason as the timesheet banner: a lane is a queue you
   // work down, not a wall you scroll past.
   const [shown, setShown] = useState(8);
@@ -279,8 +280,8 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   const load = useCallback(() => {
     setNote(null);
     fetchQueue()
-      .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
-      .catch(() => { setRows([]); setTotal(0); });
+      .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); setBillable(d?.billable_minutes ?? 0); })
+      .catch(() => { setRows([]); setTotal(0); setBillable(0); });
   }, [fetchQueue]);
 
   // Bring the lane up to date without shuffling it under someone working it:
@@ -299,6 +300,7 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
           return [...kept, ...fresh.filter((b) => !known.has(b.id))];
         });
         setTotal(d?.total_minutes ?? 0);
+        setBillable(d?.billable_minutes ?? 0);
       })
       .catch(() => {});
   }, [fetchQueue]);
@@ -325,7 +327,7 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
     return [...byKey.values()];
   }, [rows]);
 
-  useEffect(() => { onQueue?.(groups.length, total); }, [groups.length, total, onQueue]);
+  useEffect(() => { onQueue?.(groups.length, total, billable); }, [groups.length, total, billable, onQueue]);
 
   if (groups.length === 0) return null;
 
@@ -359,6 +361,9 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
               // it; it re-syncs, in place, with the page's next reload.
               setRows((prev) => prev.filter((x) => !r.ids.includes(x.id)));
               setTotal((prev) => Math.max(0, prev - r.minutes));
+              // Which of the row's blocks were billable isn't known here; the
+              // next sync corrects it. Never let it exceed what's left.
+              setBillable((prev) => Math.min(prev, Math.max(0, total - r.minutes)));
               if (folderFiled > 0) {
                 setNote(`Also filed ${folderFiled} more from the same folder`);
                 sync();
@@ -902,9 +907,10 @@ export default function DailyReview() {
   // project it is not sorted yet, so the headline must not say "all caught up"
   // above an amber lane of it. Its minutes are already inside the client totals
   // (it is committed time), so they move from sorted to needs-you, never added.
-  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0 });
-  const onProjectQueue = useCallback((count: number, minutes: number) =>
-    setProjectQueue((q) => (q.count === count && q.minutes === minutes ? q : { count, minutes })), []);
+  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0, billableMinutes: 0 });
+  const onProjectQueue = useCallback((count: number, minutes: number, billableMinutes: number) =>
+    setProjectQueue((q) => (q.count === count && q.minutes === minutes && q.billableMinutes === billableMinutes
+      ? q : { count, minutes, billableMinutes })), []);
   const needsYouCount = lanes.needsYou.count + projectQueue.count;
   const autoFiled = lanes.certain.minutes > 0;
 
@@ -1090,8 +1096,8 @@ export default function DailyReview() {
                 value={formatHours(billableHours)}
                 label="Billable"
                 valueClass="text-primary"
-                note={projectQueue.minutes > 0
-                  ? `${formatHours(projectQueue.minutes / 60)} needs a ${terms.project.toLowerCase()}`
+                note={projectQueue.billableMinutes > 0
+                  ? `${formatHours(Math.min(projectQueue.billableMinutes / 60, billableHours))} needs a ${terms.project.toLowerCase()}`
                   : undefined}
               />
               {nonBillableHours > 0 && (

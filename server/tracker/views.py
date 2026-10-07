@@ -7355,12 +7355,16 @@ def blocks_needing_matter(request):
     if not counts and not can_create:
         return Response({'date': str(first), 'blocks': [], 'total_minutes': 0})
 
+    from tracker.services.billing_totals import apply_confirmed_rules, billable_block_q
+
+    # Confirmed time only — the same rule the Billable / Non-billable totals
+    # use. A proposed block with a client GUESS is still a client question in
+    # Needs You; listing it here too asked about it twice and counted its
+    # minutes twice (4h 36m "needs a project" against a 3h 12m total).
     blocks = (
-        Block.objects
-        .filter(org=org, user=request.user, day__gte=first, day__lte=last,
-                project__isnull=True, client__isnull=False,
-                deleted_at__isnull=True)
-        .exclude(classification_state='suppressed')
+        apply_confirmed_rules(Block.objects.filter(
+            org=org, user=request.user, day__gte=first, day__lte=last,
+            project__isnull=True, client__isnull=False))
         .select_related('client')
         .order_by('start')
     )
@@ -7384,10 +7388,18 @@ def blocks_needing_matter(request):
         # still shows under its client as "No project yet".
         and (b.minutes or 0) >= IMMATERIAL_MAX_MINUTES]
 
+    # The part of it that is billable, so Daily Review can say "Xm of Billable
+    # needs a project" without non-billable client time making X > Billable.
+    listed = {r['id'] for r in rows}
+    billable_ids = set(
+        blocks.filter(billable_block_q(org), id__in=listed).values_list('id', flat=True)
+    ) if listed else set()
+
     return Response({
         'date': str(first),
         'blocks': rows,
         'total_minutes': sum(r['minutes'] for r in rows),
+        'billable_minutes': sum(r['minutes'] for r in rows if r['id'] in billable_ids),
         'can_create': can_create,
     })
 

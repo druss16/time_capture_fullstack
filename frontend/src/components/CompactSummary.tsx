@@ -415,6 +415,12 @@ export default function CompactSummary({
   const renderGroup = (g: CertainGroup) => {
     const open = openGroup === g.key || !!q;
     const allIds = g.rows.flatMap((r) => r.ids);
+    // The client is known, so the time stays here — but say on the closed
+    // header that some of it still needs a project, or it is only found by
+    // opening every client.
+    const noProjectMin = g.projects && g.clientId != null
+      ? g.rows.filter((r) => r.projectId === null).reduce((s, r) => s + r.minutes, 0)
+      : 0;
     return (
       <div key={g.key}>
         <div className="group flex items-center gap-2 py-2">
@@ -424,6 +430,11 @@ export default function CompactSummary({
               g.unassigned ? "italic text-muted-foreground" : g.internal ? "text-muted-foreground" : "text-foreground")}>
               {g.name}
             </span>
+            {noProjectMin > 0 && (
+              <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-sans text-[11px] font-semibold text-amber-700">
+                {fmtMin(noProjectMin)} needs a {terms.project.toLowerCase()}
+              </span>
+            )}
           </button>
           {/* Billable / non-billable, on EVERY client. Showing the split only
               for mixed clients left gaps down the column, and a gap reads as

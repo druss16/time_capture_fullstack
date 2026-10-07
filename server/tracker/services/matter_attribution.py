@@ -165,7 +165,10 @@ _NAME_WORD_SPLIT = re.compile(
     # Split, "Q1 2026 Production" was the words "q", "1" and "production", and
     # any Google Doc's URL (a long mixed-case ID) has a lone "q" and a "1" —
     # two of three words, enough for a partial match on every doc of the client.
-    r'|(?<=[A-Za-z]{2})(?=[0-9])|(?<=[0-9])(?=[A-Za-z])')
+    # Glued after a lower-case word ("TomGillQ1") the capital starts a new
+    # word, so it is a lone letter too.
+    r'|(?<=[a-z]{2})(?=[0-9])|(?<=[A-Z]{2})(?=[0-9])|(?<=[A-Z][a-z])(?=[0-9])'
+    r'|(?<=[0-9])(?=[A-Za-z])')
 # Words that say nothing about WHICH project: joiners, and the dates and
 # version marks a file name carries regardless of the project.
 _NAME_FILLER = {'a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'with'}

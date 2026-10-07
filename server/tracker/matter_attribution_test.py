@@ -317,6 +317,12 @@ if _ok:
     tidx = build_name_index(tg, {9: 'Tom Gill Buick GMC'})
     check("'Q1' stays one word", name_words('Q1 2026 Production') == ['q1', 'production'])
     check("words after two letters still split", name_words('Month2026') == ['month'])
+    check("all-caps word before digits still splits", name_words('KONETIQ2026') == ['konetiq'])
+    check("'Q1' glued after a camel-case word stays one word",
+          name_words('TomGillQ1Production.psd') == ['tom', 'gill', 'q1', 'production', 'psd'])
+    check("'Q1' alone does not name Q1 Production",
+          attribute_block(_B(window_title='Tom Gill Q1 budget', client_id=9),
+                          {}, {}, None, name_index=tidx)[0] is None)
     check("client abbreviation stripped from the project name",
           tidx[9].get('website reskin') == 92 and tidx[9].get('monthly donut videos') == 93)
     check("Q1 project keyed on 'q1 production'", tidx[9].get('q1 production') == 91)

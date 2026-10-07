@@ -4218,6 +4218,10 @@ class ClassificationService:
         # window still runs.
         if self._stage_7a_gmail_compose(block, decision):
             return
+        # Stage 7b — Gmail reading. The open message's subject (the tab title)
+        # matched to the user's synced mail on that thread.
+        if self._stage_7b_gmail_reading(block, decision):
+            return
 
         # Cache per (user, date) — same pattern as Stage 6 calendar
         cache_key = f"{self.user.id}:{block.start.date().isoformat()}"
@@ -4469,6 +4473,91 @@ class ClassificationService:
         decision.review_reason = (
             f"Gmail block sent mail to {len(by_client)} clients "
             f"({', '.join(names)}) — which one was this time for?"
+        )[:255]
+        return True
+
+    # Stage 7b strengths. The tab title is the thread the user had OPEN, so a
+    # thread with one client is as specific as a title naming that client:
+    # strong enough to file the block alone, a notch under composing to them.
+    GMAIL_READING_STRENGTH = 0.88
+    GMAIL_READING_AMBIGUOUS_STRENGTH = 0.70
+
+    def _stage_7b_gmail_reading(self, block, decision: 'ClassificationDecision') -> bool:
+        """Attribute a Gmail block from the thread it had open.
+
+        Returns True when it emitted the strong signal or flagged ambiguity
+        (the windowed Stage 7 is then skipped), else False.
+
+          * thread's messages -> exactly one client -> one strong 'mail' signal
+          * thread's messages -> 2+ clients         -> moderate signal each, review
+          * no open thread / no client on it        -> says nothing
+
+        PRIVACY: proposed_signals are readable by managers, so the evidence
+        names the counterparty DOMAIN and client — never the subject.
+        """
+        from tracker.services.mail_compose import open_message_subject, thread_signals
+
+        if not getattr(block, 'pk', None):
+            return False
+        try:
+            subject = open_message_subject(block)
+            rows = thread_signals(block, subject) if subject else []
+        except Exception as e:
+            logger.warning(f"[STAGE-7B] reading lookup failed for block {block.pk}: {e}")
+            return False
+
+        by_client = {}
+        for sig in rows:
+            if not sig.extracted_client_id:
+                continue
+            entry = by_client.setdefault(sig.extracted_client_id, {
+                'client': sig.extracted_client, 'messages': 0, 'domains': [],
+            })
+            entry['messages'] += 1
+            if sig.other_party_domain and sig.other_party_domain not in entry['domains']:
+                entry['domains'].append(sig.other_party_domain)
+        if not by_client:
+            return False
+
+        def _evidence(e):
+            n = e['messages']
+            return (f"Gmail: reading an email thread with {', '.join(e['domains']) or 'a known contact'} "
+                    f"→ {e['client'].name} ({n} message{'s' if n != 1 else ''} on the thread)")
+
+        def _detail(cid, e, method):
+            return {
+                'client_id': cid,
+                'client_name': e['client'].name,
+                'match_method': method,
+                'thread_message_count': e['messages'],
+                'other_party_domains': e['domains'],
+            }
+
+        if len(by_client) == 1:
+            (cid, e), = by_client.items()
+            evidence = _evidence(e)
+            decision.matched_signals.append(Signal(
+                type='mail', strength=self.GMAIL_READING_STRENGTH,
+                evidence=evidence, detail=_detail(cid, e, 'gmail_reading'),
+            ))
+            decision.detail = getattr(decision, 'detail', {}) or {}
+            decision.detail['mail_proposed_client_id'] = cid
+            decision.detail['mail_proposed_client_name'] = e['client'].name
+            decision.detail['mail_proposed_confidence'] = self.GMAIL_READING_STRENGTH
+            decision.detail['mail_proposed_evidence'] = evidence
+            return True
+
+        names = sorted(e['client'].name for e in by_client.values())
+        for cid, e in by_client.items():
+            decision.matched_signals.append(Signal(
+                type='mail', strength=self.GMAIL_READING_AMBIGUOUS_STRENGTH,
+                evidence=_evidence(e) + ' [thread involves several clients]',
+                detail=_detail(cid, e, 'gmail_reading_ambiguous'),
+            ))
+        decision.needs_review = True
+        decision.review_reason = (
+            f"Gmail thread involves {len(by_client)} clients ({', '.join(names)}) — "
+            f"which one was this time for?"
         )[:255]
         return True
 

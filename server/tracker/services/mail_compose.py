@@ -221,3 +221,61 @@ def block_active_seconds(block) -> int:
     if block.start and block.end:
         return max(0, int((block.end - block.start).total_seconds()))
     return 0
+
+
+# ─── Reading time ─────────────────────────────────────────────────────────────
+#
+# With a message open, Gmail's tab title IS its subject: "Re: Q3 engagement
+# letter - dan@mavops.ai - MavOps Mail". Strip the mailbox and browser chrome
+# and what is left names the thread. If the user's synced mail has that
+# subject with exactly one client, the time spent reading it is that client's.
+# A list view ("Inbox (3)", "Sent Mail", a search) names no thread.
+
+READING_LOOKBACK = timedelta(days=30)
+_SUBJECT_PREFIX_RE = re.compile(r'^\s*(?:(?:re|fwd?|aw|sv|wg)\s*(?:\[\d+\])?\s*:\s*)+', re.I)
+_GMAIL_VIEWS = {
+    'inbox', 'sent', 'sent mail', 'drafts', 'starred', 'snoozed', 'important',
+    'all mail', 'spam', 'trash', 'bin', 'scheduled', 'outbox', 'chats',
+    'search results', 'compose', 'new message', 'gmail', 'mail', 'primary',
+    'promotions', 'social', 'updates', 'forums',
+}
+MIN_SUBJECT_LEN = 8
+
+
+def normalize_subject(subject) -> str:
+    """Thread key: no Re:/Fwd: prefixes, case or spacing differences."""
+    s = _SUBJECT_PREFIX_RE.sub('', subject or '')
+    return ' '.join(s.lower().split())
+
+
+def open_message_subject(block) -> str:
+    """Normalized subject of the message open in this Gmail block, or ''."""
+    if not is_gmail_block(block):
+        return ''
+    from tracker.utils.client_name_match import strip_app_chrome
+    title = strip_app_chrome(getattr(block, 'window_title', '') or getattr(block, 'title', '') or '')
+    title = re.sub(r'\s*\(\d[\d,]*\)\s*', ' ', title)     # unread counts
+    title = re.sub(r'\s*[-–—]\s*gmail\s*$', '', title, flags=re.I)
+    subject = normalize_subject(title)
+    if len(subject) < MIN_SUBJECT_LEN or subject in _GMAIL_VIEWS:
+        return ''
+    # A search page: "Search results - from:acme.com"
+    if subject.startswith('search results') or subject.startswith('label:'):
+        return ''
+    return subject
+
+
+def thread_signals(block, subject):
+    """The user's synced Gmail messages on this thread, up to the block's end."""
+    from tracker.models import MailSignal
+    if not subject or not block.end:
+        return []
+    core = _SUBJECT_PREFIX_RE.sub('', subject).strip()
+    rows = MailSignal.objects.filter(
+        user_id=block.user_id,
+        provider='google',
+        occurred_at__gte=block.end - READING_LOOKBACK,
+        occurred_at__lte=block.end,
+        subject__icontains=core[:200],
+    ).select_related('extracted_client')
+    return [r for r in rows if normalize_subject(r.subject) == subject]

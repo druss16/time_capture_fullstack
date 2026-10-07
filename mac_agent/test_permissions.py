@@ -394,6 +394,55 @@ def test_swap_helper_restarts_whatever_launchd_respawned():
     assert "kickstart -k gui/" in open(calls).read()
 
 
+# --- AEDeterminePermissionToAutomateTarget can hang forever (macOS 26) -------
+
+def test_ae_status_returns_when_macos_never_answers():
+    import threading
+    import time
+    release = threading.Event()
+
+    def hangs(bundle_id, ask):
+        release.wait(30)
+        return P._AE_NOERR
+
+    t0 = time.monotonic()
+    st = P._ae_status_bounded("com.test.hang", determine=hangs, timeout=0.2)
+    assert st == P.UNKNOWN, st
+    assert time.monotonic() - t0 < 2, "the caller waited on the hung check"
+    # While that call is still stuck, the same app is not asked again (no
+    # pile-up of hung threads) ...
+    calls = []
+    st = P._ae_status_bounded("com.test.hang",
+                              determine=lambda b, a: calls.append(b) or P._AE_NOERR,
+                              timeout=0.2)
+    assert st == P.UNKNOWN and calls == [], (st, calls)
+    # ... and once macOS does answer, it is asked normally again.
+    release.set()
+    time.sleep(0.2)
+    st = P._ae_status_bounded("com.test.hang", determine=lambda b, a: P._AE_NOERR,
+                              timeout=1)
+    assert st == P.GRANTED, st
+
+
+def test_ae_status_passes_answers_through():
+    assert P._ae_status_bounded("com.test.a", lambda b, a: P._AE_DENIED) == P.DENIED
+    assert P._ae_status_bounded("com.test.b", lambda b, a: P._AE_WOULD_ASK) == P.NOT_ASKED
+
+    def boom(b, a):
+        raise OSError("no CoreServices")
+    assert P._ae_status_bounded("com.test.c", boom) == P.UNKNOWN
+
+
+def test_ae_status_never_asks_macos_about_an_app_that_is_not_running():
+    probes = P.MacProbes()
+    probes.running_path = lambda b: None
+    real, P._ae_determine = P._ae_determine, None  # any call would raise
+    try:
+        assert probes.ae_status("com.adobe.Photoshop") == P.NOT_RUNNING
+    finally:
+        P._ae_determine = real
+
+
 if __name__ == "__main__":
     failures = 0
     names = [n for n in sorted(globals()) if n.startswith("test_") and callable(globals()[n])]

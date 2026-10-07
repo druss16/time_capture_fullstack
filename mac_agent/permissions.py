@@ -201,11 +201,19 @@ class MacProbes:
             return None
 
     def ae_status(self, bundle_id: str) -> str:
-        """Ask macOS, WITHOUT prompting, whether we may script `bundle_id`."""
-        try:
-            return ae_code_to_status(_ae_determine(bundle_id, ask=False))
-        except Exception:
-            return UNKNOWN
+        """Ask macOS, WITHOUT prompting, whether we may script `bundle_id`.
+
+        AEDeterminePermissionToAutomateTarget can block FOREVER. On macOS 26
+        (2026-10-07, a More Than Cars M3) it never returned for an app that was
+        installed but not running: the very first check at startup hung, so
+        the agent paired, then froze before its first hello on every launch —
+        no tracking, no menu bar, and clicking the app said "TimeTracker is no
+        longer open". So: never ask about an app that is not running (macOS
+        would only say procNotFound anyway), and bound every call that is made.
+        """
+        if self.running_path(bundle_id) is None:
+            return NOT_RUNNING
+        return _ae_status_bounded(bundle_id)
 
     def ae_prompt(self, bundle_id: str, app_path: Optional[str]) -> str:
         """Make macOS show "TimeTracker wants to control <app>" now.
@@ -252,6 +260,41 @@ class MacProbes:
 
 
 _AE = None
+
+# The longest one non-prompting Automation check may hold up its caller. A
+# real answer comes back in milliseconds.
+AE_STATUS_TIMEOUT_S = 3.0
+# Bundle ids whose check is still stuck in macOS. A hung call cannot be
+# cancelled, so its thread is left behind; while it is, that app reads UNKNOWN
+# rather than starting another thread that would hang the same way.
+_ae_pending: set = set()
+_ae_pending_lock = threading.Lock()
+
+
+def _ae_status_bounded(bundle_id: str, determine=None,
+                       timeout: float = AE_STATUS_TIMEOUT_S) -> str:
+    """ae_code_to_status(_ae_determine(bundle_id, ask=False)), or UNKNOWN if
+    macOS has not answered within `timeout`. Never blocks longer than that."""
+    determine = determine or _ae_determine
+    with _ae_pending_lock:
+        if bundle_id in _ae_pending:
+            return UNKNOWN
+        _ae_pending.add(bundle_id)
+    box: dict = {}
+
+    def _run():
+        try:
+            box["status"] = ae_code_to_status(determine(bundle_id, False))
+        except Exception:
+            box["status"] = UNKNOWN
+        finally:
+            with _ae_pending_lock:
+                _ae_pending.discard(bundle_id)
+
+    t = threading.Thread(target=_run, daemon=True, name=f"AECheck-{bundle_id}")
+    t.start()
+    t.join(timeout)
+    return box.get("status", UNKNOWN)
 
 
 def _ae_determine(bundle_id: str, ask: bool) -> int:

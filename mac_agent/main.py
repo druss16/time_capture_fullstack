@@ -4115,6 +4115,12 @@ def run_agent():
                         break
             notif_manager.set_current_client(client_id, cname_for_notif)
 
+    # Menu bar "Pause Tracking" — shared with the GUI (created before it), saved across restarts.
+    import pause_state
+    _pause = pause_state.shared(log=log)
+    if _pause.is_paused():
+        log(f"[PAUSE] Starting paused ({_pause.status_label()})")
+
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
     # === GUI INITIALIZATION (after pairing succeeds) ===
@@ -4390,6 +4396,8 @@ def run_agent():
         last_emit_ts = None         # epoch of the last event emitted for it
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 10
+        _was_paused = False         # user pause seen on the last tick
+        _meeting_open_app = None    # app of a meeting start written, not yet ended
         LOCK_SCREEN_BUNDLES = {"com.apple.loginwindow", "com.apple.ScreenSaver.Engine"}
         LOCK_SCREEN_APPS = {"loginwindow", "screensaverengine"}
 
@@ -4448,6 +4456,59 @@ def run_agent():
                     _last_detect_heartbeat = heartbeat_touch()
                     progress_tick()
 
+                    # ── USER PAUSE (menu bar → Pause Tracking) ──
+                    # Close the open dwell at the moment of the pause, then
+                    # record nothing — not even meeting markers — until resume.
+                    # Below the heartbeat, so the watchdog still sees a live
+                    # loop while paused.
+                    if _pause.is_paused():
+                        pause_ts = min(_pause.paused_since() or time.time(), time.time())
+                        if not _was_paused:
+                            _was_paused = True
+                            log("[PAUSE] Tracking loop paused")
+                            if current_sig is not None and current_sig != IDLE_SIG and last_emit_ts:
+                                try:
+                                    _emit_current_dwell(pause_ts)
+                                except Exception as e:
+                                    log(f"[PAUSE] Failed to flush dwell: {e}")
+                            _clear_dwell()
+                            _idle_entered_at = 0.0
+                            # A meeting start with no end is paired by the
+                            # compactor with the NEXT meeting's end — one block
+                            # across the whole pause. End it at the pause.
+                            if _meeting_open_app:
+                                try:
+                                    write_event(
+                                        conn, cur, os_user, hostname,
+                                        ("Meeting-End", f"meeting:{_meeting_open_app}", "", None, None),
+                                        start_ts=pause_ts, end_ts=pause_ts + 1.0,
+                                    )
+                                    log("[PAUSE] Meeting end written at the pause")
+                                except Exception as e:
+                                    log(f"[PAUSE] Failed to end meeting: {e}")
+                                _meeting_open_app = None
+                        if meeting_detector:
+                            meeting_detector.drain_events()   # discarded
+                        tracking_loop._last_iter_time = time.time()
+                        time.sleep(2)
+                        continue
+                    if _was_paused:
+                        _was_paused = False
+                        log("[PAUSE] Tracking loop resumed")
+                        # Still in the meeting that was ended at the pause:
+                        # start it again from now, so its real end pairs here.
+                        if meeting_detector and meeting_detector.is_active():
+                            try:
+                                st = meeting_detector.get_state()
+                                now_r = time.time()
+                                write_event(conn, cur, os_user, hostname,
+                                            _meeting_sig(st.app, st.title),
+                                            start_ts=now_r, end_ts=now_r + 1.0)
+                                _meeting_open_app = st.app
+                                log("[PAUSE] Meeting restarted at resume")
+                            except Exception as e:
+                                log(f"[PAUSE] Failed to restart meeting: {e}")
+
                     # ── Drain meeting detector events ──
                     # The detector runs on its own thread; sqlite belongs to
                     # this one, so it queues and we write. Start and end are
@@ -4464,6 +4525,7 @@ def run_agent():
                                         end_ts=state.started_at + 1.0,
                                     )
                                     log(f"[MEETING] START event: {sig[0]} / {sig[2]}")
+                                    _meeting_open_app = state.app
                                 elif kind == "end":
                                     sig = ("Meeting-End", f"meeting:{state.app}",
                                            state.title or "", None, None)
@@ -4473,6 +4535,7 @@ def run_agent():
                                         end_ts=state.ended_at + 1.0,
                                     )
                                     log("[MEETING] END event written")
+                                    _meeting_open_app = None
                             except Exception as e:
                                 log(f"[MEETING] Failed to write {kind} event: {e}")
 
@@ -4886,6 +4949,8 @@ def run_agent():
             # only used while the person is idle, so it is only READ then:
             # while someone works, this makes no AX call at all and can never
             # compete with the tracker's own AX reads.
+            if _pause.is_paused():
+                return None   # paused: read nothing about the screen
             ws = get_frontmost_via_nsworkspace()
             if not ws:
                 return None

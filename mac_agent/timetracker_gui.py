@@ -18,6 +18,25 @@ import time as _time
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
 
+# Pause / Resume. Optional so a build missing the module still starts — it
+# just has no Pause item.
+try:
+    import pause_state
+except Exception as _e:  # pragma: no cover - shipped with the app
+    pause_state = None
+    print(f"[GUI] pause_state not available: {_e}")
+
+
+def _pause_state():
+    """The shared PauseState, or None when the module is missing."""
+    if pause_state is None:
+        return None
+    try:
+        return pause_state.shared()
+    except Exception as e:
+        print(f"[GUI] pause state unavailable: {e}")
+        return None
+
 
 # Required for macOS multiprocessing with frozen apps
 if __name__ == '__main__':
@@ -1217,6 +1236,7 @@ if RUMPS_AVAILABLE:
             self._project_callbacks = {}
             self._start_keepalive()
             self._start_setup_timers()
+            self._start_pause_timer()
 
             # Set initial title from state
             client_name = self.controller.state.current_client_name
@@ -1251,6 +1271,10 @@ if RUMPS_AVAILABLE:
             # menu bar that says capture is degraded.
             if self._permission_warning():
                 value = "⚠️" if not value or value == "TimeTracker" else f"⚠️ {value}"
+            # Paused by the person: a ⏸ beside the icon for EVERY org, so a
+            # forgotten pause is visible rather than silently losing the day.
+            if self._is_paused():
+                value = "⏸" if not value or value == "TimeTracker" else f"⏸ {value}"
             rumps.App.title.fset(self, value)
 
         def _permission_warning(self) -> bool:
@@ -1489,6 +1513,11 @@ if RUMPS_AVAILABLE:
 
         def _add_tail_menu_items(self):
             """The items every user gets, hands-off or not."""
+            # Pause / Resume — every user, hands-off or not: stopping the
+            # tracker for a private stretch is the person's call.
+            self._add_pause_items()
+            self.menu.add(None)
+
             # No "Today's Time" item: it was a read-only popup of the day's
             # top clients whose "Open Dashboard" button did nothing, and it
             # put client names back on screen for hands-off orgs. Daily
@@ -1525,6 +1554,67 @@ if RUMPS_AVAILABLE:
             restart_item.set_callback(lambda _: threading.Thread(
                 target=self._restart_app, daemon=True).start())
             self.menu.add(restart_item)
+
+        # ---- Pause / Resume ------------------------------------------------
+        def _add_pause_items(self):
+            pause = _pause_state()
+            if pause is None:
+                return
+            if pause.is_paused():
+                status = rumps.MenuItem(f"⏸ {pause.status_label()}")
+                status.set_callback(None)
+                self.menu.add(status)
+                resume = rumps.MenuItem("▶ Resume Tracking")
+                resume.set_callback(self._on_resume)
+                self.menu.add(resume)
+                return
+            menu = rumps.MenuItem("⏸ Pause Tracking")
+            for label, minutes in pause_state.DURATIONS:
+                item = rumps.MenuItem(label)
+                item.set_callback(self._make_pause_callback(minutes))
+                menu.add(item)
+            self.menu.add(menu)
+
+        def _make_pause_callback(self, minutes):
+            def cb(_):
+                pause = _pause_state()
+                if pause is not None:
+                    pause.pause(minutes)
+                self._refresh_pause_display()
+            return cb
+
+        def _on_resume(self, _):
+            pause = _pause_state()
+            if pause is not None:
+                pause.resume()
+            self._refresh_pause_display()
+
+        def _refresh_pause_display(self):
+            self._shown_paused = self._is_paused()
+            try:
+                self._rebuild_menu()
+            except Exception as e:
+                print(f"[GUI] menu rebuild after pause change failed: {e}")
+            self.title = getattr(self, "_requested_title", None)
+
+        def _is_paused(self) -> bool:
+            pause = _pause_state()
+            try:
+                return bool(pause is not None and pause.is_paused())
+            except Exception:
+                return False
+
+        def _start_pause_timer(self):
+            """A timed pause ends on its own: redraw the menu and the ⏸
+            badge when it does (or when the tracking loop ended it first)."""
+            self._shown_paused = self._is_paused()
+
+            def tick(_):
+                if self._is_paused() != getattr(self, "_shown_paused", False):
+                    self._refresh_pause_display()
+
+            self._pause_timer = rumps.Timer(tick, 10)
+            self._pause_timer.start()
 
         def _on_daily_review(self, _):
             """Open the web Daily Review."""

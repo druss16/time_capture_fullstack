@@ -31,6 +31,7 @@ a = Analysis(
         ('permissions.py', '.'),
         ('title_fallback.py', '.'),
         ('setup_checklist.py', '.'),
+        ('pause_state.py', '.'),
         ('sync_manager.py', '.'),
         # Org-token pairing. Imported from inside run_agent, so the analysis
         # cannot see it; without this an IT-deployed Mac silently falls back
@@ -59,6 +60,7 @@ a = Analysis(
         'permissions',
         'title_fallback',
         'setup_checklist',
+        'pause_state',
         'mdm_deploy',
         'version',
         'inference',

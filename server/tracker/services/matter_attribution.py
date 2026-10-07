@@ -161,7 +161,14 @@ _NAME_WORD_SPLIT = re.compile(
     r'[^A-Za-z0-9]+'
     r'|(?<=[a-z])(?=[A-Z])'          # springLaunch
     r'|(?<=[A-Z])(?=[A-Z][a-z])'     # KONETIQCampaigns
-    r'|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])')   # Month2026
+    # Month2026 — but not after a LONE letter: "Q1", "H2", "Q4" are one word.
+    # Split, "Q1 2026 Production" was the words "q", "1" and "production", and
+    # any Google Doc's URL (a long mixed-case ID) has a lone "q" and a "1" —
+    # two of three words, enough for a partial match on every doc of the client.
+    # Glued after a lower-case word ("TomGillQ1") the capital starts a new
+    # word, so it is a lone letter too.
+    r'|(?<=[a-z]{2})(?=[0-9])|(?<=[A-Z]{2})(?=[0-9])|(?<=[A-Z][a-z])(?=[0-9])'
+    r'|(?<=[0-9])(?=[A-Za-z])')
 # Words that say nothing about WHICH project: joiners, and the dates and
 # version marks a file name carries regardless of the project.
 _NAME_FILLER = {'a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'with'}
@@ -194,9 +201,27 @@ def name_phrase(project_name: str, client_name: str = '') -> str:
     never match a file called "Spring Launch storyboard.psd".
     """
     client_words = {_stem(w) for w in name_words(client_name)}
+    client_words |= client_abbreviations(client_name)
     words = [w for w in name_words(project_name) if _stem(w) not in client_words]
     phrase = ' '.join(words)
     return phrase if len(phrase) >= MIN_NAME_PHRASE and not _YEAR_LIKE.match(phrase) else ''
+
+
+def client_abbreviations(client_name: str) -> set:
+    """
+    The short forms a firm prefixes its project names with: "TGBGMC" for
+    "Tom Gill Buick GMC" (an all-caps word kept whole), "TGBG" (initials only).
+
+    They are the client, not the project. Left in, "TGBGMC Website Reskin"
+    needs "tgbgmc" in a title that says "Tom Gill" — so it never matches in
+    full, and only scrapes a partial on its remaining words.
+    """
+    raw = [w for w in _NAME_WORD_SPLIT.split(client_name or '') if w and w.lower() not in _NAME_FILLER]
+    if len(raw) < 2:
+        return set()
+    whole = ''.join(w if (w.isupper() and len(w) > 1) else w[0] for w in raw).lower()
+    initials = ''.join(w[0] for w in raw).lower()
+    return {a for a in (whole, initials) if len(a) >= 3}
 
 
 def build_name_index(options_by_client, client_names) -> dict:
@@ -274,6 +299,10 @@ def match_project_name(text: str, phrases: dict):
 # this share of them.
 PARTIAL_MIN_WORDS = 2
 PARTIAL_MIN_SHARE = 0.6
+# Only words this long count toward a partial match. Fragments ("q", "1",
+# "s", "ok") turn up in any ID, URL or file hash, and two of them made "most
+# of" a three-word name.
+PARTIAL_MIN_WORD_LEN = 3
 
 
 def match_project_name_partial(text: str, phrases: dict):
@@ -302,7 +331,7 @@ def match_project_name_partial(text: str, phrases: dict):
 
     scored = []
     for ph, st in stems.items():
-        matched = st & present
+        matched = {w for w in st & present if len(w) >= PARTIAL_MIN_WORD_LEN}
         if len(matched) < PARTIAL_MIN_WORDS or len(matched) / len(st) < PARTIAL_MIN_SHARE:
             continue
         if not any(len(owners[w]) == 1 for w in matched):
@@ -738,7 +767,11 @@ def attribute_block(block, index, sole_matter_by_client, project_by_external_id=
             matched = match_project_name(text, phrases)
             if matched:
                 return matched, 'name', f'project name found in {field}'
+        # Never a partial from the URL: a document's address is mostly an
+        # opaque ID, noise that only ever half-resembles a name.
         for field, text in texts:
+            if field == 'url':
+                continue
             matched = match_project_name_partial(text, phrases)
             if matched:
                 return matched, 'name_partial', f'most of a project name found in {field}'

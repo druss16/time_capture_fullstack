@@ -878,10 +878,10 @@ function PendingRow({ b, busy, onAccept, onAlwaysFile, onNotBillable, onPick, on
               title="A meeting on your calendar with no computer activity captured — confirm it to count the time">
               <CalendarDays className="h-3 w-3" /> From calendar
             </span>
-          ) : sourceLabel(b.app_name) && (
+          ) : sourceLabel(b.app_name, b.window_title) && (
             <span className="shrink-0 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 font-sans text-[10px] font-medium text-muted-foreground"
               title={`Captured from ${b.app_name}`}>
-              {sourceLabel(b.app_name)}
+              {sourceLabel(b.app_name, b.window_title)}
             </span>
           )}
           <span className="truncate font-mono text-[12.5px] text-foreground">{b.window_title || "(untitled)"}</span>
@@ -1278,7 +1278,7 @@ function SplitCandidateRow({ sc, busy, onSplit, onKeep }: {
 // A friendly "where did this come from" label from the capturing app, so a
 // bare title like "Kennedy Barnes" reads as "Email · Kennedy Barnes" (an Outlook
 // thread), not a mystery. Returns null when the app is unknown/uninformative.
-function sourceLabel(app?: string): string | null {
+function sourceLabel(app?: string, title?: string): string | null {
   const a = (app || "").toLowerCase();
   if (!a) return null;
   if (a.includes("outlook")) return "Email";
@@ -1292,9 +1292,25 @@ function sourceLabel(app?: string): string | null {
   if (a.includes("lacerte") || a.includes("ultratax") || a.includes("proseries") ||
       a.includes("drake") || a.includes("professional suite")) return "Tax software";
   if (a.includes("msedge") || a.includes("chrome") || a.includes("firefox") ||
-      a.includes("edge") || a.includes("opera") || a.includes("brave")) return "Web";
+      a.includes("edge") || a.includes("opera") || a.includes("brave"))
+    return isWebmailTitle(title) ? "Email" : "Web";
   const cleaned = (app || "").replace(/\.exe$/i, "").trim();
   return cleaned || null;
+}
+
+// A browser tab that is a mailbox, not just a page that mentions mail. Mirrors
+// the server's is_gmail_block: "… - jane@acme.com - Gmail", a Workspace that
+// renamed Gmail ("… - dan@mavops.ai - MavOps Mail", "Inbox - MavOps Mail -
+// Google Chrome"), plus Outlook on the web, Yahoo and Proton. "Direct Mail
+// Pieces - Google Drive" stays Web.
+const WEBMAIL_BRAND = /(?:^|[-–—]\s*)(?:gmail|yahoo mail|proton mail|outlook)\s*(?:[-–—]|$)/;
+const MAILBOX_AFTER_ADDRESS = /[^\s@]+@[^\s@]+\s*[-–—]\s*[^-–—@]{0,40}\bmail\s*(?:[-–—]|$)/;
+const MAIL_VIEW_BRAND = /^(?:inbox|sent|sent mail|drafts|starred|snoozed|all mail|spam|trash)(?:\s*\(\d[\d,]*\))?\s*[-–—]\s*[^-–—@]{0,40}\bmail\s*(?:[-–—]|$)/;
+function isWebmailTitle(title?: string): boolean {
+  const t = (title || "").toLowerCase().trim();
+  if (!t) return false;
+  return t.endsWith("gmail") || WEBMAIL_BRAND.test(t) ||
+    MAILBOX_AFTER_ADDRESS.test(t) || MAIL_VIEW_BRAND.test(t);
 }
 
 // ISO timestamp -> local "9:05" / "13:40". Used to show an ambiguous group's

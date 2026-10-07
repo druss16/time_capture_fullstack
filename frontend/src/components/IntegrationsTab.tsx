@@ -898,11 +898,33 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
 
   const handleQbTimeSync = async () => {
     setQbTimeSyncing(true);
+    const before = { synced: qbTimeStatus.last_synced ?? null, error: qbTimeStatus.last_sync_error ?? null };
     try {
-      const res = await safeFetchJson<{ message?: string }>(
+      const res = await safeFetchJson<{ message?: string; started?: boolean }>(
         `${API_BASE}/integrations/qb_time/sync/`, { method: 'POST' },
       );
       onSuccess(res?.message || 'QuickBooks Time sync complete.');
+      // The sync runs in the background (a big account outlasts one request).
+      // Watch the status until it lands — a new last_synced, or a new error —
+      // for up to three minutes; the card's own refresh covers anything later.
+      if (res?.started) {
+        for (let i = 0; i < 36; i++) {
+          await new Promise((r) => setTimeout(r, 5000));
+          try {
+            const data = await safeFetchJson<IntegrationStatusResponse>(`${API_BASE}/integrations/status/`);
+            setStatusData(data);
+            const q = data?.integrations?.qb_time;
+            if (q && (q.last_synced ?? null) !== before.synced) {
+              onSuccess('QuickBooks Time sync finished.');
+              break;
+            }
+            if (q && q.last_sync_status === 'failed' && (q.last_sync_error ?? null) !== before.error) {
+              onError(`QuickBooks Time sync failed: ${q.last_sync_error || 'see the card for details'}`);
+              break;
+            }
+          } catch (_) { /* a missed poll is fine; try the next one */ }
+        }
+      }
     } catch (err: any) {
       onError(err?.message || 'QuickBooks Time sync failed');
     } finally {

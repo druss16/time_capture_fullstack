@@ -113,7 +113,17 @@ def qb_time_callback(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def qb_time_sync(request):
-    """Run the sync inline so the person who pressed it sees real counts."""
+    """
+    Start a sync in the background and answer at once (202).
+
+    It used to run inline so the person who pressed it saw real counts. A firm
+    the size of MTC (409 customers, 478 projects, then alias derivation and
+    attribution) runs past gunicorn's 30-second worker timeout: the worker was
+    killed mid-request and the browser said "Failed to fetch", though the data
+    landed. Celery is eager in production, so .delay() would block the same
+    way; a thread is what actually returns. The card polls the status until
+    last_synced changes. full_sync records success or failure on the row.
+    """
     org, denied = _require_admin(request, 'run a QuickBooks Time sync')
     if denied:
         return denied
@@ -121,27 +131,39 @@ def qb_time_sync(request):
     if err:
         return err
 
-    from tracker.integrations.qb_time.sync import _sync_unlock, _try_sync_lock, full_sync
-    # The same per-firm lock the scheduled sync takes. Without it a press at
-    # :35 ran alongside the hourly sweep and both created the same links.
+    from tracker.integrations.qb_time.sync import _sync_unlock, _try_sync_lock
+    # The same per-firm lock the scheduled sync takes. Probe it here so a
+    # second press gets a clear answer; the thread takes it for real.
     if not _try_sync_lock(integration.id):
         return error_response('A QuickBooks Time sync is already running for this firm. '
                               'Give it a minute, then refresh.', 409, 'sync_running')
-    try:
-        stats = full_sync(integration)
-    finally:
-        _sync_unlock(integration.id)
-    if stats.get('errors'):
-        return error_response(f"Sync failed: {stats['errors'][0]}"[:300], 502, 'sync_failed')
+    _sync_unlock(integration.id)
 
-    c, p, e = stats['clients'], stats['projects'], stats['estimates']
-    message = (f"Synced {p['fetched']} projects across "
-               f"{c['created'] + c['matched']} clients ({c['created']} new).")
-    if e['available']:
-        message += f" {e['projects_with_estimate']} have an hours estimate."
-    else:
-        message += ' No project estimates on this QuickBooks Time account.'
-    return Response({'synced': True, 'message': message, 'stats': stats})
+    import threading
+    threading.Thread(target=_sync_in_background, args=(integration.id,),
+                     name=f'qbt-sync-{integration.id}', daemon=True).start()
+    return Response({
+        'started': True,
+        'message': 'QuickBooks Time sync started. A large account takes a minute or two; '
+                   'the counts update here when it finishes.',
+    }, status=202)
+
+
+def _sync_in_background(integration_id: int) -> None:
+    from django.db import connection
+    from tracker.integrations.qb_time.sync import _sync_unlock, _try_sync_lock, full_sync
+    try:
+        integration = Integration.objects.select_related('organization').get(id=integration_id)
+        if not _try_sync_lock(integration_id):
+            return          # someone else's sync got there first
+        try:
+            full_sync(integration)
+        finally:
+            _sync_unlock(integration_id)
+    except Exception:       # full_sync records its own failures; this is the rest
+        logger.exception('Background QuickBooks Time sync failed for integration %s', integration_id)
+    finally:
+        connection.close()  # this thread's own connection
 
 
 @api_view(['GET', 'POST'])

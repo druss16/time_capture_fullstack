@@ -18,6 +18,7 @@ evidence panel and the post-sync annotator all compute the same answer.
 A send with no Gmail block around it (sent from a phone, from another client,
 or before the agent flushed) has no compose time: None, not zero.
 """
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Dict, List, Optional
@@ -48,7 +49,22 @@ def is_gmail_block(block) -> bool:
         # the browser name appended ("... - Gmail - Google Chrome").
         if t.endswith('gmail') or ' - gmail - ' in t or GMAIL_HOST in t:
             return True
+        # A Workspace can rename Gmail ("MavOps Mail"), and the agent only has
+        # the URL when it may script the browser. Recognise the mailbox
+        # segment instead: after the owner's address, or just before the
+        # browser banner / Chrome's memory label.
+        if _BROWSER_RE.search(t) and not _OTHER_WEBMAIL_RE.search(t) and (
+                _BRANDED_AFTER_ADDRESS_RE.search(t) or _BRANDED_BEFORE_BANNER_RE.search(t)):
+            return True
     return False
+
+
+_BROWSER_RE = re.compile(r'google chrome|microsoft\s*edge|mozilla firefox|safari|brave|arc\b')
+_OTHER_WEBMAIL_RE = re.compile(r'\b(?:yahoo|outlook|hotmail|proton|aol|icloud|zoho|fastmail)\b')
+_BRANDED_AFTER_ADDRESS_RE = re.compile(r'[^\s@]+@[^\s@]+\s*[-–—]\s*[^-–—@]{0,40}?\bmail\s*(?:[-–—]|$)')
+_BRANDED_BEFORE_BANNER_RE = re.compile(
+    r'[-–—]\s*[^-–—@]{0,40}?\bmail\s*[-–—]\s*'
+    r'(?:high memory usage|google chrome|microsoft\s*edge|mozilla firefox)')
 
 
 @dataclass
@@ -135,7 +151,7 @@ def load_context(user, start, end):
             deleted_at__isnull=True,
             end__gte=start - LOOKBACK,
             start__lte=end + SEND_GRACE,
-        ).only('id', 'start', 'end', 'url', 'title', 'window_title', 'user_id')
+        ).only('id', 'start', 'end', 'minutes', 'url', 'title', 'window_title', 'user_id', 'client_id')
         if is_gmail_block(b)
     ]
     sends = list(

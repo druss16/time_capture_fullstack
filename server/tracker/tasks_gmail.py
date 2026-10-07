@@ -283,10 +283,19 @@ def run_gmail_sync(integration, budget_seconds=RUN_BUDGET_SECONDS, clock=time.mo
     except Exception as e:
         logger.warning(f"[GMAIL-SYNC] compose annotation failed for {user.username}: {e}")
 
+    # A Gmail block usually reaches the server before the mail it was written
+    # for, and was filed without it. Give those blocks their second look.
+    refiled = 0
+    try:
+        from tracker.services.gmail_refile import refile_composed_gmail_blocks
+        refiled = refile_composed_gmail_blocks(user, integration.org, now - COMPOSE_ANNOTATE_WINDOW, now)
+    except Exception as e:
+        logger.warning(f"[GMAIL-SYNC] compose re-file failed for {user.username}: {e}")
+
     saved, matched, skipped = totals
     return {
         'mode': mode, 'saved': saved, 'matched': matched, 'skipped': skipped,
-        'deleted': len(deleted_ids), 'composed': composed,
+        'deleted': len(deleted_ids), 'composed': composed, 'refiled': refiled,
         'backfill_pages': pages, 'backfill_remaining': sorted(state['bf']),
     }
 

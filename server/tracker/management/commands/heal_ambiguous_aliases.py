@@ -29,7 +29,7 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from tracker.services.alias_derivation import find_ambiguous_derived
+from tracker.services.alias_derivation import find_ambiguous_derived, platform_email_aliases
 
 
 class Command(BaseCommand):
@@ -66,6 +66,15 @@ class Command(BaseCommand):
         flagged = find_ambiguous_derived(
             [(c.pk, c.name, c.aliases or []) for c in clients]
         )
+        # Also: aliases derived from the client's own email at a platform
+        # (google.com, microsoft.com, ...) before derivation refused them.
+        # They match the firm's own tools, not the client. Still provenance-
+        # gated below, so a manually typed "google" is kept.
+        for c in clients:
+            bad = platform_email_aliases(getattr(c, "email", "") or "")
+            hits = [a for a in (c.aliases or []) if isinstance(a, str) and a.lower() in bad]
+            if hits:
+                flagged[c.pk] = list(dict.fromkeys(list(flagged.get(c.pk, [])) + hits))
 
         # Restrict removal to provenance == 'derived'. Anything else (manual or
         # unmarked legacy) is protected.

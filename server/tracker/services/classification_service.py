@@ -1462,8 +1462,15 @@ class ClassificationService:
 
         self._clients = list(
             Client.objects.filter(org=self.org, is_active=True)
-            .only('id', 'name', 'code', 'aliases')
+            .only('id', 'name', 'code', 'aliases', 'email', 'alias_sources')
         )
+        # Drop aliases a client got from its own platform email (google.com
+        # for lamurphy@google.com) before any stage reads them — they match
+        # the firm's tools, not the client. In memory only; the heal removes
+        # them from the row.
+        from tracker.services.alias_derivation import usable_aliases
+        for _c in self._clients:
+            _c.aliases = usable_aliases(_c)
 
         self._client_patterns = list(
             ClientPattern.objects.filter(org=self.org)

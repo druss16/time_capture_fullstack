@@ -915,6 +915,10 @@ export default function DailyReview() {
   const autoFiled = lanes.certain.minutes > 0;
 
   // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
+  // Header: project-pending time counts as Needs review, and comes out of
+  // the bucket it already sits in (billable, or the hidden non-billable).
+  const projectBillableHours = Math.min(projectQueue.billableMinutes / 60, billableHours);
+  const reviewHours = needsReviewHours + projectQueue.minutes / 60;
   const totalMin = Math.round(totalHours * 60);
   // Three parts of one bar: sorted, client known but no project yet, and no
   // client yet. Project time stays with its client — it is filed, just not to
@@ -1086,31 +1090,25 @@ export default function DailyReview() {
               <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
             </button>
 
-            {/* Stats — Billable (+ Non-billable) + Needs review = Total, always.
-                Needs review is ONLY time with no client yet. Time with a known
-                client but no project is the client's billable time — it is
-                counted there and flagged underneath, never added again here
-                (that double count read 26m + 41m = 43m). */}
+            {/* Stats — Billable, Needs review, Total. Needs review is
+                everything in the Needs-you card: time with no client AND time
+                with a client but no project yet. That project time is moved
+                OUT of Billable (it is already inside billable_hours), never
+                added twice — the double count read 26m + 41m against a 43m
+                total. Total also holds non-billable time, which is not shown. */}
             <div className="flex items-center gap-4 pl-3 border-l border-border/60">
               <StatCell
-                value={formatHours(billableHours)}
+                value={formatHours(Math.max(0, billableHours - projectBillableHours))}
                 label="Billable"
                 valueClass="text-primary"
-                note={projectQueue.billableMinutes > 0
-                  ? `${formatHours(Math.min(projectQueue.billableMinutes / 60, billableHours))} needs a ${terms.project.toLowerCase()}`
-                  : undefined}
               />
-              {nonBillableHours > 0 && (
-                <StatCell
-                  value={formatHours(nonBillableHours)}
-                  label="Non-billable"
-                  valueClass="text-slate-500"
-                />
-              )}
               <StatCell
-                value={formatHours(needsReviewHours)}
+                value={formatHours(reviewHours)}
                 label="Needs review"
-                valueClass={needsReviewHours === 0 ? "text-teal-500" : "text-amber-500"}
+                valueClass={reviewHours === 0 ? "text-teal-500" : "text-amber-500"}
+                note={projectQueue.minutes > 0
+                  ? `${formatHours(projectQueue.minutes / 60)} needs a ${terms.project.toLowerCase()}`
+                  : undefined}
               />
               <StatCell
                 value={formatHours(totalHours)}

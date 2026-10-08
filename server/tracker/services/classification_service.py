@@ -538,6 +538,9 @@ class ClassificationService:
         # Figma→Design) is categorized without an LLM call.
         self._stage_9_6_tool_category(block, decision)
 
+        # Stage 9.7 — the firm's own company, when nothing named another client.
+        self._stage_9_7_fallback_rules(block, decision)
+
         # Stage 10 — AI inference (last resort, only when nothing else fired)
         # Calls OpenAI to classify when stages 0-9 produced no signals.
         # Cost-controlled: only invoked if no Signal has strength >= 0.65.
@@ -1730,6 +1733,8 @@ class ClassificationService:
         )
 
         for rule_obj in self._classifier_rules:
+            if rule_obj.action == 'fallback_to_client':
+                continue            # applied after every client stage; see _stage_9_7
             rule_dict = rule_to_dict(rule_obj)
             if not rule_matches(rule_dict, ctx):
                 continue
@@ -1740,6 +1745,63 @@ class ClassificationService:
                 self._record_rule_fire(rule_obj, block, ctx, decision)
                 return True
 
+        return False
+
+    def _stage_9_7_fallback_rules(self, block, decision: ClassificationDecision) -> bool:
+        """
+        Org rules with action 'fallback_to_client': route to the firm's own
+        company ("Meet - MTC Heads", "Marketing Account Executive | More Than
+        Cars") only when no stage found a client and the block has none.
+
+        Ordinary routing rules run first and override everything; that is right
+        for UltraTax -> Internal-Tax, wrong for a firm name that also turns up
+        beside a client's ("Easterns recap - MTC"). This one only fills a void.
+        """
+        if not self._classifier_rules or block.client_id:
+            return False
+        # Evidence naming another client wins; context (the previous block,
+        # agent stickiness) does not, or "Meet - MTC Heads" would follow
+        # whatever client came before it.
+        if any(s.proposed_client_id and self._is_identifying(s) for s in decision.matched_signals):
+            return False
+        fallbacks = [r for r in self._classifier_rules if r.action == 'fallback_to_client']
+        if not fallbacks:
+            return False
+        try:
+            from tracker.services.rules.matcher import build_context, rule_to_dict, rule_matches
+        except ImportError:
+            return False
+        ctx = build_context(
+            title=getattr(block, 'window_title', '') or getattr(block, 'title', '') or '',
+            exe=self._infer_exe(block),
+            file_path=getattr(block, 'file_path', '') or '',
+            app_name=getattr(block, 'app_name', '') or '',
+            duration_minutes=block.minutes,
+            has_attributed_client=False,
+            is_inside_meeting=getattr(block, 'is_meeting', False),
+        )
+        for rule_obj in fallbacks:
+            client = rule_obj.target_client
+            if not client or not client.is_active:
+                continue
+            if not rule_matches({**rule_to_dict(rule_obj), 'action': 'route_to_client'}, ctx):
+                continue
+            decision.client_id = client.id
+            decision.confidence = 0.95
+            decision.source = 'org_rule'
+            decision.reasoning = (
+                f"Org rule #{rule_obj.id} ({rule_obj.match_type}={rule_obj.match_value!r}) "
+                f"→ {client.name} (no other client found)"
+            )
+            decision.matched_signals.append(Signal(
+                type='org_rule',
+                strength=0.95,
+                evidence=decision.reasoning,
+                detail={'rule_id': rule_obj.id, 'action': 'fallback_to_client',
+                        'client_id': client.id, 'client_name': client.name},
+            ))
+            self._record_rule_fire(rule_obj, block, ctx, decision)
+            return True
         return False
 
     def _apply_rule_action(self, rule_obj, rule_dict: dict, block, decision: ClassificationDecision) -> bool:

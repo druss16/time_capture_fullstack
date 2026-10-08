@@ -127,8 +127,8 @@ def _validate(old: Client, parent: Client, mode: str) -> None:
             f"client {old.pk} is in org {old.org_id}, parent {parent.pk} is in org {parent.org_id}")
     if not parent.is_active:
         raise ConversionError(f"parent client {parent.pk} {parent.name!r} is inactive")
-    from tracker.utils.client_name_match import is_internal_client
-    if is_internal_client(old.name):
+    from tracker.industry_categories import is_internal_client_name
+    if is_internal_client_name(old.name):
         raise ConversionError(f"client {old.pk} {old.name!r} is an Internal client")
 
 
@@ -280,7 +280,7 @@ def find_project_twins(org_id: int | None = None, *, any_source: bool = False) -
     from QuickBooks are considered unless any_source: a firm may well keep a
     client and a project of the same name on purpose.
     """
-    from tracker.utils.client_name_match import is_internal_client
+    from tracker.industry_categories import is_internal_client_name
     clients = Client.objects.filter(is_active=True)
     if org_id is not None:
         clients = clients.filter(org_id=org_id)
@@ -295,7 +295,7 @@ def find_project_twins(org_id: int | None = None, *, any_source: bool = False) -
 
     twins = []
     for c in clients.order_by('org_id', 'name'):
-        if is_internal_client(c.name):
+        if is_internal_client_name(c.name):
             continue
         hits = [p for p in by_name.get((c.org_id, c.name.strip().lower()), []) if p.client_id != c.pk]
         owners = {p.client_id for p in hits}

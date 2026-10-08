@@ -428,7 +428,45 @@ def sync_activity(integration, *, api=None, budget=ACTIVITY_BUDGET_SECONDS) -> d
 # means a lost release blocks syncing for at most LOCK_TTL, never forever.
 # Not Django's cache: it is per-process here, so the web thread and the
 # worker would each have held their own "lock".
-LOCK_TTL = 30 * 60
+# Short, and renewed while the sync runs (_Heartbeat). A killed sync — every
+# deploy restarts the processes it runs in — stops renewing, so its lock
+# lapses in minutes and the next tick reruns it. A flat 30 minutes left the
+# card on "Syncing…" for half an hour after More Than Cars' syncs died in two
+# back-to-back deploys (2026-10-08).
+LOCK_TTL = 3 * 60
+HEARTBEAT_SECONDS = 45
+
+
+class _Heartbeat:
+    """Renews the sync lock (and its progress) every `interval` seconds until
+    stopped. A daemon thread: it dies with the process, which is the point."""
+
+    def __init__(self, integration_id: int, interval: float = HEARTBEAT_SECONDS):
+        import threading
+        self.integration_id = integration_id
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f'asana-heartbeat-{integration_id}',
+                                        daemon=True)
+
+    def _run(self):
+        while not self._stop.wait(self.interval):
+            r = _redis()
+            try:
+                if r is not None:
+                    r.expire(f'asana:sync-lock:{self.integration_id}', LOCK_TTL)
+                    r.expire(f'asana:progress:{self.integration_id}', LOCK_TTL)
+            except Exception:                                    # noqa: BLE001
+                pass
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        return False
+
 
 
 def _redis():
@@ -576,6 +614,7 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
     token = _try_lock(integration.id, 'full' if (full or due) else 'activity')
     if not token:
         return {'skipped': 'already_running'}
+    beat = _Heartbeat(integration.id).__enter__()
     try:
         if full or due:
             return full_sync(integration)
@@ -589,6 +628,7 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
                            integration.id, e, exc_info=True)
             return {'error': str(e)[:200]}
     finally:
+        beat.__exit__(None, None, None)
         _unlock(integration.id, token)
 
 

@@ -225,3 +225,33 @@ class QbtFieldTests(Base):
                                         project=self.emblem, link_source='manual')
         got = self.sync({'gid': 'g1', 'name': 'x', 'custom_fields': self.field('QB Time Project', '8812345')})
         self.assertEqual(got['g1'][0], self.emblem.id)
+
+
+class HeartbeatTests(Base):
+    def test_lock_is_short_and_renewed_while_running(self):
+        import time
+        renewed = []
+
+        class R(FakeRedis):
+            def expire(self, key, ttl):
+                renewed.append((key, ttl))
+        fake = R()
+        with mock.patch.object(s, '_redis', return_value=fake):
+            with s._Heartbeat(self.integ.id, interval=0.05):
+                time.sleep(0.2)
+        self.assertLessEqual(s.LOCK_TTL, 5 * 60)
+        self.assertIn((f'asana:sync-lock:{self.integ.id}', s.LOCK_TTL), renewed)
+
+    def test_heartbeat_stops_with_the_sync(self):
+        import time
+        calls = []
+
+        class R(FakeRedis):
+            def expire(self, key, ttl):
+                calls.append(key)
+        with mock.patch.object(s, '_redis', return_value=R()):
+            with s._Heartbeat(self.integ.id, interval=0.05):
+                time.sleep(0.12)
+            n = len(calls)
+            time.sleep(0.2)
+        self.assertEqual(len(calls), n)

@@ -362,3 +362,80 @@ class ClientPrefixMatchingTests(Base):
         b.refresh_from_db()
         self.assertEqual((b.client_id, b.project_id), (self.tom.id, None))
         self.assertEqual(stats['by_asana_activity_client'], 1)
+
+
+class FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return False
+        self.data[key] = value.encode() if isinstance(value, str) else value
+        return True
+
+    def get(self, key):
+        return self.data.get(key)
+
+    def delete(self, key):
+        self.data.pop(key, None)
+
+
+class LockAndPeopleTests(Base):
+    """The 2026-10-08 stall: a Postgres advisory lock leaked through Neon's
+    pooler and every sync after the first said "already running"."""
+    def test_lock_is_exclusive_and_released_only_by_its_holder(self):
+        from tracker.integrations.asana import sync as s
+        fake = FakeRedis()
+        with mock.patch.object(s, '_redis', return_value=fake):
+            first = s._try_lock(self.integ.id)
+            self.assertTrue(first)
+            self.assertIsNone(s._try_lock(self.integ.id))          # held
+            s._unlock(self.integ.id, 'not-the-holder')
+            self.assertIsNone(s._try_lock(self.integ.id))          # still held
+            s._unlock(self.integ.id, first)
+            self.assertTrue(s._try_lock(self.integ.id))            # free again
+
+    def test_lock_expires_so_a_lost_release_cannot_stall_syncing(self):
+        from tracker.integrations.asana import sync as s
+        fake = mock.Mock()
+        fake.set.return_value = True
+        with mock.patch.object(s, '_redis', return_value=fake):
+            s._try_lock(self.integ.id)
+        self.assertEqual(fake.set.call_args.kwargs['ex'], s.LOCK_TTL)
+
+    def test_no_redis_still_syncs(self):
+        from tracker.integrations.asana import sync as s
+        with mock.patch.object(s, '_redis', return_value=None):
+            self.assertTrue(s._try_lock(self.integ.id))
+
+    def test_five_minute_pass_asks_per_person_not_per_project(self):
+        from tracker.integrations.asana import sync as s
+        for i in range(50):
+            AsanaProjectLink.objects.create(integration=self.integ, asana_gid=f'p{i}', project=self.donut)
+        AsanaProjectLink.objects.create(integration=self.integ, asana_gid='111111', project=self.reskin)
+        ExternalStaffMapping.objects.create(integration=self.integ, external_id='u1', user=self.al)
+        now = timezone.now()
+        api = FakeApi({
+            'tasks': [{'gid': 't1', 'name': 'Homepage wireframe',
+                       'memberships': [{'project': {'gid': '111111'}}]}],
+            'tasks/t1/stories': [{'gid': 's1', 'created_at': (now - timedelta(minutes=3)).isoformat(),
+                                  'created_by': {'gid': 'u1'}, 'resource_subtype': 'comment_added'}],
+        })
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            stats = s.sync_people_activity(self.integ, api=api)
+        task_calls = [p for path, p in api.calls if path == 'tasks']
+        self.assertEqual(len(task_calls), 1)                         # one person, one call
+        self.assertEqual((task_calls[0]['assignee'], task_calls[0]['workspace']), ('u1', 'ws1'))
+        self.assertEqual(stats['recorded'], 1)
+        self.assertEqual(AsanaActivity.objects.get().project_id, self.reskin.id)
+
+    def test_inactive_people_are_not_asked_about(self):
+        from tracker.integrations.asana import sync as s
+        ExternalStaffMapping.objects.create(integration=self.integ, external_id='u1', user=self.al)
+        self.al.is_active = False
+        self.al.save()
+        api = FakeApi({})
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            stats = s.sync_people_activity(self.integ, api=api)
+        self.assertEqual((stats['people'], api.calls), (0, []))

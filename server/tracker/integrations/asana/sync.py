@@ -16,7 +16,7 @@ import logging
 from datetime import timedelta
 
 from celery import shared_task
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -52,6 +52,7 @@ def full_sync(integration: Integration, *, api=None) -> dict:
         _sync_projects(integration, api, workspace, stats['projects'])
         stats['staff'] = _sync_staff(integration, api, workspace)
         stats['activity'] = sync_activity(integration, api=api)
+        stats['people_activity'] = sync_people_activity(integration, api=api)
         integration.last_synced_at = started
         integration.last_sync_status = 'success'
         integration.last_sync_error = ''
@@ -180,18 +181,92 @@ def _sync_staff(integration, api, workspace) -> dict:
     return stats
 
 
-def sync_activity(integration, *, api=None) -> dict:
-    """Stories on tasks of linked projects since each project's cursor."""
-    stats = {'projects': 0, 'tasks': 0, 'stories': 0, 'recorded': 0}
+def _record_stories(integration, api, task, links_by_gid, people, since, stats):
+    """Stories on one task by a linked person since `since`, filed under the
+    first linked Asana project the task belongs to."""
+    tgid = _gid(task.get('gid'))
+    link = next((links_by_gid[g] for g in task.get('_project_gids', ()) if g in links_by_gid), None)
+    if link is None:
+        return
+    try:
+        stories = api.paginated(f'tasks/{tgid}/stories',
+                                opt_fields='created_at,created_by,resource_subtype')
+        for story in stories:
+            stats['stories'] += 1
+            at = parse_datetime(story.get('created_at') or '')
+            who = people.get(_gid((story.get('created_by') or {}).get('gid')))
+            if not at or at < since or who is None:
+                continue
+            _, made = AsanaActivity.objects.get_or_create(
+                integration=integration, story_gid=_gid(story.get('gid')),
+                defaults=dict(user_id=who, at=at, asana_project_gid=link.asana_gid,
+                              project_id=link.project_id, client_id=link.client_id,
+                              task_gid=tgid, task_name=(task.get('name') or '')[:500],
+                              kind=(story.get('resource_subtype') or '')[:64]))
+            stats['recorded'] += int(made)
+    except AsanaNotAvailable:
+        pass
+
+
+def _linked(integration):
+    from django.db.models import Q
+    return {link.asana_gid: link for link in AsanaProjectLink.objects
+            .filter(integration=integration, archived=False)
+            .filter(Q(project__isnull=False) | Q(client__isnull=False))}
+
+
+def _people(integration):
+    """Asana user gid -> TimeTracker user id, for the firm's active members."""
+    return dict(ExternalStaffMapping.objects.filter(integration=integration, user__is_active=True)
+                .values_list('external_id', 'user_id'))
+
+
+def sync_people_activity(integration, *, api=None) -> dict:
+    """The every-5-minutes path: per linked PERSON, the tasks assigned to them
+    that changed since the last pass, and their stories.
+
+    One or two requests per person — a firm with one TimeTracker user asks
+    Asana once — where reading every linked project was hundreds per pass and
+    ran into Asana's per-minute limit. Its blind spot (a comment on a task
+    assigned to someone else) is covered hourly by sync_activity."""
+    stats = {'people': 0, 'tasks': 0, 'stories': 0, 'recorded': 0}
+    people = _people(integration)
+    workspace = integration.tenant_id
+    if not people or not workspace:
+        return stats
     api = api or AsanaClient(integration)
-    people = dict(ExternalStaffMapping.objects.filter(integration=integration)
-                  .values_list('external_id', 'user_id'))
+    links = _linked(integration)
+    now = timezone.now()
+    cursor_key = f'asana:people-cursor:{integration.id}'
+    since = (_cursor_get(cursor_key) or (now - INITIAL_LOOKBACK)) - CLOCK_SKEW
+    for asana_gid in people:
+        stats['people'] += 1
+        try:
+            tasks = api.paginated('tasks', assignee=asana_gid, workspace=workspace,
+                                  modified_since=since.isoformat(),
+                                  opt_fields='name,modified_at,memberships.project')
+            for task in tasks:
+                stats['tasks'] += 1
+                task['_project_gids'] = [_gid(((m or {}).get('project') or {}).get('gid'))
+                                         for m in task.get('memberships') or []]
+                _record_stories(integration, api, task, links, people, since, stats)
+        except AsanaNotAvailable:
+            continue
+    _cursor_set(cursor_key, now)
+    return stats
+
+
+def sync_activity(integration, *, api=None) -> dict:
+    """The hourly path: stories on tasks of every linked project since each
+    project's cursor. Catches what the per-person pass cannot see."""
+    stats = {'projects': 0, 'tasks': 0, 'stories': 0, 'recorded': 0}
+    people = _people(integration)
     if not people:
         return stats
+    api = api or AsanaClient(integration)
     now = timezone.now()
-    from django.db.models import Q
-    for link in AsanaProjectLink.objects.filter(integration=integration, archived=False) \
-            .filter(Q(project__isnull=False) | Q(client__isnull=False)):
+    links = _linked(integration)
+    for link in links.values():
         since = (link.activity_cursor or (now - INITIAL_LOOKBACK)) - CLOCK_SKEW
         stats['projects'] += 1
         try:
@@ -202,26 +277,8 @@ def sync_activity(integration, *, api=None) -> dict:
             continue        # no longer visible to the connected account
         for task in tasks:
             stats['tasks'] += 1
-            tgid = _gid(task.get('gid'))
-            try:
-                stories = api.paginated(f'tasks/{tgid}/stories',
-                                        opt_fields='created_at,created_by,resource_subtype')
-                for story in stories:
-                    stats['stories'] += 1
-                    at = parse_datetime(story.get('created_at') or '')
-                    who = people.get(_gid((story.get('created_by') or {}).get('gid')))
-                    if not at or at < since or who is None:
-                        continue
-                    _, made = AsanaActivity.objects.get_or_create(
-                        integration=integration, story_gid=_gid(story.get('gid')),
-                        defaults=dict(user_id=who, at=at, asana_project_gid=link.asana_gid,
-                                      project_id=link.project_id, client_id=link.client_id,
-                                      task_gid=tgid,
-                                      task_name=(task.get('name') or '')[:500],
-                                      kind=(story.get('resource_subtype') or '')[:64]))
-                    stats['recorded'] += int(made)
-            except AsanaNotAvailable:
-                continue
+            task['_project_gids'] = [link.asana_gid]
+            _record_stories(integration, api, task, links, people, since, stats)
         link.activity_cursor = now
         link.save(update_fields=['activity_cursor', 'updated_at'])
     return stats
@@ -231,22 +288,72 @@ def sync_activity(integration, *, api=None) -> dict:
 # Celery
 # ============================================================================
 
-_SYNC_LOCK_NAMESPACE = 0x4153   # "AS"
+# The sync's lock lives in Redis with an expiry. It was a Postgres advisory
+# lock, which belongs to one database session — and production reaches Neon
+# through its pooler, which can run the lock and the unlock on different
+# server sessions. The unlock then misses, and the lock stays held by a pooled
+# session for good: from More Than Cars' first sync (2026-10-08) every later
+# one, the 5-minute passes included, came back "already running". Expiring
+# means a lost release blocks syncing for at most LOCK_TTL, never forever.
+# Not Django's cache: it is per-process here, so the web thread and the
+# worker would each have held their own "lock".
+LOCK_TTL = 30 * 60
 
 
-def _try_lock(integration_id: int) -> bool:
-    if connection.vendor != 'postgresql':
-        return True
-    with connection.cursor() as cur:
-        cur.execute('SELECT pg_try_advisory_lock(%s, %s)', [_SYNC_LOCK_NAMESPACE, integration_id])
-        return bool(cur.fetchone()[0])
+def _redis():
+    try:
+        import redis
+        from django.conf import settings
+        return redis.Redis.from_url(settings.CELERY_BROKER_URL, socket_timeout=5)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning('Asana sync lock: Redis unavailable (%s)', e)
+        return None
 
 
-def _unlock(integration_id: int) -> None:
-    if connection.vendor != 'postgresql':
+def _try_lock(integration_id: int):
+    """A token when this caller holds the lock, else None. With no Redis the
+    sync runs unlocked — a duplicate pass is harmless (stories are unique),
+    a sync that never runs is not."""
+    import secrets
+    token = secrets.token_hex(8)
+    r = _redis()
+    if r is None:
+        return token
+    try:
+        return token if r.set(f'asana:sync-lock:{integration_id}', token, nx=True, ex=LOCK_TTL) else None
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning('Asana sync lock unavailable (%s); running unlocked', e)
+        return token
+
+
+def _unlock(integration_id: int, token) -> None:
+    r = _redis()
+    if r is None or not token:
         return
-    with connection.cursor() as cur:
-        cur.execute('SELECT pg_advisory_unlock(%s, %s)', [_SYNC_LOCK_NAMESPACE, integration_id])
+    key = f'asana:sync-lock:{integration_id}'
+    try:
+        if (r.get(key) or b'').decode() == token:     # never release someone else's
+            r.delete(key)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning('Asana sync unlock failed (%s); it expires on its own', e)
+
+
+def _cursor_get(key):
+    r = _redis()
+    try:
+        raw = r.get(key) if r is not None else None
+        return parse_datetime(raw.decode()) if raw else None
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def _cursor_set(key, when) -> None:
+    r = _redis()
+    try:
+        if r is not None:
+            r.set(key, when.isoformat(), ex=7 * 24 * 3600)
+    except Exception:                                            # noqa: BLE001
+        pass
 
 
 def run_sync(integration_id: int, *, full: bool = False) -> dict:
@@ -256,7 +363,8 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
             id=integration_id, provider='asana', is_connected=True)
     except Integration.DoesNotExist:
         return {'error': 'integration_not_found'}
-    if not _try_lock(integration.id):
+    token = _try_lock(integration.id)
+    if not token:
         return {'skipped': 'already_running'}
     try:
         due = (not integration.last_synced_at
@@ -264,21 +372,23 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
         if full or due:
             return full_sync(integration)
         try:
-            return {'activity': sync_activity(integration)}
+            return {'activity': sync_people_activity(integration)}
         except Exception as e:
             logger.warning('Asana activity sync failed for integration %s: %s',
                            integration.id, e, exc_info=True)
             return {'error': str(e)[:200]}
     finally:
-        _unlock(integration.id)
+        _unlock(integration.id, token)
 
 
-@shared_task(name='tracker.sync_asana_full')
+# CELERY_TASK_TIME_LIMIT is 3 minutes; a full sync of a 3,000-project
+# workspace runs past it, and a task killed mid-sync is how a lock is left.
+@shared_task(name='tracker.sync_asana_full', time_limit=25 * 60, soft_time_limit=24 * 60)
 def sync_asana_full(integration_id: int) -> dict:
     return run_sync(integration_id, full=True)
 
 
-@shared_task(name='tracker.sync_all_asana')
+@shared_task(name='tracker.sync_all_asana', time_limit=25 * 60, soft_time_limit=24 * 60)
 def sync_all_asana() -> dict:
     """Every few minutes: each connected firm's activity, and a full sync when
     one is due. Activity has to be fresh for the 2-minute attribution sweep to

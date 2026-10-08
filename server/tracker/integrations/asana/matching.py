@@ -134,6 +134,14 @@ class Matcher:
                 | {canon(a) for a in client_abbreviations(c.name)}
             self.keys[c.id] = (c, {k for k in keys if k})
         self._learn_short_forms()
+        # Canonical forms computed once. Recomputing them inside every match
+        # made a 3,655-project sync score 478 projects x millions of times.
+        self._canon = {p.id: canon(p.name) for p in self.projects}
+        self._by_canon = {}
+        for p in self.projects:
+            self._by_canon.setdefault(self._canon[p.id], []).append(p)
+        self._rest = {p.id: self._strip_client(p) for p in self.projects}
+        self._nums = {pid: _numbers(r) for pid, r in self._rest.items()}
 
     def _learn_short_forms(self):
         """A client's own project names start with its spoken short form:
@@ -190,6 +198,9 @@ class Matcher:
         return found[0] if len(found) == 1 else None
 
     def _project_rest(self, p) -> str:
+        return self._rest.get(p.id) if p.id in getattr(self, '_rest', {}) else self._strip_client(p)
+
+    def _strip_client(self, p) -> str:
         """The project's name with its client's name or short form set aside."""
         name = canon(p.name)
         entry = self.keys.get(p.client_id)
@@ -205,9 +216,10 @@ class Matcher:
         scored = []
         for p in pool:
             p_rest = self._project_rest(p)
-            if _numbers(p_rest) != want:      # Q3 is never Q4, 2024 never 2025
+            nums = self._nums[p.id] if p.id in self._nums else _numbers(p_rest)
+            if nums != want:                  # Q3 is never Q4, 2024 never 2025
                 continue
-            s = max(_score(rest, p_rest), _score(full, canon(p.name)))
+            s = max(_score(rest, p_rest), _score(full, self._canon.get(p.id) or canon(p.name)))
             scored.append((s, p))
         if not scored:
             return None
@@ -242,7 +254,7 @@ class Matcher:
     def match(self, asana_name: str, team: str = '', client_hint: str = ''):
         """(project or None, client or None, how). how: 'name' / 'client' /
         'ignored' (an operator marked the name "not a client") / ''."""
-        whole = self._one([p for p in self.projects if canon(p.name) == canon(asana_name)])
+        whole = self._one(self._by_canon.get(canon(asana_name), []))
         if whole is not None:
             return whole, None, 'name'
         part, rest = split_name(asana_name)

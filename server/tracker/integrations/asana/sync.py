@@ -129,6 +129,11 @@ def _apply(link, matcher) -> None:
     """Re-decide one link from what is stored on it. A hand link stands."""
     if link.link_source == 'manual':
         return
+    # An archived Asana project takes no new work: no activity is read for it,
+    # so matching it buys nothing — and archived projects are most of a
+    # mature workspace (2,853 of More Than Cars' 3,655). Keep what it had.
+    if link.archived and link.pk:
+        return
     project, client, how = matcher.match(link.asana_name, team=getattr(link, 'asana_team', ''),
                                          client_hint=getattr(link, 'client_hint', ''))
     link.project = project
@@ -181,29 +186,41 @@ def _sync_projects(integration, api, workspace, stats):
     links = {link.asana_gid: link for link in AsanaProjectLink.objects.filter(integration=integration)}
     rows = _project_rows(api, workspace)
     _progress(integration.id, 'projects', 0, len(rows))
+    seen = []
     for n, row in enumerate(rows, 1):
         gid = _gid(row.get('gid'))
         if not gid:
             continue
         stats['seen'] += 1
         link = links.get(gid) or AsanaProjectLink(integration=integration, asana_gid=gid)
+        fields = ('asana_name', 'archived', 'asana_team', 'client_hint',
+                  'project_id', 'client_id', 'link_source')
+        before = tuple(getattr(link, f) for f in fields) if link.pk else None
         link.asana_name = (row.get('name') or '').strip()[:500]
         link.archived = bool(row.get('archived'))
         link.asana_team = ((row.get('team') or {}).get('name') or '')[:255]
         link.client_hint = _client_field(row)[:255]
-        link.last_seen_in_source = now
         _apply(link, matcher)
         if link.client_id and not link.project_id:
             stats['client_only'] += 1
-        try:
-            with transaction.atomic():
-                link.save()
-        except IntegrityError:      # a concurrent sync made it first
-            link = AsanaProjectLink.objects.get(integration=integration, asana_gid=gid)
+        seen.append(gid)
+        # Only what changed is written. Saving all 3,655 rows one by one,
+        # every hour, through the pooler was most of a sync's time.
+        if before is None or tuple(getattr(link, f) for f in fields) != before:
+            link.last_seen_in_source = now
+            try:
+                with transaction.atomic():
+                    link.save()
+            except IntegrityError:      # a concurrent sync made it first
+                link = AsanaProjectLink.objects.get(integration=integration, asana_gid=gid)
         links[gid] = link
         stats['linked' if link.project_id else 'unlinked'] += 1
         if n % 200 == 0:
             _progress(integration.id, 'projects', n, len(rows))
+    # Everything Asana still lists, stamped in one statement.
+    for i in range(0, len(seen), 1000):
+        AsanaProjectLink.objects.filter(integration=integration, asana_gid__in=seen[i:i + 1000]) \
+            .update(last_seen_in_source=now)
 
 
 def _sync_staff(integration, api, workspace) -> dict:

@@ -165,3 +165,19 @@ class ResumableSyncTests(Base):
             s._progress(self.integ.id, 'activity', 120, 379)
             st = s.sync_state(self.integ)
         self.assertEqual(st['progress'], {'phase': 'activity', 'done': 120, 'total': 379})
+
+
+class SpeedTests(Base):
+    def test_unchanged_projects_are_not_rewritten_and_archived_are_not_rematched(self):
+        rows = [{'gid': 'g1', 'name': 'DeNooyer: Logo Emblem'},
+                {'gid': 'g2', 'name': 'Old Thing', 'archived': True}]
+        stats = lambda: {'seen': 0, 'linked': 0, 'unlinked': 0, 'ambiguous': 0}
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            s._sync_projects(self.integ, FakeApi({'projects': rows}), 'ws1', stats())
+        stamp = AsanaProjectLink.objects.get(asana_gid='g1').updated_at
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()), \
+                mock.patch.object(s, '_apply', wraps=s._apply) as applied:
+            s._sync_projects(self.integ, FakeApi({'projects': rows}), 'ws1', stats())
+        self.assertEqual(AsanaProjectLink.objects.get(asana_gid='g1').updated_at, stamp)   # not rewritten
+        self.assertIsNotNone(AsanaProjectLink.objects.get(asana_gid='g1').last_seen_in_source)
+        self.assertEqual(applied.call_count, 2)       # called, but the archived one returns at once

@@ -175,6 +175,8 @@ def mavops_orgs(request):
         orgs = orgs.filter(mavops_archived=False)
     from tracker.services.feature_flags import PROJECT_SWITCH, flags_for_orgs
     project_switch_on = flags_for_orgs(orgs.values_list('id', flat=True), PROJECT_SWITCH)
+    from tracker.services.client_hygiene import client_hygiene_by_org
+    hygiene = client_hygiene_by_org(orgs.values_list('id', flat=True))
 
     result = []
     archived_count = 0
@@ -226,6 +228,7 @@ def mavops_orgs(request):
             now=timezone.now(),
             permission_blocked_devices=perm_red,
             limited_capture_devices=perm_amber,
+            client_list_reasons=hygiene.get(org.id, {}).get('reasons', ()),
         )
         if getattr(org, 'mavops_archived', False):
             archived_count += 1
@@ -246,6 +249,7 @@ def mavops_orgs(request):
             'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
+            'client_hygiene': hygiene.get(org.id),
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
             'trial_ends_at': org.trial_ends_at.isoformat() if getattr(org, 'trial_ends_at', None) else None,
             'created_at': org.created_at.isoformat() if getattr(org, 'created_at', None) else None,
@@ -261,7 +265,8 @@ def mavops_orgs(request):
 
 def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_devices,
                 seat_grace_deadline=None, now=None,
-                permission_blocked_devices=0, limited_capture_devices=0):
+                permission_blocked_devices=0, limited_capture_devices=0,
+                client_list_reasons=()):
     """
     Derive a health signal for the MavOps org row.
 
@@ -312,6 +317,9 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
     if limited_capture_devices:
         n = limited_capture_devices
         reasons.append(f"{n} Mac{'s' if n != 1 else ''} without Accessibility (limited capture)")
+    # Client list problems (services/client_hygiene.py): never 'critical', since
+    # time still records, but the matcher is choosing among the wrong clients.
+    reasons.extend(client_list_reasons)
 
     # Critical = actively blocked. An overage is only critical once its grace
     # has expired; while inside the grace window it stays a warning.

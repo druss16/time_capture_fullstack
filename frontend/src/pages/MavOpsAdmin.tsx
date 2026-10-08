@@ -14,12 +14,14 @@ const SEAT_PRICES: Record<string, number> = { professional: 34.99, executive: 49
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface OrgHealth { status: "ok" | "warn" | "critical"; reasons: string[]; grace_days_left?: number | null; }
+interface ClientHygiene { active: number; idle: number; twins: number; vertical_unset: boolean; reasons: string[]; }
 interface Org {
   id: number; name: string; plan: string; seat_count: number;
   member_count: number; active_devices: number;
   deactivated_devices?: number; mavops_archived?: boolean; show_client_widget?: boolean; project_switch?: boolean; mouse_idle_pause_seconds?: number; health?: OrgHealth;
   industry_type?: string;
   seat_grace_deadline?: string | null;
+  client_hygiene?: ClientHygiene | null;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
 interface Device {
@@ -3741,6 +3743,20 @@ export default function MavOpsAdmin() {
                           }}
                         >
                           ⏳ grace {org.health.grace_days_left}d
+                        </span>
+                      )}
+                      {org.client_hygiene && org.client_hygiene.reasons.length > 0 && (
+                        <span
+                          title={org.client_hygiene.reasons.join(" · ")}
+                          style={{
+                            ...mono, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" as const,
+                            padding: "2px 8px", borderRadius: 3, cursor: "help",
+                            color: T.yellow, background: T.yellow + "18", border: `1px solid ${T.yellow}44`,
+                          }}
+                        >
+                          clients {org.client_hygiene.active}
+                          {org.client_hygiene.idle > 0 && ` · ${org.client_hygiene.idle} idle`}
+                          {org.client_hygiene.twins > 0 && ` · ${org.client_hygiene.twins} twins`}
                         </span>
                       )}
                       {trialAlert && (

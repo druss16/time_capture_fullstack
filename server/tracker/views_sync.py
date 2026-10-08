@@ -17,6 +17,7 @@ from .models import (
     OrgRoutingRule,
 )
 from .auth import AgentKeyAuthentication, BearerTokenAuthentication
+from .services.alias_derivation import usable_aliases
 
 
 def _compute_hash(data: str) -> str:
@@ -182,7 +183,7 @@ def sync_clients(request):
         'name': c.name,
         'code': c.code or '',
         'visibility': c.visibility or 'all',
-        'aliases': c.aliases or [],                       # ← NEW
+        'aliases': usable_aliases(c),
         'my_role': assignments.get(c.id),
     } for c in clients]
 
@@ -329,7 +330,7 @@ def sync_full(request):
         'name': c.name,
         'code': getattr(c, 'code', '') or '',
         'visibility': getattr(c, 'visibility', 'all') or 'all',
-        'aliases': c.aliases or [],                       # ← NEW
+        'aliases': usable_aliases(c),
         'my_role': assignments.get(c.id),
     } for c in clients]
 

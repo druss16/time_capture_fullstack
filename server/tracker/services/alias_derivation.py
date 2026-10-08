@@ -272,6 +272,20 @@ def platform_email_aliases(email: str) -> set:
     return {domain} | ({labels[-2]} if len(labels) >= 2 else set())
 
 
+def usable_aliases(client) -> list:
+    """The client's aliases minus any derived from its own platform email
+    ("google" / "google.com" for lamurphy@google.com) that a heal has not
+    removed yet. Lets a matcher ignore them from the moment the fix ships,
+    rather than from the next nightly heal. Needs `email`, `aliases` and
+    `alias_sources` loaded; a manually entered alias is always kept."""
+    aliases = [a for a in (getattr(client, 'aliases', None) or []) if isinstance(a, str)]
+    bad = platform_email_aliases(getattr(client, 'email', '') or '')
+    if not bad:
+        return aliases
+    sources = getattr(client, 'alias_sources', None) or {}
+    return [a for a in aliases if a.lower() not in bad or sources.get(a.lower()) == 'manual']
+
+
 def _email_candidates(email: str) -> list[tuple[str, float]]:
     """Generate (alias, confidence) candidates from a client email's domain.
 

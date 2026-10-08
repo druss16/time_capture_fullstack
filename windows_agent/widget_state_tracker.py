@@ -271,11 +271,13 @@ class WidgetStateTracker:
         client_name: str,
         aliases: List[str],
     ) -> bool:
-        raw_hay = " ".join(filter(None, [
-            unquote(window_title or "").lower(),
-            unquote(file_path or "").lower(),
-            unquote(url or "").lower(),
+        # Case is kept for the acronym check only; everything else is lowercase.
+        cased_hay = " ".join(filter(None, [
+            unquote(window_title or ""),
+            unquote(file_path or ""),
+            unquote(url or ""),
         ]))
+        raw_hay = cased_hay.lower()
         if not raw_hay:
             return False
         stripped_hay = WidgetStateTracker._strip_punct(raw_hay)
@@ -333,15 +335,17 @@ class WidgetStateTracker:
                 if len(t) >= 2 and t not in WidgetStateTracker._STOP_WORDS
             ]
             if len(sig_tokens) >= 2:
-                acronym = "".join(t[0] for t in sig_tokens).lower()
+                acronym = "".join(t[0] for t in sig_tokens).upper()
                 if len(acronym) >= 3:
                     # v1.5.7: tighten trailing boundary same as Mode 3.
                     # No letter or digit can follow the acronym.
+                    # The acronym must be written in UPPERCASE, as the server
+                    # requires: "Vehicle Acquisition Network" -> "VAN" matched
+                    # every "Passenger Van" listing when this ignored case.
                     acro_pattern = re.compile(
                         r'(?:^|[\s\-_/\\.,()&])' + re.escape(acronym) + r'(?:[\s\-_/\\.,()&]|$)',
-                        re.IGNORECASE,
                     )
-                    if acro_pattern.search(stripped_hay):
+                    if acro_pattern.search(cased_hay):
                         return True
 
         return False

@@ -588,10 +588,12 @@ def _build_client_matchers(clients: list, sensitivity: int = 50) -> list:
                     # their initials as the official name — avoid double pattern)
                     already_covered = any(acronym == n.lower() for n in needles_raw)
                     if not already_covered:
-                        escaped = re.escape(acronym)
+                        # Case-sensitive on purpose: the acronym must be written
+                        # in UPPERCASE ("VAN", not the word "Van"), as the server
+                        # requires. _regex_match searches acronyms in cased text.
+                        escaped = re.escape(acronym.upper())
                         pat = re.compile(
                             r'(?:^|' + _BOUNDARY + r')' + escaped + r'(?:$|' + _BOUNDARY + r'|[0-9])',
-                            re.IGNORECASE,
                         )
                         patterns.append((pat, acronym, "acronym"))
 
@@ -756,11 +758,14 @@ def _regex_match(title: str, file_path: str, matchers: list,
     search_text = _normalize(f"{title or ''} {file_path or ''}")
     if not search_text.strip():
         return None
+    # Acronym patterns are case-sensitive, so they search the text before
+    # _normalize lowercases it.
+    cased_text = re.sub(r'\s+', ' ', re.sub(r'^\*+', '', f"{title or ''} {file_path or ''}").strip())
 
     best = None
     for m in matchers:
         for i, (pattern, needle, kind) in enumerate(m["patterns"]):
-            hit = pattern.search(search_text)
+            hit = pattern.search(cased_text if kind == "acronym" else search_text)
             if not hit:
                 continue
 

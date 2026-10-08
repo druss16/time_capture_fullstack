@@ -30,6 +30,42 @@ class Dormant:
     invoices: int
 
 
+def dormant_counts_by_org(org_ids=None) -> dict[int, dict]:
+    """{org_id: {'active': n, 'dormant': n}} for many orgs in a handful of queries.
+
+    Same definition as find_dormant_clients (invoiced clients kept), counted
+    instead of listed, for the MavOps org list.
+    """
+    clients = Client.objects.filter(is_active=True)
+    blocks = Block.objects.all()
+    projects = Project.objects.all()
+    cards = TimecardEntry.objects.all()
+    invs = Invoice.objects.all()
+    if org_ids is not None:
+        org_ids = list(org_ids)
+        clients = clients.filter(org_id__in=org_ids)
+        blocks = blocks.filter(org_id__in=org_ids)
+        projects = projects.filter(org_id__in=org_ids)
+        cards = cards.filter(client__org_id__in=org_ids)
+        invs = invs.filter(client__org_id__in=org_ids)
+    busy = set(blocks.exclude(client__isnull=True).values_list('client_id', flat=True).distinct())
+    busy |= set(blocks.exclude(proposed_client__isnull=True)
+                .values_list('proposed_client_id', flat=True).distinct())
+    busy |= set(projects.values_list('client_id', flat=True).distinct())
+    busy |= set(cards.exclude(client__isnull=True).values_list('client_id', flat=True).distinct())
+    busy |= set(invs.exclude(client__isnull=True).values_list('client_id', flat=True).distinct())
+
+    out: dict[int, dict] = {}
+    for cid, org_id, name, src in clients.values_list('id', 'org_id', 'name', 'imported_from'):
+        if is_internal_client_name(name):
+            continue
+        row = out.setdefault(org_id, {'active': 0, 'dormant': 0})
+        row['active'] += 1
+        if src in IMPORT_SOURCES and cid not in busy:
+            row['dormant'] += 1
+    return out
+
+
 def find_dormant_clients(org_id: int, *, include_invoiced: bool = False) -> tuple[list[Dormant], list[Dormant]]:
     """(to_deactivate, kept_for_invoices) for one org.
 

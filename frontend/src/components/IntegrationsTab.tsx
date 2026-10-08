@@ -14,6 +14,7 @@ import { safeFetchJson } from '@/lib/api';
 import { fetchWhoAmI } from '@/lib/whoami';
 import QbTimePushPanel from './QbTimePushPanel';
 import QbTimeTeamPanel from './QbTimeTeamPanel';
+import AsanaProjectsPanel from './AsanaProjectsPanel';
 import {
   Link2,
   Unlink,
@@ -51,7 +52,7 @@ const API_BASE = RAW_BASE.endsWith('/api') ? RAW_BASE : `${RAW_BASE.replace(/\/+
 // Every provider the Settings tab can render. Clio is region-partitioned in a
 // way the accounting providers are not, which is why identity below is a
 // per-provider concept rather than a shared "company id".
-type ProviderKey = 'quickbooks' | 'xero' | 'clio' | 'qb_time';
+type ProviderKey = 'quickbooks' | 'xero' | 'clio' | 'qb_time' | 'asana';
 
 // Providers that mirror a Client → Project structure and sync it whole,
 // rather than offering a client picker.
@@ -74,6 +75,11 @@ interface ProviderStatus {
   // Clio — are new clients arriving on their own, or only on the hourly sweep?
   live_sync?: 'active' | 'partial' | 'pending' | 'failed' | 'off' | null;
   live_sync_error?: string | null;
+  // Asana — linked to existing projects, never imported (see AsanaProjectsPanel)
+  projects?: number;
+  projects_linked?: number;
+  people_linked?: number;
+  activity_7d?: number;
 }
 
 interface IntegrationStatusResponse {
@@ -82,6 +88,7 @@ interface IntegrationStatusResponse {
     xero: ProviderStatus;
     clio?: ProviderStatus;
     qb_time?: ProviderStatus;
+    asana?: ProviderStatus;
   };
   client_stats: {
     from_quickbooks: number;
@@ -180,6 +187,21 @@ const PROVIDERS = {
     customersEndpoint: '',           // synced whole, like Clio
     importEndpoint: '',
   },
+  asana: {
+    name: 'Asana',
+    short: 'Asana',
+    icon: '✅',
+    color: 'rose',
+    description: 'File time spent in Asana to the right project, from the task you worked on.',
+    features: ['Links Asana projects to your projects', 'Reads who did what on which task', 'Files Asana desktop-app time too', 'Read-only — never changes Asana'],
+    bgClass: 'bg-rose-50 border-rose-200',
+    accentClass: 'text-rose-700',
+    btnClass: 'bg-rose-600 hover:bg-rose-700',
+    badgeClass: 'bg-rose-100 text-rose-800',
+    iconBgClass: 'bg-rose-100',
+    customersEndpoint: '',           // nothing is imported — projects are linked
+    importEndpoint: '',
+  },
 } as const;
 
 // Clio runs four independent data regions. A token issued in one is rejected
@@ -197,6 +219,7 @@ function providerIdentity(provider: ProviderKey, status: ProviderStatus): { labe
   if (provider === 'quickbooks') return { label: 'Realm ID', value: status.realm_id || '—' };
   if (provider === 'xero') return { label: 'Tenant ID', value: status.tenant_id || '—' };
   if (provider === 'qb_time') return { label: 'Company ID', value: status.realm_id || '—' };
+  if (provider === 'asana') return { label: 'People linked', value: String(status.people_linked ?? 0) };
   const region = CLIO_REGIONS.find((r) => r.value === status.region);
   return { label: 'Data Region', value: region ? region.label : (status.region || '—') };
 }
@@ -505,7 +528,8 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   const config = PROVIDERS[provider];
   const connected = status.connected;
   const isClio = provider === 'clio';
-  const syncsProjects = SYNCS_PROJECTS.includes(provider);
+  const isAsana = provider === 'asana';
+  const syncsProjects = SYNCS_PROJECTS.includes(provider) || isAsana;
   const identity = providerIdentity(provider, status);
 
   return (
@@ -564,10 +588,12 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
                 <Users className="w-3.5 h-3.5" />
-                {isClio ? 'Clients / Matters' : syncsProjects ? 'Clients / Projects' : 'Imported Clients'}
+                {isClio ? 'Clients / Matters' : isAsana ? 'Projects linked' : syncsProjects ? 'Clients / Projects' : 'Imported Clients'}
               </div>
               <p className="font-bold text-slate-900 text-sm">
-                {syncsProjects ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
+                {isAsana
+                  ? `${status.projects_linked ?? 0} of ${status.projects ?? 0}`
+                  : syncsProjects ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
               </p>
             </div>
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
@@ -665,7 +691,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                 {syncing
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <RefreshCw className="w-4 h-4" />}
-                {syncing ? 'Syncing…' : isClio ? 'Sync Clients & Matters' : 'Sync Clients & Projects'}
+                {syncing ? 'Syncing…' : isClio ? 'Sync Clients & Matters' : isAsana ? 'Sync Asana' : 'Sync Clients & Projects'}
               </button>
             ) : (
               <button
@@ -753,6 +779,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const [clioRegion, setClioRegion] = useState<string>('us');
   const [clioSyncing, setClioSyncing] = useState(false);
   const [qbTimeSyncing, setQbTimeSyncing] = useState(false);
+  const [asanaSyncing, setAsanaSyncing] = useState(false);
   // Which providers lead for this org's vertical. A law firm should not have to
   // scroll past QuickBooks and Xero to find Clio. Null until whoami resolves,
   // which renders every provider — never fewer than today.
@@ -933,6 +960,36 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
     }
   };
 
+  const handleAsanaSync = async () => {
+    setAsanaSyncing(true);
+    const before = asanaStatus.last_synced ?? null;
+    try {
+      const res = await safeFetchJson<{ message?: string; started?: boolean }>(
+        `${API_BASE}/integrations/asana/sync/`, { method: 'POST' },
+      );
+      onSuccess(res?.message || 'Asana sync started.');
+      // Runs in the background; watch for it to land, up to two minutes.
+      for (let i = 0; res?.started && i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const data = await safeFetchJson<IntegrationStatusResponse>(`${API_BASE}/integrations/status/`);
+          setStatusData(data);
+          const a = data?.integrations?.asana;
+          if (a && (a.last_synced ?? null) !== before) {
+            if (a.last_sync_status === 'failed') onError(`Asana sync failed: ${a.last_sync_error || 'see the card'}`);
+            else onSuccess('Asana sync finished.');
+            break;
+          }
+        } catch (_) { /* a missed poll is fine; try the next one */ }
+      }
+    } catch (err: any) {
+      onError(err?.message || 'Asana sync failed');
+    } finally {
+      await fetchIntegrations();
+      setAsanaSyncing(false);
+    }
+  };
+
   const handleDisconnect = async (provider: ProviderKey) => {
     const name = PROVIDERS[provider].name;
     if (!confirm(`Disconnect ${name}? This will remove the connection but won't delete any imported data.`)) return;
@@ -960,6 +1017,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
   const xeroStatus = statusData?.integrations?.xero || { connected: false };
   const clioStatus = statusData?.integrations?.clio || { connected: false };
   const qbTimeStatus = statusData?.integrations?.qb_time || { connected: false };
+  const asanaStatus = statusData?.integrations?.asana || { connected: false };
   const clientStats = statusData?.client_stats || { from_quickbooks: 0, from_xero: 0, manual: 0 };
 
   return (
@@ -1023,6 +1081,17 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
               />
             );
           }
+          if (key === 'asana') {
+            return (
+              <ProviderCard
+                {...common}
+                status={asanaStatus}
+                clientCount={0}
+                onSync={handleAsanaSync}
+                syncing={asanaSyncing}
+              />
+            );
+          }
           if (key === 'clio') {
             return (
               <ProviderCard
@@ -1054,6 +1123,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
         const isConnected = (k: ProviderKey) =>
           k === 'clio' ? clioStatus.connected
             : k === 'qb_time' ? qbTimeStatus.connected
+            : k === 'asana' ? asanaStatus.connected
             : k === 'quickbooks' ? qbStatus.connected : xeroStatus.connected;
 
         // In the vertical's own order: an agency's QuickBooks Time leads,
@@ -1151,6 +1221,22 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
       {qbTimeStatus.connected && (
         <QbTimePushPanel apiBase={API_BASE} pushTrigger={qbTimeStatus.push_trigger}
                          onSuccess={onSuccess} onError={onError} />
+      )}
+
+      {asanaStatus.connected && asanaStatus.last_sync_status === 'failed' && (
+        <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-xl flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-red-800">Last Asana sync failed</p>
+            <p className="text-sm text-red-700 mt-0.5 break-words">
+              {asanaStatus.last_sync_error || 'No details recorded.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {asanaStatus.connected && (
+        <AsanaProjectsPanel apiBase={API_BASE} onSuccess={onSuccess} onError={onError} />
       )}
 
       {/* Import Clients Modal */}

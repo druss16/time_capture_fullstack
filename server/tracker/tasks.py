@@ -2005,6 +2005,10 @@ from tracker.integrations.clio.webhooks import (  # noqa: F401
 
 # QuickBooks Time project sync — registered here for the same autodiscovery
 # reason as Clio's: integrations/ is never walked by autodiscover_tasks().
+from tracker.integrations.asana.sync import (  # noqa: F401
+    sync_asana_full,
+    sync_all_asana,
+)
 from tracker.integrations.qb_time.sync import (  # noqa: F401
     sync_qb_time_full,
     sync_all_qb_time_orgs,

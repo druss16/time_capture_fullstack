@@ -420,6 +420,16 @@ QBTIME_CLIENT_ID = os.environ.get('QBTIME_CLIENT_ID', default='')
 QBTIME_CLIENT_SECRET = os.environ.get('QBTIME_CLIENT_SECRET', default='')
 QBTIME_REDIRECT_URI = os.environ.get('QBTIME_REDIRECT_URI', default='')
 
+# Asana. One app for every firm: register at app.asana.com → My apps, with the
+# redirect URL https://<api host>/api/integrations/asana/callback/. ASANA_SCOPES
+# must match the scopes the app was given; read-only is all this needs.
+ASANA_CLIENT_ID = os.environ.get('ASANA_CLIENT_ID', default='')
+ASANA_CLIENT_SECRET = os.environ.get('ASANA_CLIENT_SECRET', default='')
+ASANA_REDIRECT_URI = os.environ.get('ASANA_REDIRECT_URI', default='')
+ASANA_SCOPES = os.environ.get(
+    'ASANA_SCOPES',
+    default='projects:read tasks:read stories:read users:read workspaces:read')
+
 # Microsoft Graph (Calendar Integration)
 MS_GRAPH_CLIENT_ID = os.environ.get('MS_GRAPH_CLIENT_ID', '')
 MS_GRAPH_CLIENT_SECRET = os.environ.get('MS_GRAPH_CLIENT_SECRET', '')

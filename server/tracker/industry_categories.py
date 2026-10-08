@@ -105,8 +105,9 @@ INDUSTRY_PRIMARY_INTEGRATIONS = {
     'cpa': ['quickbooks', 'xero'],
     'ai_consulting': ['quickbooks', 'xero'],
     # Agencies commonly clock hours in QuickBooks Time, which holds their
-    # Customer → Project list and project estimates.
-    'marketing': ['qb_time', 'quickbooks', 'xero'],
+    # Customer → Project list and project estimates — and run the projects
+    # themselves in Asana.
+    'marketing': ['qb_time', 'asana', 'quickbooks', 'xero'],
     'general': ['quickbooks', 'xero'],
 }
 

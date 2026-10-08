@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from . import views
 from .integrations.clio import views as clio_views
 from .integrations.qb_time import views as qb_time_views
+from .integrations.asana import views as asana_views
 from . import views_fee_basis
 from . import views_sso
 from . import views_week_coverage
@@ -331,6 +332,11 @@ urlpatterns = [
     path('integrations/clio/status/', clio_views.clio_status, name='clio-status'),
     path('integrations/clio/push-trigger/', clio_views.clio_push_trigger, name='clio-push-trigger'),
     path('integrations/clio/disconnect/', clio_views.clio_disconnect, name='clio-disconnect'),
+    path('integrations/asana/connect/', asana_views.asana_connect, name='asana-connect'),
+    path('integrations/asana/callback/', asana_views.asana_callback, name='asana-callback'),
+    path('integrations/asana/sync/', asana_views.asana_sync, name='asana-sync'),
+    path('integrations/asana/disconnect/', asana_views.asana_disconnect, name='asana-disconnect'),
+    path('integrations/asana/projects/', asana_views.asana_projects, name='asana-projects'),
     path('integrations/qb_time/connect/', qb_time_views.qb_time_connect, name='qb-time-connect'),
     path('integrations/qb_time/callback/', qb_time_views.qb_time_callback, name='qb-time-callback'),
     path('integrations/qb_time/sync/', qb_time_views.qb_time_sync, name='qb-time-sync'),

@@ -68,6 +68,15 @@ app.conf.beat_schedule = {
         'options': {'expires': 150},
     },
 
+    # Asana: what each person did on which task, read every 5 minutes so the
+    # 2-minute attribution sweep can file Asana time while it is fresh. A full
+    # project/people sync rides along once an hour (integrations/asana/sync.py).
+    'sync-asana-every-5-min': {
+        'task': 'tracker.sync_all_asana',
+        'schedule': crontab(minute='*/5'),
+        'options': {'expires': 280},
+    },
+
     # Hourly backstop: a full sync for any firm the change check has not
     # synced lately — catches edited estimates, which the check cannot see.
     'sync-qb-time-orgs-hourly': {

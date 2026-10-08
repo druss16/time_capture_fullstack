@@ -196,7 +196,7 @@ class OnboardingIntake(models.Model):
 
 
 CONNECT_LINK_TTL = timedelta(days=7)
-CONNECT_PROVIDERS = ('quickbooks', 'qb_time')
+CONNECT_PROVIDERS = ('quickbooks', 'qb_time', 'asana')
 
 
 class ConnectLink(models.Model):
@@ -230,6 +230,10 @@ class ConnectLink(models.Model):
     qbt_state = models.CharField(max_length=64, blank=True, default='', db_index=True)
     qbo_connected_at = models.DateTimeField(null=True, blank=True)
     qbt_connected_at = models.DateTimeField(null=True, blank=True)
+    # Asana: anyone who can see the firm's projects can approve — one
+    # connection reads everyone's activity (integrations/asana/).
+    asana_state = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    asana_connected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

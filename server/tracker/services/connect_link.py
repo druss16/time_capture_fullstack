@@ -34,9 +34,10 @@ from tracker.models_onboarding_console import CONNECT_PROVIDERS, ConnectLink
 
 logger = logging.getLogger(__name__)
 
-LABELS = {'quickbooks': 'QuickBooks Online', 'qb_time': 'QuickBooks Time'}
-_STATE_FIELD = {'quickbooks': 'qbo_state', 'qb_time': 'qbt_state'}
-_DONE_FIELD = {'quickbooks': 'qbo_connected_at', 'qb_time': 'qbt_connected_at'}
+LABELS = {'quickbooks': 'QuickBooks Online', 'qb_time': 'QuickBooks Time', 'asana': 'Asana'}
+_STATE_FIELD = {'quickbooks': 'qbo_state', 'qb_time': 'qbt_state', 'asana': 'asana_state'}
+_DONE_FIELD = {'quickbooks': 'qbo_connected_at', 'qb_time': 'qbt_connected_at',
+               'asana': 'asana_connected_at'}
 
 
 class ConnectLinkError(Exception):
@@ -70,6 +71,9 @@ def get_open(raw):
 def is_configured(provider):
     if provider == 'quickbooks':
         return bool(getattr(settings, 'QUICKBOOKS_CLIENT_ID', ''))
+    if provider == 'asana':
+        from tracker.integrations.asana.client import is_configured as asana_configured
+        return bool(asana_configured())
     from tracker.integrations.qb_time.client import is_configured as qbt_configured
     return bool(qbt_configured())
 
@@ -109,6 +113,9 @@ def start(link, provider):
     if provider == 'quickbooks':
         from tracker.views_integrations import quickbooks_auth_url
         return quickbooks_auth_url(state)
+    if provider == 'asana':
+        from tracker.integrations.asana.client import authorize_url as asana_authorize_url
+        return asana_authorize_url(state)
     from tracker.integrations.qb_time.client import authorize_url
     return authorize_url(settings.QBTIME_CLIENT_ID, settings.QBTIME_REDIRECT_URI, state)
 
@@ -173,6 +180,13 @@ def status(link):
         if p == 'quickbooks' and connected:
             from tracker.models import Client
             row['clients'] = Client.objects.filter(org=org, imported_from='quickbooks').count()
+        if p == 'asana' and connected:
+            # Linked projects + who has no Asana account of the same email:
+            # their Asana time cannot be filed until it matches.
+            from tracker.integrations.asana.views import asana_status
+            row['sync_status'] = integration.last_sync_status or ''
+            row.update(asana_status(integration))
+            row['unmatched'] = unmatched_members(org, integration)
         out.append(row)
     return {
         'firm': org.name,

@@ -683,10 +683,10 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
   );
 }
 
-// ── Connect link (QuickBooks Online / QuickBooks Time) ─────────────────────
+// ── Connect link (QuickBooks Online / QuickBooks Time / Asana) ─────────────
 
 const CONNECT_LABEL: Record<ConnectProvider, string> = {
-  quickbooks: "QuickBooks Online", qb_time: "QuickBooks Time",
+  quickbooks: "QuickBooks Online", qb_time: "QuickBooks Time", asana: "Asana",
 };
 
 function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
@@ -716,8 +716,8 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
   };
 
   return (
-    <Modal title="QuickBooks connect link" onClose={onClose}
-      subtitle="For the firm's QuickBooks admin — usually the bookkeeper. No TimeTracker login; they click Connect and sign in to Intuit. Clients import as soon as QuickBooks Online is approved.">
+    <Modal title="Connect link" onClose={onClose}
+      subtitle="No TimeTracker login: they click Connect and sign in to QuickBooks or Asana. QuickBooks needs the firm's QuickBooks admin (usually the bookkeeper); Asana, anyone who can see the agency's Asana projects. Clients import as soon as QuickBooks Online is approved.">
       <div className="space-y-4">
         {current && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm">
@@ -729,6 +729,9 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
             {current.providers.includes("qb_time") && (current.qbt_connected_at
               ? <Pill tone="green">QuickBooks Time connected {fmtDate(current.qbt_connected_at)}</Pill>
               : <Pill tone="amber">QuickBooks Time not yet</Pill>)}
+            {current.providers.includes("asana") && (current.asana_connected_at
+              ? <Pill tone="green">Asana connected {fmtDate(current.asana_connected_at)}</Pill>
+              : <Pill tone="amber">Asana not yet</Pill>)}
           </div>
         )}
 
@@ -743,11 +746,11 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
               ))}
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              QuickBooks Time is one connection for the whole firm — it writes everyone's timesheets, matched by email.
+              QuickBooks Time and Asana are each one connection for the whole firm, matched to people by email. Asana files time in the Asana desktop app by the task worked on.
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <div><label className={labelClass}>QuickBooks admin's name</label>
+            <div><label className={labelClass}>Who approves — name</label>
               <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
             <div><label className={labelClass}>Their email</label>
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="bookkeeper@firm.com" /></div>

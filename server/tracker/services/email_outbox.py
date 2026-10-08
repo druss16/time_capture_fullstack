@@ -27,7 +27,7 @@ MODES = (HOLD, REDIRECT, LIVE)
 EMAIL_TYPES = [
     ('password_reset',      'Password reset',                 'A user asked to reset their password'),
     ('intake',              'Onboarding intake link',         'The firm questionnaire sent from the Onboarding Console'),
-    ('connect_link',        'QuickBooks connect link',        'Asks a firm\u2019s QuickBooks admin to approve the connection'),
+    ('connect_link',        'Connect link',                   'Asks a firm to approve its QuickBooks / Asana connection'),
     ('onboarding',          'Invitation to join',             'A new user is invited to set up TimeTracker'),
     ('org_added',           'Added to a firm',                'An existing user is added to another firm'),
     ('timesheet_reminder',  'Daily review reminder',          'Daily nudge to review yesterday’s time'),

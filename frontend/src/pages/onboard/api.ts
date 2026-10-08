@@ -116,10 +116,10 @@ export const onboardApi = {
       `${BASE}/projects/${id}/connect-link/`, { method: "POST", ...json(body) }),
 };
 
-export type ConnectProvider = "quickbooks" | "qb_time";
+export type ConnectProvider = "quickbooks" | "qb_time" | "asana";
 export interface ConnectLinkInfo {
   providers: ConnectProvider[]; sent_to: string; created_at: string; expires_at: string; open: boolean;
-  qbo_connected_at: string | null; qbt_connected_at: string | null;
+  qbo_connected_at: string | null; qbt_connected_at: string | null; asana_connected_at?: string | null;
 }
 
 export interface RosterRow {
@@ -147,6 +147,7 @@ export interface ConnectStatus {
   providers: {
     key: ConnectProvider; label: string; connected: boolean; configured: boolean;
     clients?: number; sync_status?: string; unmatched?: { name: string; email: string }[];
+    projects?: number; projects_linked?: number; people_linked?: number;
   }[];
 }
 

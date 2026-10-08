@@ -242,3 +242,88 @@ class QuickBooksStepTests(ConsoleBase):
         for prov in ('quickbooks', 'qb_time'):
             Integration.objects.create(organization=p.organization, provider=prov, is_connected=True)
         self.assertEqual(self._step(p)['detail'], 'QuickBooks Online + QuickBooks Time connected')
+
+
+ASANA = dict(ASANA_CLIENT_ID='asana-id', ASANA_CLIENT_SECRET='asana-secret',
+             ASANA_REDIRECT_URI='https://api.test/api/integrations/asana/callback/',
+             ASANA_SCOPES='projects:read tasks:read stories:read users:read workspaces:read',
+             FRONTEND_URL='https://app.test')
+
+
+@override_settings(**ASANA)
+class AsanaConnectLinkTests(ConsoleBase):
+    """An agency approves Asana from the same link — anyone who can see its
+    projects, no TimeTracker login."""
+    def setUp(self):
+        super().setUp()
+        self.p = self.make_project()
+        self.org = self.p.organization
+        self.public = APIClient()
+
+    def issue(self, providers=('asana',)):
+        r = self.api.post(f'/api/onboard/projects/{self.p.id}/connect-link/',
+                          {'providers': list(providers)}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()['url'].rsplit('/', 1)[1]
+
+    def test_issue_keeps_asana(self):
+        self.issue(providers=('quickbooks', 'asana'))
+        self.assertEqual(ConnectLink.objects.get(revoked_at__isnull=True).providers,
+                         ['quickbooks', 'asana'])
+
+    def test_start_sends_to_asana_with_state_on_link(self):
+        raw = self.issue()
+        r = self.public.post(f'/api/onboard/connect/{raw}/asana/start/')
+        self.assertEqual(r.status_code, 200, r.content)
+        url = r.json()['auth_url']
+        self.assertTrue(url.startswith('https://app.asana.com/-/oauth_authorize'))
+        state = parse_qs(urlparse(url).query)['state'][0]
+        self.assertEqual(ConnectLink.objects.get().asana_state, state)
+        self.assertEqual(Integration.objects.get(organization=self.org, provider='asana').oauth_state, state)
+
+    def test_link_started_grant_returns_to_the_link(self):
+        raw = self.issue()
+        url = self.public.post(f'/api/onboard/connect/{raw}/asana/start/').json()['auth_url']
+        state = parse_qs(urlparse(url).query)['state'][0]
+        with mock.patch('tracker.integrations.asana.views.exchange_code',
+                        return_value={'access_token': 'a', 'refresh_token': 'r', 'expires_in': 3600}), \
+                mock.patch('tracker.integrations.asana.views._start_sync') as started:
+            r = self.public.get('/api/integrations/asana/callback/', {'code': 'c', 'state': state})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r['Location'], 'https://app.test/connect/return?provider=asana&status=connected')
+        started.assert_called_once()
+        link = ConnectLink.objects.get()
+        self.assertIsNotNone(link.asana_connected_at)
+        self.assertEqual(link.asana_state, '')
+        self.assertTrue(Integration.objects.get(organization=self.org, provider='asana').is_connected)
+        # The firm's page now says connected, with the project counts.
+        row = self.public.get(f'/api/onboard/connect/{raw}/').json()['providers'][0]
+        self.assertEqual((row['key'], row['connected']), ('asana', True))
+        self.assertIn('projects_linked', row)
+
+    def test_cancelled_in_asana_returns_to_the_link(self):
+        raw = self.issue()
+        url = self.public.post(f'/api/onboard/connect/{raw}/asana/start/').json()['auth_url']
+        state = parse_qs(urlparse(url).query)['state'][0]
+        r = self.public.get('/api/integrations/asana/callback/', {'error': 'access_denied', 'state': state})
+        self.assertEqual(r['Location'],
+                         'https://app.test/connect/return?provider=asana&status=error&reason=access_denied')
+
+    def test_settings_started_grant_is_untouched_by_links(self):
+        Integration.objects.create(organization=self.org, provider='asana', oauth_state='settings-st')
+        with mock.patch('tracker.integrations.asana.views.exchange_code',
+                        return_value={'access_token': 'a', 'refresh_token': 'r', 'expires_in': 3600}), \
+                mock.patch('tracker.integrations.asana.views._start_sync'):
+            r = self.public.get('/api/integrations/asana/callback/', {'code': 'c', 'state': 'settings-st'})
+        self.assertEqual(r.status_code, 200)     # the Settings popup page, not a redirect
+
+    def test_asana_only_email_says_asana(self):
+        from tracker import email_service
+        with mock.patch('tracker.email_service.send_email', return_value=True) as send:
+            email_service.send_connect_link(to_email='pm@agency.test', firm_name='Acme',
+                                            connect_url='https://app.test/connect/x',
+                                            providers=['Asana'])
+        kw = send.call_args.kwargs
+        self.assertEqual(kw['subject'], 'Approve the Asana connection for Acme')
+        self.assertNotIn('QuickBooks admin', kw['plain_content'])
+        self.assertIn('sign in to Asana', kw['plain_content'])

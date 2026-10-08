@@ -505,3 +505,80 @@ class CardStateTests(Base):
                 r = api.post('/api/integrations/asana/sync/')
             self.assertEqual(r.data.get('running'), True)
             started.assert_not_called()
+
+
+class RealPairsMatcherTests(SimpleTestCase):
+    """More Than Cars' QuickBooks Time and Asana lists are 'identical' the
+    way people mean it. Pairs from their data, 2026-10-08."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from types import SimpleNamespace as NS
+        from tracker.integrations.asana.matching import Matcher
+        names = ['CarNow, Inc.', 'Robert DeNooyer Chevrolet', 'More Than Cars Media', 'More Than Cars',
+                 'Easterns Automotive Group', 'Fredericktown Chevrolet', 'Tom Gill Chevrolet',
+                 'Tom Gill Buick GMC', 'Beaver Mazda', 'Bob Weaver Chevrolet', 'Auto Acquire, Inc.']
+        cls.c = {n: NS(id=i + 1, name=n, aliases=[], email='', alias_sources={})
+                 for i, n in enumerate(names)}
+        rows = [
+            ('CarNow Showroom Deal Maker UX Video', 'CarNow, Inc.'),
+            ('CarNow NADA Booth Design', 'CarNow, Inc.'),
+            ('CarNow 2026 Positioning Video', 'CarNow, Inc.'),
+            ('DeNooyer 250th Email', 'Robert DeNooyer Chevrolet'),
+            ('DeNooyer Website & Asset Color Revisions', 'Robert DeNooyer Chevrolet'),
+            ('DeNooyer Logo Emblem', 'Robert DeNooyer Chevrolet'),
+            ('MTCM NY Auto Forum Event Coverage', 'More Than Cars Media'),
+            ('MTCM Podcast Production', 'More Than Cars Media'),
+            ('Easterns Nissan White Marsh Website Updates', 'Easterns Automotive Group'),
+            ('Easterns Monthly Offers', 'Easterns Automotive Group'),
+            ('Fredy Chevy Q4 Production', 'Fredericktown Chevrolet'),
+            ('Fredy Chevy Q3 Production', 'Fredericktown Chevrolet'),
+            ('Fredy Chevy Used Cars Brand Campaign', 'Fredericktown Chevrolet'),
+            ('Tom Gill Auto Group Onboarding Video', 'Tom Gill Chevrolet'),
+            ('TGBGMC Website Reskin', 'Tom Gill Buick GMC'),
+            ('Beaver Mazda CX5 Event Emails', 'Beaver Mazda'),
+            ('Beaver Mazda CX5 Event Logo', 'Beaver Mazda'),
+            ('Bob Weaver Billboard Designs', 'Bob Weaver Chevrolet'),
+            ('AutoAcquire Social Media Videos', 'Auto Acquire, Inc.'),
+            ('AutoAcquire Banners', 'Auto Acquire, Inc.'),
+        ]
+        cls.p = {n: NS(id=100 + i, name=n, client_id=cls.c[cl].id, is_active=True)
+                 for i, (n, cl) in enumerate(rows)}
+        cls.m = Matcher(list(cls.c.values()), list(cls.p.values()))
+
+    def project(self, asana_name):
+        p, _c, _how = self.m.match(asana_name)
+        return p.name if p else None
+
+    def test_wording_differences_still_link(self):
+        for asana, tt in [
+            ('CarNow: Showroom Dealmaker UX Video', 'CarNow Showroom Deal Maker UX Video'),
+            ('DeNooyer: 250 Email', 'DeNooyer 250th Email'),
+            ('DeNooyer: Website and Asset Color Revision', 'DeNooyer Website & Asset Color Revisions'),
+            ('Beaver Mazda: CX5 Event Email', 'Beaver Mazda CX5 Event Emails'),
+        ]:
+            self.assertEqual(self.project(asana), tt, asana)
+
+    def test_client_short_forms(self):
+        self.assertEqual(self.project('MTC Media - NY Auto Forum Event Coverage'),
+                         'MTCM NY Auto Forum Event Coverage')
+        self.assertEqual(self.project('Easterns Auto Group: Nissan of White Marsh Website Update'),
+                         'Easterns Nissan White Marsh Website Updates')
+        self.assertEqual(self.project('Fredy Chevy: Q4 Production'), 'Fredy Chevy Q4 Production')
+        self.assertEqual(self.project('AutoAcquire: Banners'), 'AutoAcquire Banners')
+
+    def test_ambiguous_client_resolved_by_its_project(self):
+        self.assertEqual(self.project('Tom Gill: Auto Group Onboarding Video'),
+                         'Tom Gill Auto Group Onboarding Video')
+        self.assertEqual(self.project('Tom Gill: Website Reskin'), 'TGBGMC Website Reskin')
+        # Two Tom Gill clients and no project fits: nothing, not a guessed client.
+        self.assertEqual(self.m.match('Tom Gill: Mirror Hang Tag and Reorder'), (None, None, ''))
+
+    def test_numbers_must_agree(self):
+        p, c, how = self.m.match('Fredy Chevy: Q2 Production')
+        self.assertEqual((p, c.name, how), (None, 'Fredericktown Chevrolet', 'client'))
+
+    def test_near_miss_stays_client_only(self):
+        p, c, how = self.m.match('Bob Weaver: Billboards')
+        self.assertEqual((p, c.name, how), (None, 'Bob Weaver Chevrolet', 'client'))
+        self.assertEqual(self.m.match('ASOTU CON 2025'), (None, None, ''))

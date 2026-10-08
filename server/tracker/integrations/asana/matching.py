@@ -1,30 +1,80 @@
 """
 Which TimeTracker project — or at least which client — an Asana project is.
 
-Agencies name Asana projects "Client: Project" ("Tom Gill: CDP Email
-Journeys", "Easterns Auto: Monthly Nissan New Cars Offer Ads"), with the client
-in whatever short form they say out loud. Matching only the whole name linked
-13 of More Than Cars' 803 live projects. So, in order:
+An agency's project list lives in QuickBooks Time AND in Asana, typed twice by
+hand. More Than Cars' two lists are "identical" the way people mean it, not
+the way a string compare does (real pairs, 2026-10-08):
 
-  1. the whole name is a TimeTracker project's name (punctuation aside);
-  2. the part before the colon (or " - ") names exactly one client — in full,
-     by an alias, by its abbreviation, or as the first words of its name
-     ("Tom Gill" → Tom Gill Buick GMC, "Easterns Auto" → Easterns Automotive
-     Group) — and the rest names one of THAT client's projects, by the same
-     name rules as the attribution sweep;
-  3. the client alone, when no project of it fits. Asana time then lands on
-     the right client and asks only for the project.
+    QuickBooks Time / TimeTracker              Asana
+    CarNow Showroom Deal Maker UX Video        CarNow: Showroom Dealmaker UX Video
+    DeNooyer 250th Email                       DeNooyer: 250 Email
+    DeNooyer Website & Asset Color Revisions   DeNooyer: Website and Asset Color Revision
+    MTCM NY Auto Forum Event Coverage          MTC Media - NY Auto Forum Event Coverage
+    Easterns Nissan White Marsh Website Updates
+                                Easterns Auto Group: Nissan of White Marsh Website Update
 
-A client part that fits two clients ("Beaver" — Toyota or Mazda?) names
-neither: a wrong client bills the wrong client, which is worse than asking.
+and the client is written in whatever short form the agency says out loud —
+"DeNooyer" for Robert DeNooyer Chevrolet, "Fredy Chevy" for Fredericktown
+Chevrolet — the same short form its own QuickBooks Time project names use.
+
+So, in order:
+
+  1. the whole name is a project's name, once both are canonical (case, "&",
+     plurals, "250th", bracketed asides, spacing);
+  2. the part before ":" / " - " names candidate clients: by full name (legal
+     suffix aside), alias, abbreviation, the first words of the name, or a
+     short form LEARNED from that client's own project names ("DeNooyer
+     250th Email" teaches "denooyer"). "Tom Gill" can be two clients;
+  3. the rest is scored against those clients' projects, the client part of
+     each project's name set aside. The best must be close (CLOSE) and clearly
+     ahead of the next (MARGIN), and any numbers must agree — "Q3 Production"
+     is never "Q4 Production". The project decides the client, so an
+     ambiguous "Tom Gill" resolves when exactly one of its projects fits;
+  4. one candidate client and no project fits: the client alone. Asana time
+     then lands on the right client and asks only for the project;
+  5. no client part, or no candidate: the whole name against every project,
+     stricter (GLOBAL_CLOSE).
+
+A wrong project bills the wrong work, so every step abstains rather than
+guesses: ties, near-ties and number mismatches link nothing.
 """
 import re
+from difflib import SequenceMatcher
 
 _SPLIT = re.compile(r'\s*:\s*|\s+-\s+|(?<=\w)-\s+')
+_PARENS = re.compile(r'\([^)]*\)')
+_ORDINAL = re.compile(r'\b(\d+)(?:st|nd|rd|th)\b')
+_LEGAL = {'inc', 'llc', 'co', 'corp', 'corporation', 'ltd', 'the', 'company'}
+
+CLOSE = 0.88          # a candidate client's project
+GLOBAL_CLOSE = 0.93   # any project, no client to narrow it
+MARGIN = 0.06         # the best must beat the runner-up by this much
+MIN_SHORT_FORM = 3    # letters in a learned client short form
 
 
 def _norm(text: str) -> str:
     return ' '.join(re.sub(r'[^a-z0-9]+', ' ', (text or '').lower()).split())
+
+
+def _stem(word: str) -> str:
+    return word[:-1] if len(word) > 3 and word.endswith('s') and not word.endswith('ss') else word
+
+
+def canon(text: str) -> str:
+    """'DeNooyer Website & Asset Color Revisions (v2)' -> 'denooyer website and
+    asset color revision'."""
+    t = (text or '').lower().replace('&', ' and ')
+    t = _PARENS.sub(' ', t)
+    t = _ORDINAL.sub(r'\1', t)
+    return ' '.join(_stem(w) for w in _norm(t).split())
+
+
+def _compact(text: str) -> str:
+    return canon(text).replace(' ', '')
+
+
+def _numbers(text: str) -> frozenset:
+    return frozenset(w for w in canon(text).split() if any(ch.isdigit() for ch in w))
 
 
 def split_name(name: str):
@@ -44,6 +94,14 @@ def _word_prefix(part_words, client_words) -> bool:
     return all(cw.startswith(pw) for pw, cw in zip(part_words[1:], client_words[1:]))
 
 
+def _score(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    if a.replace(' ', '') == b.replace(' ', ''):
+        return 1.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
 class Matcher:
     """Built once per sync from the firm's clients and projects."""
 
@@ -52,46 +110,103 @@ class Matcher:
         projects: objects with id, name, client_id, is_active."""
         from tracker.services.alias_derivation import usable_aliases
         from tracker.services.matter_attribution import client_abbreviations
-        self.clients = []
-        for c in clients:
-            names = {_norm(c.name)} | {_norm(a) for a in usable_aliases(c)} \
-                | set(client_abbreviations(c.name))
-            self.clients.append((c, {n for n in names if n}))
-        self.by_name = {}
+        self.projects = list(projects)
         self.by_client = {}
-        for p in projects:
-            self.by_name.setdefault(_norm(p.name), []).append(p)
+        for p in self.projects:
             self.by_client.setdefault(p.client_id, []).append(p)
 
-    @staticmethod
-    def _one(projects):
-        live = [p for p in projects if p.is_active] or list(projects)
-        return live[0] if len(live) == 1 else None
+        # Every way a client is written, canonical, longest first so a
+        # project name loses its longest client prefix.
+        self.keys = {}
+        for c in clients:
+            full = canon(c.name)
+            bare = ' '.join(w for w in full.split() if w not in _LEGAL)
+            keys = {full, bare} | {canon(a) for a in usable_aliases(c)} \
+                | {canon(a) for a in client_abbreviations(c.name)}
+            self.keys[c.id] = (c, {k for k in keys if k})
+        self._learn_short_forms()
+
+    def _learn_short_forms(self):
+        """A client's own project names start with its spoken short form:
+        'DeNooyer 250th Email', 'Fredy Chevy Q4 Production'. A 1–3 word
+        prefix that starts two or more of ONE client's projects, and no other
+        client's, is a short form of that client."""
+        seen = {}
+        for p in self.projects:
+            words = canon(p.name).split()
+            for n in (1, 2, 3):
+                if len(words) > n:
+                    seen.setdefault(' '.join(words[:n]), {}).setdefault(p.client_id, set()).add(p.id)
+        for prefix, by_client in seen.items():
+            if len(by_client) != 1 or len(prefix.replace(' ', '')) < MIN_SHORT_FORM:
+                continue
+            (cid, ids), = by_client.items()
+            if len(ids) >= 2 and cid in self.keys:
+                self.keys[cid][1].add(prefix)
+
+    # ── clients ─────────────────────────────────────────────────────────
+    def client_candidates(self, part: str) -> list:
+        key = canon(part)
+        if not key:
+            return []
+        compact = key.replace(' ', '')
+        exact = [c for c, keys in self.keys.values()
+                 if key in keys or compact in {k.replace(' ', '') for k in keys}]
+        if exact:
+            return exact
+        words = key.split()
+        out = []
+        for c, keys in self.keys.values():
+            flat = {k.replace(' ', '') for k in keys}
+            if any(_word_prefix(words, k.split()) for k in keys) \
+                    or any(len(k) >= MIN_SHORT_FORM and words[0] == k for k in keys) \
+                    or any(len(k) >= MIN_SHORT_FORM and compact.startswith(k) for k in flat):
+                # 'mtc media' starts 'mtcm' (More Than Cars Media) as well as
+                # being 'mtc' (More Than Cars): both are candidates, and the
+                # project name picks between them.
+                out.append(c)
+        return out
 
     def client_for(self, part: str):
-        key = _norm(part)
-        if not key:
-            return None
-        exact = [c for c, names in self.clients if key in names]
-        if len(exact) == 1:
-            return exact[0]
-        if exact:
-            return None
-        words = key.split()
-        prefix = [c for c, _ in self.clients if _word_prefix(words, _norm(c.name).split())]
-        return prefix[0] if len(prefix) == 1 else None
+        found = self.client_candidates(part)
+        return found[0] if len(found) == 1 else None
 
-    def project_for(self, client, rest: str):
+    def _project_rest(self, p) -> str:
+        """The project's name with its client's name or short form set aside."""
+        name = canon(p.name)
+        entry = self.keys.get(p.client_id)
+        for k in sorted(entry[1] if entry else (), key=len, reverse=True):
+            if name.startswith(k + ' '):
+                return name[len(k) + 1:]
+        return name
+
+    # ── projects ────────────────────────────────────────────────────────
+    def _best(self, pool, text_rest: str, text_full: str, close: float):
+        rest, full = canon(text_rest), canon(text_full)
+        want = _numbers(text_rest)
+        scored = []
+        for p in pool:
+            p_rest = self._project_rest(p)
+            if _numbers(p_rest) != want:      # Q3 is never Q4, 2024 never 2025
+                continue
+            s = max(_score(rest, p_rest), _score(full, canon(p.name)))
+            scored.append((s, p))
+        if not scored:
+            return None
+        scored.sort(key=lambda sp: -sp[0])
+        best_s, best = scored[0]
+        runner = next((s for s, p in scored[1:] if p.id != best.id), 0.0)
+        if best_s >= close and best_s - runner >= MARGIN:
+            return best
+        return None
+
+    def _by_phrase(self, client, rest: str):
+        """The attribution sweep's own name rules, for a rest that CONTAINS a
+        project's name ('Q1 Production shot list')."""
         from tracker.services.matter_attribution import (
             match_project_name, match_project_name_partial, name_phrase,
         )
         mine = self.by_client.get(client.id, [])
-        if not mine:
-            return None
-        same = [p for p in mine if _norm(p.name) == _norm(rest)
-                or _norm(p.name) == _norm(f'{client.name} {rest}')]
-        if same:
-            return self._one(same)
         seen = {}
         for p in mine:
             phrase = name_phrase(p.name, client.name)
@@ -101,18 +216,28 @@ class Matcher:
         pid = match_project_name(rest, phrases) or match_project_name_partial(rest, phrases)
         return next((p for p in mine if p.id == pid), None) if pid else None
 
+    @staticmethod
+    def _one(projects):
+        live = [p for p in projects if p.is_active] or list(projects)
+        return live[0] if len(live) == 1 else None
+
     def match(self, asana_name: str):
         """(project or None, client or None, how)."""
-        whole = self._one(self.by_name.get(_norm(asana_name), []))
+        whole = self._one([p for p in self.projects if canon(p.name) == canon(asana_name)])
         if whole is not None:
             return whole, None, 'name'
         part, rest = split_name(asana_name)
-        if not part:
+        flat = f'{part} {rest}' if part else rest
+        clients = self.client_candidates(part) if part else []
+        if clients:
+            pool = [p for c in clients for p in self.by_client.get(c.id, [])]
+            project = self._best(pool, rest, flat, CLOSE)
+            if project is None and len(clients) == 1:
+                project = self._by_phrase(clients[0], rest)
+            if project is not None:
+                return project, None, 'name'
+            if len(clients) == 1:
+                return None, clients[0], 'client'
             return None, None, ''
-        client = self.client_for(part)
-        if client is None:
-            return None, None, ''
-        project = self.project_for(client, rest)
-        if project is not None:
-            return project, client, 'name'
-        return None, client, 'client'
+        project = self._best(self.projects, rest, flat, GLOBAL_CLOSE)
+        return (project, None, 'name') if project is not None else (None, None, '')

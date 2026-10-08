@@ -78,6 +78,8 @@ interface ProviderStatus {
   // Asana — linked to existing projects, never imported (see AsanaProjectsPanel)
   projects?: number;
   projects_linked?: number;
+  clients_linked?: number;   // Asana projects tied to a client, project not known
+  syncing?: boolean;         // Asana — a full sync holds the lock right now
   people_linked?: number;
   activity_7d?: number;
 }
@@ -595,6 +597,11 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                   ? `${status.projects_linked ?? 0} of ${status.projects ?? 0}`
                   : syncsProjects ? `${clientCount} / ${matterCount ?? 0}` : clientCount}
               </p>
+              {isAsana && (status.clients_linked ?? 0) > 0 && (
+                <p className="mt-0.5 text-xs text-slate-500" title="Asana projects whose name says the client but no project of that client matches. Their time gets the client and asks only for the project.">
+                  + {status.clients_linked} to a client
+                </p>
+              )}
             </div>
             <div className="bg-white/70 rounded-xl p-3 border border-slate-200/50">
               <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold mb-1">
@@ -602,7 +609,9 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
                 Last Synced
               </div>
               <p className="font-bold text-slate-900 text-sm">
-                {status.last_synced
+                {isAsana && status.syncing
+                  ? <span className="inline-flex items-center gap-1.5 text-sky-700"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing…</span>
+                  : status.last_synced
                   ? (() => {
                       const diff = Math.floor((Date.now() - new Date(status.last_synced).getTime()) / 1000);
                       if (diff < 60) return `${diff}s ago`;
@@ -687,11 +696,11 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
         {connected ? (
           <div className="flex items-center gap-3">
             {syncsProjects ? (
-              <button onClick={onSync} disabled={syncing} className={primaryBtnClass}>
-                {syncing
+              <button onClick={onSync} disabled={syncing || (isAsana && !!status.syncing)} className={primaryBtnClass}>
+                {(syncing || (isAsana && status.syncing))
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <RefreshCw className="w-4 h-4" />}
-                {syncing ? 'Syncing…' : isClio ? 'Sync Clients & Matters' : isAsana ? 'Sync Asana' : 'Sync Clients & Projects'}
+                {(syncing || (isAsana && status.syncing)) ? 'Syncing…' : isClio ? 'Sync Clients & Matters' : isAsana ? 'Sync Asana' : 'Sync Clients & Projects'}
               </button>
             ) : (
               <button
@@ -820,6 +829,15 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
       .catch(() => {/* fall through to showing everything */});
     return () => { alive = false; };
   }, []);
+
+  // While an Asana sync runs (a big workspace's first one takes many minutes),
+  // refresh the card every 10 seconds so it ends on the real outcome.
+  const asanaRunning = !!statusData?.integrations?.asana?.syncing;
+  useEffect(() => {
+    if (!asanaRunning) return;
+    const t = setInterval(() => { fetchIntegrations(); }, 10000);
+    return () => clearInterval(t);
+  }, [asanaRunning, fetchIntegrations]);
 
   // Listen for OAuth callback postMessage
   useEffect(() => {
@@ -962,29 +980,17 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ onSuccess, onError })
 
   const handleAsanaSync = async () => {
     setAsanaSyncing(true);
-    const before = asanaStatus.last_synced ?? null;
     try {
-      const res = await safeFetchJson<{ message?: string; started?: boolean }>(
+      const res = await safeFetchJson<{ message?: string }>(
         `${API_BASE}/integrations/asana/sync/`, { method: 'POST' },
       );
       onSuccess(res?.message || 'Asana sync started.');
-      // Runs in the background; watch for it to land, up to two minutes.
-      for (let i = 0; res?.started && i < 24; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        try {
-          const data = await safeFetchJson<IntegrationStatusResponse>(`${API_BASE}/integrations/status/`);
-          setStatusData(data);
-          const a = data?.integrations?.asana;
-          if (a && (a.last_synced ?? null) !== before) {
-            if (a.last_sync_status === 'failed') onError(`Asana sync failed: ${a.last_sync_error || 'see the card'}`);
-            else onSuccess('Asana sync finished.');
-            break;
-          }
-        } catch (_) { /* a missed poll is fine; try the next one */ }
-      }
     } catch (err: any) {
-      onError(err?.message || 'Asana sync failed');
+      onError(err?.message || 'Asana sync failed to start');
     } finally {
+      // The card now follows the sync itself (syncing / failed) — see the
+      // poll on asana.syncing — however long the first import takes.
+      await new Promise((r) => setTimeout(r, 1500));
       await fetchIntegrations();
       setAsanaSyncing(false);
     }

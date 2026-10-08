@@ -1568,12 +1568,12 @@ def integrations_status(request):
                 from tracker.integrations.qb_time.push import push_trigger_for
                 integrations[provider]['push_trigger'] = push_trigger_for(i)
             elif provider == 'asana':
-                integrations[provider]['last_sync_status'] = i.last_sync_status or None
-                integrations[provider]['last_sync_error'] = i.last_sync_error or None
                 integrations[provider]['last_synced'] = (
                     i.last_synced_at.isoformat() if i.last_synced_at else None
                 )
+                from tracker.integrations.asana.sync import sync_state
                 from tracker.integrations.asana.views import asana_status
+                integrations[provider].update(sync_state(i))
                 integrations[provider].update(asana_status(i))
         except Integration.DoesNotExist:
             integrations[provider] = {'connected': False}

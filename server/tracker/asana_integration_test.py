@@ -439,3 +439,69 @@ class LockAndPeopleTests(Base):
         with mock.patch.object(s, '_redis', return_value=FakeRedis()):
             stats = s.sync_people_activity(self.integ, api=api)
         self.assertEqual((stats['people'], api.calls), (0, []))
+
+
+class CardStateTests(Base):
+    """The card has to say what the sync is doing: More Than Cars' first
+    big sync looked 'stopped' because the card only knew the last finish."""
+    def state(self):
+        from tracker.integrations.asana.sync import sync_state
+        self.integ.refresh_from_db()
+        return sync_state(self.integ)
+
+    def test_running_full_sync_shows_syncing(self):
+        from tracker.integrations.asana import sync as s
+        fake = FakeRedis()
+        with mock.patch.object(s, '_redis', return_value=fake):
+            s._try_lock(self.integ.id, 'full')
+            self.integ.last_sync_status = 'running'
+            self.integ.save()
+            st = self.state()
+        self.assertEqual((st['syncing'], st['last_sync_status']), (True, 'running'))
+
+    def test_dead_sync_reads_as_failed(self):
+        from tracker.integrations.asana import sync as s
+        self.integ.last_sync_status = 'running'
+        self.integ.save()
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):    # nobody holds the lock
+            st = self.state()
+        self.assertFalse(st['syncing'])
+        self.assertEqual(st['last_sync_status'], 'failed')
+        self.assertIn('stopped before it finished', st['last_sync_error'])
+
+    def test_five_minute_pass_is_not_a_full_sync(self):
+        from tracker.integrations.asana import sync as s
+        fake = FakeRedis()
+        with mock.patch.object(s, '_redis', return_value=fake):
+            s._try_lock(self.integ.id, 'activity')
+            self.assertFalse(self.state()['syncing'])
+
+    def test_full_sync_marks_running_then_success(self):
+        from tracker.integrations.asana import sync as s
+        seen = []
+        real = s._sync_projects
+
+        def spy(integration, *a, **k):
+            seen.append(Integration.objects.get(id=integration.id).last_sync_status)
+            return real(integration, *a, **k)
+        with mock.patch.object(s, '_sync_projects', side_effect=spy), \
+                mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            s.full_sync(self.integ, api=FakeApi({}))
+        self.integ.refresh_from_db()
+        self.assertEqual((seen, self.integ.last_sync_status), (['running'], 'success'))
+
+    @override_settings(**ASANA)
+    def test_status_endpoint_and_second_press(self):
+        from tracker.integrations.asana import sync as s
+        api = APIClient()
+        api.force_authenticate(self.al)
+        AsanaProjectLink.objects.create(integration=self.integ, asana_gid='9', client=self.tom)
+        fake = FakeRedis()
+        with mock.patch.object(s, '_redis', return_value=fake):
+            s._try_lock(self.integ.id, 'full')
+            data = api.get('/api/integrations/status/').data['integrations']['asana']
+            self.assertEqual((data['syncing'], data['clients_linked']), (True, 1))
+            with mock.patch('tracker.integrations.asana.views._start_sync') as started:
+                r = api.post('/api/integrations/asana/sync/')
+            self.assertEqual(r.data.get('running'), True)
+            started.assert_not_called()

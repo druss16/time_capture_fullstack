@@ -12,6 +12,7 @@ from . import views_day_review
 from . import views_capture_status
 from . import views_review_misfiled
 from . import views_agent_work
+from . import views_tracking_pause
 from . import views_outstanding_weeks
 from . import views_readiness
 from . import views_mail_domains
@@ -622,6 +623,8 @@ urlpatterns = [
     path("agent-work/", views_agent_work.agent_work_list, name="agent_work_list"),
     path("agent-work/report/", views_agent_work.agent_work_report, name="agent_work_report"),
     path("agent-presence/", views_agent_work.agent_presence_report, name="agent_presence_report"),
+    # Menu-bar "Pause Tracking" intervals → Reports' Paused column
+    path("agent/pauses/", views_tracking_pause.agent_pauses_report, name="agent_pauses_report"),
     # Reports → AI agent activity (owners only; hidden until MavOps enables it per firm)
     path("reports/ai-agents/", views_agent_work.ai_agent_report, name="ai_agent_report"),
     path("reports/ai-agents/status/", views_agent_work.ai_agent_report_status, name="ai_agent_report_status"),

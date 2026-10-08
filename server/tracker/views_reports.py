@@ -274,6 +274,41 @@ def _headcount_for_scope(org, can_see_all, forced_user_id) -> int:
     return max(n, 1)
 
 
+def _add_paused_hours(summary, org, start_utc, end_utc, can_see_all, forced_user_id):
+    """Put `paused_hours` on every employee row (and a row for anyone who
+    only paused), plus totals.paused_hours. Total and utilization are left
+    alone. Same scope rule as the rest: a member sees only their own."""
+    from django.contrib.auth import get_user_model
+    from tracker.views_tracking_pause import paused_minutes_by_user
+
+    user_ids = None if can_see_all else [forced_user_id]
+    paused = paused_minutes_by_user(org, start_utc, end_utc, user_ids)
+
+    seen = set()
+    for row in summary["rows"]:
+        seen.add(row["id"])
+        row["paused_hours"] = round(paused.get(row["id"], 0) / 60, 2)
+
+    only_paused = [uid for uid, mins in paused.items() if uid not in seen and mins > 0]
+    if only_paused:
+        users = get_user_model().objects.filter(id__in=only_paused)
+        for u in users:
+            summary["rows"].append({
+                "id": u.id,
+                "label": u.get_full_name().strip() or u.username,
+                "total_hours": 0.0,
+                "billable_hours": 0.0,
+                "non_billable_hours": 0.0,
+                "utilization_pct": 0.0,
+                "top_client": None,
+                "block_count": 0,
+                "uncategorized_hours": 0.0,
+                "paused_hours": round(paused[u.id] / 60, 2),
+            })
+
+    summary["totals"]["paused_hours"] = round(sum(paused.values()) / 60, 2)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Core aggregation
 # ──────────────────────────────────────────────────────────────────────────
@@ -864,6 +899,12 @@ def reports_summary(request):
             "uncategorized_hours": uncat_h,
         })
 
+    # Paused — time the person chose "Pause Tracking" in the agent. Shown
+    # beside their hours, never added into Total or utilization: nothing was
+    # captured while paused, and a pause is not work.
+    if group_by == "employee":
+        _add_paused_hours(summary, org, start_utc, end_utc, can_see_all, forced_user_id)
+
     # Re-sort: rows may have changed total_hours, and new rows were appended.
     summary["rows"].sort(key=lambda r: r["total_hours"], reverse=True)
 
@@ -977,6 +1018,8 @@ def reports_summary_export(request):
             round(100 * r["billable_hours"] / r["total_hours"], 1)
             if r["total_hours"] else 0.0
         )
+    if group_by == "employee":
+        _add_paused_hours(summary, org, start_utc, end_utc, can_see_all, forced_user_id)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -991,7 +1034,8 @@ def reports_summary_export(request):
         "Non-Billable Hours", "Needs Review Hours", "Utilization %",
     ]
     if group_by == "employee":
-        header.append("Top Client")
+        # Paused last, so the columns people's spreadsheets expect stay put.
+        header += ["Top Client", "Paused Hours"]
     writer.writerow(header)
 
     for r in summary["rows"]:
@@ -1001,7 +1045,7 @@ def reports_summary_export(request):
             r["utilization_pct"],
         ]
         if group_by == "employee":
-            row.append(r["top_client"] or "")
+            row += [r["top_client"] or "", r.get("paused_hours", 0)]
         writer.writerow(row)
 
     writer.writerow([])
@@ -1011,11 +1055,14 @@ def reports_summary_export(request):
         round(100 * t["billable_hours"] / grand_total_h, 1)
         if grand_total_h else 0.0
     )
-    writer.writerow([
+    total_row = [
         "TOTAL", grand_total_h, t["billable_hours"],
         t["non_billable_hours"], round(total_uncat_min / 60, 2),
         grand_util,
-    ])
+    ]
+    if group_by == "employee":
+        total_row += ["", t.get("paused_hours", 0)]
+    writer.writerow(total_row)
 
     resp = HttpResponse(buf.getvalue(), content_type="text/csv")
     fname = f"time_summary_{org.slug}_{period}_{start_date}.csv"

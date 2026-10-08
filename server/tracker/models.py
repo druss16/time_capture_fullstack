@@ -5015,6 +5015,9 @@ from tracker.models_agent_work import (  # noqa: F401, E402
     FirmFeatureFlag, AgentActivityReview,
 )
 
+# Menu-bar "Pause Tracking" intervals, for the Reports column (see the module)
+from tracker.models_tracking_pause import TrackingPause  # noqa: F401, E402
+
 # Agency project budgets — monthly hours per project (see models_project_budgets.py)
 from tracker.models_project_budgets import (  # noqa: F401, E402
     CurrentProject, OrgFeatureFlag, ProjectBudget,

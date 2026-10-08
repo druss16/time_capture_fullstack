@@ -42,7 +42,7 @@ JOBCODES = [
     jc(2, 'Chevy'),
     jc(21, 'Truck Month', 2),
     jc(3, 'Admin'),                         # overhead code, no projects -> no client
-    jc(4, 'Lincoln', qbo=True),             # linked to QBO, no projects yet -> client
+    jc(4, 'Lincoln', qbo=True),             # linked to QBO, no projects: client except for an agency
     jc(9, 'PTO', type='pto'),
 ]
 
@@ -119,10 +119,10 @@ class SyncTests(TestCase):
         self.assertEqual(stats['errors'], [])
         names = set(Client.objects.filter(org=self.org).values_list('name', flat=True))
         self.assertIn('Ford Dealers', names)
-        self.assertIn('Lincoln', names)        # QBO-linked customer
+        self.assertNotIn('Lincoln', names)     # an agency's QBO-linked customer without projects
         self.assertNotIn('Admin', names)       # overhead code
         self.assertEqual(Client.objects.filter(org=self.org, name='Chevy').count(), 1)  # matched, not duplicated
-        self.assertEqual(stats['clients']['skipped'], 1)
+        self.assertEqual(stats['clients']['skipped'], 2)
 
         spring = ExternalMatterMapping.objects.get(integration=self.integration, external_id='11')
         self.assertEqual(spring.estimated_hours, Decimal('20.00'))
@@ -146,6 +146,13 @@ class SyncTests(TestCase):
         self.assertEqual(stats['staff'], {'matched': 1, 'unmatched': 1})
         self.integration.refresh_from_db()
         self.assertEqual(self.integration.last_sync_status, 'success')
+
+    def test_other_verticals_keep_qbo_linked_customers_without_projects(self):
+        Organization.objects.filter(pk=self.org.pk).update(industry_type='cpa')
+        self.integration.refresh_from_db()
+        self.sync()
+        self.assertTrue(Client.objects.filter(org=self.org, name='Lincoln').exists())
+        self.assertFalse(Client.objects.filter(org=self.org, name='Admin').exists())
 
     def test_idempotent_and_adopts_local_project(self):
         ford = Client.objects.create(org=self.org, name='Ford Dealers')

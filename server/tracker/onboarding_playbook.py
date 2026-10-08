@@ -117,10 +117,13 @@ STEPS = [
          help='Prefer pulling from the firm\'s system (QuickBooks, Clio) over a CSV — '
               'retyping a list is how you get two of everything.'),
     Step('qbo_cleanup', 'provision', 'Vendors / partners / internal entries removed from '
-         'the imported customers', 'manual', verticals=('marketing',)),
+         'the imported customers', 'manual', verticals=('marketing',),
+         help='The QuickBooks import only makes clients of customers with projects. '
+              'Check the list anyway; prune_dormant_clients deactivates the rest.'),
     Step('campaigns', 'provision', 'Campaigns added', 'manual', verticals=('marketing',),
-         help='QuickBooks Projects don\'t come across yet. Use the web client import '
-              '(project column) or add them in the app.'),
+         help='QuickBooks sub-customers and QuickBooks Time projects come across as '
+              'projects. Add anything else with the web client import (project column) '
+              'or in the app.'),
     Step('task_types', 'provision', 'Service codes / activity types imported', 'action',
          check='task_types', action='import_task_types'),
     Step('mappings', 'provision', 'Every canonical category mapped', 'action',

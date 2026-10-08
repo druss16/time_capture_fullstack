@@ -102,6 +102,50 @@ class QboImportTests(TestCase):
         self.assertEqual(rows['11']['parent_id'], '1')
 
 
+class MarketingImportRuleTests(TestCase):
+    """An agency's hands-off import makes clients only of customers with projects."""
+    LIST = (company(1, 'Acme Motors'), sub(11, 'Acme Spring Campaign', 1),
+            company(2, 'Visa Cardholder-3'), company(3, 'Stripe Sales'))
+
+    def setUp(self):
+        self.org = Organization.objects.create(name='MTC', slug='mtc-rule', industry_type='marketing')
+        self.integ = Integration.objects.create(organization=self.org, provider='quickbooks',
+                                                is_connected=True, realm_id='R1')
+
+    def run_import(self, ids=None, customers=None):
+        with mock.patch.object(views_integrations, 'qb_api_call',
+                               return_value=answer(*(customers or self.LIST))), \
+             mock.patch.object(views_integrations, 'run_post_import_alias_derivation'):
+            result, err = views_integrations.import_qb_customers(self.org, self.integ, ids)
+        self.assertIsNone(err)
+        return result
+
+    def names(self):
+        return set(Client.objects.filter(org=self.org, imported_from='quickbooks').values_list('name', flat=True))
+
+    def test_agency_import_skips_customers_without_projects(self):
+        result = self.run_import()
+        self.assertEqual(self.names(), {'Acme Motors'})
+        reasons = {s['name']: s['reason'] for s in result['skipped']}
+        self.assertIn('No projects', reasons['Stripe Sales'])
+
+    def test_a_customer_already_in_timetracker_is_still_linked(self):
+        stripe = Client.objects.create(org=self.org, name='Stripe Sales')
+        self.run_import()
+        stripe.refresh_from_db()
+        self.assertEqual(stripe.quickbooks_id, '3')
+
+    def test_a_customer_picked_by_hand_is_imported(self):
+        self.run_import(ids=['2'], customers=(company(2, 'Visa Cardholder-3'),))
+        self.assertEqual(self.names(), {'Visa Cardholder-3'})
+
+    def test_other_verticals_import_every_customer(self):
+        Organization.objects.filter(pk=self.org.pk).update(industry_type='cpa')
+        self.org.refresh_from_db()
+        self.run_import()
+        self.assertEqual(self.names(), {'Acme Motors', 'Visa Cardholder-3', 'Stripe Sales'})
+
+
 class TwinCleanupTests(TestCase):
     def setUp(self):
         self.org = Organization.objects.create(name='MTC', slug='mtc-twins')

@@ -249,6 +249,10 @@ def _sync_clients(integration, plan, stats) -> dict:
         by_name.setdefault(_norm(c.name), c)
 
     has_projects = {customer for customer, _jc, _r in plan['projects'].values()}
+    # An agency's customers without projects are vendors and one-off payers,
+    # not clients; elsewhere a customer linked to QuickBooks is a client.
+    from tracker.industry_categories import clients_need_projects
+    linked_counts = not clients_need_projects(org.industry_type)
     out = {}
     for jid, jc in plan['customers'].items():
         name = (jc.get('name') or '').strip()
@@ -259,7 +263,8 @@ def _sync_clients(integration, plan, stats) -> dict:
         else:
             client = by_name.get(_norm(name))
             if client is None:
-                worth_a_client = jid in has_projects or bool(jc.get('connect_with_quickbooks'))
+                worth_a_client = jid in has_projects or (
+                    linked_counts and bool(jc.get('connect_with_quickbooks')))
                 if not name or not worth_a_client or not integration.auto_create_internal_records:
                     stats['skipped'] += 1
                     continue

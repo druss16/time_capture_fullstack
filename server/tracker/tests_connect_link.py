@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from tracker.models import Client, Integration, OrganizationMembership
+from tracker.models import Client, Integration, Organization, OrganizationMembership
 from tracker.models_onboarding_console import ConnectLink
 from tracker.models_task_type_sets import ExternalStaffMapping
 from tracker.services import connect_link
@@ -177,6 +177,10 @@ class ConnectLinkTests(ConsoleBase):
 class ImportAllCustomersTests(ConsoleBase):
     def test_none_imports_every_active_customer(self):
         p = self.make_project()
+        # A CPA firm: every customer is a client. (An agency's import keeps only
+        # customers with projects; see qbo_subcustomer_test.MarketingImportRuleTests.)
+        Organization.objects.filter(pk=p.organization_id).update(industry_type='cpa')
+        p.organization.refresh_from_db()
         integ = Integration.objects.create(organization=p.organization, provider='quickbooks',
                                            is_connected=True, realm_id='R1')
         data = {'QueryResponse': {'Customer': [

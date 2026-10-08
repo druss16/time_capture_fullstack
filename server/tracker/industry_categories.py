@@ -127,6 +127,23 @@ INDUSTRY_PRIMARY_INTEGRATIONS = {
 INDUSTRY_LOCAL_PROJECTS = {'marketing'}
 
 
+# Verticals whose real clients are the customers that have projects.
+#
+# An agency's QuickBooks customer list is everyone it ever invoiced or was paid
+# through: vendors, card processors ("Visa Cardholder-3"), payment rails
+# ("Stripe Sales"), one-off individuals, "Sample Customer". The customers it
+# does tracked work for are the ones with projects (QuickBooks sub-customers /
+# QuickBooks Time child jobcodes). One agency with 25-30 clients was imported
+# as 412. A CPA firm is the opposite: every customer is a client and few have
+# projects, so this is per vertical.
+INDUSTRY_CLIENTS_NEED_PROJECTS = {'marketing'}
+
+
+def clients_need_projects(industry_type: str) -> bool:
+    """True when an automatic import should only make clients of customers with projects."""
+    return (industry_type or 'general') in INDUSTRY_CLIENTS_NEED_PROJECTS
+
+
 def tracks_local_projects(industry_type: str) -> bool:
     """True when this vertical's projects are created and kept in TimeTracker."""
     return (industry_type or 'general') in INDUSTRY_LOCAL_PROJECTS

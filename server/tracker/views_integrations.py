@@ -623,6 +623,13 @@ def import_qb_customers(org, integration, customer_ids=None):
         clients_by_qb_id[qb_id] = client
         return client
 
+    # An agency's real clients are the customers with projects; the rest of its
+    # QuickBooks list is vendors, card processors and one-off payers. Only the
+    # hands-off import applies this: a customer picked by hand is imported.
+    from tracker.industry_categories import clients_need_projects
+    needs_projects = customer_ids is None and clients_need_projects(org.industry_type)
+    with_projects = {top_of(i) for i in by_id if _qb_parent_id(by_id[i])}
+
     wanted = [str(c['Id']) for c in customers]
     for qb_id in sorted(wanted, key=lambda i: bool(_qb_parent_id(by_id[i]))):  # companies first
         customer = by_id[qb_id]
@@ -630,6 +637,12 @@ def import_qb_customers(org, integration, customer_ids=None):
         try:
             top = top_of(qb_id)
             if top == qb_id:
+                if (needs_projects and qb_id not in with_projects
+                        and not Client.objects.filter(org=org).filter(
+                            Q(quickbooks_id=qb_id) | Q(name__iexact=name)).exists()):
+                    skipped.append({'id': qb_id, 'name': name,
+                                    'reason': 'No projects in QuickBooks; not a client'})
+                    continue
                 company_client(qb_id)
                 continue
             # A sub-customer: a project of its company, never a client of its own.

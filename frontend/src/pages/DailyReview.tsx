@@ -257,12 +257,11 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   refreshTick: number;
   onChanged: () => void;
   /** Reports what is waiting here, so the page headline counts it too. */
-  onQueue?: (count: number, minutes: number, billableMinutes: number) => void;
+  onQueue?: (count: number, minutes: number) => void;
 }) => {
   const terms = useTerminology();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
-  const [billable, setBillable] = useState(0);
   // Capped for the same reason as the timesheet banner: a lane is a queue you
   // work down, not a wall you scroll past.
   const [shown, setShown] = useState(8);
@@ -280,8 +279,8 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
   const load = useCallback(() => {
     setNote(null);
     fetchQueue()
-      .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); setBillable(d?.billable_minutes ?? 0); })
-      .catch(() => { setRows([]); setTotal(0); setBillable(0); });
+      .then((d: any) => { setRows(d?.blocks ?? []); setTotal(d?.total_minutes ?? 0); })
+      .catch(() => { setRows([]); setTotal(0); });
   }, [fetchQueue]);
 
   // Bring the lane up to date without shuffling it under someone working it:
@@ -300,7 +299,6 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
           return [...kept, ...fresh.filter((b) => !known.has(b.id))];
         });
         setTotal(d?.total_minutes ?? 0);
-        setBillable(d?.billable_minutes ?? 0);
       })
       .catch(() => {});
   }, [fetchQueue]);
@@ -327,7 +325,7 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
     return [...byKey.values()];
   }, [rows]);
 
-  useEffect(() => { onQueue?.(groups.length, total, billable); }, [groups.length, total, billable, onQueue]);
+  useEffect(() => { onQueue?.(groups.length, total); }, [groups.length, total, onQueue]);
 
   if (groups.length === 0) return null;
 
@@ -361,9 +359,6 @@ const MatterLane = ({ date, range, refreshTick, onChanged, onQueue }: {
               // it; it re-syncs, in place, with the page's next reload.
               setRows((prev) => prev.filter((x) => !r.ids.includes(x.id)));
               setTotal((prev) => Math.max(0, prev - r.minutes));
-              // Which of the row's blocks were billable isn't known here; the
-              // next sync corrects it. Never let it exceed what's left.
-              setBillable((prev) => Math.min(prev, Math.max(0, total - r.minutes)));
               if (folderFiled > 0) {
                 setNote(`Also filed ${folderFiled} more from the same folder`);
                 sync();
@@ -907,18 +902,18 @@ export default function DailyReview() {
   // project it is not sorted yet, so the headline must not say "all caught up"
   // above an amber lane of it. Its minutes are already inside the client totals
   // (it is committed time), so they move from sorted to needs-you, never added.
-  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0, billableMinutes: 0 });
-  const onProjectQueue = useCallback((count: number, minutes: number, billableMinutes: number) =>
-    setProjectQueue((q) => (q.count === count && q.minutes === minutes && q.billableMinutes === billableMinutes
-      ? q : { count, minutes, billableMinutes })), []);
+  const [projectQueue, setProjectQueue] = useState({ count: 0, minutes: 0 });
+  const onProjectQueue = useCallback((count: number, minutes: number) =>
+    setProjectQueue((q) => (q.count === count && q.minutes === minutes
+      ? q : { count, minutes })), []);
   const needsYouCount = lanes.needsYou.count + projectQueue.count;
   const autoFiled = lanes.certain.minutes > 0;
 
   // ── Progress hero numbers: how much of the day is sorted vs still needs you ──
-  // Header: project-pending time counts as Needs review, and comes out of
-  // the bucket it already sits in (billable, or the hidden non-billable).
-  const projectBillableHours = Math.min(projectQueue.billableMinutes / 60, billableHours);
-  const reviewHours = needsReviewHours + projectQueue.minutes / 60;
+  // Header: time with a billable client counts as Billable even before it has
+  // a project. Needs review is only time with no client yet; the minutes still
+  // waiting on a project are shown as a note under it, not counted in it.
+  const reviewHours = needsReviewHours;
   const totalMin = Math.round(totalHours * 60);
   // Three parts of one bar: sorted, client known but no project yet, and no
   // client yet. Project time stays with its client — it is filed, just not to
@@ -1090,15 +1085,14 @@ export default function DailyReview() {
               <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
             </button>
 
-            {/* Stats — Billable, Needs review, Total. Needs review is
-                everything in the Needs-you card: time with no client AND time
-                with a client but no project yet. That project time is moved
-                OUT of Billable (it is already inside billable_hours), never
-                added twice — the double count read 26m + 41m against a 43m
-                total. Total also holds non-billable time, which is not shown. */}
+            {/* Stats — Billable, Needs review, Total. Billable is all time on
+                a billable client, project or not. Needs review is time with no
+                client yet. The minutes still needing a project sit under it as
+                a note — already inside Billable/Total, so never added again.
+                Total also holds non-billable time, which is not shown. */}
             <div className="flex items-center gap-4 pl-3 border-l border-border/60">
               <StatCell
-                value={formatHours(Math.max(0, billableHours - projectBillableHours))}
+                value={formatHours(billableHours)}
                 label="Billable"
                 valueClass="text-primary"
               />

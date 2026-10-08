@@ -9285,8 +9285,12 @@ def agent_error_report(request):
         f"host={error.hostname} | v={error.app_version}"
     )
 
-    maybe_send_alert(error)
-    
+    # The error is stored; an alert that fails must not turn that into a 500.
+    try:
+        maybe_send_alert(error)
+    except Exception:
+        logger.exception("[AGENT-ERROR] alert failed for id=%s", error.id)
+
     return Response({"ok": True, "error_id": error.id})
 
 
@@ -9496,7 +9500,15 @@ from datetime import timedelta
 
 def maybe_send_alert(error):
     '''Send email for critical errors.'''
-    CRITICAL_TYPES = ['tracking_fatal', 'tracking_loop_critical']
+    # Imported here: AgentError is not a module-level name in this file, so
+    # this function raised NameError — after the error was stored, as a 500 —
+    # and no critical alert was ever emailed.
+    from tracker.models import AgentError
+    # startup_stall / menu_bar_frozen: the agent's own watchdogs caught it
+    # stuck (startup_watchdog.py / menubar_watchdog.py) — the failure a
+    # customer would otherwise discover before we do.
+    CRITICAL_TYPES = ['tracking_fatal', 'tracking_loop_critical',
+                      'startup_stall', 'menu_bar_frozen']
     
     if error.error_type not in CRITICAL_TYPES:
         return

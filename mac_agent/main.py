@@ -1164,11 +1164,16 @@ def detect_client_in_window(title: str, file_path: str = None) -> Optional[dict]
 _error_report_cache = {}  # Prevent spamming same error
 ERROR_REPORT_COOLDOWN = 300  # 5 minutes between same errors
 
+# Sent even with no device key: the agent is stuck, maybe before pairing.
+_KEYLESS_ERROR_TYPES = {"startup_stall", "menu_bar_frozen"}
+
+
 def report_error_to_backend(
     error_type: str, 
     error_msg: str, 
     traceback_str: str = None,
-    context: dict = None
+    context: dict = None,
+    wait: bool = False,
 ):
     """
     Send error report to backend for remote debugging.
@@ -1180,7 +1185,9 @@ def report_error_to_backend(
         context: Additional context (current_sig, idle state, etc.)
     """
     api_key = config.get("api_key") or API_KEY
-    if not api_key or not API_BASE:
+    # /agent/errors/ is keyed by device_id and needs no key, so the reports
+    # that matter most — a Mac stuck before it ever paired — still get sent.
+    if not API_BASE or (not api_key and error_type not in _KEYLESS_ERROR_TYPES):
         return False
     
     # Rate limit - don't spam same error
@@ -1214,7 +1221,8 @@ def report_error_to_backend(
                 data=json.dumps(payload).encode("utf-8"), 
                 method="POST"
             )
-            req.add_header("Authorization", f"DeviceKey {api_key}")
+            if api_key:
+                req.add_header("Authorization", f"DeviceKey {api_key}")
             req.add_header("Content-Type", "application/json")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 log(f"[ERROR-REPORT] Sent to backend: {error_type}")
@@ -1227,7 +1235,10 @@ def report_error_to_backend(
             log(f"[ERROR-REPORT] Failed to send: {e}")
         return False
     
-    # Send async to not block
+    # wait=True: the caller is about to exit (a stall restart) and a
+    # background send would die with the process, unsent.
+    if wait:
+        return _send()
     threading.Thread(target=_send, daemon=True).start()
     return True
 
@@ -3627,6 +3638,7 @@ def _start_startup_watchdog():
                 stacks,
                 {"stage": stage, "elapsed_s": int(elapsed), "restart": restart,
                  "app_version": APP_VERSION},
+                wait=True,
             )
         except Exception as e:
             log(f"[STARTUP] could not report the stall: {e}")
@@ -3635,6 +3647,7 @@ def _start_startup_watchdog():
         except Exception:
             pass
         if restart:
+            time.sleep(8)   # let the log upload (a background thread) finish
             os._exit(1)   # non-zero → LaunchAgent KeepAlive starts us again
 
     wd = _sw.StartupWatchdog(on_stall=on_stall, log=log)
@@ -3643,6 +3656,46 @@ def _start_startup_watchdog():
             f"({wd.previous.get('count')}x)")
     wd.start()
     return wd
+
+
+def _start_menubar_watchdog():
+    """Main thread only, just before the menu bar's run loop starts. If the
+    menu bar stops ticking for 2 min: log every thread's stack, report
+    'menu_bar_frozen', restart. Returns what must stay referenced."""
+    try:
+        import menubar_watchdog as _mw
+        import startup_watchdog as _sw
+    except Exception as e:
+        log(f"[GUI] menu bar watchdog not available: {e}")
+        return None
+
+    def on_frozen(stale):
+        stacks = _sw.all_thread_stacks()
+        log(f"[GUI] ⚠️ Menu bar not responding for {int(stale)}s — restarting", level="error")
+        log(f"[GUI] Thread stacks:\n{stacks}", level="error")
+        try:
+            report_error_to_backend(
+                "menu_bar_frozen",
+                f"Menu bar (main thread) not responding for {int(stale)}s",
+                stacks, {"stale_s": int(stale), "app_version": APP_VERSION}, wait=True)
+        except Exception as e:
+            log(f"[GUI] could not report the freeze: {e}")
+        try:
+            ship_logs_to_backend(tail_lines=200, trigger="menu_bar_frozen")
+        except Exception:
+            pass
+        time.sleep(8)   # let the log upload finish
+        os._exit(1)     # non-zero → LaunchAgent KeepAlive starts us again
+
+    try:
+        wd = _mw.MainThreadWatchdog(on_frozen=on_frozen)
+        refs = _mw.install_main_thread_timer(wd)
+        wd.start_checker()
+        log("[GUI] Menu bar watchdog on")
+        return (wd, refs)
+    except Exception as e:
+        log(f"[GUI] menu bar watchdog failed to start: {e}")
+        return None
 
 
 def run_agent():
@@ -5093,6 +5146,7 @@ def run_agent():
     if gui_menu_bar and GUI_AVAILABLE:
         from AppKit import NSApp
         log("[GUI] Starting GUI event loop...")
+        _menubar_wd = _start_menubar_watchdog()   # keep the timer referenced
         try:
             gui_menu_bar.run()
         except KeyboardInterrupt:

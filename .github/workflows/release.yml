@@ -79,6 +79,7 @@ jobs:
             --add-data "setup_checklist.py:." \
             --add-data "pause_state.py:." \
             --add-data "startup_watchdog.py:." \
+            --add-data "menubar_watchdog.py:." \
             --add-data "inference:inference" \
             --hidden-import=timetracker_gui \
             --hidden-import=notifications \
@@ -101,6 +102,7 @@ jobs:
             --hidden-import=setup_checklist \
             --hidden-import=pause_state \
             --hidden-import=startup_watchdog \
+            --hidden-import=menubar_watchdog \
             --hidden-import=ApplicationServices \
             --hidden-import=CoreMediaIO \
             --hidden-import=inference \

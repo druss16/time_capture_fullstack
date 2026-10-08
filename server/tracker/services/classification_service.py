@@ -850,13 +850,29 @@ class ClassificationService:
                             f"review={force_review}"
                         )
                     else:
-                        # v1.3.41 default: keep the agent's pick, just flag it.
-                        logger.info(
-                            f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
-                            f"vs classifier={decision.client_id} at "
-                            f"{(decision.confidence or 0):.2f} — keeping agent's pick"
-                        )
-                        # Don't write block.client_id — keep agent's choice
+                        # Default: keep the agent's pick and flag it, EXCEPT when
+                        # the block's own title names the classifier's client and
+                        # not the agent's. A stale tray client (the first event's)
+                        # must not beat a window that says another client's full
+                        # name: "Easterns Automotive Group Scope Addendum 6-1 -
+                        # Google Docs" was committed to Direct Exteriors because
+                        # the block was opened while the tray said Direct Exteriors.
+                        named = self._title_seconds_naming(
+                            block, (old_client_id, decision.client_id))
+                        if named[decision.client_id] > named[old_client_id]:
+                            block.client_id = decision.client_id
+                            logger.info(
+                                f"[CLASSIFY-DISAGREE] Block {block.pk}: title names "
+                                f"classifier's client {decision.client_id}, not agent's "
+                                f"{old_client_id} — classifier wins"
+                            )
+                        else:
+                            logger.info(
+                                f"[CLASSIFY-DISAGREE] Block {block.pk}: agent={old_client_id} "
+                                f"vs classifier={decision.client_id} at "
+                                f"{(decision.confidence or 0):.2f} — keeping agent's pick"
+                            )
+                            # Don't write block.client_id — keep agent's choice
                 else:
                     block.client_id = decision.client_id
             else:
@@ -2051,6 +2067,36 @@ class ClassificationService:
         )
         self._internal_tax_client_id = internal_tax.id if internal_tax else None
         return self._internal_tax_client_id
+
+    def _title_seconds_naming(self, block, client_ids) -> dict:
+        """{client_id: seconds of this block whose window title names that client}.
+
+        Read from the block's raw events, where the real titles are (a Chrome
+        block's own title is often just "Google Chrome"); the block's title
+        stands in when there are no events. Names and aliases are matched with
+        the server's own matcher, so a short or generic alias can't count.
+        """
+        from tracker.models import Client, RawEvent
+        out = {cid: 0.0 for cid in client_ids}
+        clients = {c.id: c for c in Client.objects.filter(id__in=[c for c in client_ids if c])}
+        needles = {
+            cid: [n for n in [c.name] + list(c.aliases or []) if n and self._alias_is_safe(n)]
+            for cid, c in clients.items()
+        }
+        spans = [
+            (t, max((e - s).total_seconds(), 1.0))
+            for t, s, e in RawEvent.objects.filter(block=block)
+            .values_list('window_title', 'start_ts', 'end_ts') if t and s and e
+        ]
+        if not spans:
+            t = getattr(block, 'window_title', None) or getattr(block, 'title', None)
+            if t:
+                spans = [(t, float((block.minutes or 1) * 60))]
+        for title, secs in spans:
+            for cid, ns in needles.items():
+                if any(self._alias_matches_safely(n, title) for n in ns):
+                    out[cid] += secs
+        return out
 
     def _arbitrate_disagreement(self, block, agent_client_id, classifier_client_id):
         """

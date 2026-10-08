@@ -163,13 +163,13 @@ def asana_projects(request):
         if link is None:
             return error_response('Unknown Asana project.', 404)
         if project_id in (None, '', 0):
-            link.project, link.link_source = None, 'manual'
+            link.project, link.client, link.link_source = None, None, 'manual'
         else:
             project = Project.objects.filter(org=org, id=project_id).first()
             if project is None:
                 return error_response('Project not found for this firm.', 404)
-            link.project, link.link_source = project, 'manual'
-        link.save(update_fields=['project', 'link_source', 'updated_at'])
+            link.project, link.client_id, link.link_source = project, project.client_id, 'manual'
+        link.save(update_fields=['project', 'client', 'link_source', 'updated_at'])
         return Response({'asana_gid': gid, 'project_id': link.project_id})
 
     rows = [{
@@ -178,10 +178,11 @@ def asana_projects(request):
         'archived': link.archived,
         'project_id': link.project_id,
         'project_name': link.project.name if link.project else None,
-        'client_name': link.project.client.name if link.project and link.project.client else None,
+        'client_name': (link.project.client.name if link.project and link.project.client
+                        else link.client.name if link.client else None),
         'link_source': link.link_source,
     } for link in AsanaProjectLink.objects.filter(integration=integration)
-        .select_related('project__client').order_by('archived', 'asana_name')]
+        .select_related('project__client', 'client').order_by('archived', 'asana_name')]
     # What an unlinked one can be linked to: the firm's live projects.
     options = [{'id': p.id, 'name': p.name, 'client_name': p.client.name if p.client else ''}
                for p in Project.objects.filter(org=org, is_active=True).select_related('client')
@@ -200,6 +201,8 @@ def asana_status(integration) -> dict:
         return {
             'projects': live.count(),
             'projects_linked': live.filter(project__isnull=False).count(),
+            # Client known, project not: Asana time gets the client, asks the project.
+            'clients_linked': live.filter(project__isnull=True, client__isnull=False).count(),
             'people_linked': ExternalStaffMapping.objects.filter(integration=integration).count(),
             'activity_7d': AsanaActivity.objects.filter(
                 integration=integration, at__gte=timezone.now() - timedelta(days=7)).count(),

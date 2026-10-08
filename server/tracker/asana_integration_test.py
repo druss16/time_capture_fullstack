@@ -127,9 +127,8 @@ class SyncTests(Base):
         links = dict(AsanaProjectLink.objects.values_list('asana_gid', 'project_id'))
         self.assertEqual(links['111111'], self.reskin.id)
         self.assertEqual(links['222222'], self.donut.id)
-        self.assertIsNone(links['333333'])
+        self.assertIsNone(links['333333'])          # "Social" is two clients' project
         self.assertIsNone(links['444444'])
-        self.assertEqual(stats['ambiguous'], 1)
         self.assertEqual(Project.objects.count(), before)
 
     def test_hand_made_link_survives_sync(self):
@@ -299,3 +298,67 @@ class ViewTests(Base):
         AsanaProjectLink.objects.create(integration=self.integ, asana_gid='2')
         data = self.api.get('/api/integrations/status/').data['integrations']['asana']
         self.assertEqual((data['connected'], data['projects'], data['projects_linked']), (True, 2, 1))
+
+
+class ClientPrefixMatchingTests(Base):
+    """More Than Cars names Asana projects "Client: Project" with the client in
+    its spoken short form. Real names from their workspace (2026-10-08)."""
+    def setUp(self):
+        super().setUp()
+        self.eastern = Client.objects.create(org=self.org, name='Easterns Automotive Group')
+        self.btoy = Client.objects.create(org=self.org, name='Beaver Toyota')
+        self.bmaz = Client.objects.create(org=self.org, name='Beaver Mazda')
+        self.cdp = Project.objects.create(org=self.org, client=self.tom,
+                                          name='Tom Gill Buick GMC CDP Planning and Execution')
+        self.guide = Project.objects.create(org=self.org, client=self.btoy, name='Beaver Toyota Brand Guide')
+
+    def sync(self, *names):
+        rows = [{'gid': str(100000 + i), 'name': n} for i, n in enumerate(names)]
+        _sync_projects(self.integ, FakeApi({'projects': rows}), 'ws1',
+                       {'seen': 0, 'linked': 0, 'unlinked': 0, 'ambiguous': 0})
+        return {l.asana_name: (l.project_id, l.client_id, l.link_source)
+                for l in AsanaProjectLink.objects.all()}
+
+    def test_short_client_then_project(self):
+        got = self.sync('Tom Gill: CDP Planning & Execution', 'Beaver Toyota: Brand Guide',
+                        'Tom Gill: Website Reskin')
+        self.assertEqual(got['Tom Gill: CDP Planning & Execution'], (self.cdp.id, self.tom.id, 'name'))
+        self.assertEqual(got['Beaver Toyota: Brand Guide'], (self.guide.id, self.btoy.id, 'name'))
+        # TGBGMC Website Reskin, via the client-abbreviation strip
+        self.assertEqual(got['Tom Gill: Website Reskin'], (self.reskin.id, self.tom.id, 'name'))
+
+    def test_client_only_when_no_project_fits(self):
+        got = self.sync('Tom Gill: Mirror Hang Tag and Reorder- October 2023',
+                        'Easterns Auto: Monthly Nissan New Cars Offer Ads',
+                        'Beaver Toyota:Ameris Step and Repeat')
+        self.assertEqual(got['Tom Gill: Mirror Hang Tag and Reorder- October 2023'],
+                         (None, self.tom.id, 'client'))
+        self.assertEqual(got['Easterns Auto: Monthly Nissan New Cars Offer Ads'],
+                         (None, self.eastern.id, 'client'))
+        self.assertEqual(got['Beaver Toyota:Ameris Step and Repeat'], (None, self.btoy.id, 'client'))
+
+    def test_ambiguous_or_unknown_client_links_nothing(self):
+        got = self.sync('Beaver: Flags', 'ASOTU CON 2025', 'Frank Leta- Ukraine Fundraiser Graphics')
+        for name in got:
+            self.assertEqual(got[name], (None, None, ''), name)
+
+    def test_desktop_time_gets_the_client_and_still_asks_the_project(self):
+        self.sync('Tom Gill: Mirror Hang Tag and Reorder- October 2023')
+        link = AsanaProjectLink.objects.get()
+        ExternalStaffMapping.objects.create(integration=self.integ, external_id='u1', user=self.al)
+        t0 = AttributionTests.T0
+        AsanaActivity.objects.create(integration=self.integ, story_gid='s1', user=self.al,
+                                     at=t0 + timedelta(minutes=5), client=self.tom,
+                                     asana_project_gid=link.asana_gid, kind='comment_added')
+        b = Block.objects.create(org=self.org, user=self.al, hostname='mac', device_id='d1',
+                                 start=t0, end=t0 + timedelta(minutes=20), minutes=12,
+                                 app_name='Asana', title='Asana', window_title='Asana',
+                                 classification_state='committed', is_categorized=True,
+                                 is_billable=True, client=self.ford, categorized_by='ai',
+                                 category_hours={'Project Management': 0.2})
+        with mock.patch('tracker.services.matter_attribution.timezone.now',
+                        return_value=t0 + timedelta(hours=1)):
+            stats = attribute_matters_for_org(self.org, days=2)
+        b.refresh_from_db()
+        self.assertEqual((b.client_id, b.project_id), (self.tom.id, None))
+        self.assertEqual(stats['by_asana_activity_client'], 1)

@@ -13,7 +13,6 @@ linked project: the tasks modified since the last pass, then each one's
 stories since then.
 """
 import logging
-import re
 from datetime import timedelta
 
 from celery import shared_task
@@ -36,10 +35,6 @@ INITIAL_LOOKBACK = timedelta(days=2)
 CLOCK_SKEW = timedelta(minutes=2)
 # A full sync (projects + people) at most this often; activity every pass.
 FULL_SYNC_EVERY = timedelta(minutes=60)
-
-
-def _norm(name: str) -> str:
-    return ' '.join(re.sub(r'[^a-z0-9]+', ' ', (name or '').lower()).split())
 
 
 def _gid(value) -> str:
@@ -101,13 +96,18 @@ def _workspace(integration, api) -> str:
 
 
 def _sync_projects(integration, api, workspace, stats):
-    """Every Asana project in the workspace, linked to the TimeTracker project
-    of the same name when exactly one has it. A link made by hand stands."""
+    """Every Asana project in the workspace, linked to its TimeTracker project
+    — or to its client alone — by name (see matching.py). A link made by hand
+    stands."""
+    from tracker.integrations.asana.matching import Matcher
+    from tracker.models import Client
     org = integration.organization
     now = timezone.now()
-    by_name = {}
-    for p in Project.objects.filter(org=org).only('id', 'name', 'is_active'):
-        by_name.setdefault(_norm(p.name), []).append(p)
+    matcher = Matcher(
+        Client.objects.filter(org=org, is_active=True)
+        .only('id', 'name', 'aliases', 'email', 'alias_sources'),
+        Project.objects.filter(org=org).only('id', 'name', 'client_id', 'is_active'))
+    stats.setdefault('client_only', 0)
     links = {link.asana_gid: link for link in AsanaProjectLink.objects.filter(integration=integration)}
 
     for row in api.paginated('projects', workspace=workspace, opt_fields='name,archived'):
@@ -121,14 +121,12 @@ def _sync_projects(integration, api, workspace, stats):
         link.archived = bool(row.get('archived'))
         link.last_seen_in_source = now
         if link.link_source != 'manual':
-            same = by_name.get(_norm(name), [])
-            live = [p for p in same if p.is_active] or same
-            if len(live) == 1:
-                link.project, link.link_source = live[0], 'name'
-            else:
-                if len(live) > 1:
-                    stats['ambiguous'] += 1
-                link.project, link.link_source = None, ''
+            project, client, how = matcher.match(name)
+            link.project = project
+            link.client_id = project.client_id if project else (client.id if client else None)
+            link.link_source = how
+        if link.client_id and not link.project_id:
+            stats['client_only'] += 1
         try:
             with transaction.atomic():
                 link.save()
@@ -191,8 +189,9 @@ def sync_activity(integration, *, api=None) -> dict:
     if not people:
         return stats
     now = timezone.now()
-    for link in AsanaProjectLink.objects.filter(integration=integration, archived=False,
-                                                project__isnull=False):
+    from django.db.models import Q
+    for link in AsanaProjectLink.objects.filter(integration=integration, archived=False) \
+            .filter(Q(project__isnull=False) | Q(client__isnull=False)):
         since = (link.activity_cursor or (now - INITIAL_LOOKBACK)) - CLOCK_SKEW
         stats['projects'] += 1
         try:
@@ -216,7 +215,8 @@ def sync_activity(integration, *, api=None) -> dict:
                     _, made = AsanaActivity.objects.get_or_create(
                         integration=integration, story_gid=_gid(story.get('gid')),
                         defaults=dict(user_id=who, at=at, asana_project_gid=link.asana_gid,
-                                      project_id=link.project_id, task_gid=tgid,
+                                      project_id=link.project_id, client_id=link.client_id,
+                                      task_gid=tgid,
                                       task_name=(task.get('name') or '')[:500],
                                       kind=(story.get('resource_subtype') or '')[:64]))
                     stats['recorded'] += int(made)

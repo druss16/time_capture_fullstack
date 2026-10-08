@@ -247,6 +247,31 @@ FREE_EMAIL_DOMAINS = {
 }
 
 
+def is_platform_domain(domain: str) -> bool:
+    """A free mailbox provider or a big platform/SaaS vendor — or a subdomain
+    of one. A client whose QuickBooks email is "lamurphy@google.com" is a
+    person with a Google address, not Google: deriving "google.com" and
+    "google" from it booked every Gmail, Calendar and Merchant Center window
+    at More Than Cars to that client (2026-10-07)."""
+    from tracker.services.mail_domain_noise import VENDOR_DOMAINS
+    d = (domain or '').strip().lower().strip('.')
+    if d.startswith('www.'):
+        d = d[4:]
+    return any(d == p or d.endswith('.' + p) for p in FREE_EMAIL_DOMAINS | VENDOR_DOMAINS)
+
+
+def platform_email_aliases(email: str) -> set:
+    """The aliases an email at a platform domain WOULD have yielded — the full
+    domain and its host — so a heal can find ones derived before the guard."""
+    if not email or "@" not in email:
+        return set()
+    domain = email.split("@")[-1].strip().lower().strip(".")
+    if not is_platform_domain(domain):
+        return set()
+    labels = domain.split(".")
+    return {domain} | ({labels[-2]} if len(labels) >= 2 else set())
+
+
 def _email_candidates(email: str) -> list[tuple[str, float]]:
     """Generate (alias, confidence) candidates from a client email's domain.
 
@@ -263,7 +288,7 @@ def _email_candidates(email: str) -> list[tuple[str, float]]:
     domain = email.split("@")[-1].strip().lower().strip(".")
     if not domain or "." not in domain:
         return out
-    if domain in FREE_EMAIL_DOMAINS:
+    if is_platform_domain(domain):
         return out
 
     # Full domain with TLD — safe as-is; the dotted form won't fuzzy-match prose.

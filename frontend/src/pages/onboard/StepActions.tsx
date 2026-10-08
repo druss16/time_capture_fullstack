@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2, Sparkles, Upload } from "lucide-react";
 import {
-  onboardApi, type ConnectLinkInfo, type ConnectProvider, type IssuedInvite, type KitFile,
+  onboardApi, type AsanaLinkGroup, type AsanaLinkReport, type ConnectLinkInfo, type ConnectProvider, type IssuedInvite, type KitFile,
   type ProjectDetail, type RosterRow,
 } from "./api";
 import {
@@ -29,6 +29,7 @@ export default function ActionDialog({ action, ...p }: Props & { action: string 
     case "deploy_kit": return <DeployKitDialog {...p} />;
     case "intake": return <IntakeDialog {...p} />;
     case "connect_link": return <ConnectLinkDialog {...p} />;
+    case "asana_links": return <AsanaLinksDialog {...p} />;
     case "derive_aliases": return <AliasesDialog {...p} />;
     case "clio_trigger": return <ClioTriggerDialog {...p} />;
     case "go_live": return <GoLiveDialog {...p} />;
@@ -784,6 +785,98 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
         <ErrorNote message={err} />
         <div className="flex justify-end"><button className={secondaryBtnClass} onClick={onClose}>Close</button></div>
       </div>
+    </Modal>
+  );
+}
+
+
+// ── Asana link report ──────────────────────────────────────────────────────
+// Unmatched Asana projects, grouped by the client name they are written under
+// ("DeNooyer — 19 projects"). One choice per group maps the name and relinks
+// every project in it. Not a client alias: it only reads Asana project names.
+
+function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
+  const [r, setR] = useState<AsanaLinkReport | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => { onboardApi.asanaLinks(project.id).then(setR).catch((e) => setErr(msg(e))); }, [project.id]);
+
+  const decide = async (g: AsanaLinkGroup, body: { client_id?: number | null; ignore?: boolean; clear?: boolean }) => {
+    setBusy(g.prefix); setErr(null); setNote(null);
+    try {
+      const res = await onboardApi.mapAsanaName(project.id, { prefix: g.prefix, label: g.label, ...body });
+      setR(res); onChanged();
+      setNote(body.clear ? `Cleared “${g.label}”.` : `“${g.label}” applied — ${res.changed} Asana project${res.changed === 1 ? "" : "s"} relinked.`);
+    } catch (e) { setErr(msg(e)); } finally { setBusy(null); }
+  };
+
+  return (
+    <Modal title="Asana projects — link report" onClose={onClose}
+      subtitle="How the firm's Asana projects matched its clients and projects. Unmatched ones are grouped by the client name they're written under; one choice fixes the whole group. This only reads Asana project names — it never changes a client's aliases.">
+      {!r && !err && <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Reading…</div>}
+      <ErrorNote message={err} />
+      {r && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 text-sm">
+            <Pill tone={r.matched_pct >= 90 ? "green" : "amber"}>{r.matched_pct}% matched</Pill>
+            <Pill tone="green">{r.linked_project} to a project</Pill>
+            <Pill>{r.linked_client} to a client</Pill>
+            {r.ignored > 0 && <Pill>{r.ignored} not clients</Pill>}
+            <Pill tone="amber">{r.unlinked} unmatched</Pill>
+            <Pill>{r.live} live Asana projects</Pill>
+          </div>
+          {!r.has_team_or_field && (
+            <p className="text-xs text-slate-500">
+              Asana didn't share teams or a “Client” field for these projects. If the firm organises Asana by team per client, give the Asana app the teams:read and custom_fields:read scopes and reconnect — every project then gets its client from Asana itself.
+            </p>
+          )}
+          {note && <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{note}</div>}
+          {r.groups.length === 0 ? (
+            <p className="text-sm text-slate-600">Every live Asana project is matched.</p>
+          ) : (
+            <div className="max-h-[55vh] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
+              {r.groups.map((g) => (
+                <div key={g.prefix || "(none)"} className="space-y-2 p-3">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-semibold text-slate-800">{g.label}</span>
+                    <span className="text-sm text-slate-500">
+                      {g.count} project{g.count === 1 ? "" : "s"}
+                      {g.client_only > 0 && ` · ${g.client_only} already on ${g.current_client ?? "a client"} (project not matched)`}
+                    </span>
+                    {g.mapped && (
+                      <Pill tone="green">{g.mapped.ignore ? "Not a client" : `→ ${g.mapped.client_name}`}</Pill>
+                    )}
+                  </div>
+                  <div className="truncate text-xs text-slate-500" title={g.examples.join(" · ")}>{g.examples.join(" · ")}</div>
+                  {g.fixable && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {g.suggestions.map((c) => (
+                        <button key={c.id} className={secondaryBtnClass} disabled={!!busy}
+                          onClick={() => decide(g, { client_id: c.id })}>{c.name}</button>
+                      ))}
+                      <select className={inputClass + " w-auto max-w-[16rem]"} disabled={!!busy} value=""
+                        onChange={(e) => e.target.value && decide(g, { client_id: Number(e.target.value) })}>
+                        <option value="">Another client…</option>
+                        {r.clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                      <button className="text-xs font-medium text-slate-500 hover:text-slate-800 hover:underline" disabled={!!busy}
+                        onClick={() => decide(g, { ignore: true })}>Not a client</button>
+                      {g.mapped && (
+                        <button className="text-xs font-medium text-slate-400 hover:text-slate-700 hover:underline" disabled={!!busy}
+                          onClick={() => decide(g, { clear: true })}>Undo</button>
+                      )}
+                      {busy === g.prefix && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end"><button className={secondaryBtnClass} onClick={onClose}>Close</button></div>
+        </div>
+      )}
     </Modal>
   );
 }

@@ -37,6 +37,13 @@ So, in order:
 
 A wrong project bills the wrong work, so every step abstains rather than
 guesses: ties, near-ties and number mismatches link nothing.
+
+Two things outrank the name's own client part, when present:
+
+  * a choice an operator made in the onboarding link report (AsanaNameMap:
+    "DeNooyer" -> Robert DeNooyer Chevrolet, or "not a client");
+  * what Asana says: a project custom field named Client / Customer /
+    Account, else the project's team, when it names one client.
 """
 import re
 from difflib import SequenceMatcher
@@ -105,9 +112,11 @@ def _score(a: str, b: str) -> float:
 class Matcher:
     """Built once per sync from the firm's clients and projects."""
 
-    def __init__(self, clients, projects):
+    def __init__(self, clients, projects, name_map=None):
         """clients: objects with id, name, aliases (+ email, alias_sources);
-        projects: objects with id, name, client_id, is_active."""
+        projects: objects with id, name, client_id, is_active;
+        name_map: {canonical prefix: client, or None for "not a client"}."""
+        self.name_map = dict(name_map or {})
         from tracker.services.alias_derivation import usable_aliases
         from tracker.services.matter_attribution import client_abbreviations
         self.projects = list(projects)
@@ -145,10 +154,19 @@ class Matcher:
                 self.keys[cid][1].add(prefix)
 
     # ── clients ─────────────────────────────────────────────────────────
+    def mapped(self, part: str):
+        """(True, client-or-None) when an operator decided this name."""
+        key = canon(part)
+        if key in self.name_map:
+            return True, self.name_map[key]
+        return False, None
+
     def client_candidates(self, part: str) -> list:
         key = canon(part)
         if not key:
             return []
+        if key in self.name_map:
+            return [self.name_map[key]] if self.name_map[key] is not None else []
         compact = key.replace(' ', '')
         exact = [c for c, keys in self.keys.values()
                  if key in keys or compact in {k.replace(' ', '') for k in keys}]
@@ -221,14 +239,26 @@ class Matcher:
         live = [p for p in projects if p.is_active] or list(projects)
         return live[0] if len(live) == 1 else None
 
-    def match(self, asana_name: str):
-        """(project or None, client or None, how)."""
+    def match(self, asana_name: str, team: str = '', client_hint: str = ''):
+        """(project or None, client or None, how). how: 'name' / 'client' /
+        'ignored' (an operator marked the name "not a client") / ''."""
         whole = self._one([p for p in self.projects if canon(p.name) == canon(asana_name)])
         if whole is not None:
             return whole, None, 'name'
         part, rest = split_name(asana_name)
         flat = f'{part} {rest}' if part else rest
-        clients = self.client_candidates(part) if part else []
+        if part:
+            decided, client = self.mapped(part)
+            if decided and client is None:
+                return None, None, 'ignored'
+        clients = []
+        for source in (client_hint, part, team):       # most to least specific
+            if source:
+                clients = self.client_candidates(source)
+                if clients:
+                    break
+        if not part and clients:
+            rest = asana_name                          # the whole name is the project part
         if clients:
             pool = [p for c in clients for p in self.by_client.get(c.id, [])]
             project = self._best(pool, rest, flat, CLOSE)

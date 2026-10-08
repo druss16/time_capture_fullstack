@@ -20,7 +20,9 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from tracker.integrations.asana.client import AsanaClient, AsanaError, AsanaNotAvailable
+from tracker.integrations.asana.client import (
+    AsanaAuthError, AsanaClient, AsanaError, AsanaNotAvailable,
+)
 from tracker.models import Integration, OrganizationMembership, Project
 from tracker.models_asana import AsanaActivity, AsanaProjectLink
 from tracker.models_task_type_sets import ExternalStaffMapping
@@ -100,36 +102,97 @@ def _workspace(integration, api) -> str:
     return integration.tenant_id
 
 
-def _sync_projects(integration, api, workspace, stats):
-    """Every Asana project in the workspace, linked to its TimeTracker project
-    — or to its client alone — by name (see matching.py). A link made by hand
-    stands."""
+CLIENT_FIELD_NAMES = {'client', 'customer', 'account', 'client name', 'customer name', 'company'}
+
+
+def build_matcher(integration):
+    """The firm's matcher: its clients and projects, plus every name an
+    operator decided in the onboarding link report (AsanaNameMap)."""
     from tracker.integrations.asana.matching import Matcher
     from tracker.models import Client
+    from tracker.models_asana import AsanaNameMap
     org = integration.organization
-    now = timezone.now()
-    matcher = Matcher(
+    name_map = {}
+    try:
+        for m in AsanaNameMap.objects.filter(integration=integration).select_related('client'):
+            name_map[m.prefix] = None if m.ignore else m.client
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning('Asana name map unavailable (%s)', e)    # not migrated yet
+    return Matcher(
         Client.objects.filter(org=org, is_active=True)
         .only('id', 'name', 'aliases', 'email', 'alias_sources'),
-        Project.objects.filter(org=org).only('id', 'name', 'client_id', 'is_active'))
+        Project.objects.filter(org=org).only('id', 'name', 'client_id', 'is_active'),
+        name_map=name_map)
+
+
+def _apply(link, matcher) -> None:
+    """Re-decide one link from what is stored on it. A hand link stands."""
+    if link.link_source == 'manual':
+        return
+    project, client, how = matcher.match(link.asana_name, team=getattr(link, 'asana_team', ''),
+                                         client_hint=getattr(link, 'client_hint', ''))
+    link.project = project
+    link.client_id = project.client_id if project else (client.id if client else None)
+    link.link_source = how
+
+
+def relink(integration) -> dict:
+    """Every stored Asana project, re-matched with no call to Asana — after an
+    operator maps a name, the whole group moves at once."""
+    matcher = build_matcher(integration)
+    changed = 0
+    for link in AsanaProjectLink.objects.filter(integration=integration):
+        before = (link.project_id, link.client_id, link.link_source)
+        _apply(link, matcher)
+        if (link.project_id, link.client_id, link.link_source) != before:
+            link.save(update_fields=['project', 'client', 'link_source', 'updated_at'])
+            changed += 1
+    return {'changed': changed}
+
+
+def _client_field(row) -> str:
+    for f in row.get('custom_fields') or []:
+        if (f.get('name') or '').strip().lower() in CLIENT_FIELD_NAMES and f.get('display_value'):
+            return str(f['display_value']).strip()
+    return ''
+
+
+def _project_rows(api, workspace):
+    """Every project, with its team and custom fields when the app may read
+    them (teams:read / custom_fields:read). Without those scopes Asana
+    refuses the richer request; the names alone still link."""
+    try:
+        return list(api.paginated('projects', workspace=workspace, opt_fields=(
+            'name,archived,team.name,custom_fields.name,custom_fields.display_value')))
+    except AsanaAuthError:
+        raise
+    except AsanaError as e:
+        logger.info('Asana projects without team/custom fields (%s)', e)
+        return list(api.paginated('projects', workspace=workspace, opt_fields='name,archived'))
+
+
+def _sync_projects(integration, api, workspace, stats):
+    """Every Asana project in the workspace, linked to its TimeTracker project
+    — or to its client alone — by name, team or Client field (see
+    matching.py). A link made by hand stands."""
+    now = timezone.now()
+    matcher = build_matcher(integration)
     stats.setdefault('client_only', 0)
     links = {link.asana_gid: link for link in AsanaProjectLink.objects.filter(integration=integration)}
-
-    for row in api.paginated('projects', workspace=workspace, opt_fields='name,archived'):
+    rows = _project_rows(api, workspace)
+    _progress(integration.id, 'projects', 0, len(rows))
+    for n, row in enumerate(rows, 1):
         gid = _gid(row.get('gid'))
         if not gid:
             continue
         stats['seen'] += 1
-        name = (row.get('name') or '').strip()
         link = links.get(gid) or AsanaProjectLink(integration=integration, asana_gid=gid)
-        link.asana_name = name[:500]
+        link.asana_name = (row.get('name') or '').strip()[:500]
         link.archived = bool(row.get('archived'))
+        link.asana_team = ((row.get('team') or {}).get('name') or '')[:255]
+        link.client_hint = _client_field(row)[:255]
         link.last_seen_in_source = now
-        if link.link_source != 'manual':
-            project, client, how = matcher.match(name)
-            link.project = project
-            link.client_id = project.client_id if project else (client.id if client else None)
-            link.link_source = how
+        _apply(link, matcher)
         if link.client_id and not link.project_id:
             stats['client_only'] += 1
         try:
@@ -139,6 +202,8 @@ def _sync_projects(integration, api, workspace, stats):
             link = AsanaProjectLink.objects.get(integration=integration, asana_gid=gid)
         links[gid] = link
         stats['linked' if link.project_id else 'unlinked'] += 1
+        if n % 200 == 0:
+            _progress(integration.id, 'projects', n, len(rows))
 
 
 def _sync_staff(integration, api, workspace) -> dict:
@@ -260,17 +325,35 @@ def sync_people_activity(integration, *, api=None) -> dict:
     return stats
 
 
-def sync_activity(integration, *, api=None) -> dict:
+# Each run reads project activity for at most this long, oldest-read projects
+# first, and leaves a backlog for the next run. Production Celery is eager —
+# scheduled tasks run inside the beat process, and a deploy restarts it — so a
+# sync that tries to read 800 projects in one go is one that gets killed half
+# way. In chunks it always finishes something, and resumes where it stopped.
+ACTIVITY_BUDGET_SECONDS = 150
+
+
+def sync_activity(integration, *, api=None, budget=ACTIVITY_BUDGET_SECONDS) -> dict:
     """The hourly path: stories on tasks of every linked project since each
     project's cursor. Catches what the per-person pass cannot see."""
-    stats = {'projects': 0, 'tasks': 0, 'stories': 0, 'recorded': 0}
+    import time
+    stats = {'projects': 0, 'tasks': 0, 'stories': 0, 'recorded': 0, 'remaining': 0}
     people = _people(integration)
     if not people:
+        _backlog(integration.id, False)
         return stats
     api = api or AsanaClient(integration)
     now = timezone.now()
     links = _linked(integration)
-    for link in links.values():
+    queue = sorted(links.values(), key=lambda l: (l.activity_cursor is not None,
+                                                   l.activity_cursor or now))
+    started = time.monotonic()
+    for n, link in enumerate(queue):
+        if budget is not None and time.monotonic() - started > budget:
+            stats['remaining'] = len(queue) - n
+            break
+        if n % 10 == 0:
+            _progress(integration.id, 'activity', n, len(queue))
         since = (link.activity_cursor or (now - INITIAL_LOOKBACK)) - CLOCK_SKEW
         stats['projects'] += 1
         try:
@@ -278,13 +361,14 @@ def sync_activity(integration, *, api=None) -> dict:
                                        modified_since=since.isoformat(),
                                        opt_fields='name,modified_at'))
         except AsanaNotAvailable:
-            continue        # no longer visible to the connected account
+            tasks = []      # no longer visible to the connected account
         for task in tasks:
             stats['tasks'] += 1
             task['_project_gids'] = [link.asana_gid]
             _record_stories(integration, api, task, links, people, since, stats)
         link.activity_cursor = now
         link.save(update_fields=['activity_cursor', 'updated_at'])
+    _backlog(integration.id, stats['remaining'] > 0)
     return stats
 
 
@@ -369,7 +453,51 @@ def sync_state(integration) -> dict:
         status = 'failed'
         error = error or ('The last sync stopped before it finished (the server restarted '
                           'mid-sync). Press Sync Asana to run it again.')
-    return {'syncing': syncing, 'last_sync_status': status or None, 'last_sync_error': error or None}
+    out = {'syncing': syncing, 'last_sync_status': status or None, 'last_sync_error': error or None}
+    if syncing:
+        out['progress'] = _progress_get(integration.id)
+    return out
+
+
+def _progress(integration_id: int, phase: str, done: int, total: int) -> None:
+    """What the card says while syncing: 'Reading activity 120 of 379'."""
+    import json
+    r = _redis()
+    try:
+        if r is not None:
+            r.set(f'asana:progress:{integration_id}',
+                  json.dumps({'phase': phase, 'done': done, 'total': total}), ex=LOCK_TTL)
+    except Exception:                                            # noqa: BLE001
+        pass
+
+
+def _progress_get(integration_id: int):
+    import json
+    r = _redis()
+    try:
+        raw = r.get(f'asana:progress:{integration_id}') if r is not None else None
+        return json.loads(raw) if raw else None
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def _backlog(integration_id: int, pending: bool = None):
+    """Project activity left for the next run. Set: the 5-minute pass works
+    it down, a chunk at a time, instead of waiting an hour."""
+    r = _redis()
+    key = f'asana:backlog:{integration_id}'
+    try:
+        if r is None:
+            return False
+        if pending is None:
+            return bool(r.get(key))
+        if pending:
+            r.set(key, '1', ex=24 * 3600)
+        else:
+            r.delete(key)
+        return pending
+    except Exception:                                            # noqa: BLE001
+        return False
 
 
 def _cursor_get(key):
@@ -398,7 +526,10 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
     except Integration.DoesNotExist:
         return {'error': 'integration_not_found'}
     due = (not integration.last_synced_at
-           or timezone.now() - integration.last_synced_at >= FULL_SYNC_EVERY)
+           or timezone.now() - integration.last_synced_at >= FULL_SYNC_EVERY
+           # Marked running, nobody holding the lock: it died (a deploy
+           # restarted the process). Run it again now, not in an hour.
+           or (integration.last_sync_status == 'running' and running_kind(integration.id) is None))
     token = _try_lock(integration.id, 'full' if (full or due) else 'activity')
     if not token:
         return {'skipped': 'already_running'}
@@ -406,7 +537,10 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
         if full or due:
             return full_sync(integration)
         try:
-            return {'activity': sync_people_activity(integration)}
+            out = {'activity': sync_people_activity(integration)}
+            if _backlog(integration.id):
+                out['backlog'] = sync_activity(integration)
+            return out
         except Exception as e:
             logger.warning('Asana activity sync failed for integration %s: %s',
                            integration.id, e, exc_info=True)

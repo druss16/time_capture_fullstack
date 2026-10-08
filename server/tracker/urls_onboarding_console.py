@@ -17,6 +17,7 @@ urlpatterns = [
     path('projects/<int:pk>/mappings/suggest/', v.suggest_mappings, name='onboard-mappings-suggest'),
     path('projects/<int:pk>/invites/', v.invites, name='onboard-invites'),
     path('projects/<int:pk>/token/', v.token, name='onboard-token'),
+    path('projects/<int:pk>/asana-links/', v.asana_links_view, name='onboard-asana-links'),
     path('projects/<int:pk>/pairing/', v.pairing, name='onboard-pairing'),
     path('projects/<int:pk>/aliases/', v.aliases, name='onboard-aliases'),
     path('projects/<int:pk>/clio-trigger/', v.clio_trigger, name='onboard-clio-trigger'),

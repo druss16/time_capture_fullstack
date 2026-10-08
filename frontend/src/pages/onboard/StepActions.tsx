@@ -644,7 +644,7 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
           <div className="text-sm font-semibold text-slate-900">{submitted ? "Reopen for edits and send" : "Send to the firm"}</div>
           <div className="grid gap-2 sm:grid-cols-2">
             <div><label className={labelClass}>Name</label>
-              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Rivera" /></div>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
             <div><label className={labelClass}>Email</label>
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@firm.com" /></div>
           </div>
@@ -758,7 +758,7 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
             <div><label className={labelClass}>Who approves — name</label>
-              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Rivera" /></div>
             <div><label className={labelClass}>Their email</label>
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@agency.com" /></div>
           </div>

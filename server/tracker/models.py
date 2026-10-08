@@ -2707,6 +2707,9 @@ class OrgRoutingRule(models.Model):
         ('flag_for_review',   'Flag For Review'),
         # NEW (Phase 1 rebuild) — provides signal but does not auto-commit
         ('propose_only', 'Propose Only (always require review)'),
+        # The firm's own company ("MTC", "More Than Cars"): applied only after
+        # the classifier found no client, and never to a block that has one.
+        ('fallback_to_client', 'Route to Client When No Other Client Is Found'),
     ]
     action = models.CharField(
         max_length=32,

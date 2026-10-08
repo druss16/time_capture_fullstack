@@ -377,6 +377,10 @@ def sync_full(request):
             r.to_agent_dict() for r in
             OrgRoutingRule.objects
                 .filter(org=org, enabled=True)
+                # Fallback rules are server-only: an agent's engine returns the
+                # first matching rule, so one it can't act on would hide a real
+                # rule ranked below it.
+                .exclude(action='fallback_to_client')
                 .select_related('target_client')
                 .order_by('-priority', 'id')
         ]

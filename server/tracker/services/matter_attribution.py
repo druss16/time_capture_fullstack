@@ -942,6 +942,13 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     client_fixes = defaultdict(list)
     stats['by_convention'] = 0
     stats['by_current_project'] = 0
+    stats['by_asana_url'] = 0
+    stats['by_asana_activity'] = 0
+    # What the firm's Asana knows (integrations/asana/attribution.py). None
+    # for a firm without Asana, or before its tables are migrated.
+    from tracker.integrations.asana.attribution import load_context as _asana_context
+    from tracker.integrations.asana.attribution import project_for as _asana_project_for
+    asana = _asana_context(org, since)
     # Ticker "Switch Project" picks: user -> (project, client, from, until).
     picks = {}
     try:
@@ -986,6 +993,23 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
             updates[pick[0]].append(block.id)
             stats['by_current_project'] += 1
             continue
+
+        # Asana: the project id in a tab's address, or — for the desktop app,
+        # whose title never changes — what the person did in Asana during the
+        # block. Knowledge of the project, and so of its client: it may fill
+        # a missing client or correct a machine guess, never a person's pick.
+        if asana is not None:
+            asana_pid, asana_tier = _asana_project_for(block, asana)
+            if asana_pid:
+                want_client = asana['client_of'].get(asana_pid)
+                if want_client and block.client_id != want_client:
+                    if block.client_id and not may_correct_client(block.categorized_by):
+                        stats['off_client'] += 1
+                        continue
+                    client_fixes[want_client].append(block.id)
+                updates[asana_pid].append(block.id)
+                stats[f'by_{asana_tier}'] += 1
+                continue
 
         project_id, tier, _reason = attribute_block(
             block, index, sole_matter_by_client, project_by_external_id,

@@ -915,6 +915,7 @@ class Client(models.Model):
         ('xero', 'Xero'),
         ('clio', 'Clio'),
         ('qb_time', 'QuickBooks Time'),
+        ('asana', 'Asana'),
     ]
     imported_from = models.CharField(
         max_length=20,
@@ -5031,6 +5032,9 @@ from tracker.models_onboarding_console import (  # noqa: F401, E402
 
 # Sign in with Microsoft / Google (see models_sso.py)
 from tracker.models_sso import SocialLogin  # noqa: F401, E402
+
+# Asana — project links + task activity, read-only (see models_asana.py)
+from tracker.models_asana import AsanaActivity, AsanaProjectLink  # noqa: F401, E402
 
 
 

@@ -73,8 +73,14 @@ class Command(BaseCommand):
         total_blocks = total_min = 0
         for (org_id, parent_id), items in sorted(groups.items()):
             parent = items[0].parent
-            reports = fold_clients(org_id, parent_id, [t.client.pk for t in items], apply=opts["apply"])
             w(f"org {org_id} · {parent_id} {parent.name!r}")
+            try:
+                reports = fold_clients(org_id, parent_id, [t.client.pk for t in items], apply=opts["apply"])
+            except ConversionError as e:
+                # One bad company must not stop the rest; nothing of it was written.
+                w(self.style.WARNING(f"   SKIPPED: {e}"))
+                w("")
+                continue
             for r in reports:
                 total_blocks += r.block_count
                 total_min += r.block_minutes

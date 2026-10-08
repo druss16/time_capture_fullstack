@@ -136,7 +136,7 @@ def _target_project(old: Client, parent: Client, report: ConversionReport) -> Pr
     """The parent's project named after the old client: reuse one the parent
     already has, else take the old client's own project of that name, else make one."""
     name = old.name[:PROJECT_NAME_MAX]
-    proj = Project.objects.filter(org_id=parent.org_id, client=parent, name=name).first()
+    proj = Project.objects.filter(org_id=parent.org_id, client=parent, name__iexact=name).first()
     if proj:
         report.project_source = "existing on parent"
     else:
@@ -260,3 +260,89 @@ def rebuild_rollups(org_id: int, days: set) -> int:
     for d in sorted(days):
         _rollup_client_daily_for_org_date(org, d)
     return len(days)
+
+
+@dataclass
+class Twin:
+    org_id: int
+    client: Client           # the client that should not exist
+    parent: Client           # the company it belongs to
+    project: Project | None  # the parent's project of the same name, if any
+    reason: str
+
+
+def find_project_twins(org_id: int | None = None, *, any_source: bool = False) -> list[Twin]:
+    """Active clients that are really another client's project: same name as an
+    active project under exactly one other active client of the org.
+
+    This is what a QuickBooks Online import of sub-customers left behind next to
+    the projects QuickBooks Time filed under the company. Only clients imported
+    from QuickBooks are considered unless any_source: a firm may well keep a
+    client and a project of the same name on purpose.
+    """
+    from tracker.utils.client_name_match import is_internal_client
+    clients = Client.objects.filter(is_active=True)
+    if org_id is not None:
+        clients = clients.filter(org_id=org_id)
+    if not any_source:
+        clients = clients.filter(imported_from='quickbooks')
+    projects = Project.objects.filter(is_active=True, client__is_active=True).select_related('client')
+    if org_id is not None:
+        projects = projects.filter(org_id=org_id)
+    by_name: dict[tuple[int, str], list[Project]] = {}
+    for p in projects:
+        by_name.setdefault((p.org_id, p.name.strip().lower()), []).append(p)
+
+    twins = []
+    for c in clients.order_by('org_id', 'name'):
+        if is_internal_client(c.name):
+            continue
+        hits = [p for p in by_name.get((c.org_id, c.name.strip().lower()), []) if p.client_id != c.pk]
+        owners = {p.client_id for p in hits}
+        if len(owners) == 1:
+            twins.append(Twin(c.org_id, c, hits[0].client, hits[0], 'same name as a project'))
+    # A client that is itself the company of another twin is a chain; leave it
+    # for a person rather than fold a company that is about to receive projects.
+    parents = {t.parent.pk for t in twins}
+    return [t for t in twins if t.client.pk not in parents]
+
+
+def find_qbo_subcustomer_clients(org_id: int) -> list[Twin]:
+    """Clients made from QuickBooks Online sub-customers, read from QuickBooks
+    itself. Needs the firm's live QuickBooks connection, so it runs where the
+    OAuth keys are (Render), not in a local container."""
+    from tracker.models import Integration
+    from tracker.views_integrations import _qb_parent_id, qb_api_call
+    integration = Integration.objects.get(organization_id=org_id, provider='quickbooks')
+    data, err = qb_api_call(integration, 'GET', '/query',
+                            params={'query': "SELECT * FROM Customer MAXRESULTS 1000"})
+    if err:
+        raise ConversionError(f"QuickBooks query failed: {getattr(err, 'data', err)}")
+    by_id = {str(c['Id']): c for c in data.get('QueryResponse', {}).get('Customer', [])}
+
+    def top_of(qb_id):
+        seen = set()
+        while qb_id in by_id and qb_id not in seen:
+            seen.add(qb_id)
+            parent = _qb_parent_id(by_id[qb_id])
+            if not parent or parent not in by_id:
+                return qb_id
+            qb_id = parent
+        return qb_id
+
+    clients = {c.quickbooks_id: c for c in Client.objects.filter(
+        org_id=org_id, is_active=True, quickbooks_id__isnull=False).exclude(quickbooks_id='')}
+    twins = []
+    for qb_id, client in clients.items():
+        if qb_id not in by_id or not _qb_parent_id(by_id[qb_id]):
+            continue
+        top = top_of(qb_id)
+        parent = clients.get(top)
+        if parent is None:
+            top_name = by_id.get(top, {}).get('DisplayName') or ''
+            parent = Client.objects.filter(org_id=org_id, is_active=True, name__iexact=top_name).first()
+        if parent is None or parent.pk == client.pk:
+            continue
+        project = Project.objects.filter(client=parent, name__iexact=client.name).first()
+        twins.append(Twin(org_id, client, parent, project, 'QuickBooks sub-customer'))
+    return twins

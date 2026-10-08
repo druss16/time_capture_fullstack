@@ -32,6 +32,7 @@ from .models import (
     Integration,
     OrganizationMembership,
     Client,
+    Project,
     Block,
     BillingRate,
     InvoiceConflict,
@@ -494,6 +495,9 @@ def quickbooks_customers(request):
         'phone': c.get('PrimaryPhone', {}).get('FreeFormNumber', '') if c.get('PrimaryPhone') else '',
         'balance': float(c.get('Balance', 0)),
         'already_imported': c['Id'] in existing_qb_ids,
+        # A sub-customer imports as a project of its company, not a client.
+        'parent_id': _qb_parent_id(c) or None,
+        'is_project': bool(_qb_parent_id(c)),
     } for c in customers]
 
     return Response({
@@ -522,8 +526,25 @@ def quickbooks_import(request):
     return Response(result)
 
 
+def _qb_parent_id(customer) -> str:
+    """A sub-customer's parent id, '' for a top-level customer. QuickBooks sets
+    Job=true and ParentRef on a sub-customer (a project or job of a company)."""
+    ref = customer.get('ParentRef') or {}
+    return str(ref.get('value') or '') if (customer.get('Job') or ref) else ''
+
+
+def _qb_email(customer) -> str:
+    return customer.get('PrimaryEmailAddr', {}).get('Address', '') if customer.get('PrimaryEmailAddr') else ''
+
+
 def import_qb_customers(org, integration, customer_ids=None):
-    """Create (or link by name) a Client per QuickBooks customer.
+    """Create (or link by name) a Client per top-level QuickBooks customer, and a
+    Project under it per sub-customer.
+
+    QuickBooks keeps a company's projects as sub-customers. Importing those as
+    clients too made every project a second, empty client beside the project
+    QuickBooks Time had already filed under the company; "Easterns" then named
+    eighteen clients and matched none of them.
 
     customer_ids=None imports every ACTIVE customer — the connect link's
     hands-off first import (services/connect_link.py). Returns (result, err)
@@ -539,40 +560,96 @@ def import_qb_customers(org, integration, customer_ids=None):
         return None, err
 
     customers = data.get('QueryResponse', {}).get('Customer', [])
-    imported, skipped, errors = [], [], []
+    by_id = {str(c['Id']): c for c in customers}
+    # A selected sub-customer needs its company even when the company wasn't
+    # selected; fetch missing ancestors (a few levels at most).
+    for _ in range(5):
+        missing = {_qb_parent_id(c) for c in by_id.values()} - set(by_id) - {''}
+        if not missing:
+            break
+        id_list = "', '".join(sorted(missing))
+        more, err = qb_api_call(integration, 'GET', '/query',
+                                params={'query': f"SELECT * FROM Customer WHERE Id IN ('{id_list}')"})
+        if err:
+            return None, err
+        found = more.get('QueryResponse', {}).get('Customer', [])
+        if not found:
+            break
+        by_id.update({str(c['Id']): c for c in found})
 
-    for customer in customers:
-        qb_id = customer['Id']
+    def top_of(qb_id):
+        seen = set()
+        while qb_id in by_id and qb_id not in seen:
+            seen.add(qb_id)
+            parent = _qb_parent_id(by_id[qb_id])
+            if not parent or parent not in by_id:
+                return qb_id
+            qb_id = parent
+        return qb_id
+
+    imported, projects, skipped, errors = [], [], [], []
+    clients_by_qb_id = {}
+
+    def company_client(qb_id, record=True):
+        """The Client for a top-level customer: already imported, linked by name, or new."""
+        if qb_id in clients_by_qb_id:
+            return clients_by_qb_id[qb_id]
+        customer = by_id[qb_id]
         name = customer.get('DisplayName') or customer.get('CompanyName') or 'Unknown'
+        client = Client.objects.filter(org=org, quickbooks_id=qb_id).first()
+        if client:
+            if record:
+                skipped.append({'id': qb_id, 'name': name, 'reason': 'Already imported'})
+        else:
+            client = Client.objects.filter(org=org, name__iexact=name).first()
+            if client:
+                client.quickbooks_id = qb_id
+                client.quickbooks_realm_id = integration.realm_id
+                client.imported_from = 'quickbooks'
+                update_fields = ['quickbooks_id', 'quickbooks_realm_id', 'imported_from']
+                email = _qb_email(customer)
+                if email and not client.email:
+                    client.email = email
+                    update_fields.append('email')
+                client.save(update_fields=update_fields)
+                imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': True})
+            else:
+                client = Client.objects.create(
+                    org=org, name=name, quickbooks_id=qb_id,
+                    quickbooks_realm_id=integration.realm_id,
+                    imported_from='quickbooks', is_active=True, email=_qb_email(customer),
+                )
+                imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': False})
+        clients_by_qb_id[qb_id] = client
+        return client
 
-        if Client.objects.filter(org=org, quickbooks_id=qb_id).exists():
-            skipped.append({'id': qb_id, 'name': name, 'reason': 'Already imported'})
-            continue
-
-        name_match = Client.objects.filter(org=org, name__iexact=name).first()
-        if name_match:
-            name_match.quickbooks_id = qb_id
-            name_match.quickbooks_realm_id = integration.realm_id
-            name_match.imported_from = 'quickbooks'
-            update_fields = ['quickbooks_id', 'quickbooks_realm_id', 'imported_from']
-            email = customer.get('PrimaryEmailAddr', {}).get('Address', '') if customer.get('PrimaryEmailAddr') else ''
-            if email and not name_match.email:
-                name_match.email = email
-                update_fields.append('email')
-            name_match.save(update_fields=update_fields)
-            imported.append({'id': name_match.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': True})
-            continue
-
+    wanted = [str(c['Id']) for c in customers]
+    for qb_id in sorted(wanted, key=lambda i: bool(_qb_parent_id(by_id[i]))):  # companies first
+        customer = by_id[qb_id]
+        name = customer.get('DisplayName') or customer.get('CompanyName') or 'Unknown'
         try:
-            client = Client.objects.create(
-                org=org, name=name, quickbooks_id=qb_id,
-                quickbooks_realm_id=integration.realm_id,
-                imported_from='quickbooks', is_active=True,
-                email=(customer.get('PrimaryEmailAddr', {}).get('Address', '') if customer.get('PrimaryEmailAddr') else ''),
-            )
-            imported.append({'id': client.id, 'name': name, 'quickbooks_id': qb_id, 'linked_existing': False})
+            top = top_of(qb_id)
+            if top == qb_id:
+                company_client(qb_id)
+                continue
+            # A sub-customer: a project of its company, never a client of its own.
+            earlier = Client.objects.filter(org=org, quickbooks_id=qb_id, is_active=True).first()
+            if earlier:
+                skipped.append({'id': qb_id, 'name': name, 'reason':
+                                f'Imported earlier as a client ({earlier.id}); fold it into its company'})
+                continue
+            parent = company_client(top, record=False)
+            project_name = name[:Project._meta.get_field('name').max_length]
+            project = Project.objects.filter(org=org, client=parent, name__iexact=project_name).first()
+            created = project is None
+            if created:
+                project = Project.objects.create(org=org, client=parent, name=project_name, is_active=True)
+            elif not project.is_active:
+                Project.objects.filter(pk=project.pk).update(is_active=True)
+            projects.append({'id': project.id, 'name': project.name, 'client_id': parent.id,
+                             'quickbooks_id': qb_id, 'linked_existing': not created})
         except Exception as e:
-            logger.error(f"Failed to create client from QB {qb_id}: {e}")
+            logger.error(f"Failed to import QB customer {qb_id}: {e}")
             errors.append({'id': qb_id, 'name': name, 'error': str(e)})
 
     # Auto-derive aliases for newly imported clients (best-effort, never breaks import)
@@ -580,9 +657,10 @@ def import_qb_customers(org, integration, customer_ids=None):
         run_post_import_alias_derivation(org)
 
     return {
-        'imported': imported, 'skipped': skipped, 'errors': errors,
+        'imported': imported, 'projects': projects, 'skipped': skipped, 'errors': errors,
         'summary': {
             'imported_count': len(imported),
+            'project_count': len(projects),
             'skipped_count': len(skipped),
             'error_count': len(errors),
         },

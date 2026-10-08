@@ -850,7 +850,8 @@ def _build_convention_index(org, options_by_client):
              .values_list('client_id', 'external_code'))
     projects = [(o.project_id, o.client_id, o.name)
                 for opts in options_by_client.values() for o in opts]
-    return build_index(clients, extra, projects)
+    from tracker.services.classification_service import ClassificationService
+    return build_index(clients, extra, projects, is_safe=ClassificationService._alias_is_safe)
 
 
 def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dict:
@@ -941,6 +942,7 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     updates = defaultdict(list)
     client_fixes = defaultdict(list)
     stats['by_convention'] = 0
+    stats['by_flexible_name'] = 0
     stats['by_current_project'] = 0
     stats['by_asana_url'] = 0
     stats['by_asana_activity'] = 0
@@ -984,6 +986,21 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
                 # Client only: let the other tiers find the project, now
                 # scoped to the client the file named.
                 block.client_id = want_client
+            else:
+                # Not the CODE_Name_Project grammar: read the client wherever
+                # its name sits ("TomGill_Buick_GMC_Offers…", "TGBGMC Website
+                # Reskin"). Only a whole name or alias may correct a machine
+                # guess; an abbreviation or shortening only fills an empty one.
+                from tracker.services.naming_convention import resolve_flexible
+                fx = resolve_flexible([('file_path', block.file_path),
+                                       ('window_title', block.window_title),
+                                       ('title', block.title)], convention)
+                if fx and fx[0] != block.client_id and (
+                        not block.client_id
+                        or (fx[1] == 'name' and may_correct_client(block.categorized_by))):
+                    client_fixes[fx[0]].append(block.id)
+                    block.client_id = fx[0]
+                    stats['by_flexible_name'] += 1
 
         # What the person said they are on, for their same-client work while
         # the pick is fresh. Below the convention (a named file is specific),

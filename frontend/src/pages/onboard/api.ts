@@ -110,14 +110,15 @@ export const onboardApi = {
     safeFetchJson<Intake & { emailed: boolean; to: string }>(`${BASE}/projects/${id}/intake/send/`, { method: "POST", ...json({ email, name }) }),
   markIntakeSent: (id: number, to: string) =>
     safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/mark-sent/`, { method: "POST", ...json({ to }) }),
-  connectLink: (id: number) => safeFetchJson<{ link: ConnectLinkInfo | null }>(`${BASE}/projects/${id}/connect-link/`),
+  connectLink: (id: number) => safeFetchJson<{ link: ConnectLinkInfo | null; links?: ConnectLinkInfo[] }>(`${BASE}/projects/${id}/connect-link/`),
   issueConnectLink: (id: number, body: { providers: ConnectProvider[]; email: string; name: string }) =>
-    safeFetchJson<{ url: string; emailed: boolean; to: string; link: ConnectLinkInfo }>(
+    safeFetchJson<{ url: string; emailed: boolean; to: string; link: ConnectLinkInfo; links?: ConnectLinkInfo[] }>(
       `${BASE}/projects/${id}/connect-link/`, { method: "POST", ...json(body) }),
 };
 
 export type ConnectProvider = "quickbooks" | "qb_time" | "asana";
 export interface ConnectLinkInfo {
+  id?: number;
   providers: ConnectProvider[]; sent_to: string; created_at: string; expires_at: string; open: boolean;
   qbo_connected_at: string | null; qbt_connected_at: string | null; asana_connected_at?: string | null;
 }

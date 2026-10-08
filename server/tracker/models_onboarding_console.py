@@ -244,13 +244,22 @@ class ConnectLink(models.Model):
 
     @classmethod
     def mint(cls, organization, providers, *, project=None, created_by=None, sent_to=''):
-        """Retire the firm's open links and return (link, raw_token)."""
+        """Retire the firm's open links for any of these providers and return
+        (link, raw_token).
+
+        Only overlapping ones: QuickBooks goes to the bookkeeper and Asana to
+        whoever runs the projects, so a new Asana link must not kill the
+        bookkeeper's still-unused QuickBooks one."""
         now = timezone.now()
-        cls.objects.filter(organization=organization, revoked_at__isnull=True).update(revoked_at=now)
+        wanted = [p for p in CONNECT_PROVIDERS if p in (providers or [])]
+        stale = [link.id for link in cls.objects.filter(organization=organization, revoked_at__isnull=True)
+                 if set(link.providers or []) & set(wanted)]
+        if stale:
+            cls.objects.filter(id__in=stale).update(revoked_at=now)
         raw = secrets.token_urlsafe(32)
         link = cls.objects.create(
             organization=organization, project=project, token_hash=cls.hash_token(raw),
-            providers=[p for p in CONNECT_PROVIDERS if p in (providers or [])],
+            providers=wanted,
             created_by=created_by, sent_to=(sent_to or '')[:254],
             expires_at=now + CONNECT_LINK_TTL,
         )

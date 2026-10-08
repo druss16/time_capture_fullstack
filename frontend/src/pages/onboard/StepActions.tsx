@@ -644,7 +644,7 @@ function IntakeDialog({ project, onClose, onChanged }: Props) {
           <div className="text-sm font-semibold text-slate-900">{submitted ? "Reopen for edits and send" : "Send to the firm"}</div>
           <div className="grid gap-2 sm:grid-cols-2">
             <div><label className={labelClass}>Name</label>
-              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Jamie Rivera" /></div>
             <div><label className={labelClass}>Email</label>
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@firm.com" /></div>
           </div>
@@ -694,13 +694,17 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
   const [email, setEmail] = useState(qboAdmin.email || "");
   const [name, setName] = useState(qboAdmin.name || "");
   const [providers, setProviders] = useState<ConnectProvider[]>(["quickbooks"]);
-  const [current, setCurrent] = useState<ConnectLinkInfo | null>(null);
+  const [links, setLinks] = useState<ConnectLinkInfo[]>([]);
   const [url, setUrl] = useState<string | null>(null);
   const [result, setResult] = useState<{ emailed: boolean; to: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { onboardApi.connectLink(project.id).then((r) => setCurrent(r.link)).catch(() => {}); }, [project.id]);
+  useEffect(() => {
+    onboardApi.connectLink(project.id)
+      .then((r) => setLinks(r.links ?? (r.link ? [r.link] : [])))
+      .catch(() => {});
+  }, [project.id]);
 
   const toggle = (p: ConnectProvider) =>
     setProviders((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
@@ -709,7 +713,7 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
     setBusy(true); setErr(null); setResult(null);
     try {
       const r = await onboardApi.issueConnectLink(project.id, { providers, email: send ? email : "", name });
-      setUrl(r.url); setCurrent(r.link);
+      setUrl(r.url); setLinks(r.links ?? (r.link ? [r.link] : []));
       if (send) setResult({ emailed: r.emailed, to: r.to });
       onChanged();
     } catch (e) { setErr(msg(e)); } finally { setBusy(false); }
@@ -719,19 +723,22 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
     <Modal title="Connect link" onClose={onClose}
       subtitle="No TimeTracker login: they click Connect and sign in to QuickBooks or Asana. QuickBooks needs the firm's QuickBooks admin (usually the bookkeeper); Asana, anyone who can see the agency's Asana projects. Clients import as soon as QuickBooks Online is approved.">
       <div className="space-y-4">
-        {current && (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm">
-            {current.open ? <Pill tone="blue">Open until {fmtDate(current.expires_at)}</Pill> : <Pill tone="amber">Expired or replaced</Pill>}
-            {current.sent_to && <Pill>Sent to {current.sent_to}</Pill>}
-            {current.providers.includes("quickbooks") && (current.qbo_connected_at
-              ? <Pill tone="green">QuickBooks Online connected {fmtDate(current.qbo_connected_at)}</Pill>
-              : <Pill tone="amber">QuickBooks Online not yet</Pill>)}
-            {current.providers.includes("qb_time") && (current.qbt_connected_at
-              ? <Pill tone="green">QuickBooks Time connected {fmtDate(current.qbt_connected_at)}</Pill>
-              : <Pill tone="amber">QuickBooks Time not yet</Pill>)}
-            {current.providers.includes("asana") && (current.asana_connected_at
-              ? <Pill tone="green">Asana connected {fmtDate(current.asana_connected_at)}</Pill>
-              : <Pill tone="amber">Asana not yet</Pill>)}
+        {links.length > 0 && (
+          <div className="space-y-2">
+            {links.map((l, i) => {
+              const done: Record<ConnectProvider, string | null | undefined> = {
+                quickbooks: l.qbo_connected_at, qb_time: l.qbt_connected_at, asana: l.asana_connected_at,
+              };
+              return (
+                <div key={l.id ?? i} className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm">
+                  {l.open ? <Pill tone="blue">Open until {fmtDate(l.expires_at)}</Pill> : <Pill tone="amber">Expired or replaced</Pill>}
+                  <Pill>{l.sent_to ? `Sent to ${l.sent_to}` : "Made by hand"}</Pill>
+                  {l.providers.map((p) => (done[p]
+                    ? <Pill key={p} tone="green">{CONNECT_LABEL[p]} connected {fmtDate(done[p]!)}</Pill>
+                    : <Pill key={p} tone="amber">{CONNECT_LABEL[p]} not yet</Pill>))}
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -753,9 +760,9 @@ function ConnectLinkDialog({ project, onClose, onChanged }: Props) {
             <div><label className={labelClass}>Who approves — name</label>
               <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Sam Lee" /></div>
             <div><label className={labelClass}>Their email</label>
-              <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="bookkeeper@firm.com" /></div>
+              <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@agency.com" /></div>
           </div>
-          <p className="text-xs text-slate-500">A new link replaces any earlier one. It works for 7 days.</p>
+          <p className="text-xs text-slate-500">Send QuickBooks and Asana to different people with separate links. A new link only replaces an open one for the same service. Links work for 7 days.</p>
           <div className="flex flex-wrap justify-end gap-2">
             <button className={secondaryBtnClass} disabled={busy || providers.length === 0} onClick={() => issue(false)}>Just make a link</button>
             <button className={primaryBtnClass} disabled={busy || providers.length === 0 || !email.trim()} onClick={() => issue(true)}>

@@ -266,6 +266,18 @@ class AsanaConnectLinkTests(ConsoleBase):
         self.assertEqual(r.status_code, 200, r.content)
         return r.json()['url'].rsplit('/', 1)[1]
 
+    def test_asana_link_leaves_open_quickbooks_link_alone(self):
+        qb = self.issue(providers=('quickbooks',))
+        self.issue(providers=('asana',))
+        # The bookkeeper's QuickBooks link still works; both are listed.
+        self.assertEqual(self.public.get(f'/api/onboard/connect/{qb}/').status_code, 200)
+        body = self.api.get(f'/api/onboard/projects/{self.p.id}/connect-link/').json()
+        self.assertEqual(sorted(tuple(l['providers']) for l in body['links']),
+                         [('asana',), ('quickbooks',)])
+        # A second Asana link replaces only the first Asana one.
+        self.issue(providers=('asana',))
+        self.assertEqual(ConnectLink.objects.filter(revoked_at__isnull=True).count(), 2)
+
     def test_issue_keeps_asana(self):
         self.issue(providers=('quickbooks', 'asana'))
         self.assertEqual(ConnectLink.objects.get(revoked_at__isnull=True).providers,

@@ -590,18 +590,35 @@ def _apply_intake_contacts(intake):
 
 # ── Connect link (QuickBooks Online / QuickBooks Time) ───────────────────
 
-def _connect_summary(link):
-    if not link:
-        return {'link': None}
-    return {'link': {
-        'providers': link.providers, 'sent_to': link.sent_to,
+def _link_info(link):
+    return {
+        'id': link.id, 'providers': link.providers, 'sent_to': link.sent_to,
         'created_at': link.created_at.isoformat(), 'expires_at': link.expires_at.isoformat(),
         'open': link.is_open,
         'qbo_connected_at': link.qbo_connected_at.isoformat() if link.qbo_connected_at else None,
         'qbt_connected_at': link.qbt_connected_at.isoformat() if link.qbt_connected_at else None,
         'asana_connected_at': (link.asana_connected_at.isoformat()
                                if getattr(link, 'asana_connected_at', None) else None),
-    }}
+    }
+
+
+def _connect_summary(link, org=None):
+    """`link`: the one just issued (or the newest). `links`: every link of the
+    firm still open, plus the newest per provider — a QuickBooks link to the
+    bookkeeper and an Asana link to the project lead live side by side."""
+    from tracker.models_onboarding_console import ConnectLink
+    out = {'link': _link_info(link) if link else None, 'links': []}
+    org = org or (link.organization if link else None)
+    if org is None:
+        return out
+    shown, covered = [], set()
+    for each in ConnectLink.objects.filter(organization=org).order_by('-created_at')[:20]:
+        fresh = set(each.providers or []) - covered
+        if each.is_open or fresh:
+            shown.append(each)
+        covered |= set(each.providers or [])
+    out['links'] = [_link_info(each) for each in shown]
+    return out
 
 
 @operator_view(['GET', 'POST'])
@@ -617,7 +634,7 @@ def connect_link_view(request, pk):
     p = _project(pk)
     if request.method == 'GET':
         return Response(_connect_summary(
-            ConnectLink.objects.filter(organization=p.organization).first()))
+            ConnectLink.objects.filter(organization=p.organization).first(), p.organization))
 
     providers = [x for x in (request.data.get('providers') or []) if x in CONNECT_PROVIDERS]
     if not providers:

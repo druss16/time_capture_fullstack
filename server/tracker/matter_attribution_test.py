@@ -38,7 +38,7 @@ try:
     from tracker.services.matter_attribution import (
         candidate_tokens, build_matter_index, match_matter_in_text, attribute_block,
         folder_key, neighbour_matter,
-        name_phrase, build_name_index, match_project_name,
+        name_phrase, name_words, build_name_index, match_project_name,
         match_project_name_partial, named_part_of_path,
     )
     from tracker.services.projects import ProjectOption
@@ -309,6 +309,36 @@ if _ok:
     check("partial abstains, sole-project is not consulted for a multi-project client",
           attribute_block(_B(file_path='/d/0074_Konetiq_Sept/c.psd', client_id=7),
                           {}, {}, None, name_index=midx)[0] is None)
+
+    print("Q1 2026 Production vs. a Google Doc's URL (Tom Gill, 2026-10-07):")
+    tg = {9: [_opt(91, 9, 'Tom Gill Buick/GMC Q1 2026 Production', mapped=True),
+              _opt(92, 9, 'TGBGMC Website Reskin', mapped=True),
+              _opt(93, 9, 'TGBGMC Monthly Donut Videos', mapped=True)]}
+    tidx = build_name_index(tg, {9: 'Tom Gill Buick GMC'})
+    check("'Q1' stays one word", name_words('Q1 2026 Production') == ['q1', 'production'])
+    check("words after two letters still split", name_words('Month2026') == ['month'])
+    check("all-caps word before digits still splits", name_words('KONETIQ2026') == ['konetiq'])
+    check("'Q1' glued after a camel-case word stays one word",
+          name_words('TomGillQ1Production.psd') == ['tom', 'gill', 'q1', 'production', 'psd'])
+    check("'Q1' alone does not name Q1 Production",
+          attribute_block(_B(window_title='Tom Gill Q1 budget', client_id=9),
+                          {}, {}, None, name_index=tidx)[0] is None)
+    check("client abbreviation stripped from the project name",
+          tidx[9].get('website reskin') == 92 and tidx[9].get('monthly donut videos') == 93)
+    check("Q1 project keyed on 'q1 production'", tidx[9].get('q1 production') == 91)
+    doc = _B(title='Chrome', window_title='Tom Gill October Offers for Creative - Google Docs',
+             url='https://docs.google.com/document/d/1xQ7bW9q_1Tz3kLm0Pq1aR/edit?tab=t.0',
+             client_id=9)
+    check("a doc's URL ID does not half-name Q1 Production",
+          attribute_block(doc, {}, {}, None, name_index=tidx)[0] is None)
+    check("fragments never count toward a partial",
+          match_project_name_partial('q 1 x', {'q1 production': 91, 'q 1 production': 91}) is None)
+    check("a title that says Q1 Production still matches",
+          attribute_block(_B(window_title='Tom Gill Q1 Production shot list - Google Docs', client_id=9),
+                          {}, {}, None, name_index=tidx)[:2] == (91, 'name'))
+    check("a title that says Website Reskin matches in full now",
+          attribute_block(_B(window_title='Tom Gill Website Reskin wireframes', client_id=9),
+                          {}, {}, None, name_index=tidx)[:2] == (92, 'name'))
 
     print("The sync root's words never count toward a name:")
     check("Dropbox (More Than Cars) does not half-name 'New Car Specials'",

@@ -104,6 +104,42 @@ jobs:
           POSTGRES_PORT: '5432'
         run: python manage.py verify_beat_tasks
 
+  undefined-names:
+    name: Python undefined names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'          # matches server/Dockerfile
+
+      - name: Install pyflakes
+        run: pip install pyflakes==3.4.0
+
+      - name: pyflakes (undefined names only)
+        # A name that is never imported or defined is a NameError the moment
+        # that line runs — and only then. `manage.py check` imports every
+        # module but never calls the function, so it passes. That is how a
+        # NameError took prod down (#649/#650), and how an undefined
+        # AgentError in maybe_send_alert turned every critical agent error
+        # report into a 500 and kept the alert email from ever sending.
+        #
+        # Only "undefined name" fails the job. pyflakes also reports hundreds
+        # of unused / redefined imports that are pre-existing and harmless;
+        # failing on those would make this red on every PR. pyflakes exits
+        # non-zero for any finding, so its exit code is ignored and the grep
+        # decides.
+        run: |
+          python -m pyflakes server/ mac_agent/ windows_agent/ > pyflakes.log 2>&1 || true
+          # Anchored on the quote: pyflakes' star-import notice ("unable to
+          # detect undefined names", server/settings_scratch.py) must not match.
+          if grep -E ": undefined name '" pyflakes.log; then
+            echo "::error::pyflakes found undefined names (above). Each is a NameError at call time."
+            exit 1
+          fi
+          echo "no undefined names ($(wc -l < pyflakes.log) other pyflakes findings, not enforced)"
+
   frontend:
     name: TypeScript
     runs-on: ubuntu-latest

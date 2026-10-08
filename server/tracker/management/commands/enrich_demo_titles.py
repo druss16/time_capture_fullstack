@@ -221,6 +221,10 @@ print(f"  ✓ Deleted {deleted:,} old events")
 print("Step 3/3: Regenerating dense RawEvents (one every 2 minutes)...")
 
 EVENT_INTERVAL = 120
+BATCH_SIZE = 500
+all_block_ids = list(
+    Block.objects.filter(org=org).order_by('id').values_list('id', flat=True)
+)
 total_events = 0
 processed_blocks = 0
 

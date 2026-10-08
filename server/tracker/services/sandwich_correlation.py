@@ -51,9 +51,14 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Optional, List
+from typing import TYPE_CHECKING, Optional, List
 
 from django.utils import timezone
+
+if TYPE_CHECKING:
+    # Annotation only; the runtime import stays inside the function to avoid
+    # a cycle with classification_service.
+    from tracker.services.classification_service import Signal
 
 logger = logging.getLogger('timetracker.classification')
 

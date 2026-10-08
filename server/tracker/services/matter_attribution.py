@@ -946,6 +946,8 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
     stats['by_current_project'] = 0
     stats['by_asana_url'] = 0
     stats['by_asana_activity'] = 0
+    stats['by_asana_url_client'] = 0
+    stats['by_asana_activity_client'] = 0
     # What the firm's Asana knows (integrations/asana/attribution.py). None
     # for a firm without Asana, or before its tables are migrated.
     from tracker.integrations.asana.attribution import load_context as _asana_context
@@ -1016,17 +1018,21 @@ def attribute_matters_for_org(org, *, days=30, dry_run=False, limit=None) -> dic
         # block. Knowledge of the project, and so of its client: it may fill
         # a missing client or correct a machine guess, never a person's pick.
         if asana is not None:
-            asana_pid, asana_tier = _asana_project_for(block, asana)
+            asana_pid, asana_client, asana_tier = _asana_project_for(block, asana)
+            if asana_client and block.client_id != asana_client:
+                if block.client_id and not may_correct_client(block.categorized_by):
+                    stats['off_client'] += 1
+                    continue
+                client_fixes[asana_client].append(block.id)
+                # The tiers below may still find the project, now scoped to
+                # the client Asana named.
+                block.client_id = asana_client
             if asana_pid:
-                want_client = asana['client_of'].get(asana_pid)
-                if want_client and block.client_id != want_client:
-                    if block.client_id and not may_correct_client(block.categorized_by):
-                        stats['off_client'] += 1
-                        continue
-                    client_fixes[want_client].append(block.id)
                 updates[asana_pid].append(block.id)
                 stats[f'by_{asana_tier}'] += 1
                 continue
+            if asana_tier:
+                stats[f'by_{asana_tier}'] = stats.get(f'by_{asana_tier}', 0) + 1
 
         project_id, tier, _reason = attribute_block(
             block, index, sole_matter_by_client, project_by_external_id,

@@ -22,6 +22,7 @@ class AsanaProjectLink(models.Model):
     """One Asana project, and the TimeTracker project it is (if known)."""
     LINK_SOURCES = [
         ('name', 'Matched by name'),
+        ('client', 'Client named, project not'),
         ('manual', 'Linked by hand'),
     ]
 
@@ -35,6 +36,12 @@ class AsanaProjectLink(models.Model):
         'tracker.Project', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='asana_links')
     link_source = models.CharField(max_length=16, blank=True, default='', choices=LINK_SOURCES)
+    # The client, when the name says whose work it is but no project of that
+    # client fits ("Tom Gill: KBB Buy Back June Event"). Asana time then gets
+    # the client and asks only for the project. Set with `project` too.
+    client = models.ForeignKey(
+        'tracker.Client', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='asana_links')
 
     # Tasks modified after this have not had their activity read yet.
     activity_cursor = models.DateTimeField(null=True, blank=True)
@@ -60,6 +67,8 @@ class AsanaActivity(models.Model):
     asana_project_gid = models.CharField(max_length=64, blank=True, default='')
     project = models.ForeignKey('tracker.Project', on_delete=models.SET_NULL,
                                 null=True, blank=True, related_name='asana_activity')
+    client = models.ForeignKey('tracker.Client', on_delete=models.SET_NULL,
+                               null=True, blank=True, related_name='asana_activity')
     task_gid = models.CharField(max_length=64, blank=True, default='')
     task_name = models.CharField(max_length=500, blank=True, default='')
     kind = models.CharField(max_length=64, blank=True, default='')

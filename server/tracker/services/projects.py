@@ -63,6 +63,44 @@ def org_uses_projects(org) -> bool:
     return ExternalMatterMapping.objects.filter(integration__organization=org).exists()
 
 
+def needs_project_check(org, *, project_counts=None):
+    """Return a block -> bool test for "committed client time someone can still
+    file under a project", or None when this firm has nothing to file under.
+
+    One rule for the Daily Review project queue and the Reports "needs a
+    project" note, so the two numbers agree. The caller passes committed
+    blocks; this only decides the project part:
+
+      · a real client and no project yet — not the firm's own Internal clients;
+      · that client has projects to choose between, unless the firm keeps its
+        own projects (then one can be created from the picker);
+      · material: at least the Needs You floor, so a glance is never a task.
+
+    `project_counts` (client_id -> number of options) skips a second lookup
+    when the caller already has it.
+    """
+    from tracker.industry_categories import is_internal_client_name
+    from tracker.services.classification_service import IMMATERIAL_MAX_MINUTES
+
+    if project_counts is None:
+        project_counts = {cid: len(opts) for cid, opts in selectable_projects(org).items()}
+    can_create = org_tracks_local_projects(org)
+    if not project_counts and not can_create:
+        return None
+
+    def needs(block) -> bool:
+        if block.project_id or not block.client_id:
+            return False
+        if not (can_create or block.client_id in project_counts):
+            return False
+        client = block.client
+        if client is not None and is_internal_client_name(client.name):
+            return False
+        return (block.minutes or 0) >= IMMATERIAL_MAX_MINUTES
+
+    return needs
+
+
 def selectable_projects(org, *, client_ids=None, include_ids=()) -> dict[int, list[ProjectOption]]:
     """client_id -> live projects, mirrored first then local, by name.
 

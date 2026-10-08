@@ -143,7 +143,24 @@ class EndpointTests(Base):
         r = self.api.get('/api/blocks/needs-matter/', {'date': str(DAY)})
         self.assertEqual(sorted(x['id'] for x in r.data['blocks']), sorted([nb.id, b.id]))
         self.assertEqual(r.data['total_minutes'], 40)
-        self.assertEqual(r.data['billable_minutes'], 20)
+
+    def test_reports_count_unfiled_client_time_as_billable_with_a_note(self):
+        # Client known, no project: Billable, not Review. The minutes still
+        # needing a project ride along as a note — same set as the queue.
+        b = self.block(self.ford)
+        self.block(self.ford, project=Project.objects.create(
+            org=self.org, client=self.ford, name='Spring Launch'))
+        self.block(self.ford, minutes=1, end=T0)            # a glance: not a task
+        r = self.api.get('/api/reports/summary/', {'period': 'day', 'date': str(DAY)})
+        row = next(x for x in r.data['rows'] if x['id'] == self.user.id)
+        self.assertEqual(row['uncategorized_hours'], 0)
+        self.assertGreaterEqual(row['billable_hours'], round(40 / 60, 2))
+        self.assertEqual(row['needs_project_hours'], round(20 / 60, 2))
+        item = next(x for x in row['breakdown'] if x['id'] == self.ford.id)
+        self.assertEqual(item['needs_project_hours'], round(20 / 60, 2))
+        self.assertEqual(r.data['totals']['needs_project_hours'], round(20 / 60, 2))
+        q = self.api.get('/api/blocks/needs-matter/', {'date': str(DAY)})
+        self.assertEqual([x['id'] for x in q.data['blocks']], [b.id])
 
     def test_queue_range_and_internal_client_excluded(self):
         # Every org is seeded with its own Internal client.

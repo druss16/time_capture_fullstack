@@ -35,6 +35,7 @@ import {
   Pause,
 } from "lucide-react";
 import ReportsViewToggle, { useAiAgentsReportAvailable } from "@/components/reports/ReportsViewToggle";
+import { useTerminology } from "@/lib/terminology";
 import { API_BASE } from "@/lib/api";
 import {
   TIMEFRAMES, resolveTimeframe, timeframePhrase, type TimeframeKey,
@@ -144,6 +145,9 @@ interface BreakdownItem {
   billable_hours: number;
   non_billable_hours: number;
   uncategorized_hours?: number;
+  // Committed client time with no project yet — already inside billable /
+  // non-billable, shown as a note under Review, never added to it.
+  needs_project_hours?: number;
 }
 
 // Stage C — GET /api/reports/activity/ shape.
@@ -180,6 +184,7 @@ interface SummaryRow {
   billable_hours: number;
   non_billable_hours: number;
   uncategorized_hours?: number;   // server name kept; displayed as "Needs review"
+  needs_project_hours?: number;   // already inside billable / non-billable
   // Time the person chose "Pause Tracking" in the desktop agent. Shown beside
   // their hours, never inside Total or utilization. Employee rows only.
   paused_hours?: number;
@@ -201,6 +206,7 @@ interface SummaryResponse {
     billable_hours: number;
     non_billable_hours: number;
     uncategorized_hours?: number;
+    needs_project_hours?: number;
     utilization_pct: number;
     utilization_standard_pct?: number;
     utilization_captured_pct?: number;
@@ -1054,6 +1060,9 @@ function EmployeeRow({
   // non-bill/review mix within that length. Floor at 8% so tiny bars stay visible.
   const lengthPct = Math.max(8, (total / (maxTotal || 1)) * 100);
   const review = row.uncategorized_hours || 0;
+  const needsProject = row.needs_project_hours || 0;
+  const terms = useTerminology();
+  const projectWord = terms.project.toLowerCase();
   const util = row.utilization_pct ?? 0;
   const paused = row.paused_hours || 0;
   // Someone who only paused has no tracked time to name a client from.
@@ -1113,7 +1122,7 @@ function EmployeeRow({
           <div className="text-right">
             <div className="text-sm font-bold tabular-nums text-slate-500">{fmtHours(row.non_billable_hours)}</div>
           </div>
-          <div className="text-right">
+          <div className="flex flex-col items-end text-right">
             {review > 0 ? (
               <span
                 role="button"
@@ -1128,6 +1137,12 @@ function EmployeeRow({
               </span>
             ) : (
               <span className="text-sm text-slate-300">—</span>
+            )}
+            {needsProject > 0 && (
+              <span className="mt-0.5 whitespace-nowrap text-[10px] font-semibold tabular-nums text-amber-600"
+                    title={`Counted in Billable / Non-bill already — just not filed under a ${projectWord} yet`}>
+                {fmtHours(needsProject)} needs a {projectWord}
+              </span>
             )}
           </div>
           <div className="text-right">
@@ -1179,6 +1194,9 @@ function EmployeeRow({
             <span className="tabular-nums"><b className="text-slate-600 font-bold">{fmtHours(row.non_billable_hours)}</b> <span className="text-slate-400">non-bill</span></span>
             {review > 0 && (
               <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(review)}</b> review</span>
+            )}
+            {needsProject > 0 && (
+              <span className="tabular-nums text-amber-600"><b className="font-bold">{fmtHours(needsProject)}</b> needs a {projectWord}</span>
             )}
             {paused > 0 && (
               <span className="tabular-nums"><b className="text-slate-500 font-bold">{fmtHours(paused)}</b> <span className="text-slate-400">paused</span></span>
@@ -1251,6 +1269,11 @@ function EmployeeRow({
                                 {fmtHours(b.uncategorized_hours)} review
                               </span>
                             )}
+                            {(b.needs_project_hours || 0) > 0 && (
+                              <span className="ml-1.5 rounded bg-amber-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-amber-600">
+                                {fmtHours(b.needs_project_hours)} no {projectWord}
+                              </span>
+                            )}
                           </span>
                         </div>
                         <div className="mt-1 h-1.5 rounded bg-slate-100 overflow-hidden">
@@ -1316,6 +1339,9 @@ function ClientDetailModal({
 }) {
   const people = Array.isArray(row.breakdown) ? row.breakdown : [];
   const s = scope?.scoped;
+  const terms = useTerminology();
+  const projectWord = terms.project.toLowerCase();
+  const needsProject = (s ? s.needs_project_hours : row.needs_project_hours) || 0;
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-slate-900/40 px-4 py-16"
@@ -1367,6 +1393,7 @@ function ClientDetailModal({
                 : "—"}
               tone={((s ? s.uncategorized_hours : row.uncategorized_hours) || 0) > 0 ? "amber" : undefined}
               big
+              note={needsProject > 0 ? `${fmtHours(needsProject)} needs a ${projectWord}` : undefined}
             />
           </div>
 
@@ -1439,6 +1466,11 @@ function ClientDetailModal({
                           {fmtHours(p.uncategorized_hours)} needs review
                         </div>
                       )}
+                      {(p.needs_project_hours || 0) > 0 && (
+                        <div className="text-xs font-medium text-amber-600 mt-0.5">
+                          {fmtHours(p.needs_project_hours)} needs a {projectWord}
+                        </div>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       <div className="text-sm font-bold tabular-nums text-slate-800">{fmtHours(p.total_hours)}</div>
@@ -1463,12 +1495,14 @@ function ClientDetailModal({
 
 // ── Small presentational helpers ──────────────────────────────────────────
 function StatBox({
-  label, value, tone, big,
+  label, value, tone, big, note,
 }: {
   label: string;
   value: string;
   tone?: "emerald" | "amber";
   big?: boolean;
+  /** A caveat that does not change the number (e.g. time still needing a project). */
+  note?: string | undefined;
 }) {
   const toneMap: Record<string, string> = {
     emerald: "text-primary",
@@ -1480,6 +1514,7 @@ function StatBox({
         {value}
       </div>
       <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+      {note && <div className="mt-1 text-[11px] font-semibold tabular-nums text-amber-600">{note}</div>}
     </div>
   );
 }

@@ -113,6 +113,7 @@ import secrets
 # --- Local apps ---
 from tracker.models import (
     AgentControl,
+    AgentError,
     AgentSession,
     AgentPairCode,
     AgentDevice,
@@ -195,7 +196,7 @@ from tracker.services.pattern_learning import PatternLearningService
 from rest_framework import viewsets, status
 from django.db.models import Sum, F, Q, DecimalField
 from django.db.models.functions import Coalesce
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
 from .serializers_billing import (
@@ -754,29 +755,6 @@ def _get_user_obj(username: Optional[str]):
     try:
         return User.objects.get(username=username)
     except User.DoesNotExist:
-        return None
-
-def _get_agent_device(request):
-    """Return the AgentDevice for the given API key, or None.
-    Raises PermissionError if the device exists but is deactivated:
-    'device_revoked' when an admin switched it off, 'subscription_inactive'
-    otherwise.
-    """
-    api_key = request.META.get(AGENT_HEADER)
-    if not api_key:
-        return None
-    try:
-        return AgentDevice.objects.select_related("user").get(api_key=api_key, is_active=True)
-    except AgentDevice.DoesNotExist:
-        # Check if device exists but was deactivated (subscription cancelled/expired)
-        dead = AgentDevice.objects.filter(api_key=api_key, is_active=False).first()
-        if dead is not None:
-            # An admin switching off one machine is not a lapsed subscription;
-            # see the same distinction in tracker/auth.py.
-            raise PermissionError(
-                "device_revoked" if dead.deactivated_reason == "admin_revoked"
-                else "subscription_inactive"
-            )
         return None
 
 def _host(url: str) -> str:

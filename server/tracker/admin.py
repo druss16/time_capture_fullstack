@@ -1,6 +1,7 @@
 # tracker/admin.py
 from django.contrib import admin
 from django.contrib.admin.sites import NotRegistered
+from django.utils import timezone
 from .models import Client, Project, Task, Block, TimecardEntry, Rule, KnownEntity, AITrainingExample, ClientPattern, TaskPattern, OnboardingBatch, DeviceProvisioningMap, QboCompanyMapping
 
 

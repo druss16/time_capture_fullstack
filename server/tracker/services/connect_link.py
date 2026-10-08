@@ -183,8 +183,10 @@ def status(link):
         if p == 'asana' and connected:
             # Linked projects + who has no Asana account of the same email:
             # their Asana time cannot be filed until it matches.
+            from tracker.integrations.asana.sync import sync_state
             from tracker.integrations.asana.views import asana_status
-            row['sync_status'] = integration.last_sync_status or ''
+            state = sync_state(integration)
+            row['sync_status'] = 'running' if state['syncing'] else (state['last_sync_status'] or '')
             row.update(asana_status(integration))
             row['unmatched'] = unmatched_members(org, integration)
         out.append(row)

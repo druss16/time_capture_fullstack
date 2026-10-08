@@ -46,6 +46,10 @@ def full_sync(integration: Integration, *, api=None) -> dict:
              'staff': {'matched': 0, 'unmatched': 0},
              'activity': {}, 'errors': []}
     started = timezone.now()
+    # The card shows "Syncing…" off this (with the lock — see sync_state).
+    integration.last_sync_status = 'running'
+    integration.last_sync_error = ''
+    integration.save(update_fields=['last_sync_status', 'last_sync_error', 'updated_at'])
     try:
         api = api or AsanaClient(integration)
         workspace = _workspace(integration, api)
@@ -310,12 +314,13 @@ def _redis():
         return None
 
 
-def _try_lock(integration_id: int):
+def _try_lock(integration_id: int, kind: str = 'full'):
     """A token when this caller holds the lock, else None. With no Redis the
     sync runs unlocked — a duplicate pass is harmless (stories are unique),
-    a sync that never runs is not."""
+    a sync that never runs is not. The token starts with the kind ('full' /
+    'activity'), so the card can say a full sync is running."""
     import secrets
-    token = secrets.token_hex(8)
+    token = f'{kind}:{secrets.token_hex(8)}'
     r = _redis()
     if r is None:
         return token
@@ -336,6 +341,35 @@ def _unlock(integration_id: int, token) -> None:
             r.delete(key)
     except Exception as e:                                       # noqa: BLE001
         logger.warning('Asana sync unlock failed (%s); it expires on its own', e)
+
+
+def running_kind(integration_id: int):
+    """'full' / 'activity' while a sync holds the lock, else None (or None
+    when Redis cannot say)."""
+    r = _redis()
+    try:
+        raw = r.get(f'asana:sync-lock:{integration_id}') if r is not None else None
+        return raw.decode().split(':', 1)[0] if raw else None
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def sync_state(integration) -> dict:
+    """What the card says about the sync itself.
+
+    A full sync marks the row 'running' when it starts and 'success' /
+    'failed' when it ends. 'running' with no full sync holding the lock means
+    it died without reaching either — a restart killed the thread, or the
+    worker its task ran on — and the card must say so rather than show the
+    time of the last sync that finished."""
+    syncing = running_kind(integration.id) == 'full'
+    status = integration.last_sync_status or ''
+    error = integration.last_sync_error or ''
+    if status == 'running' and not syncing:
+        status = 'failed'
+        error = error or ('The last sync stopped before it finished (the server restarted '
+                          'mid-sync). Press Sync Asana to run it again.')
+    return {'syncing': syncing, 'last_sync_status': status or None, 'last_sync_error': error or None}
 
 
 def _cursor_get(key):
@@ -363,12 +397,12 @@ def run_sync(integration_id: int, *, full: bool = False) -> dict:
             id=integration_id, provider='asana', is_connected=True)
     except Integration.DoesNotExist:
         return {'error': 'integration_not_found'}
-    token = _try_lock(integration.id)
+    due = (not integration.last_synced_at
+           or timezone.now() - integration.last_synced_at >= FULL_SYNC_EVERY)
+    token = _try_lock(integration.id, 'full' if (full or due) else 'activity')
     if not token:
         return {'skipped': 'already_running'}
     try:
-        due = (not integration.last_synced_at
-               or timezone.now() - integration.last_synced_at >= FULL_SYNC_EVERY)
         if full or due:
             return full_sync(integration)
         try:

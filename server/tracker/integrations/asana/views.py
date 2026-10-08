@@ -112,6 +112,11 @@ def asana_sync(request):
     integration, err = get_integration(org, 'asana')
     if err:
         return err
+    from tracker.integrations.asana.sync import running_kind
+    if running_kind(integration.id) == 'full':
+        return Response({'started': False, 'running': True,
+                         'message': 'An Asana sync is already running. The card updates when it finishes.'},
+                        status=202)
     _start_sync(integration.id, full=True)
     return Response({'started': True,
                      'message': 'Asana sync started. The counts update here when it finishes.'},

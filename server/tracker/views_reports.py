@@ -712,6 +712,35 @@ def _aggregate(blocks, group_by: str):
     }
 
 
+def _add_needs_project_hours(summary, org, committed_blocks, group_by: str):
+    """Set `needs_project_hours` on the totals, each row and each drill-down
+    item: committed client time still waiting for a project. 0 for firms that
+    don't file time under projects."""
+    from tracker.services.projects import needs_project_check
+
+    needs = needs_project_check(org)
+    total = 0
+    by_row = defaultdict(int)
+    by_pair = defaultdict(int)
+    if needs is not None:
+        for b in committed_blocks:
+            if not needs(b):
+                continue
+            m = b.minutes or 0
+            total += m
+            row_key, sub_key = ((b.user_id, b.client_id) if group_by == "employee"
+                                else (b.client_id, b.user_id))
+            by_row[row_key] += m
+            by_pair[(row_key, sub_key)] += m
+
+    summary["totals"]["needs_project_hours"] = round(total / 60, 2)
+    for row in summary["rows"]:
+        row["needs_project_hours"] = round(by_row.get(row["id"], 0) / 60, 2)
+        for item in row.get("breakdown") or ():
+            item["needs_project_hours"] = round(
+                by_pair.get((row["id"], item["id"]), 0) / 60, 2)
+
+
 def _bucket_key(dt_value, period: str):
     """Local-date bucket label for a datetime, matching the period granularity."""
     local = timezone.localtime(dt_value)
@@ -904,6 +933,11 @@ def reports_summary(request):
     # captured while paused, and a pause is not work.
     if group_by == "employee":
         _add_paused_hours(summary, org, start_utc, end_utc, can_see_all, forced_user_id)
+
+    # Needs a project — committed client time with no project yet. It already
+    # sits in Billable / Non-billable (it has its client), so it is a note under
+    # Review, never added to it. Same rule as the Daily Review project queue.
+    _add_needs_project_hours(summary, org, blocks, group_by)
 
     # Re-sort: rows may have changed total_hours, and new rows were appended.
     summary["rows"].sort(key=lambda r: r["total_hours"], reverse=True)

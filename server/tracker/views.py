@@ -7306,8 +7306,9 @@ def blocks_needing_matter(request):
     one chosen on Friday is reconstructed — and a reconstruction bills a client.
     """
     from datetime import datetime as _dt
-    from tracker.industry_categories import is_internal_client_name
-    from tracker.services.projects import org_tracks_local_projects, selectable_projects
+    from tracker.services.projects import (
+        needs_project_check, org_tracks_local_projects, selectable_projects,
+    )
 
     org = get_user_org(request.user)
     if not org:
@@ -7328,12 +7329,11 @@ def blocks_needing_matter(request):
     counts = {cid: len(opts) for cid, opts in selectable_projects(org).items()}
     can_create = org_tracks_local_projects(org)
 
-    from tracker.services.classification_service import IMMATERIAL_MAX_MINUTES
-
-    if not counts and not can_create:
+    needs = needs_project_check(org, project_counts=counts)
+    if needs is None:
         return Response({'date': str(first), 'blocks': [], 'total_minutes': 0})
 
-    from tracker.services.billing_totals import apply_confirmed_rules, billable_block_q
+    from tracker.services.billing_totals import apply_confirmed_rules
 
     # Confirmed time only — the same rule the Billable / Non-billable totals
     # use. A proposed block with a client GUESS is still a client question in
@@ -7359,25 +7359,14 @@ def blocks_needing_matter(request):
         'label': (b.window_title or b.title or '').strip() or '(no title)',
         'matter_options': counts.get(b.client_id, 0),
     } for b in blocks
-        # The firm's own overhead clients have no projects to file under.
-        if not (b.client and is_internal_client_name(b.client.name))
-        # Same materiality floor as Needs You: a 13-second Finder glance at a
-        # client folder or a path-less flicker is not worth a decision. It
-        # still shows under its client as "No project yet".
-        and (b.minutes or 0) >= IMMATERIAL_MAX_MINUTES]
-
-    # The part of it that is billable, so Daily Review can say "Xm of Billable
-    # needs a project" without non-billable client time making X > Billable.
-    listed = {r['id'] for r in rows}
-    billable_ids = set(
-        blocks.filter(billable_block_q(org), id__in=listed).values_list('id', flat=True)
-    ) if listed else set()
+        # Not internal clients, and not a 13-second glance — a sliver still
+        # shows under its client as "No project yet". Same rule as Reports.
+        if needs(b)]
 
     return Response({
         'date': str(first),
         'blocks': rows,
         'total_minutes': sum(r['minutes'] for r in rows),
-        'billable_minutes': sum(r['minutes'] for r in rows if r['id'] in billable_ids),
         'can_create': can_create,
     })
 

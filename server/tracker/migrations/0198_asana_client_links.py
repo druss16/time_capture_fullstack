@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0196_asana_connect_link'),
+        ('tracker', '0197_orgroutingrule_fallback_action'),
     ]
 
     operations = [

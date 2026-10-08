@@ -93,6 +93,14 @@ def sync_status(request):
         count = stats.get('count') or 0
         return _compute_hash(f"{latest_id}:{count}")
 
+    # Clients and projects hash their CONTENT, not just max id + count: an alias
+    # added ("Easterns") or a client renamed changes neither, so a running agent
+    # kept matching on its old list until a restart. A few hundred short rows.
+    client_rows = list(Client.objects.filter(id__in=accessible_clients, is_active=True)
+                       .order_by('id').values_list('id', 'name', 'code', 'aliases', 'visibility'))
+    project_rows = list(Project.objects.filter(client_id__in=accessible_clients, is_active=True)
+                        .order_by('id').values_list('id', 'name', 'client_id'))
+
     return Response({
         'server_time': timezone.now().isoformat(),
         'organization': {
@@ -103,11 +111,11 @@ def sync_status(request):
         'entities': {
             'clients': {
                 'count': client_stats['count'] or 0,
-                'hash': make_hash(client_stats),
+                'hash': _compute_hash(json.dumps(client_rows, default=str)),
             },
             'projects': {
                 'count': project_stats['count'] or 0,
-                'hash': make_hash(project_stats),
+                'hash': _compute_hash(json.dumps(project_rows, default=str)),
             },
             'task_types': {
                 'count': task_stats.get('count') or 0,

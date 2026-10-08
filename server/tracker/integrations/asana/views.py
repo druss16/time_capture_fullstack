@@ -50,19 +50,28 @@ def asana_connect(request):
 def asana_callback(request):
     """Exchange the code for tokens. Reached by redirect, with no session."""
     code, state, error = request.GET.get('code'), request.GET.get('state'), request.GET.get('error')
+    # Started from a connect link (services/connect_link.py) rather than Settings?
+    from tracker.services import connect_link
+    link = connect_link.link_for_state('asana', state)
+
+    def fail(reason):
+        if link:
+            return redirect(connect_link.return_url('asana', False, reason))
+        return _fail(reason)
+
     if error:
-        return _fail(error)
+        return fail(error)
     if not code or not state:
-        return _fail('missing_code')
+        return fail('missing_code')
     try:
         integration = Integration.objects.get(oauth_state=state, provider='asana')
     except Integration.DoesNotExist:
-        return _fail('invalid_state')
+        return fail('invalid_state')
     try:
         tokens = exchange_code(code)
     except Exception as e:
         logger.error('Asana token exchange failed: %s', e)
-        return _fail('token_exchange_failed')
+        return fail('token_exchange_failed')
 
     apply_tokens(integration, tokens)
     # The workspace is chosen on the first sync; a reconnect may be a
@@ -74,6 +83,9 @@ def asana_callback(request):
     integration.last_sync_error = ''
     integration.save()
     _start_sync(integration.id, full=True)
+    if link:
+        connect_link.finish(link, 'asana', integration)
+        return redirect(connect_link.return_url('asana', True))
     return _oauth_success_response('asana')
 
 

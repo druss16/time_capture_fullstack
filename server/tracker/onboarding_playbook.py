@@ -106,6 +106,12 @@ STEPS = [
               'push. QuickBooks Online: customers and invoices for Analytics. Either one ticks '
               'this step. For an agency, QuickBooks is its OWN books — time in it is admin, '
               'never client work.'),
+    Step('asana_connected', 'provision', 'Asana connected (if the agency uses it)', 'action',
+         who='firm', check='asana_connected', action='connect_link', verticals=('marketing',),
+         help='Same connect link — tick Asana. Anyone at the agency who can see its Asana '
+              'projects can approve; one connection reads the whole team\'s activity. Time in '
+              'the Asana desktop app (titled only "Asana") is then filed by the task worked on. '
+              'Mark N/A if they don\'t use Asana.'),
     Step('clio_connected', 'provision', 'Clio connected (correct region)', 'auto', who='firm',
          check='clio_connected', verticals=('legal',),
          help='Settings → Connections → Integrations → Clio. Pick US / EU / AU correctly '
@@ -319,6 +325,17 @@ class Facts:
         on = [label for key, label in names.items()
               if (i := self._integration(key)) and i.is_connected]
         return bool(on), (' + '.join(on) + ' connected') if on else 'not connected'
+
+    def asana_connected(self):
+        i = self._integration('asana')
+        if not (i and i.is_connected):
+            return False, 'not connected'
+        from tracker.integrations.asana.views import asana_status
+        s = asana_status(i)
+        if not s:
+            return True, 'connected'
+        return True, (f"connected · {s.get('projects_linked', 0)} of {s.get('projects', 0)} "
+                      f"projects linked · {s.get('people_linked', 0)} people")
 
     def clio_connected(self):
         i = self._integration('clio')

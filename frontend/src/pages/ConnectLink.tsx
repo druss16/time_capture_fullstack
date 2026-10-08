@@ -1,5 +1,5 @@
-// src/pages/ConnectLink.tsx — the firm's QuickBooks admin approves the
-// QuickBooks Online / QuickBooks Time connection from one emailed link.
+// src/pages/ConnectLink.tsx — someone at the firm approves its QuickBooks
+// Online / QuickBooks Time / Asana connections from one emailed link.
 // No login: the token in the URL is the credential (server: services/connect_link.py).
 //
 // Intuit sends the browser back to /connect/return (the server stores only a
@@ -13,11 +13,21 @@ import { primaryBtnClass } from "./settings/ui";
 
 const TOKEN_KEY = "tt_connect_link";
 
-const REASONS: Record<string, string> = {
-  access_denied: "The connection was cancelled in QuickBooks.",
+const LABELS: Record<string, string> = {
+  quickbooks: "QuickBooks Online", qb_time: "QuickBooks Time", asana: "Asana",
+};
+
+const reasons = (name: string): Record<string, string> => ({
+  access_denied: `The connection was cancelled in ${name}.`,
   invalid_state: "That attempt was already used or replaced. Please click Connect again.",
-  token_exchange_failed: "QuickBooks didn't complete the connection. Please try again.",
-  missing_code: "QuickBooks didn't complete the connection. Please try again.",
+  token_exchange_failed: `${name} didn't complete the connection. Please try again.`,
+  missing_code: `${name} didn't complete the connection. Please try again.`,
+});
+
+const DESCRIPTIONS: Record<ConnectProvider, string> = {
+  quickbooks: "Lets TimeTracker read your customers so time can be filed against them.",
+  qb_time: "One connection for the whole team: approved time goes to each person's QuickBooks Time timesheet.",
+  asana: "One connection for the whole team: time in Asana is filed to the project of the task worked on. Read-only — TimeTracker never changes anything in Asana.",
 };
 
 export default function ConnectLink() {
@@ -27,8 +37,9 @@ export default function ConnectLink() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<ConnectProvider | null>(null);
   const returned = params.get("status");
-  const returnedLabel = params.get("provider") === "qb_time" ? "QuickBooks Time" : "QuickBooks Online";
-  const returnError = returned === "error" ? (REASONS[params.get("reason") || ""] || REASONS.token_exchange_failed) : null;
+  const returnedLabel = LABELS[params.get("provider") || ""] || "QuickBooks Online";
+  const returnedReasons = reasons(params.get("provider") === "asana" ? "Asana" : "QuickBooks");
+  const returnError = returned === "error" ? (returnedReasons[params.get("reason") || ""] || returnedReasons.token_exchange_failed) : null;
 
   const load = useCallback(() => {
     connectRequest(token).then((s) => { setStatus(s); setErr(null); }).catch((e) => setErr(e.message));
@@ -36,10 +47,11 @@ export default function ConnectLink() {
 
   useEffect(() => { load(); }, [load]);
 
-  // QuickBooks Time's first import runs right after the grant; refresh until it settles.
+  // QuickBooks Time's and Asana's first import runs right after the grant; refresh until it settles.
   useEffect(() => {
-    const qbt = status?.providers.find((p) => p.key === "qb_time");
-    if (!qbt?.connected || !["pending", "running"].includes(qbt.sync_status || "")) return;
+    const syncing = status?.providers.some((p) =>
+      (p.key === "qb_time" || p.key === "asana") && p.connected && ["pending", "running"].includes(p.sync_status || ""));
+    if (!syncing) return;
     const t = setTimeout(load, 4000);
     return () => clearTimeout(t);
   }, [status, load]);
@@ -75,26 +87,27 @@ export default function ConnectLink() {
                 <div className="mt-0.5 text-sm text-emerald-700">
                   Connected
                   {p.key === "quickbooks" && typeof p.clients === "number" && ` · ${p.clients} customers imported`}
+                  {p.key === "asana" && typeof p.projects === "number" && ` · ${p.projects_linked ?? 0} of ${p.projects} projects linked`}
                 </div>
               ) : !p.configured ? (
                 <div className="mt-0.5 text-sm text-amber-700">Not available yet — Mavops has been told.</div>
               ) : (
-                <div className="mt-0.5 text-sm text-slate-600">
-                  {p.key === "quickbooks"
-                    ? "Lets TimeTracker read your customers so time can be filed against them."
-                    : "One connection for the whole team: approved time goes to each person's QuickBooks Time timesheet."}
-                </div>
+                <div className="mt-0.5 text-sm text-slate-600">{DESCRIPTIONS[p.key]}</div>
               )}
-              {p.key === "qb_time" && p.connected && ["pending", "running"].includes(p.sync_status || "") && (
+              {(p.key === "qb_time" || p.key === "asana") && p.connected && ["pending", "running"].includes(p.sync_status || "") && (
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><Loader2 className="h-3 w-3 animate-spin" /> Matching your team…</div>
               )}
-              {p.key === "qb_time" && p.connected && (p.unmatched?.length ?? 0) > 0 && (
+              {(p.key === "qb_time" || p.key === "asana") && p.connected && p.sync_status !== "pending" && (p.unmatched?.length ?? 0) > 0 && (
                 <div className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-                  <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> No QuickBooks Time user with the same email:</div>
+                  <div className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" /> No {p.label} user with the same email:</div>
                   <ul className="mt-1 list-disc pl-5">
                     {p.unmatched!.map((u) => <li key={u.email}>{u.name} <span className="text-amber-700">({u.email})</span></li>)}
                   </ul>
-                  <div className="mt-1 text-xs text-amber-800">Their time can't reach QuickBooks Time until the email in QuickBooks Time matches. Tell Mavops if they use a different address there.</div>
+                  <div className="mt-1 text-xs text-amber-800">
+                    {p.key === "asana"
+                      ? "Their Asana time can't be filed by task until the email in Asana matches (or they aren't in Asana, which is fine). Tell Mavops if they use a different address there."
+                      : "Their time can't reach QuickBooks Time until the email in QuickBooks Time matches. Tell Mavops if they use a different address there."}
+                  </div>
                 </div>
               )}
             </div>
@@ -112,7 +125,7 @@ export default function ConnectLink() {
       {err && <Banner tone="amber">{err}</Banner>}
 
       <p className="text-xs text-slate-500">
-        You'll sign in to QuickBooks on Intuit's own page; TimeTracker never sees your QuickBooks password.
+        You'll sign in on QuickBooks' or Asana's own page; TimeTracker never sees your password.
         This link can't be used to sign in to TimeTracker.
       </p>
     </Shell>
@@ -126,11 +139,12 @@ export function ConnectReturn() {
   try { token = sessionStorage.getItem(TOKEN_KEY); } catch { token = null; }
   if (token) return <Navigate to={`/connect/${encodeURIComponent(token)}?${params.toString()}`} replace />;
   const ok = params.get("status") === "connected";
+  const fallbackReasons = reasons(params.get("provider") === "asana" ? "Asana" : "QuickBooks");
   return (
     <Shell>
       <Banner tone={ok ? "green" : "amber"}>
         {ok ? "Connected. Thank you — you can close this page."
-          : (REASONS[params.get("reason") || ""] || REASONS.token_exchange_failed) + " Open the link from your email again to retry."}
+          : (fallbackReasons[params.get("reason") || ""] || fallbackReasons.token_exchange_failed) + " Open the link from your email again to retry."}
       </Banner>
     </Shell>
   );
@@ -154,8 +168,8 @@ function Shell({ firm, children }: { firm?: string; children: React.ReactNode })
       <div className="mx-auto max-w-2xl space-y-5 px-4 py-8 sm:px-6">
         <header>
           <div className="text-xs font-semibold uppercase tracking-wider text-primary">TimeTracker · Mavops</div>
-          <h1 className="mt-1 text-2xl font-semibold">{firm ? `Connect ${firm}'s QuickBooks` : "Connect QuickBooks"}</h1>
-          {firm && <p className="mt-1 text-sm text-slate-600">About two minutes. Click Connect and sign in to QuickBooks as you normally would.</p>}
+          <h1 className="mt-1 text-2xl font-semibold">{firm ? `Connect ${firm} to TimeTracker` : "Connect to TimeTracker"}</h1>
+          {firm && <p className="mt-1 text-sm text-slate-600">About two minutes each. Click Connect and sign in as you normally would.</p>}
         </header>
         {children}
       </div>

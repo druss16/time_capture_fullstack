@@ -599,6 +599,8 @@ def _connect_summary(link):
         'open': link.is_open,
         'qbo_connected_at': link.qbo_connected_at.isoformat() if link.qbo_connected_at else None,
         'qbt_connected_at': link.qbt_connected_at.isoformat() if link.qbt_connected_at else None,
+        'asana_connected_at': (link.asana_connected_at.isoformat()
+                               if getattr(link, 'asana_connected_at', None) else None),
     }}
 
 
@@ -619,7 +621,7 @@ def connect_link_view(request, pk):
 
     providers = [x for x in (request.data.get('providers') or []) if x in CONNECT_PROVIDERS]
     if not providers:
-        return _err('Pick QuickBooks Online, QuickBooks Time, or both.')
+        return _err('Pick at least one: QuickBooks Online, QuickBooks Time or Asana.')
     email = (request.data.get('email') or '').strip()
     if email:
         try:

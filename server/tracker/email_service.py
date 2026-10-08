@@ -502,23 +502,38 @@ Questions? {help_url} or reply to this email.
 
 def send_connect_link(to_email: str, firm_name: str, connect_url: str, providers: list,
                       contact_name: str = None, expires_on: str = None):
-    """Ask a firm's QuickBooks admin to approve the connection(s).
+    """Ask someone at a firm to approve the connection(s) — QuickBooks Online,
+    QuickBooks Time and/or Asana.
 
     They usually have no TimeTracker account, so the email says what the link
-    does and does not do: it only lets them approve the QuickBooks connection.
+    does and does not do: it only lets them approve these connections.
     """
     hello = f"Hi {contact_name}," if contact_name else "Hi,"
     until = f" It works until {expires_on}." if expires_on else ""
     what = " and ".join(providers) or "QuickBooks"
-    # Each service is its own Intuit approval, so two means two sign-ins.
-    steps = ("It takes about two minutes: open the link, click Connect, and sign in to "
-             "QuickBooks as you normally would." if len(providers) < 2 else
-             "It takes a few minutes: open the link, click Connect next to each one, and "
-             "sign in to QuickBooks as you normally would.")
+    has_qb = any(p.startswith("QuickBooks") for p in providers) or not providers
+    has_asana = "Asana" in providers
+    # Who may approve, in the provider's own terms — the reason the email
+    # came to this person and not to someone else.
+    if has_qb and has_asana:
+        why = ("Intuit only lets a QuickBooks admin approve QuickBooks, which is why this came "
+               "to you. For Asana, anyone who can see the agency's Asana projects can approve.")
+    elif has_asana:
+        why = ("Anyone at the agency who can see its Asana projects can approve it, and one "
+               "approval covers the whole team.")
+    else:
+        why = "Intuit only lets a QuickBooks admin approve that, which is why this came to you."
+    sign_in = ("QuickBooks or Asana" if has_qb and has_asana
+               else "Asana" if has_asana else "QuickBooks")
+    # Each service is its own approval, so two means two sign-ins.
+    steps = (f"It takes about two minutes: open the link, click Connect, and sign in to "
+             f"{sign_in} as you normally would." if len(providers) < 2 else
+             f"It takes a few minutes: open the link, click Connect next to each one, and "
+             f"sign in to {sign_in} as you normally would.")
     plain = f"""{hello}
 
 {firm_name} is setting up TimeTracker, and it needs to connect to {what}.
-Intuit only lets a QuickBooks admin approve that, which is why this came to you.
+{why}
 {steps}
 
 Open the link:
@@ -534,8 +549,7 @@ Questions? Just reply to this email.
     body = (
         f'<p style="margin:0 0 10px;">{hello}</p>'
         f'<p style="margin:0 0 6px;"><strong style="color:{INK};">{firm_name}</strong> is '
-        f'setting up TimeTracker, and it needs to connect to {what}. Intuit only lets a '
-        f'QuickBooks admin approve that, which is why this came to you.</p>'
+        f'setting up TimeTracker, and it needs to connect to {what}. {why}</p>'
         f'<p style="margin:0;">{steps}</p>'
         + _btn(connect_url, 'brand', f'Connect {what}')
         + f'<p style="margin:0 0 6px;color:{INK_FAINT};font-size:13px;">No TimeTracker account '
@@ -547,9 +561,12 @@ Questions? Just reply to this email.
     )
     html = _wrap_html('brand', '', f'Connect {firm_name} to {what}', body,
                       preheader=f'A quick approval so TimeTracker can connect to {what}.')
+    subject = (f"Approve the Asana connection for {firm_name}" if has_asana and not has_qb
+               else f"Approve the {what} connection for {firm_name}" if has_asana
+               else f"Approve the QuickBooks connection for {firm_name}")
     return send_email(
         to_email=to_email,
-        subject=f"Approve the QuickBooks connection for {firm_name}",
+        subject=subject,
         html_content=html,
         plain_content=plain,
         categories=["onboarding", "connect_link"],

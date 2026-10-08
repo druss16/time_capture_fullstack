@@ -15,6 +15,7 @@ from tracker.integrations.asana.matching import canon, split_name
 from tracker.models_asana import AsanaNameMap, AsanaProjectLink
 
 GROUP_LIMIT = 80
+PICK_LIMIT = 150
 
 
 def _suggestions(matcher, part, clients, n=3):
@@ -84,6 +85,21 @@ def link_report(integration) -> dict:
         })
     rows.sort(key=lambda r: (-(r['count'] - r['client_only']), -r['count']))
 
+    # Client known, project not: the closest projects of that client, for a
+    # person to accept in one click. Best guesses first.
+    picks = []
+    for link in links:
+        if link.project_id or not link.client_id or link.link_source in ('manual', 'ignored'):
+            continue
+        cands = matcher.project_candidates(link.client_id, link.asana_name)
+        if cands:
+            picks.append({
+                'asana_gid': link.asana_gid, 'asana_name': link.asana_name,
+                'client_name': link.client.name if link.client else None,
+                'candidates': [{'project_id': p.id, 'name': p.name, 'score': sc} for sc, p in cands],
+            })
+    picks.sort(key=lambda r: -r['candidates'][0]['score'])
+
     live = len(links)
     matched = counts['project'] + counts['client'] + counts['ignored']
     return {
@@ -94,6 +110,8 @@ def link_report(integration) -> dict:
         'unlinked': counts['unlinked'],
         'matched_pct': round(100 * matched / live) if live else 0,
         'groups': rows[:GROUP_LIMIT],
+        'project_picks': picks[:PICK_LIMIT],
+        'project_picks_total': len(picks),
         'clients': [{'id': c.id, 'name': c.name} for c in clients],
         'has_team_or_field': any(l.asana_team or l.client_hint or l.qbt_ref for l in links),
         # Linked exactly through a "QB Time Project" field in Asana.
@@ -119,3 +137,14 @@ def map_name(integration, prefix: str, *, client=None, ignore=False, label='', u
             defaults={'client': None if ignore else client, 'ignore': bool(ignore),
                       'label': (label or prefix)[:255], 'created_by': user})
     return relink(integration)
+
+
+def accept_project(integration, asana_gid: str, project) -> None:
+    """A person picked the project: a hand link, kept by every later sync."""
+    link = AsanaProjectLink.objects.get(integration=integration, asana_gid=asana_gid)
+    link.project = project
+    link.client_id = project.client_id
+    link.link_source = 'manual'
+    link.save(update_fields=['project', 'client', 'link_source', 'updated_at'])
+    from tracker.integrations.asana.sync import carry_to_activity
+    carry_to_activity(link)

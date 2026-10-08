@@ -163,8 +163,19 @@ def relink(integration) -> dict:
         _apply(link, matcher)
         if (link.project_id, link.client_id, link.link_source) != before:
             link.save(update_fields=['project', 'client', 'link_source', 'updated_at'])
+            carry_to_activity(link)
             changed += 1
     return {'changed': changed}
+
+
+def carry_to_activity(link) -> int:
+    """Activity already read keeps the project its Asana project had THEN.
+    When the link improves (a pick, a group choice, a better match), the
+    activity follows, so the attribution sweep files that time to the
+    project too. Returns rows moved."""
+    return (AsanaActivity.objects
+            .filter(integration_id=link.integration_id, asana_project_gid=link.asana_gid)
+            .update(project_id=link.project_id, client_id=link.client_id))
 
 
 def _field_named(row, names) -> str:
@@ -239,6 +250,8 @@ def _sync_projects(integration, api, workspace, stats):
                     link.save()
             except IntegrityError:      # a concurrent sync made it first
                 link = AsanaProjectLink.objects.get(integration=integration, asana_gid=gid)
+            if before is not None and (link.project_id, link.client_id) != before[5:7]:
+                carry_to_activity(link)
         links[gid] = link
         stats['linked' if link.project_id else 'unlinked'] += 1
         if n % 200 == 0:

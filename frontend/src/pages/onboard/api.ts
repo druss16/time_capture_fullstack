@@ -113,6 +113,9 @@ export const onboardApi = {
   asanaLinks: (id: number) => safeFetchJson<AsanaLinkReport>(`${BASE}/projects/${id}/asana-links/`),
   mapAsanaName: (id: number, body: { prefix: string; label?: string; client_id?: number | null; ignore?: boolean; clear?: boolean }) =>
     safeFetchJson<AsanaLinkReport & { changed: number }>(`${BASE}/projects/${id}/asana-links/`, { method: "POST", ...json(body) }),
+  acceptAsanaProject: (id: number, asanaGid: string, projectId: number) =>
+    safeFetchJson<AsanaLinkReport & { changed: number }>(`${BASE}/projects/${id}/asana-links/`,
+      { method: "POST", ...json({ accept: asanaGid, project_id: projectId }) }),
   connectLink: (id: number) => safeFetchJson<{ link: ConnectLinkInfo | null; links?: ConnectLinkInfo[] }>(`${BASE}/projects/${id}/connect-link/`),
   issueConnectLink: (id: number, body: { providers: ConnectProvider[]; email: string; name: string }) =>
     safeFetchJson<{ url: string; emailed: boolean; to: string; link: ConnectLinkInfo; links?: ConnectLinkInfo[] }>(
@@ -129,6 +132,11 @@ export interface AsanaLinkReport {
   live: number; linked_project: number; linked_client: number; ignored: number; unlinked: number;
   matched_pct: number; groups: AsanaLinkGroup[]; clients: { id: number; name: string }[];
   has_team_or_field: boolean;
+  project_picks?: AsanaProjectPick[]; project_picks_total?: number;
+}
+export interface AsanaProjectPick {
+  asana_gid: string; asana_name: string; client_name: string | null;
+  candidates: { project_id: number; name: string; score: number }[];
 }
 
 export type ConnectProvider = "quickbooks" | "qb_time" | "asana";

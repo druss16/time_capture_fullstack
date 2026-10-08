@@ -21,6 +21,7 @@ from django.db import models
 class AsanaProjectLink(models.Model):
     """One Asana project, and the TimeTracker project it is (if known)."""
     LINK_SOURCES = [
+        ('field', 'Linked by its QB Time field in Asana'),
         ('name', 'Matched by name'),
         ('client', 'Client named, project not'),
         ('ignored', 'Not a client (by hand)'),
@@ -50,6 +51,11 @@ class AsanaProjectLink(models.Model):
     # reliably than the project's name does (see matching.py).
     asana_team = models.CharField(max_length=255, blank=True, default='')
     client_hint = models.CharField(max_length=255, blank=True, default='')
+    # A project custom field naming the QuickBooks Time project ("QB Time
+    # Project": its id or its name). Names are typed twice by hand and drift
+    # ("Deal Maker" / "Dealmaker"); this is the shared key that makes the
+    # link exact. Outranks every name rule; only a hand link outranks it.
+    qbt_ref = models.CharField(max_length=255, blank=True, default='')
 
     # Tasks modified after this have not had their activity read yet.
     activity_cursor = models.DateTimeField(null=True, blank=True)

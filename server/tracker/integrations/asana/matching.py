@@ -112,11 +112,12 @@ def _score(a: str, b: str) -> float:
 class Matcher:
     """Built once per sync from the firm's clients and projects."""
 
-    def __init__(self, clients, projects, name_map=None):
+    def __init__(self, clients, projects, name_map=None, qbt_ids=None):
         """clients: objects with id, name, aliases (+ email, alias_sources);
         projects: objects with id, name, client_id, is_active;
         name_map: {canonical prefix: client, or None for "not a client"}."""
         self.name_map = dict(name_map or {})
+        self.qbt_ids = {str(k).strip(): v for k, v in (qbt_ids or {}).items()}
         from tracker.services.alias_derivation import usable_aliases
         from tracker.services.matter_attribution import client_abbreviations
         self.projects = list(projects)
@@ -251,9 +252,30 @@ class Matcher:
         live = [p for p in projects if p.is_active] or list(projects)
         return live[0] if len(live) == 1 else None
 
-    def match(self, asana_name: str, team: str = '', client_hint: str = ''):
-        """(project or None, client or None, how). how: 'name' / 'client' /
-        'ignored' (an operator marked the name "not a client") / ''."""
+    def by_qbt_ref(self, ref: str):
+        """The project a "QB Time Project" field names: its QuickBooks Time id
+        exactly, else its name exactly (canonically), else a clear close
+        match. None when it names nothing — a typo must not guess."""
+        ref = (ref or '').strip()
+        if not ref:
+            return None
+        pid = self.qbt_ids.get(ref)
+        if pid is not None:
+            return next((p for p in self.projects if p.id == pid), None)
+        same = self._one(self._by_canon.get(canon(ref), []))
+        if same is not None:
+            return same
+        part, rest = split_name(ref)
+        return self._best(self.projects, rest, f'{part} {rest}' if part else rest, GLOBAL_CLOSE)
+
+    def match(self, asana_name: str, team: str = '', client_hint: str = '', qbt_ref: str = ''):
+        """(project or None, client or None, how). how: 'field' (its QB Time
+        field named the project) / 'name' / 'client' / 'ignored' (an operator
+        marked the name "not a client") / ''."""
+        if qbt_ref:
+            project = self.by_qbt_ref(qbt_ref)
+            if project is not None:
+                return project, None, 'field'
         whole = self._one(self._by_canon.get(canon(asana_name), []))
         if whole is not None:
             return whole, None, 'name'

@@ -95,7 +95,11 @@ def link_report(integration) -> dict:
         'matched_pct': round(100 * matched / live) if live else 0,
         'groups': rows[:GROUP_LIMIT],
         'clients': [{'id': c.id, 'name': c.name} for c in clients],
-        'has_team_or_field': any(l.asana_team or l.client_hint for l in links),
+        'has_team_or_field': any(l.asana_team or l.client_hint or l.qbt_ref for l in links),
+        # Linked exactly through a "QB Time Project" field in Asana.
+        'linked_by_field': sum(1 for l in links if l.link_source == 'field'),
+        'qbt_field_unresolved': sum(1 for l in links if l.qbt_ref and l.link_source != 'field'
+                                    and l.link_source != 'manual'),
     }
 
 

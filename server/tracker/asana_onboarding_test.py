@@ -181,3 +181,47 @@ class SpeedTests(Base):
         self.assertEqual(AsanaProjectLink.objects.get(asana_gid='g1').updated_at, stamp)   # not rewritten
         self.assertIsNotNone(AsanaProjectLink.objects.get(asana_gid='g1').last_seen_in_source)
         self.assertEqual(applied.call_count, 2)       # called, but the archived one returns at once
+
+
+class QbtFieldTests(Base):
+    """A "QB Time Project" custom field in Asana is the shared key: names are
+    typed twice by hand and drift; the field makes the link exact."""
+    def setUp(self):
+        super().setUp()
+        from tracker.models_task_type_sets import ExternalMatterMapping
+        qbt = Integration.objects.create(organization=self.org, provider='qb_time', is_connected=True)
+        self.deal = Project.objects.create(org=self.org, client=self.tgb, name='Tom Gill Buick GMC Showroom Deal Maker')
+        ExternalMatterMapping.objects.create(integration=qbt, project=self.deal, external_id='8812345')
+
+    def sync(self, *rows):
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            s._sync_projects(self.integ, FakeApi({'projects': list(rows)}), 'ws1',
+                             {'seen': 0, 'linked': 0, 'unlinked': 0, 'ambiguous': 0})
+        return {l.asana_gid: (l.project_id, l.client_id, l.link_source) for l in AsanaProjectLink.objects.all()}
+
+    def field(self, name, value):
+        return [{'name': name, 'display_value': value}]
+
+    def test_qbt_id_links_exactly_whatever_the_name_says(self):
+        got = self.sync({'gid': 'g1', 'name': 'Totally different name',
+                         'custom_fields': self.field('QB Time Project', '8812345')})
+        self.assertEqual(got['g1'], (self.deal.id, self.tgb.id, 'field'))
+
+    def test_qbt_name_and_field_name_variants(self):
+        got = self.sync({'gid': 'g1', 'name': 'x', 'custom_fields': self.field('QBT Project', 'Robert DeNooyer Logo Emblem')},
+                        {'gid': 'g2', 'name': 'y', 'custom_fields': self.field('QuickBooks-Time Project',
+                                                                            'Tom Gill Buick GMC Showroom Dealmaker')})
+        self.assertEqual(got['g1'][0], self.emblem.id)
+        self.assertEqual(got['g2'][0], self.deal.id)       # close match, still exact enough
+
+    def test_field_naming_nothing_falls_back_to_the_name(self):
+        got = self.sync({'gid': 'g1', 'name': 'Robert DeNooyer: Logo Emblem',
+                         'custom_fields': self.field('QB Time Project', 'no such thing 999')})
+        self.assertEqual(got['g1'][:2], (self.emblem.id, self.denooyer.id))
+        self.assertEqual(got['g1'][2], 'name')
+
+    def test_hand_link_still_wins(self):
+        AsanaProjectLink.objects.create(integration=self.integ, asana_gid='g1', asana_name='x',
+                                        project=self.emblem, link_source='manual')
+        got = self.sync({'gid': 'g1', 'name': 'x', 'custom_fields': self.field('QB Time Project', '8812345')})
+        self.assertEqual(got['g1'][0], self.emblem.id)

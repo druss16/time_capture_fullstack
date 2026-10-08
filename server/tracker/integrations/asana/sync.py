@@ -103,6 +103,11 @@ def _workspace(integration, api) -> str:
 
 
 CLIENT_FIELD_NAMES = {'client', 'customer', 'account', 'client name', 'customer name', 'company'}
+# A custom field holding the QuickBooks Time project — whatever the firm named
+# it. Compared lower-cased with punctuation dropped.
+QBT_FIELD_NAMES = {'qb time project', 'qbt project', 'quickbooks time project', 'qb time',
+                   'qbt', 'qb time job', 'qbt job', 'qb time jobcode', 'jobcode', 'job code',
+                   'quickbooks project', 'qb project', 'tsheets project', 'time project'}
 
 
 def build_matcher(integration):
@@ -118,11 +123,17 @@ def build_matcher(integration):
             name_map[m.prefix] = None if m.ignore else m.client
     except Exception as e:                                       # noqa: BLE001
         logger.warning('Asana name map unavailable (%s)', e)    # not migrated yet
+    from tracker.models_task_type_sets import ExternalMatterMapping
+    # QuickBooks Time project ids, so a "QB Time Project" field holding an id
+    # links exactly — the id QuickBooks Time itself assigned.
+    qbt_ids = dict(ExternalMatterMapping.objects
+                   .filter(integration__organization=org, integration__provider='qb_time')
+                   .values_list('external_id', 'project_id'))
     return Matcher(
         Client.objects.filter(org=org, is_active=True)
         .only('id', 'name', 'aliases', 'email', 'alias_sources'),
         Project.objects.filter(org=org).only('id', 'name', 'client_id', 'is_active'),
-        name_map=name_map)
+        name_map=name_map, qbt_ids=qbt_ids)
 
 
 def _apply(link, matcher) -> None:
@@ -135,7 +146,8 @@ def _apply(link, matcher) -> None:
     if link.archived and link.pk:
         return
     project, client, how = matcher.match(link.asana_name, team=getattr(link, 'asana_team', ''),
-                                         client_hint=getattr(link, 'client_hint', ''))
+                                         client_hint=getattr(link, 'client_hint', ''),
+                                         qbt_ref=getattr(link, 'qbt_ref', ''))
     link.project = project
     link.client_id = project.client_id if project else (client.id if client else None)
     link.link_source = how
@@ -153,6 +165,19 @@ def relink(integration) -> dict:
             link.save(update_fields=['project', 'client', 'link_source', 'updated_at'])
             changed += 1
     return {'changed': changed}
+
+
+def _field_named(row, names) -> str:
+    import re
+    for f in row.get('custom_fields') or []:
+        key = ' '.join(re.sub(r'[^a-z0-9]+', ' ', (f.get('name') or '').lower()).split())
+        if key in names and f.get('display_value') not in (None, ''):
+            return str(f['display_value']).strip()
+    return ''
+
+
+def _qbt_field(row) -> str:
+    return _field_named(row, QBT_FIELD_NAMES)
 
 
 def _client_field(row) -> str:
@@ -193,13 +218,14 @@ def _sync_projects(integration, api, workspace, stats):
             continue
         stats['seen'] += 1
         link = links.get(gid) or AsanaProjectLink(integration=integration, asana_gid=gid)
-        fields = ('asana_name', 'archived', 'asana_team', 'client_hint',
+        fields = ('asana_name', 'archived', 'asana_team', 'client_hint', 'qbt_ref',
                   'project_id', 'client_id', 'link_source')
         before = tuple(getattr(link, f) for f in fields) if link.pk else None
         link.asana_name = (row.get('name') or '').strip()[:500]
         link.archived = bool(row.get('archived'))
         link.asana_team = ((row.get('team') or {}).get('name') or '')[:255]
         link.client_hint = _client_field(row)[:255]
+        link.qbt_ref = _qbt_field(row)[:255]
         _apply(link, matcher)
         if link.client_id and not link.project_id:
             stats['client_only'] += 1

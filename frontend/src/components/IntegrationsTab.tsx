@@ -80,6 +80,7 @@ interface ProviderStatus {
   projects_linked?: number;
   clients_linked?: number;   // Asana projects tied to a client, project not known
   syncing?: boolean;         // Asana — a full sync holds the lock right now
+  progress?: { phase: string; done: number; total: number } | null;
   people_linked?: number;
   activity_7d?: number;
 }
@@ -610,7 +611,11 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
               </div>
               <p className="font-bold text-slate-900 text-sm">
                 {isAsana && status.syncing
-                  ? <span className="inline-flex items-center gap-1.5 text-sky-700"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing…</span>
+                  ? <span className="inline-flex items-center gap-1.5 text-sky-700"><Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      {status.progress && status.progress.total
+                        ? `${status.progress.phase === 'activity' ? 'Reading activity' : 'Matching projects'} ${status.progress.done} of ${status.progress.total}`
+                        : 'Syncing…'}
+                    </span>
                   : status.last_synced
                   ? (() => {
                       const diff = Math.floor((Date.now() - new Date(status.last_synced).getTime()) / 1000);

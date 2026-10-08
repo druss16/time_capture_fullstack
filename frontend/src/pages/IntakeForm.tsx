@@ -172,6 +172,18 @@ export default function IntakeForm() {
                 options={[["hourly", "Hourly"], ["retainer", "Monthly retainer"], ["mix", "A mix"]]} onChange={(x) => setAns("billing_model", x)} />
               <Choice label="Where does an hourly rate come from?" name="rate_source" value={a.answers.rate_source as string} disabled={ro}
                 options={[["person", "The person"], ["service", "The service"], ["client", "The client"]]} onChange={(x) => setAns("rate_source", x)} />
+              <Choice label="Do you run your projects in Asana?" name="uses_asana" value={a.answers.uses_asana as string} disabled={ro}
+                options={[["yes", "Yes"], ["no", "No"]]} onChange={(x) => setAns("uses_asana", x)} />
+              {a.answers.uses_asana === "yes" && (
+                <div>
+                  <label className={labelClass}>How are your Asana projects named? An example or two helps.</label>
+                  <input className={inputClass} disabled={ro} placeholder={'e.g. "Client: Project" — Tom Gill: October Offers'}
+                    value={(a.answers.asana_naming as string) || ""} onChange={(e) => setAns("asana_naming", e.target.value)} />
+                  <p className="mt-1 text-xs text-slate-500">
+                    And if a client goes by a short name in Asana (“Fredy Chevy” for Fredericktown Chevrolet), list those too — we'll match them on day one.
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {v === "legal" && (

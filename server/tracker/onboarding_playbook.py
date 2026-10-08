@@ -112,6 +112,11 @@ STEPS = [
               'projects can approve; one connection reads the whole team\'s activity. Time in '
               'the Asana desktop app (titled only "Asana") is then filed by the task worked on. '
               'Mark N/A if they don\'t use Asana.'),
+    Step('asana_linked', 'provision', 'Asana projects matched to clients', 'action',
+         check='asana_linked', action='asana_links', verticals=('marketing',),
+         help='Opens the link report: unmatched Asana projects grouped by the client name '
+              'they are written under ("DeNooyer — 19"). One choice per group fixes all of '
+              'them. Done at 90% matched. Mark N/A if they don\'t use Asana.'),
     Step('clio_connected', 'provision', 'Clio connected (correct region)', 'auto', who='firm',
          check='clio_connected', verticals=('legal',),
          help='Settings → Connections → Integrations → Clio. Pick US / EU / AU correctly '
@@ -336,6 +341,19 @@ class Facts:
             return True, 'connected'
         return True, (f"connected · {s.get('projects_linked', 0)} of {s.get('projects', 0)} "
                       f"projects linked · {s.get('people_linked', 0)} people")
+
+    def asana_linked(self):
+        i = self._integration('asana')
+        if not (i and i.is_connected):
+            return False, 'Asana not connected'
+        try:
+            from tracker.integrations.asana.report import link_report
+            r = link_report(i)
+        except Exception as e:                                   # noqa: BLE001
+            return False, f'report unavailable ({type(e).__name__})'
+        return r['matched_pct'] >= 90, (
+            f"{r['matched_pct']}% matched · {r['linked_project']} to a project, "
+            f"{r['linked_client']} to a client, {r['unlinked']} unmatched")
 
     def clio_connected(self):
         i = self._integration('clio')

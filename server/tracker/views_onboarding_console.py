@@ -656,6 +656,39 @@ def connect_link_view(request, pk):
                      **_connect_summary(link)})
 
 
+@operator_view(['GET', 'POST'])
+def asana_links_view(request, pk):
+    """GET: how the firm's Asana projects matched, unmatched grouped by client
+    name. POST {prefix, client_id | null, ignore?, clear?}: decide one name
+    for its whole group and relink it (integrations/asana/report.py)."""
+    from tracker.integrations.asana.report import link_report, map_name
+    from tracker.models import Client, Integration
+
+    p = _project(pk)
+    integration = Integration.objects.filter(organization=p.organization, provider='asana').first()
+    if integration is None:
+        return _err('This firm has not connected Asana yet.', 404)
+    if request.method == 'POST':
+        prefix = (request.data.get('prefix') or '').strip()
+        ignore = bool(request.data.get('ignore'))
+        clear = bool(request.data.get('clear'))
+        client = None
+        if not (ignore or clear):
+            client = Client.objects.filter(org=p.organization, id=request.data.get('client_id')).first()
+            if client is None:
+                return _err('Pick one of the firm\'s clients.')
+        try:
+            result = map_name(integration, prefix, client=client, ignore=ignore, clear=clear,
+                              label=request.data.get('label') or prefix, user=request.user)
+        except ValueError as e:
+            return _err(e)
+        svc.audit(p, request.user, 'asana.map_name', prefix=prefix,
+                  client=client.name if client else None, ignore=ignore, clear=clear,
+                  changed=result['changed'])
+        return Response({**link_report(integration), 'changed': result['changed']})
+    return Response(link_report(integration))
+
+
 class PublicConnect(APIView):
     """The firm's side: no login, the token in the path is the whole credential."""
     authentication_classes = []

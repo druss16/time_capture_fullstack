@@ -110,11 +110,26 @@ export const onboardApi = {
     safeFetchJson<Intake & { emailed: boolean; to: string }>(`${BASE}/projects/${id}/intake/send/`, { method: "POST", ...json({ email, name }) }),
   markIntakeSent: (id: number, to: string) =>
     safeFetchJson<Intake>(`${BASE}/projects/${id}/intake/mark-sent/`, { method: "POST", ...json({ to }) }),
+  asanaLinks: (id: number) => safeFetchJson<AsanaLinkReport>(`${BASE}/projects/${id}/asana-links/`),
+  mapAsanaName: (id: number, body: { prefix: string; label?: string; client_id?: number | null; ignore?: boolean; clear?: boolean }) =>
+    safeFetchJson<AsanaLinkReport & { changed: number }>(`${BASE}/projects/${id}/asana-links/`, { method: "POST", ...json(body) }),
   connectLink: (id: number) => safeFetchJson<{ link: ConnectLinkInfo | null; links?: ConnectLinkInfo[] }>(`${BASE}/projects/${id}/connect-link/`),
   issueConnectLink: (id: number, body: { providers: ConnectProvider[]; email: string; name: string }) =>
     safeFetchJson<{ url: string; emailed: boolean; to: string; link: ConnectLinkInfo; links?: ConnectLinkInfo[] }>(
       `${BASE}/projects/${id}/connect-link/`, { method: "POST", ...json(body) }),
 };
+
+export interface AsanaLinkGroup {
+  prefix: string; label: string; count: number; client_only: number; current_client: string | null;
+  examples: string[]; fixable: boolean;
+  mapped: { client_id: number | null; client_name: string | null; ignore: boolean } | null;
+  suggestions: { id: number; name: string }[];
+}
+export interface AsanaLinkReport {
+  live: number; linked_project: number; linked_client: number; ignored: number; unlinked: number;
+  matched_pct: number; groups: AsanaLinkGroup[]; clients: { id: number; name: string }[];
+  has_team_or_field: boolean;
+}
 
 export type ConnectProvider = "quickbooks" | "qb_time" | "asana";
 export interface ConnectLinkInfo {

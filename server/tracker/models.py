@@ -5037,7 +5037,7 @@ from tracker.models_onboarding_console import (  # noqa: F401, E402
 from tracker.models_sso import SocialLogin  # noqa: F401, E402
 
 # Asana — project links + task activity, read-only (see models_asana.py)
-from tracker.models_asana import AsanaActivity, AsanaProjectLink  # noqa: F401, E402
+from tracker.models_asana import AsanaActivity, AsanaNameMap, AsanaProjectLink  # noqa: F401, E402
 
 
 

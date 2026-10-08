@@ -458,6 +458,9 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   const toggleSelectAll = () => setSelectedClientIds(selectedClientIds.size === filteredClients.length ? new Set() : new Set(filteredClients.map(c => c.id)));
   const clearSelection  = () => setSelectedClientIds(new Set());
   const selectedClients = clients.filter(c => selectedClientIds.has(c.id));
+  // Inactive clients (folded duplicates, pruned imports) stay listed for history;
+  // the count leads with the active ones so "49 of 536" doesn't read as 536 clients.
+  const activeClientCount = clients.filter(c => c.is_active).length;
 
   const resetForm = () => { setForm({ name: '', code: '', visibility: 'all', aliases: [] }); setAliasInput(''); setShowAdd(false); setEditingId(null); };
 
@@ -569,7 +572,9 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
           ))}
         </div>
         <span className="text-xs text-slate-400 ml-auto">
-          {filteredClients.length === clients.length ? `${clients.length} clients` : <><span className="font-semibold text-slate-600">{filteredClients.length}</span> of {clients.length}</>}
+          {search
+            ? <><span className="font-semibold text-slate-600">{filteredClients.length}</span> of {clients.length}</>
+            : <><span className="font-semibold text-slate-600">{activeClientCount}</span> active · {clients.length - activeClientCount} inactive</>}
           {(search || statusFilter !== 'all') && filteredClients.length < clients.length && (
             <button onClick={() => { setSearch(''); setStatusFilter('all'); }} className="ml-2 text-primary hover:underline font-medium">Clear</button>
           )}

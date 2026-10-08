@@ -255,3 +255,83 @@ class HeartbeatTests(Base):
             n = len(calls)
             time.sleep(0.2)
         self.assertEqual(len(calls), n)
+
+
+class ProjectPickTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.eastern = Client.objects.create(org=self.org, name='Easterns Automotive Group')
+        self.white = Project.objects.create(org=self.org, client=self.eastern,
+                                            name='Easterns Nissan White Marsh Website Updates')
+        self.bm = Client.objects.create(org=self.org, name='Beaver Mazda')
+        self.logo = Project.objects.create(org=self.org, client=self.bm, name='Beaver Mazda CX5 Event Logo')
+        self.refresh = Project.objects.create(org=self.org, client=self.tgb, name='Tom Gill Buick GMC Website Refresh')
+
+    def sync(self, *names):
+        rows = [{'gid': f'g{i}', 'name': n} for i, n in enumerate(names)]
+        with mock.patch.object(s, '_redis', return_value=FakeRedis()):
+            s._sync_projects(self.integ, FakeApi({'projects': rows}), 'ws1',
+                             {'seen': 0, 'linked': 0, 'unlinked': 0, 'ambiguous': 0})
+        return {l.asana_name: l for l in AsanaProjectLink.objects.all()}
+
+    def test_client_words_set_aside_on_both_sides(self):
+        got = self.sync('Easterns Auto Group: Nissan of White Marsh Website Update')
+        self.assertEqual(got['Easterns Auto Group: Nissan of White Marsh Website Update'].project_id, self.white.id)
+
+    def test_a_different_deliverable_is_not_linked(self):
+        got = self.sync('Beaver Mazda: CX5 Event Email')
+        link = got['Beaver Mazda: CX5 Event Email']
+        self.assertEqual((link.project_id, link.client_id), (None, self.bm.id))
+
+    def test_report_suggests_and_one_click_accept_sticks(self):
+        self.sync('Beaver Mazda: CX5 Event Email', 'Tom Gill Buick GMC: Website Changes')
+        url = f'/api/onboard/projects/{self.p.id}/asana-links/'
+        r = self.api.get(url).json()
+        picks = {x['asana_name']: x for x in r['project_picks']}
+        self.assertEqual(picks['Tom Gill Buick GMC: Website Changes']['candidates'][0]['project_id'],
+                         self.refresh.id)
+        gid = picks['Tom Gill Buick GMC: Website Changes']['asana_gid']
+        r = self.api.post(url, {'accept': gid, 'project_id': self.refresh.id}, format='json').json()
+        self.assertNotIn('Tom Gill Buick GMC: Website Changes', [x['asana_name'] for x in r['project_picks']])
+        link = AsanaProjectLink.objects.get(asana_gid=gid)
+        self.assertEqual((link.project_id, link.link_source), (self.refresh.id, 'manual'))
+        # A later sync keeps it.
+        self.sync('Beaver Mazda: CX5 Event Email', 'Tom Gill Buick GMC: Website Changes')
+        link.refresh_from_db()
+        self.assertEqual(link.project_id, self.refresh.id)
+
+    def test_accept_refuses_another_firms_project(self):
+        from tracker.models import Organization
+        other = Organization.objects.create(name='Other', slug='other-firm')
+        foreign = Project.objects.create(org=other, name='Theirs',
+                                         client=Client.objects.create(org=other, name='Their Client'))
+        self.sync('Beaver Mazda: CX5 Event Email')
+        gid = AsanaProjectLink.objects.get().asana_gid
+        r = self.api.post(f'/api/onboard/projects/{self.p.id}/asana-links/',
+                          {'accept': gid, 'project_id': foreign.id}, format='json')
+        self.assertEqual(r.status_code, 400)
+
+
+class CarryToActivityTests(ProjectPickTests):
+    def test_accepting_a_pick_moves_activity_already_read(self):
+        from tracker.models_asana import AsanaActivity
+        self.sync('Tom Gill Buick GMC: Website Changes')
+        link = AsanaProjectLink.objects.get()
+        act = AsanaActivity.objects.create(integration=self.integ, story_gid='s1', user=self.operator,
+                                           at=timezone.now(), asana_project_gid=link.asana_gid,
+                                           client=self.tgb, kind='comment_added')
+        self.api.post(f'/api/onboard/projects/{self.p.id}/asana-links/',
+                      {'accept': link.asana_gid, 'project_id': self.refresh.id}, format='json')
+        act.refresh_from_db()
+        self.assertEqual((act.project_id, act.client_id), (self.refresh.id, self.tgb.id))
+
+    def test_a_group_choice_moves_activity_too(self):
+        from tracker.models_asana import AsanaActivity
+        link = AsanaProjectLink.objects.create(integration=self.integ, asana_gid='gx',
+                                               asana_name='DeNooyer: Used Car Sticker')
+        act = AsanaActivity.objects.create(integration=self.integ, story_gid='s2', user=self.operator,
+                                           at=timezone.now(), asana_project_gid='gx', kind='comment_added')
+        self.api.post(f'/api/onboard/projects/{self.p.id}/asana-links/',
+                      {'prefix': 'DeNooyer', 'client_id': self.denooyer.id}, format='json')
+        act.refresh_from_db()
+        self.assertEqual(act.client_id, self.denooyer.id)

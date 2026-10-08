@@ -668,6 +668,19 @@ def asana_links_view(request, pk):
     integration = Integration.objects.filter(organization=p.organization, provider='asana').first()
     if integration is None:
         return _err('This firm has not connected Asana yet.', 404)
+    if request.method == 'POST' and request.data.get('accept'):
+        from tracker.integrations.asana.report import accept_project
+        from tracker.models import Project
+        project = Project.objects.filter(org=p.organization, id=request.data.get('project_id')).first()
+        if project is None:
+            return _err('Pick one of the firm\'s projects.')
+        try:
+            accept_project(integration, str(request.data['accept']), project)
+        except Exception:                                        # noqa: BLE001
+            return _err('That Asana project is no longer there.', 404)
+        svc.audit(p, request.user, 'asana.accept_project', asana_gid=str(request.data['accept']),
+                  project_name=project.name)
+        return Response({**link_report(integration), 'changed': 1})
     if request.method == 'POST':
         prefix = (request.data.get('prefix') or '').strip()
         ignore = bool(request.data.get('ignore'))

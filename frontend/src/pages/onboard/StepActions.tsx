@@ -803,6 +803,14 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
 
   useEffect(() => { onboardApi.asanaLinks(project.id).then(setR).catch((e) => setErr(msg(e))); }, [project.id]);
 
+  const accept = async (gid: string, asanaName: string, projectId: number, projectName: string) => {
+    setBusy(gid); setErr(null); setNote(null);
+    try {
+      setR(await onboardApi.acceptAsanaProject(project.id, gid, projectId)); onChanged();
+      setNote(`“${asanaName}” → ${projectName}`);
+    } catch (e) { setErr(msg(e)); } finally { setBusy(null); }
+  };
+
   const decide = async (g: AsanaLinkGroup, body: { client_id?: number | null; ignore?: boolean; clear?: boolean }) => {
     setBusy(g.prefix); setErr(null); setNote(null);
     try {
@@ -872,6 +880,35 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+          {(r.project_picks?.length ?? 0) > 0 && (
+            <div className="space-y-2">
+              <div className="text-sm font-semibold text-slate-800">
+                Pick the project <span className="font-normal text-slate-500">
+                  — {r.project_picks_total} Asana project{r.project_picks_total === 1 ? "" : "s"} know their client but not their project. Closest guesses first; one click links it for good.
+                </span>
+              </div>
+              <div className="max-h-[45vh] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
+                {r.project_picks!.map((pk) => (
+                  <div key={pk.asana_gid} className="space-y-1.5 p-3">
+                    <div className="text-sm">
+                      <span className="font-medium text-slate-800">{pk.asana_name}</span>
+                      {pk.client_name && <span className="text-slate-500"> · {pk.client_name}</span>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {pk.candidates.map((c) => (
+                        <button key={c.project_id} className={secondaryBtnClass} disabled={!!busy}
+                          title={`${Math.round(c.score * 100)}% similar`}
+                          onClick={() => accept(pk.asana_gid, pk.asana_name, c.project_id, c.name)}>
+                          {c.name} <span className="text-xs text-slate-400">{Math.round(c.score * 100)}%</span>
+                        </button>
+                      ))}
+                      {busy === pk.asana_gid && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           <div className="flex justify-end"><button className={secondaryBtnClass} onClick={onClose}>Close</button></div>

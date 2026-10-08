@@ -211,25 +211,57 @@ class Matcher:
         return name
 
     # ── projects ────────────────────────────────────────────────────────
-    def _best(self, pool, text_rest: str, text_full: str, close: float):
+    def _scored(self, pool, text_rest: str, text_full: str, part: str = ''):
+        """[(score, project)] best first, numbers agreeing.
+
+        The project's own client words are set aside (_project_rest), and so
+        are the Asana client part's words at the start of the project name:
+        "Easterns Auto Group: Nissan of White Marsh Website Update" against
+        "Easterns Nissan White Marsh Website Updates" compares "nissan white
+        marsh website update" on both sides, whatever short form either list
+        used for the client."""
         rest, full = canon(text_rest), canon(text_full)
         want = _numbers(text_rest)
+        part_words = set(canon(part).split()) if part else set()
         scored = []
         for p in pool:
             p_rest = self._project_rest(p)
-            nums = self._nums[p.id] if p.id in self._nums else _numbers(p_rest)
-            if nums != want:                  # Q3 is never Q4, 2024 never 2025
+            variants = [p_rest]
+            if part_words:
+                words = (self._canon.get(p.id) or canon(p.name)).split()
+                i = 0
+                while i < len(words) - 1 and words[i] in part_words:
+                    i += 1
+                if i:
+                    variants.append(' '.join(words[i:]))
+            # Q3 is never Q4, 2024 never 2025: some form of the project's
+            # name must carry exactly the Asana name's numbers.
+            fits = [v for v in variants if _numbers(v) == want]
+            if not fits:
                 continue
-            s = max(_score(rest, p_rest), _score(full, self._canon.get(p.id) or canon(p.name)))
-            scored.append((s, p))
+            best_s = max(max(_score(rest, v) for v in fits),
+                         _score(full, self._canon.get(p.id) or canon(p.name)))
+            scored.append((best_s, p))
+        scored.sort(key=lambda sp: -sp[0])
+        return scored
+
+    def _best(self, pool, text_rest: str, text_full: str, close: float, part: str = ''):
+        scored = self._scored(pool, text_rest, text_full, part)
         if not scored:
             return None
-        scored.sort(key=lambda sp: -sp[0])
         best_s, best = scored[0]
         runner = next((s for s, p in scored[1:] if p.id != best.id), 0.0)
         if best_s >= close and best_s - runner >= MARGIN:
             return best
         return None
+
+    def project_candidates(self, client_id, asana_name: str, n: int = 3, floor: float = 0.5):
+        """The closest projects of one client, for a person to choose from —
+        no threshold beyond `floor`, no margin: a suggestion, not a link."""
+        part, rest = split_name(asana_name)
+        flat = f'{part} {rest}' if part else rest
+        scored = self._scored(self.by_client.get(client_id, []), rest, flat, part or '')
+        return [(round(sc, 2), p) for sc, p in scored[:n] if sc >= floor]
 
     def _by_phrase(self, client, rest: str):
         """The attribution sweep's own name rules, for a rest that CONTAINS a
@@ -295,7 +327,7 @@ class Matcher:
             rest = asana_name                          # the whole name is the project part
         if clients:
             pool = [p for c in clients for p in self.by_client.get(c.id, [])]
-            project = self._best(pool, rest, flat, CLOSE)
+            project = self._best(pool, rest, flat, CLOSE, part or '')
             if project is None and len(clients) == 1:
                 project = self._by_phrase(clients[0], rest)
             if project is not None:

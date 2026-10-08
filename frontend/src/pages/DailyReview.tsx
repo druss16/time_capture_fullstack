@@ -1086,11 +1086,12 @@ export default function DailyReview() {
               <RefreshCw className={cn("w-4 h-4", busy && "animate-spin")} />
             </button>
 
-            {/* Stats — Billable (+ Non-billable) + Needs review = Total, always.
-                Needs review is ONLY time with no client yet. Time with a known
-                client but no project is the client's billable time — it is
-                counted there and flagged underneath, never added again here
-                (that double count read 26m + 41m = 43m). */}
+            {/* Stats — Billable, Needs review, Total. Total also holds
+                non-billable time, which is deliberately not shown, so the two
+                cells beside it need not add up to it. Needs review is ONLY time
+                with no client yet: time with a client but no project is that
+                client's billable time, flagged underneath, never counted twice
+                (that double count read 26m + 41m against a 43m total). */}
             <div className="flex items-center gap-4 pl-3 border-l border-border/60">
               <StatCell
                 value={formatHours(billableHours)}
@@ -1100,13 +1101,6 @@ export default function DailyReview() {
                   ? `${formatHours(Math.min(projectQueue.billableMinutes / 60, billableHours))} needs a ${terms.project.toLowerCase()}`
                   : undefined}
               />
-              {nonBillableHours > 0 && (
-                <StatCell
-                  value={formatHours(nonBillableHours)}
-                  label="Non-billable"
-                  valueClass="text-slate-500"
-                />
-              )}
               <StatCell
                 value={formatHours(needsReviewHours)}
                 label="Needs review"

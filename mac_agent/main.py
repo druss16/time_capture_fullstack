@@ -595,17 +595,6 @@ def _meeting_sig(meeting_app: str, title: str = None):
 MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 PRINT_EVERY_POLL  = bool(_get("print_every", os.getenv("AGENT_PRINT_EVERY") == "1"))
-# `disable_ax` was the field workaround for the macOS 26 permission-check hang
-# (2026-10-07: an Automation check that never returned froze startup). That
-# hang is fixed and the startup watchdog now skips a stalled permission check,
-# so drop the workaround ONCE, by itself — the people who set it are remote,
-# and leaving it on means no permission prompts and empty window titles. The
-# marker keeps a deliberate re-set after this from being undone again.
-if config.get("disable_ax") and not config.get("disable_ax_auto_cleared"):
-    config.pop("disable_ax", None)
-    config["disable_ax_auto_cleared"] = True
-    save_config(config)
-    print("[AX] Removed the disable_ax workaround (permission-check hang is fixed)")
 DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"))
 # Filter blanks. "".split(",") is [""], so an unset AGENT_EXCLUDE_BUNDLES put
 # the EMPTY STRING in this set — and the tracking loop excludes a window when

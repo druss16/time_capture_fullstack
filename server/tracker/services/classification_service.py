@@ -6816,6 +6816,24 @@ class ClassificationService:
             ):
                 if (
                     decision.client_id is not None
+                    and self._agent_title_claim_unverified(block, signals, decision.client_id)
+                ):
+                    # The agent said "the title names X" and nothing else backs
+                    # X. Check the title ourselves; if it doesn't name X, file
+                    # the sliver as No-client rather than bill the agent's guess
+                    # (a "Passenger Van" listing auto-filed to Vehicle
+                    # Acquisition Network on the acronym VAN).
+                    decision.matched_signals.append(Signal(
+                        type='agent_title_unverified',
+                        strength=0.0,
+                        evidence=(f'Agent matched client {decision.client_id} from the title; '
+                                  f'the title does not name it'),
+                        # Not 'client_id': that key reads as a proposal for it.
+                        detail={'rejected_client_id': decision.client_id},
+                    ))
+                    decision.client_id = None
+                if (
+                    decision.client_id is not None
                     and not self._has_contradicting_signal(signals, decision.client_id)
                 ):
                     decision.recommended_state = 'committed'
@@ -6914,6 +6932,49 @@ class ClassificationService:
             )
 
         return decision
+
+    def _agent_title_claim_unverified(self, block, signals, client_id) -> bool:
+        """True when client_id rests only on the agent saying "the title names
+        this client" and the block's own titles don't name it.
+
+        The agent is the first layer; the server checks what it can. A title
+        claim is checkable, so it is checked: by name and alias with the
+        server's own matcher, or by the client's initialism written in capitals
+        (the server's acronym rule). Other agent sources (a tray pick, a file
+        path, staying on the last client) can't be read off the title and are
+        left alone, as is any claim another signal corroborates.
+        """
+        agent = [s for s in signals
+                 if s.type == 'agent_inference' and s.proposed_client_id == client_id]
+        if not agent:
+            return False
+        if any(s.proposed_client_id == client_id and s.type != 'agent_inference'
+               and s.strength > 0 for s in signals):
+            return False
+        sources = set()
+        for s in agent:
+            sources |= set((s.detail or {}).get('inference_evidence_sources') or [])
+        if sources != {'title_alias_match'}:
+            return False
+
+        client = next((c for c in self._clients if c.id == client_id), None)
+        if client is None:
+            return True
+        from tracker.models import RawEvent
+        from tracker.utils.client_name_match import _initialism
+        titles = [t for t in RawEvent.objects.filter(block=block)
+                  .values_list('window_title', flat=True) if t]
+        titles += [t for t in (getattr(block, 'window_title', None), getattr(block, 'title', None)) if t]
+        names = [n for n in [client.name] + list(client.aliases or []) if n and self._alias_is_safe(n)]
+        initialism = _initialism(client.name).upper()
+        acronym = (re.compile(r'(?<![A-Za-z0-9])' + re.escape(initialism) + r'(?![A-Za-z0-9])')
+                   if len(initialism) >= 3 else None)
+        for title in titles:
+            if any(self._alias_matches_safely(n, title) for n in names):
+                return False
+            if acronym and acronym.search(title):
+                return False
+        return True
 
     def _commit_if_immaterial(self, decision: 'ClassificationDecision', block,
                               signals: list, stage: str) -> bool:

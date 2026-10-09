@@ -189,6 +189,24 @@ class LensSmokeTests(TestCase):
                     self.assertIn("hours", r)
                     self.assertIn("share", r)
 
+    def test_person_row_ties_to_the_hours_and_utilization_tiles(self):
+        """The Team row and the tiles above it are the same person over the
+        same window, so they must agree. They didn't: the row counted internal
+        and idle time the tiles exclude (19.4 h / 72.2% under 19.0 h / 73.8%)."""
+        from tracker.analytics_v2.breakdowns import breakdown
+        from tracker.analytics_v2.metrics import get_metric
+
+        scope = Scope(type="staff", ids=[self.user.id])
+        row = next(r for r in breakdown(self.org, scope, self.time, "user")
+                   if r["id"] == self.user.id)
+        total = get_metric("total_hours").safe_compute(self.org, scope, self.time)
+        mix = get_metric("billable_mix").safe_compute(self.org, scope, self.time)
+
+        # The two Internal - Tax hours are in neither.
+        self.assertAlmostEqual(row["hours"], 6.0, places=1)
+        self.assertAlmostEqual(row["hours"], float(total.value), places=1)
+        self.assertAlmostEqual(row["billable_pct"], float(mix.value), places=1)
+
     def test_unassigned_rows_are_named_not_blank(self):
         """Half the fixture blocks have no client. `breakdown` still reports
         that row, and names it rather than leaving the label blank — it is the

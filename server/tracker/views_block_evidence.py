@@ -1493,7 +1493,10 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
     cur_name = getattr(getattr(block, "client", None), "name", None)
 
     INHERIT = object()
-    raw = {}  # label -> client_id | None | INHERIT
+    raw = {}     # label -> client_id | None | INHERIT
+    source = {}  # label -> how it got there, so the UI can say WHY a slice
+                 # names a client ("named" by its own title, or merely "booked":
+                 # it stays with the block's client because nothing named anyone)
     for item in bd:
         label = item["label"]
         hit = None
@@ -1504,16 +1507,20 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
                 hit = None
         if hit and hit.get("client_id"):
             raw[label] = hit["client_id"]
+            source[label] = "named"
         elif _TIMESHEET_RE.search(label):
             raw[label] = None
+            source[label] = "timesheet"
         elif _NOISE_LABEL_RE.match(label.strip()):
             raw[label] = INHERIT
+            source[label] = "inherit"
         else:
             # Strict matcher abstained. Before falling back to the block's own
             # client, try the lenient phrase match — a filename that embeds a
             # distinct client's name should pre-fill that client for the split.
             pc = _phrase_client_for_label(label, names, index) if index else None
             raw[label] = pc if pc is not None else cur_id
+            source[label] = "named" if pc is not None else "booked"
 
     # Resolve INHERIT → the largest slice that DID resolve to a concrete client.
     # (bd is biggest-first, so the first non-INHERIT is the dominant one.)
@@ -1533,8 +1540,30 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
         out[label] = {
             "client_id": v,
             "client_name": (cur_name if v == cur_id else names.get(v)) if v is not None else None,
+            "source": source[label],
         }
     return out
+
+
+# Chrome titles a Google Meet tab "Meet - <event name>" / "Meet – abc-defg-hij";
+# the shared platform list only knows the "google meet" / meet.google.com forms.
+_GOOGLE_MEET_TAB_RE = re.compile(r"^\s*meet\s*[-\u2013\u2014|]\s*\S", re.I)
+
+
+def _is_meeting_block(block) -> bool:
+    """True when the block is a video call. Used to keep the windows someone
+    glanced at DURING a call (a client's sheet, a shared deck) from turning the
+    call into a "mixes N clients" split: a meeting is one conversation."""
+    if getattr(block, "is_meeting", False):
+        return True
+    title = block.window_title or ""
+    try:
+        from tracker.utils.meeting_platforms import is_meeting_activity
+        if is_meeting_activity(block.app_name or "", title, block.url or ""):
+            return True
+    except Exception:
+        pass
+    return bool(_GOOGLE_MEET_TAB_RE.match(title))
 
 
 def _overlapping_calendar_event(block):
@@ -1776,6 +1805,7 @@ def block_why(request, block_id: int):
             if s:
                 item["suggested_client_id"] = s["client_id"]
                 item["suggested_client_name"] = s["client_name"]
+                item["suggested_source"] = s.get("source")
     except Exception:
         pass
 

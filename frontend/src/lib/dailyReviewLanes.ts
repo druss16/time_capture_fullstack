@@ -40,6 +40,11 @@ export type SplitSlice = {
    *  stay in the non-billable bucket the block already sits in. Absent on older
    *  backends — callers fall back to the candidate's category. */
   suggested_category?: string;
+  /** How the slice got its client: "named" (its own window title names them),
+   *  "booked" (nothing named anyone, so it stays with the block's client),
+   *  "timesheet" (own admin → No client), "inherit" (a bare dialog that follows
+   *  the main activity). Absent on older backends. */
+  suggested_source?: "named" | "booked" | "timesheet" | "inherit" | null;
 };
 
 /** One choice offered on an ambiguous group's picker. */
@@ -85,6 +90,9 @@ export type SplitCandidate = {
   category: string;
   booked_client_id: number | null;
   booked_client_name: string;
+  /** The block is a video call (only flagged when other clients' windows held
+   *  most of it). */
+  is_meeting?: boolean;
   slices: SplitSlice[];
 };
 

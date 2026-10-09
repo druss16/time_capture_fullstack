@@ -4916,7 +4916,7 @@ def today_time(request):
         from tracker.services.classification_service import (
             FALLBACK_CATEGORIES, FALLBACK_CATEGORIES_DEFAULT,
         )
-        from tracker.views_block_evidence import _block_breakdown, _slice_suggestions
+        from tracker.views_block_evidence import _block_breakdown, _is_meeting_block, _slice_suggestions
         _names = {c.id: c.name for c in Client.objects.filter(org=org, is_active=True).only('id', 'name')} if org else {}
         if _names:
             _index = build_token_index(_names)
@@ -4980,6 +4980,24 @@ def today_time(request):
                         if _bd and (len(_bd) > 1 or _unassigned) else {}
                     )
                     _cids = {s['client_id'] for s in _sug.values() if s.get('client_id') is not None}
+                    # A MEETING is one conversation. The windows in front during
+                    # the call (a client's sheet, a deck, the next agenda item)
+                    # are what was looked at, not separate work: a weekly agency
+                    # Meet flashed "mixes 3 clients" because two other clients'
+                    # Google Sheets were each up for a minute or two. Only the
+                    # call's own slice says who it was with, unless the other
+                    # clients' windows held most of the block, in which case
+                    # the "meeting" was mostly something else.
+                    _is_mtg = _is_meeting_block(_b)
+                    if _is_mtg and _bd and len(_cids) >= 1:
+                        _bd_tot = sum(it.get('minutes', 0) for it in _bd) or 1
+                        _mtg_cid = (_sug.get(_bd[0]['label']) or {}).get('client_id')
+                        _side_min = sum(
+                            it.get('minutes', 0) for it in _bd
+                            if (_sug.get(it['label']) or {}).get('client_id') not in (None, _mtg_cid)
+                        )
+                        if _side_min < 0.5 * _bd_tot:
+                            _cids = {_mtg_cid} if _mtg_cid is not None else set()
                     # Minutes whose activity names nobody. On a no-client block a
                     # material unnamed remainder is a party in its own right: the
                     # block genuinely is mixed, and moving the whole thing to the
@@ -4993,8 +5011,11 @@ def today_time(request):
                     # block (own timesheet + a parish file) one minute IS half the
                     # block, and a minutes floor turned that into a one-click
                     # "move it all to the parish" — billing them for the timesheet.
+                    # (Not for a meeting: the call itself is the party, and the
+                    # unnamed minutes are just the call.)
                     _remainder_is_party = (
-                        _unassigned and _none_min >= 1 and _none_min >= 0.2 * _bd_min
+                        _unassigned and not _is_mtg
+                        and _none_min >= 1 and _none_min >= 0.2 * _bd_min
                     )
                     if len(_cids) >= 2 or (len(_cids) == 1 and _remainder_is_party):
                         _is_split = True
@@ -5005,12 +5026,18 @@ def today_time(request):
                             'category':           _row_cat,
                             'booked_client_id':   _b.client_id,
                             'booked_client_name': _names.get(_b.client_id, '') if not _unassigned else 'No client',
+                            'is_meeting':         _is_mtg,
                             'slices': [
                                 {
                                     'label':                 it['label'],
                                     'minutes':               it.get('minutes', 0),
                                     'suggested_client_id':   (_sug.get(it['label']) or {}).get('client_id'),
                                     'suggested_client_name': (_sug.get(it['label']) or {}).get('client_name'),
+                                    # "named": this window's own title names the
+                                    # client. "booked": nothing named anyone, so
+                                    # it stays with the block's client. The row
+                                    # shows this so a chip is never unexplained.
+                                    'suggested_source':      (_sug.get(it['label']) or {}).get('source'),
                                     # Slices that land on nobody stay non-billable;
                                     # only the ones that name a client become work.
                                     'suggested_category': (

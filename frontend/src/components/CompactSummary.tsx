@@ -1275,6 +1275,38 @@ function SplitCandidateRow({ sc, busy, onSplit, onKeep }: {
           ))}
           {clients.length > 4 && <span className="text-muted-foreground">+{clients.length - 4} more</span>}
         </div>
+        {/* Why: the title above is only the block's main window. The chips come
+            from the OTHER windows in front during it — show each one, its
+            minutes, and whether its own title named the client or it simply
+            stayed with the booked one, so a "mixes 3 clients" is never a mystery. */}
+        <div className="mt-2 font-sans text-[11px] text-muted-foreground">
+          <div className="mb-0.5">
+            {sc.is_meeting
+              ? "Most of this call was spent in other clients' windows:"
+              : `Windows in front during these ${fmtMin(sc.minutes || 0)}:`}
+          </div>
+          <ul className="space-y-0.5">
+            {sc.slices.map((s) => {
+              const who = s.suggested_client_name || (s.suggested_client_id == null ? "No client" : "—");
+              const why =
+                s.suggested_source === "named" ? "named in its title"
+                : s.suggested_source === "booked"
+                  ? (sc.booked_client_id == null ? "names no one" : `names no one — stays with ${sc.booked_client_name || "the booked client"}`)
+                : s.suggested_source === "timesheet" ? "looks like your own admin"
+                : s.suggested_source === "inherit" ? "a dialog — follows the main window"
+                : null;
+              return (
+                <li key={s.label} className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="w-8 shrink-0 text-right tabular-nums">{fmtMin(s.minutes || 0)}</span>
+                  <span className="min-w-0 truncate font-mono text-foreground/80" title={s.label}>{s.label}</span>
+                  <span className="shrink-0">→</span>
+                  <span className="shrink-0 font-medium text-foreground/90">{who}</span>
+                  {why && <span className="hidden shrink-0 text-muted-foreground/80 sm:inline">· {why}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button onClick={onSplit} disabled={busy} className={PILL_AMBER}>

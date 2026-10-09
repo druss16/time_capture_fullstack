@@ -280,6 +280,43 @@ def needs_review_sections(org, scope, time: TimeRange) -> list[Section]:
     return out
 
 
+def tracked_time_chart(rows: list[dict], time: TimeRange, *,
+                       card_id: str = "team_capacity") -> ChartCardPayload:
+    """Billable vs the rest of tracked time, one ring (or bar) per person.
+
+    Shared by Team and the Overview's team preview so both draw the same
+    picture of the same people.
+    """
+    data = [
+        {
+            "label": r["label"],
+            "billable_hours": r["billable_hours"],
+            "other_hours": round(max(r["hours"] - r["billable_hours"], 0), 2),
+            "capacity_hours": r.get("capacity_hours") or 0,
+        }
+        for r in sorted(rows, key=lambda x: -x["hours"])
+    ]
+    return ChartCardPayload(
+        id=card_id,
+        title="Where each person's tracked time went",
+        subtitle=f"{time.label} · billable vs everything else tracked",
+        # A ring per person (the TimeTracker mark) while there are few
+        # enough to read side by side; past that, stacked bars compare
+        # better. One person as a stacked bar was a single wall of colour.
+        chart_type="ring" if len(data) <= _RING_MAX_PEOPLE else "stacked_bar",
+        x_key="label",
+        data=data,
+        # One measure and its remainder, not two peers — so the chart is
+        # painted with the emphasis pair rather than two categorical hues.
+        series=[
+            {"key": "billable_hours", "label": "Billable", "role": "primary"},
+            {"key": "other_hours", "label": "Other tracked", "role": "muted"},
+        ],
+        value_format="hours_1dp",
+        state=MetricState.READY if data else MetricState.EMPTY,
+    )
+
+
 def _add_capacity(org, rows: list[dict], time: TimeRange) -> None:
     """Annotate rows in place with `capacity_hours` and `capacity_pct`."""
     from ..capacity import capacity_hours_map
@@ -339,40 +376,7 @@ class TeamLens(Lens):
     # ── capacity picture ────────────────────────────────────────────────────
 
     def _capacity_chart(self, rows: list[dict], time: TimeRange) -> ChartCardPayload:
-        """Billable vs the rest of tracked time, one bar per person.
-
-        A ranked bar, not a donut: the question is "who has room and who is
-        full", which is a comparison between people, and a stacked bar answers
-        it at a glance where a ring of wedges does not.
-        """
-        data = [
-            {
-                "label": r["label"],
-                "billable_hours": r["billable_hours"],
-                "other_hours": round(max(r["hours"] - r["billable_hours"], 0), 2),
-                "capacity_hours": r.get("capacity_hours") or 0,
-            }
-            for r in sorted(rows, key=lambda x: -x["hours"])
-        ]
-        return ChartCardPayload(
-            id="team_capacity",
-            title="Where each person's tracked time went",
-            subtitle=f"{time.label} · billable vs everything else tracked",
-            # A ring per person (the TimeTracker mark) while there are few
-            # enough to read side by side; past that, stacked bars compare
-            # better. One person as a stacked bar was a single wall of colour.
-            chart_type="ring" if len(data) <= _RING_MAX_PEOPLE else "stacked_bar",
-            x_key="label",
-            data=data,
-            # One measure and its remainder, not two peers — so the chart is
-            # painted with the emphasis pair rather than two categorical hues.
-            series=[
-                {"key": "billable_hours", "label": "Billable", "role": "primary"},
-                {"key": "other_hours", "label": "Other tracked", "role": "muted"},
-            ],
-            value_format="hours_1dp",
-            state=MetricState.READY if data else MetricState.EMPTY,
-        )
+        return tracked_time_chart(rows, time)
 
     # ── one person ──────────────────────────────────────────────────────────
 

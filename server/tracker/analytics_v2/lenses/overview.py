@@ -193,14 +193,16 @@ class OverviewLens(Lens):
 
     def _team_preview(self, org, scope, time) -> Section:
         from ..breakdowns import breakdown
-        from .team import team_table
+        from .team import team_table, tracked_time_chart
 
-        rows = breakdown(org, scope, time, "user")
+        rows = breakdown(org, scope, time, "user")[:_PREVIEW_ROWS]
         table = team_table(
-            org, rows[:_PREVIEW_ROWS], time,
+            org, rows, time,
             table_id="overview_team",
             title="Team",
             subtitle=f"{time.label} · top {_PREVIEW_ROWS} by hours · "
                      "open Team for capacity and the full list",
         )
-        return Section(id="team_preview", type="section", children=[table])
+        # The same billable rings as Team, for the same five people.
+        rings = tracked_time_chart(rows, time, card_id="overview_team_rings")
+        return Section(id="team_preview", type="section", children=[rings, table])

@@ -3992,7 +3992,7 @@ export default function MavOpsAdmin() {
                       {(d.ax_capture || (d.permission_issues ?? []).length > 0) && (
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
                           {d.ax_capture && <Badge label={AX_LABEL[d.ax_capture][0]} color={AX_LABEL[d.ax_capture][1]} />}
-                          {(d.permission_issues ?? []).filter(i => !i.code.startsWith("accessibility_")).map(i => (
+                          {(d.permission_issues ?? []).filter(i => !i.code.startsWith("accessibility_") && i.code !== "permissions_unreported").map(i => (
                             <Badge key={i.code} label={i.message} color={i.severity === "red" ? T.red : T.yellow} />
                           ))}
                         </div>
@@ -4002,6 +4002,9 @@ export default function MavOpsAdmin() {
                       <Btn label="view logs" onClick={() => { setFilterHostname(d.machine_name); setTab("logs"); }} outline />
                       <Btn label={requestingDevice === d.device_id ? "requesting…" : "request logs"} onClick={() => d.device_id ? requestLogs(d.device_id) : flash("No device_id", "err")} disabled={requestingDevice === d.device_id} />
                       <Btn label={restartingDevice === d.device_id ? "restarting…" : "restart"} onClick={() => restartDevice(d.device_id)} outline color={T.yellow} disabled={restartingDevice === d.device_id} />
+                      {d.ax_capture && !d.ax_switch_supported && (
+                        <Btn label="turn accessibility on · needs v1.9.34" onClick={() => {}} disabled />
+                      )}
                       {d.ax_capture && d.ax_switch_supported && (["off", "rolled_back", "unknown", "turning_off"] as AxCapture[]).includes(d.ax_capture) && (
                         <Btn label={axSwitching === d.id ? "switching…" : d.ax_capture === "rolled_back" ? "try accessibility again" : "turn accessibility on"} onClick={() => switchAx(d, "on")} disabled={axSwitching === d.id} />
                       )}

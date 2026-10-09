@@ -149,7 +149,7 @@ class NeedsReviewByPersonTests(TestCase):
         head = next(s for s in overview if s["id"] == "headline")
         tile = next(t for t in head["tiles"] if t["id"] == "needs_review_suggestion_rate")
         self.assertEqual(tile["metric"]["value"], 25.0)
-        self.assertEqual(tile["metric"]["secondary_value"], 1.0)
+        self.assertEqual(tile["metric"]["secondary_value"], 4.0)
 
     def test_overview_team_section_shows_the_rings(self):
         overview = [s.to_dict() for s in get_lens("overview").assemble(
@@ -159,6 +159,11 @@ class NeedsReviewByPersonTests(TestCase):
         table = self._child(overview, "overview_team")
         self.assertEqual({d["label"] for d in rings["data"]},
                          {r["label"] for r in table["rows"]})
+
+    def test_needs_review_tiles_are_tinted_as_one_group(self):
+        row = next(s for s in self._assemble(Scope(type="firm"))
+                   if s["id"] == "needs_review_stats")
+        self.assertEqual({t["tone"] for t in row["tiles"]}, {"amber"})
 
     def test_firm_stats_count_suggestions_and_their_rate(self):
         stats = self._stats(self._assemble(Scope(type="firm")))

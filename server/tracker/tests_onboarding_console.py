@@ -453,9 +453,20 @@ class StripeBillingStartTests(ConsoleBase):
     def test_past_or_today_is_refused_before_stripe_is_called(self):
         p = self.make_project()
         with self.assertRaises(svc.ConsoleError):
-            self._setup(p, billing_starts=timezone.now().date().isoformat())
+            self._setup(p, billing_starts=timezone.localdate().isoformat())
         with self.assertRaises(svc.ConsoleError):
             self._setup(p, billing_starts='not-a-date')
+
+    def test_today_means_eastern_today_in_the_evening(self):
+        # 22:58 EDT on Oct 7 is already Oct 8 in UTC. Oct 7 is still today
+        # (refused); Oct 8 is tomorrow (accepted).
+        from datetime import datetime, timezone as dt_tz
+        p = self.make_project()
+        evening = datetime(2026, 10, 8, 2, 58, tzinfo=dt_tz.utc)
+        with mock.patch('django.utils.timezone.now', return_value=evening):
+            with self.assertRaises(svc.ConsoleError):
+                self._setup(p, billing_starts='2026-10-07')
+            self.assertIn('trial_end', self._setup(p, billing_starts='2026-10-08'))
 
     def test_subscribing_clears_an_app_side_trial(self):
         p = self.make_project()

@@ -447,7 +447,6 @@ interface ActivityGroup {
   key: string;
   first_offset: number;
   duration_seconds: number;
-  count: number;
   app_name: string;
   title: string;
   where: string | null;
@@ -464,14 +463,13 @@ function groupEvents(events: EventRow[]): ActivityGroup[] {
     const hit = ev.signals.find((s) => s.type === "title_alias" && s.match_position);
     if (g) {
       g.duration_seconds += ev.duration_seconds;
-      g.count += 1;
       for (const s of ev.signals) {
         if (!g.signals.some((x) => x.type === s.type && x.client_id === s.client_id)) g.signals.push(s);
       }
       g.hit = g.hit ?? hit;
     } else {
       groups.set(key, {
-        key, first_offset: ev.offset_seconds, duration_seconds: ev.duration_seconds, count: 1,
+        key, first_offset: ev.offset_seconds, duration_seconds: ev.duration_seconds,
         app_name: ev.app_name, title: ev.window_title || "(no title)", where,
         signals: [...ev.signals], hit,
       });
@@ -642,7 +640,7 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
               {/* Where the time went: a proportional strip plus legend. */}
               {totalSeconds > 0 && (
                 <div className="mb-3">
-                  <div className="flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                  {places.length > 1 && <div className="flex h-1.5 overflow-hidden rounded-full bg-slate-100">
                     {places.map((p, i) => (
                       <div
                         key={p.name}
@@ -650,8 +648,8 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
                         style={{ width: `${(p.seconds / totalSeconds) * 100}%` }}
                       />
                     ))}
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                  </div>}
+                  <div className={cn("flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500", places.length > 1 && "mt-1.5")}>
                     {places.map((p, i) => (
                       <span key={p.name} className="inline-flex items-center gap-1">
                         <span className={cn("h-1.5 w-1.5 rounded-full", ["bg-slate-500", "bg-slate-400", "bg-slate-300"][i])} />
@@ -697,7 +695,6 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
                     </div>
                     <span className="shrink-0 pt-px text-right font-mono text-[11px] tabular-nums text-slate-600">
                       {fmtDuration(g.duration_seconds)}
-                      {g.count > 1 && <span className="ml-1 text-slate-400">&times;{g.count}</span>}
                     </span>
                   </li>
                 ))}

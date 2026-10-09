@@ -4785,7 +4785,7 @@ def today_time(request):
     # captured-but-unattributed material blocks (rendered as no-guess "Assign
     # client" / "No Client" rows).
     from tracker.views_reports import is_pending_review_block
-    from tracker.views_block_evidence import why_summary
+    from tracker.views_block_evidence import display_title, why_summary
     from tracker.services.calendar_meetings import is_calendar_block
     proposed_inline = []
     _pending = Block.objects.filter(
@@ -4813,7 +4813,7 @@ def today_time(request):
             _learning = None
         proposed_inline.append({
             'block_id':             _b.id,
-            'window_title':         getattr(_b, 'window_title', '') or '',
+            'window_title':         display_title(_b, org),
             'app_name':             getattr(_b, 'app_name', '') or '',
             'minutes':              _b.minutes or 0,
             'proposed_client_id':   _b.proposed_client_id,

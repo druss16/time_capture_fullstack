@@ -1148,6 +1148,10 @@ def suggested_client_for(block, org):
         tc, fam = _title_who(block, org)
         if tc:
             return tc["client_id"]
+    # What Asana says outranks everything below (see _asana_why).
+    _asana = _asana_why(block, org)
+    if _asana:
+        return _asana[1]
         # ...and when the title names a GROUP of look-alikes but not which one,
         # that is an answer too: nobody. Falling through to the temporal tiers
         # here is how "St Francis …pdf" got booked to the parish that happened to
@@ -1195,6 +1199,42 @@ def title_names_family(block, org) -> bool:
     return bool(tc is None and fam and len(fam.get("candidates") or []) >= 2)
 
 
+def _asana_why(block, org):
+    """(sentence, client_id, client_name) from the firm's Asana, or None.
+
+    The Asana desktop app is titled "Asana" whatever is open, so without this
+    the row fell back to "Right before this, you were working on…" — a guess —
+    while Asana itself knew which client's tasks were being changed. Asana is
+    the source system: it outranks every temporal tier, and only a client file
+    open alongside, or a title naming a client, comes before it."""
+    try:
+        from tracker.integrations.asana.attribution import explain
+        hit = explain(block, org)
+    except Exception:
+        return None
+    if not hit or not hit.get("client_id"):
+        return None
+    name = Client.objects.filter(id=hit["client_id"]).values_list("name", flat=True).first()
+    return hit["reason"], hit["client_id"], name
+
+
+def display_title(block, org) -> str:
+    """The row's title. The Asana desktop app's window is titled "Asana" (or
+    nothing) whatever is open, so Daily Review showed "(untitled)"; name the
+    task the person worked on instead, from the firm's Asana."""
+    title = getattr(block, "window_title", "") or ""
+    if title.strip().lower() not in ("", "asana"):
+        return title
+    try:
+        from tracker.integrations.asana.attribution import explain, is_asana_block
+        if not is_asana_block(block):
+            return title
+        hit = explain(block, org)
+    except Exception:
+        return title
+    return (hit or {}).get("task_name") or title
+
+
 def why_summary(block, org):
     """(explanation, suggested_client_id, suggested_client_name, candidates) — the pending-row
     parts of the /why/ explanation, so Daily Review can embed them in the
@@ -1215,6 +1255,11 @@ def why_summary(block, org):
         "", co, surrounding, title_client=tc, title_family=fam)
     if _is_browser(block) and not (co and co.get("client_id")):
         sid, sname = None, None
+    if tier not in ("co_open", "title"):
+        _asana = _asana_why(block, org)
+        if _asana:
+            sentence, sid, sname = _asana
+            tier = "asana"
     # Same meeting rule as block_why, so the pending row and the "Why?" panel
     # tell the same story (a telehealth call in Chrome, a calendar-born row).
     try:
@@ -1656,6 +1701,11 @@ def block_why(request, block_id: int):
     explanation, tier, suggested_id, suggested_name = _compose_why(
         local_time, co_open_client, surrounding, title_client=tc, title_family=fam
     )
+    if tier not in ("co_open", "title"):
+        _asana = _asana_why(block, org)
+        if _asana:
+            explanation, suggested_id, suggested_name = _asana
+            tier = "asana"
     # A meeting is a FACT from the agent's detector, not a guess from app shape,
     # so it outranks every heuristic below — including the title, which for a
     # meeting block is the conferencing app's splash screen.
@@ -1672,13 +1722,13 @@ def block_why(request, block_id: int):
         tier = "meeting"
     # A title that names a client outranks the personal/timesheet heuristics — those
     # guess from app shape, but the title is explicit about whose work this is.
-    if personal and not has_co_client and tier not in ("title", "family", "meeting"):
+    if personal and not has_co_client and tier not in ("title", "family", "meeting", "asana"):
         explanation = "Looks like personal browsing (news / social / streaming) — not client work."
         tier = "personal"
         suggested_id = suggested_name = None
     # A personal timesheet touches many clients — the temporal-neighbor guess would
     # misleadingly name whoever came next. Label it honestly and suggest no client.
-    elif not has_co_client and tier not in ("title", "family", "meeting") and _looks_like_timesheet(block):
+    elif not has_co_client and tier not in ("title", "family", "meeting", "asana") and _looks_like_timesheet(block):
         explanation = "Looks like your own timesheet — internal, not tied to one client."
         tier = "timesheet"
         suggested_id = suggested_name = None

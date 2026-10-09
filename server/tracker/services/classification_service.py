@@ -506,6 +506,14 @@ class ClassificationService:
         # one was told.
         self._stage_4_7_qb_company_roster(block, decision)
 
+        # Stage 4.8 — Asana. The desktop app's title is only "Asana", so the
+        # evidence is what the firm's Asana says: the project in a tab's
+        # address, or the tasks the person changed during the block. Knowledge
+        # from the source system, like a QuickBooks file — without it this
+        # stage's answer was set by the matter sweep and wiped here again on
+        # the next pass, every ~90 seconds.
+        self._stage_4_8_asana(block, decision)
+
         # Stage 5 — URL domain match
         # SKIPPED in foundation: Stage 3 already handles URL domain matching.
         # Stage 5 was originally planned for Client.email_domain matching but
@@ -574,6 +582,7 @@ class ClassificationService:
         'qb_company_file', 'qb_vendor_fingerprint', 'org_rule', 'tax_software',
         'calendar', 'mail',
         'title_match_domain', 'title_match_title_alias', 'title_match_file_path',
+        'asana',
     })
 
     @classmethod
@@ -4310,6 +4319,35 @@ class ClassificationService:
     #   user decides. If we silently overwrote, we'd just trade one
     #   inheritance bug for another.
 
+    def _stage_4_8_asana(self, block, decision: 'ClassificationDecision'):
+        """The client (and project, when one) the firm's Asana names for an
+        Asana block. See integrations/asana/attribution.py for the rules: one
+        client across everything touched, or nothing."""
+        from tracker.integrations.asana.attribution import explain, is_asana_block
+        if not is_asana_block(block):
+            return
+        if getattr(self, '_asana_connected', None) is None:
+            from tracker.models import Integration
+            self._asana_connected = Integration.objects.filter(
+                organization=self.org, provider='asana').exists()
+        if not self._asana_connected:
+            return
+        hit = explain(block, self.org)
+        if not hit or not hit.get('client_id'):
+            return
+        decision.matched_signals.append(Signal(
+            type='asana',
+            strength=0.9,
+            evidence=hit['reason'],
+            detail={
+                'client_id':  hit['client_id'],
+                'project_id': hit['project_id'],
+                'tier':       hit['tier'],
+                'task_name':  hit['task_name'],
+                'count':      hit['count'],
+            },
+        ))
+
     def _stage_7_mail(self, block, decision: 'ClassificationDecision'):
         """
         Use MailSignal records around the block's time as a classification signal.
@@ -6284,7 +6322,7 @@ class ClassificationService:
             'title_match_domain', 'file_path_structure',
             'calendar', 'mail', 'learned_pattern',
             'org_rule', 'tax_software', 'qb_company_file',
-            'qb_vendor_fingerprint', 'qb_company_roster',
+            'qb_vendor_fingerprint', 'qb_company_roster', 'asana',
         }
         verified_signals = []
         for sig in signals:

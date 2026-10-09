@@ -36,6 +36,8 @@ _KPIS: list[tuple[str, str | None]] = [
     ("effective_rate", "profitability"),
     ("labor_cost", "profitability"),
     ("gross_margin", "profitability"),
+    # How much of the review pile is already one tap from done.
+    ("needs_review_suggestion_rate", "team"),
 ]
 
 # Only offered once invoices exist; see the module docstring.

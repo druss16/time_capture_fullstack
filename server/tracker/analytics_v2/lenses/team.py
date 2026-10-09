@@ -241,7 +241,6 @@ def needs_review_stats(org, scope, time: TimeRange) -> Section | None:
         return sum(v for u, v in d.items() if only is None or u in only)
 
     items, hrs, sug = total(by_user), total(hours), total(suggested)
-    rate = round(sug / items * 100, 1) if items else None
 
     def tile(tid, label, fmt, value, tooltip):
         return KPITile(id=tid, label=label, format=fmt, tooltip=tooltip,
@@ -255,9 +254,9 @@ def needs_review_stats(org, scope, time: TimeRange) -> Section | None:
         tile("needs_review_suggested", "With a suggestion", "integer", sug,
              "Waiting items where TimeTracker already has a client guess — "
              "each one is a single tap to confirm."),
-        tile("needs_review_suggestion_rate", "Suggestion rate", "percent_1dp", rate,
-             "With a suggestion ÷ items waiting. The rest need a person to "
-             "pick the client."),
+        # The registered metric, so this tile and the Overview headline's
+        # can't disagree.
+        kpi_tile("needs_review_suggestion_rate", org, scope, time),
     ])
 
 

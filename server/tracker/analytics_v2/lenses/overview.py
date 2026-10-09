@@ -7,7 +7,7 @@ What an owner should be able to answer without clicking anything:
     What is the work worth?                   → Billable value, effective rate
     Are we making money on it?                → Labor cost, gross margin
     Which way is it moving?                   → Performance trend, vs comparison
-    What should I look at?                    → Insights, then the top tables
+    What should I look at?                    → Intelligent Insights, then the top tables
 
 Everything below the fold is a PREVIEW that drills into a dedicated view — the
 most and least efficient clients, the team, where the time went. The full tables live in the
@@ -99,7 +99,7 @@ class OverviewLens(Lens):
         if not cards:
             return None
         return Section(
-            id="insights", type="section", title="What to look at",
+            id="insights", type="section", title="Intelligent Insights",
             children=cards,
         )
 

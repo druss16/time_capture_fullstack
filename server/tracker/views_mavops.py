@@ -316,8 +316,8 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
         reasons.append(f"{n} Mac{'s' if n != 1 else ''} with Automation/extension off")
     if limited_capture_devices:
         n = limited_capture_devices
-        reasons.append(f"{n} Mac{'s' if n != 1 else ''} without Accessibility "
-                       f"(limited capture or not reported)")
+        reasons.append(f"{n} Mac{'s' if n != 1 else ''} with limited capture "
+                       f"(Accessibility off or unreported, or an optional app off)")
     # Client list problems (services/client_hygiene.py): never 'critical', since
     # time still records, but the matcher is choosing among the wrong clients.
     reasons.extend(client_list_reasons)

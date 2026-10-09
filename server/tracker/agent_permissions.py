@@ -50,6 +50,19 @@ _APP_NAMES = {
 }
 
 
+# Automation targets the agent treats as REQUIRED (mac_agent/permissions.py
+# AUTOMATION_TARGETS, required=True): without them a browser page or Adobe
+# file is just the app's name. The rest (Office, Finder, System Events) are
+# optional extras — Accessibility already gives their window titles — so a
+# denial there is amber, not red.
+_REQUIRED_AUTOMATION = {
+    "com.google.Chrome", "com.microsoft.edgemac", "com.apple.Safari",
+    "com.brave.Browser", "company.thebrowser.Browser",
+    "com.adobe.Photoshop", "com.adobe.illustrator", "com.adobe.InDesign",
+    "com.adobe.Acrobat.Pro",
+}
+
+
 def _s(v: Any) -> str:
     return str(v)[:_MAX_STR] if v is not None else ""
 
@@ -117,10 +130,17 @@ def permission_issues(status: Optional[Dict[str, Any]],
         return []
     issues: List[Dict[str, str]] = []
     denied = [b for b, v in (status.get("automation") or {}).items() if v == "denied"]
-    if denied:
-        names = ", ".join(_APP_NAMES.get(b, b) for b in sorted(denied))
+    required = [b for b in denied if b in _REQUIRED_AUTOMATION]
+    optional = [b for b in denied if b not in _REQUIRED_AUTOMATION]
+    if required:
+        names = ", ".join(sorted(_APP_NAMES.get(b, b) for b in required))
         issues.append({"severity": "red", "code": "automation_denied",
                        "message": f"Automation off for {names} — page/file names not captured"})
+    if optional:
+        names = ", ".join(sorted(_APP_NAMES.get(b, b) for b in optional))
+        issues.append({"severity": "amber", "code": "automation_optional_denied",
+                       "message": f"Automation off for {names} (optional) — "
+                                  "folder/document paths not captured"})
     if status.get("extension") == "not_seen":
         issues.append({"severity": "red", "code": "extension_off",
                        "message": "Browser extension not reporting"})

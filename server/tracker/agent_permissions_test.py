@@ -84,6 +84,18 @@ class IssuesTest(SimpleTestCase):
         self.assertIn("Limited capture", issue["message"])
         self.assertIn("Slack", issue["message"])
 
+    def test_denied_optional_app_is_amber_not_red(self):
+        # Finder/Office are optional extras: Accessibility already gives
+        # their titles (Alannah, 2026-10-09: a red Finder badge overstated it).
+        st = {**FULL, "automation": {"com.apple.finder": "denied",
+                                     "com.microsoft.Excel": "denied"}}
+        (issue,) = permission_issues(st)
+        self.assertEqual((issue["severity"], issue["code"]),
+                         ("amber", "automation_optional_denied"))
+        self.assertIn("Excel, Finder", issue["message"])
+        both = {**st, "automation": {**st["automation"], "com.google.Chrome": "denied"}}
+        self.assertEqual([i["severity"] for i in permission_issues(both)], ["red", "amber"])
+
     def test_never_reported_mac_is_amber(self):
         (issue,) = permission_issues(None, MAC)
         self.assertEqual((issue["severity"], issue["code"]),
@@ -112,7 +124,7 @@ class IssuesTest(SimpleTestCase):
                         permission_blocked_devices=1, limited_capture_devices=2)
         self.assertEqual(h["status"], "warn")
         self.assertIn("1 Mac with Automation/extension off", h["reasons"])
-        self.assertIn("2 Macs without Accessibility (limited capture or not reported)",
+        self.assertIn("2 Macs with limited capture (Accessibility off or unreported, or an optional app off)",
                       h["reasons"])
         ok = _org_health(plan="pro", seat_count=5, member_count=3, active_devices=3,
                          deactivated_devices=0, now=timezone.now())
@@ -240,7 +252,7 @@ class MavOpsTest(Base):
         orgs = {o["name"]: o for o in c.get("/api/mavops/orgs/").json()["orgs"]}
         self.assertIn("1 Mac with Automation/extension off", orgs["Other"]["health"]["reasons"])
         # Firm's Mac never reported: limited, not blocked.
-        self.assertIn("1 Mac without Accessibility (limited capture or not reported)",
+        self.assertIn("1 Mac with limited capture (Accessibility off or unreported, or an optional app off)",
                       orgs["Firm"]["health"]["reasons"])
         self.assertFalse(any("Automation" in r for r in orgs["Firm"]["health"]["reasons"]))
 

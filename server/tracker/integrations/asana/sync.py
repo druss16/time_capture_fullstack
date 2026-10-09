@@ -59,6 +59,12 @@ def full_sync(integration: Integration, *, api=None) -> dict:
         stats['staff'] = _sync_staff(integration, api, workspace)
         stats['activity'] = sync_activity(integration, api=api)
         stats['people_activity'] = sync_people_activity(integration, api=api)
+        try:
+            from tracker.integrations.asana.learning import learn_links
+            stats['learned'] = learn_links(integration)['linked']
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning('Asana learning failed for integration %s: %s', integration.id, e,
+                           exc_info=True)
         integration.last_synced_at = started
         integration.last_sync_status = 'success'
         integration.last_sync_error = ''
@@ -148,6 +154,10 @@ def _apply(link, matcher) -> None:
     project, client, how = matcher.match(link.asana_name, team=getattr(link, 'asana_team', ''),
                                          client_hint=getattr(link, 'client_hint', ''),
                                          qbt_ref=getattr(link, 'qbt_ref', ''))
+    # Learned from the firm's own time (learning.py): only the exact
+    # QB Time field outranks it; a name guess does not.
+    if link.link_source == 'learned' and how != 'field':
+        return
     link.project = project
     link.client_id = project.client_id if project else (client.id if client else None)
     link.link_source = how

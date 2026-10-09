@@ -26,6 +26,7 @@ class AsanaProjectLink(models.Model):
         ('client', 'Client named, project not'),
         ('ignored', 'Not a client (by hand)'),
         ('manual', 'Linked by hand'),
+        ('learned', "Learned from the firm's own time entries"),
     ]
 
     integration = models.ForeignKey(

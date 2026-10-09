@@ -822,7 +822,7 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
 
   return (
     <Modal title="Asana projects — link report" onClose={onClose}
-      subtitle="How the firm's Asana projects matched its clients and projects. Unmatched ones are grouped by the client name they're written under; one choice fixes the whole group. This only reads Asana project names — it never changes a client's aliases.">
+      subtitle="How the firm's Asana projects matched its clients and projects. Unmatched ones are grouped by the client name they're written under; one choice fixes the whole group — optional, only if you know the firm. This only reads Asana project names — it never changes a client's aliases.">
       {!r && !err && <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Reading…</div>}
       <ErrorNote message={err} />
       {r && (
@@ -887,8 +887,8 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
               <div className="text-sm font-semibold text-slate-800">
                 Pick the project <span className="font-normal text-slate-500">
                   — {r.project_picks_total} Asana project{r.project_picks_total === 1 ? "" : "s"} know their client but not their project.
-                  {(r.project_picks_activity_7d ?? 0) > 0 && ` ${r.project_picks_activity_7d} actions this week are waiting on these picks — the busiest are first.`}
-                  {" "}One click links it for good.
+                  {" "}Nothing to do here: these link themselves as the firm logs its time in QuickBooks Time and Daily Review.
+                  {" "}Only click if you know a guess is right.
                 </span>
               </div>
               <div className="max-h-[45vh] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">

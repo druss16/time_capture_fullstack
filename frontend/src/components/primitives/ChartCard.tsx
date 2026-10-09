@@ -18,6 +18,7 @@ import type {
 import {
   CHROME, EMPHASIS, SERIES, SERIES_FALLBACK, seriesColor,
 } from "@/lib/analytics_v2/theme";
+import FilterBadge from "@/components/analytics/FilterBadge";
 
 // WIP aging band colors — an ordered ramp, not categorical identity: these
 // bands have a natural order (fresher → staler), so a single-hue-to-status
@@ -91,6 +92,7 @@ export default function ChartCard({ card, onGrainChange }: Props) {
             {card.subtitle && (
               <p className="text-xs text-slate-500 mt-0.5">{card.subtitle}</p>
             )}
+            <div className="mt-1.5 empty:hidden"><FilterBadge /></div>
           </div>
           {(views.length > 1 || (grains.length > 1 && onGrainChange)) && (
           <div className="flex flex-wrap items-center gap-2">

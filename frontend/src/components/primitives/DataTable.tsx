@@ -13,6 +13,7 @@ import { formatValue } from "@/lib/analytics_v2/format";
 import { API_BASE, safeFetchJson } from "@/lib/api";
 import InfoTip from "@/components/analytics/InfoTip";
 import type { DataTablePayload, DataTableColumn } from "@/lib/analytics_v2/types";
+import FilterBadge from "@/components/analytics/FilterBadge";
 
 /**
  * PhaseCell — the one piece of data entry in budget-vs-progress.
@@ -156,6 +157,7 @@ export default function DataTable({ table, onRowClick }: Props) {
         {table.subtitle && (
           <p className="text-xs text-slate-500 mt-0.5">{table.subtitle}</p>
         )}
+        <div className="mt-1.5 empty:hidden"><FilterBadge /></div>
         {table.footnote && (
           <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
             {table.footnote}

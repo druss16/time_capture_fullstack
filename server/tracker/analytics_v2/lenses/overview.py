@@ -21,7 +21,7 @@ as catastrophic billing performance rather than as missing data.
 from __future__ import annotations
 
 from ..series import trend_chart
-from ..types import Section
+from ..types import ChartCardPayload, MetricState, Section
 from .base import Lens, register_lens
 from .helpers import kpi_tile, safe_sparklines
 
@@ -42,6 +42,27 @@ _KPIS: list[tuple[str, str | None]] = [
 _REALIZATION_KPI = ("realization_dollar", "realization")
 
 _PREVIEW_ROWS = 5
+
+
+def _low_efficiency_chart(rows, time, tail) -> ChartCardPayload:
+    """The least efficient clients as ranked bars, worst at the top.
+
+    A chart rather than a second copy of the client table: the question here
+    is "how far behind are they", which a bar length answers at a glance.
+    Bar clicks don't drill; the subtitle points at Clients for the detail.
+    """
+    data = [{"label": r["label"], "margin_pct": r["margin_pct"]} for r in rows]
+    return ChartCardPayload(
+        id="overview_low_efficiency_clients",
+        title="Low Efficiency Clients",
+        subtitle=f"{time.label} · bottom {len(data)} by margin % · {tail}",
+        chart_type="horizontal_bar",
+        x_key="label",
+        data=data,
+        series=[{"key": "margin_pct", "label": "Margin %", "role": "primary"}],
+        value_format="percent_1dp",
+        state=MetricState.READY if data else MetricState.EMPTY,
+    )
 
 
 @register_lens("overview")
@@ -144,13 +165,7 @@ class OverviewLens(Lens):
         ])]
         if low:
             sections.append(Section(id="clients_low_preview", type="section", children=[
-                client_table(
-                    low, time,
-                    table_id="overview_low_efficiency_clients",
-                    title="Low Efficiency Clients",
-                    subtitle=f"{time.label} · bottom {_PREVIEW_ROWS} by margin % · {tail}",
-                    sort_key="margin_pct", sort_direction="asc",
-                ),
+                _low_efficiency_chart(low, time, tail),
             ]))
         return sections
 

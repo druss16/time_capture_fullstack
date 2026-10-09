@@ -60,6 +60,14 @@ COST_FIELD_KEYS = frozenset({
 # redaction. Mirrors `lenses.clients.COST_DERIVED_FLAGS`, which a test pins.
 COST_FLAG_KEYS = frozenset({"losing_money", "below_typical"})
 
+# Tables/charts whose ROW SELECTION is a margin ranking. Stripping the margin
+# column is not enough: "these five clients" is itself the disclosure, so the
+# whole node goes. Ids from lenses/overview._clients_preview.
+COST_RANKED_NODE_IDS = frozenset({
+    "overview_high_efficiency_clients",
+    "overview_low_efficiency_clients",
+})
+
 
 def can_view_cost_data(user, org) -> bool:
     """True only for an owner of ``org`` (or a MavOps superuser doing support).
@@ -149,6 +157,7 @@ def _redact_node(node: Any) -> Any:
         return node
 
     if ntype == "chart_card":
+        had_series = bool(node.get("series"))
         node["series"] = [
             s for s in node.get("series") or []
             if s.get("key") not in COST_FIELD_KEYS
@@ -174,6 +183,10 @@ def _redact_node(node: Any) -> Any:
             node["series"] = [{"key": k, "label": first.get("label", k)}
                               for k in first.get("series") or []
                               if k not in COST_FIELD_KEYS]
+        # Every series was cost: the chart would draw axes and no bars. Charts
+        # that never used `series` (pie, wip_aging, ...) are not affected.
+        if had_series and not node["series"]:
+            node["_cost_only"] = True
         node["subtitle"] = _scrub_subtitle(node.get("subtitle") or "")
         return node
 
@@ -217,11 +230,15 @@ def _redact_row(row: dict) -> dict:
 
 
 def _is_empty_table(node: Any) -> bool:
-    return (
-        isinstance(node, dict)
-        and node.get("type") == "data_table"
-        and not node.get("columns")
-    )
+    if not isinstance(node, dict):
+        return False
+    if node.get("id") in COST_RANKED_NODE_IDS:
+        return True
+    if node.get("type") == "data_table":
+        return not node.get("columns")
+    if node.get("type") == "chart_card":
+        return bool(node.get("_cost_only"))
+    return False
 
 
 def redact_cost_sections(sections: list[dict]) -> list[dict]:

@@ -236,6 +236,42 @@ def get_request_org_override(request):
             pass
     return get_org_or_default(request)
 
+# Roles that may READ another member's Daily Review (Analytics → Needs review →
+# a row). Mirrors views_review_misfiled.REVIEWER_ROLES.
+DAY_VIEW_ROLES = ('owner', 'admin', 'manager')
+
+
+def manager_day_view_target(request):
+    """For `today-time?user_id=`: the colleague an owner/admin/manager may view.
+
+    Returns (user, None) when allowed, (None, Response) when refused. Read-only
+    by design — only `today_time` calls this, and every Daily Review write
+    still acts on `request.user`, so a manager can look but not re-file.
+    Deliberately separate from `get_request_user_override`, whose callers
+    include views that write.
+    """
+    raw = request.GET.get("user_id")
+    try:
+        target_id = int(raw)
+    except (TypeError, ValueError):
+        return None, Response({"error": "Invalid user_id"}, status=400)
+    if target_id == request.user.id:
+        return request.user, None
+    shared = OrganizationMembership.objects.filter(
+        user=request.user, role__in=DAY_VIEW_ROLES,
+        organization__memberships__user_id=target_id,
+    ).exists()
+    if not shared:
+        return None, Response(
+            {"error": "Only owners, admins and managers can view a colleague's Daily Review."},
+            status=403,
+        )
+    try:
+        return User.objects.get(id=target_id), None
+    except User.DoesNotExist:
+        return None, Response({"error": "No such user"}, status=404)
+
+
 def get_request_user_override(request):
     override_uid = request.GET.get("user_id")
     if override_uid and (request.user.is_staff or request.user.is_superuser):
@@ -4512,6 +4548,21 @@ def today_time(request):
 
     # ── Impersonation override ──
     user = get_request_user_override(request)
+    # An owner/admin/manager opening a colleague's day from Analytics. Staff
+    # are already handled above; this is the org-role path, read-only.
+    viewing_other = None
+    if (request.GET.get("user_id") and user == request.user
+            and not (request.user.is_staff or request.user.is_superuser)):
+        user, refused = manager_day_view_target(request)
+        if refused is not None:
+            return refused
+    if user != request.user:
+        viewing_other = {
+            "id": user.id,
+            "name": (f"{user.first_name} {user.last_name}".strip()
+                     or user.username or user.email),
+            "read_only": True,
+        }
 
     if not user.is_authenticated:
         return Response(
@@ -5090,7 +5141,9 @@ def today_time(request):
         'mismatch_blocks':    mismatch_blocks,
         'split_candidates':   split_candidates,
         'ambiguous_groups':   ambiguous_groups,
-
+        # Set when a manager is looking at someone else's day; the page shows
+        # a banner and disables every action.
+        'viewing':            viewing_other,
     })
 
 

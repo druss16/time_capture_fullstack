@@ -10,6 +10,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Eye,
 } from "lucide-react";
 import { todayIso } from "@/lib/utils/date";
 import { primeCsrf } from "@/lib/csrf";
@@ -185,6 +186,8 @@ type TodayTimeResponse = {
   mismatch_blocks?: MismatchBlock[];
   split_candidates?: SplitCandidate[];
   ambiguous_groups?: AmbiguousGroup[];
+  /** Set when an owner/admin/manager is looking at a colleague's day. */
+  viewing?: { id: number; name: string; read_only: boolean } | null;
 };
 
 
@@ -395,6 +398,14 @@ export default function DailyReview() {
   const [availableClients, setAvailableClients] = useState<ClientOption[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const terms = useTerminology();
+  // `?user=<id>` — a manager opening a colleague's day from Analytics → Needs
+  // review. READ-ONLY: every Daily Review write acts on the signed-in person,
+  // so an action here would land on the manager's own time (Confirm all would
+  // confirm THEIR blocks). The page is read-only from the first paint, before
+  // the server has answered; `viewing === null` (it was your own id) lifts it.
+  const viewUserId = searchParams.get("user");
+  const [viewing, setViewing] = useState<TodayTimeResponse["viewing"] | undefined>(undefined);
+  const readOnly = !!viewUserId && viewing !== null;
   const [billableHours, setBillableHours] = useState(0);
   const [nonBillableHours, setNonBillableHours] = useState(0);
   const [needsReviewHours, setNeedsReviewHours] = useState(0);
@@ -521,6 +532,7 @@ export default function DailyReview() {
   const heldPayload = useRef<TodayTimeResponse | null>(null);
 
   const applyTodayTime = useCallback((json: TodayTimeResponse) => {
+    setViewing(json.viewing ?? null);
     setTimeSummary(json.clients || []);
     setBillableHours(json.billable_hours || 0);
     setNonBillableHours(json.non_billable_hours || 0);
@@ -546,7 +558,8 @@ export default function DailyReview() {
     heldPayload.current = null;  // superseded — and never paint one from another date
     try {
       const { start, end } = rangeBounds(date, range);
-      const qs = range === "day" ? `date=${date}` : `start=${start}&end=${end}`;
+      const qs = (range === "day" ? `date=${date}` : `start=${start}&end=${end}`)
+        + (viewUserId ? `&user_id=${encodeURIComponent(viewUserId)}` : "");
       const json = await safeFetchJson<TodayTimeResponse>(
         `${API_BASE}/today-time/?${qs}`, { signal: ctl.signal }
       );
@@ -565,7 +578,7 @@ export default function DailyReview() {
       // one must not un-dim a page the newer foreground load is still filling.
       if (!background && seq === reloadSeq.current) setBusy(false);
     }
-  }, [date, range, applyTodayTime]);
+  }, [date, range, applyTodayTime, viewUserId]);
 
   const loadUncategorizedCount = useCallback(async () => {
     try {
@@ -626,12 +639,15 @@ export default function DailyReview() {
   useEffect(() => {
     const t = setTimeout(() => {
       loadTimeSummary();
-      loadUncategorizedCount();
       loadClients();
+      // Both act on the SIGNED-IN person's blocks (the classifier pass can
+      // auto-file them), so neither runs while viewing a colleague.
+      if (viewUserId) return;
+      loadUncategorizedCount();
       runAIClassification();
     }, 200);
     return () => clearTimeout(t);
-  }, [loadTimeSummary, loadUncategorizedCount, loadClients, runAIClassification]);
+  }, [loadTimeSummary, loadUncategorizedCount, loadClients, runAIClassification, viewUserId]);
 
   useEffect(() => {
     const dateParam = searchParams.get("date");
@@ -653,9 +669,10 @@ export default function DailyReview() {
 
   const handleRefresh = useCallback(() => {
     loadTimeSummary();
+    if (viewUserId) return;
     loadUncategorizedCount();
     runAIClassification();
-  }, [loadTimeSummary, loadUncategorizedCount, runAIClassification]);
+  }, [loadTimeSummary, loadUncategorizedCount, runAIClassification, viewUserId]);
 
   // Optimistic row control for Needs You actions. All of these are INSTANT and
   // fire before the save, so the user never waits.
@@ -968,6 +985,8 @@ export default function DailyReview() {
   seenTotalRef.current = totalMin;
   useEffect(() => {
     if (range !== "day") return;
+    // A manager looking is not the owner reviewing; never mark their day seen.
+    if (viewUserId) return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -990,7 +1009,7 @@ export default function DailyReview() {
       window.removeEventListener("focus", arm);
       document.removeEventListener("visibilitychange", arm);
     };
-  }, [date, range]);
+  }, [date, range, viewUserId]);
 
   const atLatestRange = rangeBounds(date, range).end >= todayIso();
 
@@ -1023,7 +1042,7 @@ export default function DailyReview() {
             <div className="w-px h-5 bg-border/60" />
 
             {/* Compact add button */}
-            <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />
+            {!readOnly && <ManualTimeEntry defaultDate={date} onSuccess={handleRefresh} />}
           </div>
 
           {/* RIGHT — flags, date, refresh, stats */}
@@ -1059,7 +1078,7 @@ export default function DailyReview() {
             </div>
 
             {/* Confirm all — accept every pending block at once */}
-            <button
+            {!readOnly && <button
               onClick={handleConfirmAll}
               disabled={confirmingAll || busy}
               title="Confirm all pending suggestions"
@@ -1073,7 +1092,7 @@ export default function DailyReview() {
                 ? <RefreshCw className="w-4 h-4 animate-spin" />
                 : <Check className="w-4 h-4" />}
               {confirmingAll ? "Confirming\u2026" : "Confirm all"}
-            </button>
+            </button>}
 
             {/* Refresh — ghost icon, no background until hover */}
             <button
@@ -1114,6 +1133,23 @@ export default function DailyReview() {
           </div>
         </div>
       </div>
+
+      {readOnly && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-sky-200 bg-sky-50 px-5 py-2.5 text-sm text-sky-900">
+          <Eye className="h-4 w-4 shrink-0 text-sky-600" />
+          <span>
+            Viewing <span className="font-semibold">{viewing?.name || "a colleague"}</span>'s Daily Review
+            <span className="text-sky-700/80"> · read-only — they confirm their own time</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => window.history.length > 1 ? window.history.back() : (window.location.href = "/analytics")}
+            className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" /> Back
+          </button>
+        </div>
+      )}
 
       {/* ═══ CONTENT ════════════════════════════════════════════════════════ */}
       <div className="p-5">
@@ -1164,7 +1200,12 @@ export default function DailyReview() {
         </div>
 
         {/* Faint teal-tinted "canvas" — cool + trustworthy; the white lane cards float on it. */}
-        <div className="rounded-2xl bg-[#eef4f3] p-5 sm:p-6">
+        <div
+          className="rounded-2xl bg-[#eef4f3] p-5 sm:p-6"
+          // Read-only: `inert` takes every control in the lanes out of reach
+          // (clicks, focus, keyboard) without hand-disabling dozens of them.
+          {...(readOnly ? ({ inert: "" } as Record<string, unknown>) : {})}
+        >
           {/* ── Progress hero: how much of the range is sorted vs still needs you ── */}
           <div className="mb-7 w-full max-w-2xl" style={{ fontFamily: '"Inter", sans-serif' }}>
             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
@@ -1178,7 +1219,7 @@ export default function DailyReview() {
                   <div className="text-[20px] font-bold tracking-[-0.01em] text-slate-900">
                     {needsYouCount > 0 ? (
                       <><span className="text-amber-600">{needsYouCount} {needsYouCount === 1 ? "thing" : "things"}</span> need{needsYouCount === 1 ? "s" : ""} you{range === "week" ? " this week" : range === "month" ? " this month" : range === "quarter" ? " this quarter" : ""}</>
-                    ) : "You’re all caught up"}
+                    ) : (readOnly ? `${viewing?.name || "They"} ${viewing?.name ? "is" : "are"} all caught up` : "You’re all caught up")}
                   </div>
                   <div className="shrink-0 text-[12.5px] tabular-nums text-slate-500">{sortedPct}% sorted</div>
                 </div>
@@ -1220,7 +1261,10 @@ export default function DailyReview() {
             onInteractionChange={handleInteractionChange}
             projectQueue={projectQueue}
             projectRows={
-              <MatterLane date={date} range={range} refreshTick={laneTick} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
+              // The matter lane reads the SIGNED-IN person's queue; showing it
+              // on a colleague's day would show the manager's own matters.
+              readOnly ? undefined
+                : <MatterLane date={date} range={range} refreshTick={laneTick} onChanged={scheduleRowRefresh} onQueue={onProjectQueue} />
             }
           />
         </div>

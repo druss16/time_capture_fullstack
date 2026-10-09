@@ -273,6 +273,10 @@ class DataTablePayload:
     # frontend builds {scope: {type: scope_type, ids: [id], label: row[label_key]},
     # lens: lens} and navigates. Rows without an id stay inert.
     row_drilldown: Optional[dict] = None  # {scope_type, lens, id_key, label_key}
+    # Alternative to row_drilldown for rows that open a page OUTSIDE Analytics:
+    # each row carries an in-app path under this key (e.g. a colleague's Daily
+    # Review day). Rows without one stay inert.
+    row_link_key: str = ""
     # Columns worth reading as a share of the table, not just a number. The
     # frontend paints an in-cell bar behind these, scaled to the column max.
     bar_columns: list[str] = field(default_factory=list)
@@ -292,6 +296,7 @@ class DataTablePayload:
             "rows": self.rows,
             "default_sort": self.default_sort,
             "row_drilldown": self.row_drilldown,
+            "row_link_key": self.row_link_key,
             "bar_columns": self.bar_columns,
             "ranked": self.ranked,
             "footnote": self.footnote,

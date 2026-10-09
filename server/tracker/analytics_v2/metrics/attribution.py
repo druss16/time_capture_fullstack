@@ -126,6 +126,10 @@ def needs_you_items(org_id: int, time, user_ids, limit: int = 200) -> tuple[list
             "id": b.id,
             "user_id": b.user_id,
             "day": b.day.strftime("%a %b %-d") if b.day else "",
+            # Opens this person's Daily Review on that day, read-only for a
+            # manager (see views.manager_day_view_target).
+            "href": (f"/daily?date={b.day.isoformat()}&user={b.user_id}"
+                     if b.day else ""),
             "time": local.strftime("%-I:%M %p") if local else "",
             "app": b.app_name or "",
             "what": (b.window_title or b.title or b.file_path or b.url or "")[:140],

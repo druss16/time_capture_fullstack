@@ -158,6 +158,15 @@ def needs_review_chart(org, scope, time: TimeRange) -> ChartCardPayload | None:
         data=data,
         series=[{"key": "items", "label": "Items to review", "role": "primary"}],
         value_format="integer",
+        # Five tiny items and one three-hour block are different kinds of
+        # behind; the toggle lets a manager rank by either.
+        toggle_views=[
+            {"key": "items", "label": "Items", "series": ["items"],
+             "format": "integer", "role": "primary"},
+            {"key": "hours", "label": "Hours", "series": ["hours"],
+             "format": "hours_1dp", "role": "primary"},
+        ],
+        toggle_label="Measure",
         state=MetricState.READY if data else MetricState.EMPTY,
     )
 

@@ -138,6 +138,8 @@ export interface ChartToggleView {
   series: string[];
   format?: NumberFormat | undefined;
   chart_type?: ChartType | undefined;
+  /** Emphasis for the view's series; without it the series takes a categorical hue. */
+  role?: "primary" | "muted" | undefined;
 }
 
 export interface ChartCardPayload {

@@ -42,6 +42,10 @@ from .base import Lens, register_lens
 from .helpers import column, kpi_tile, safe_sparklines
 
 
+# Rings read well side by side up to about two rows of them.
+_RING_MAX_PEOPLE = 8
+
+
 def team_columns() -> list[dict]:
     return [
         column("label", "Employee", "text"),
@@ -354,7 +358,10 @@ class TeamLens(Lens):
             id="team_capacity",
             title="Where each person's tracked time went",
             subtitle=f"{time.label} · billable vs everything else tracked",
-            chart_type="stacked_bar",
+            # A ring per person (the TimeTracker mark) while there are few
+            # enough to read side by side; past that, stacked bars compare
+            # better. One person as a stacked bar was a single wall of colour.
+            chart_type="ring" if len(data) <= _RING_MAX_PEOPLE else "stacked_bar",
             x_key="label",
             data=data,
             # One measure and its remainder, not two peers — so the chart is

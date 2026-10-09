@@ -8,6 +8,11 @@ Three tiers (per Phase 4 design):
 
 All three return InsightCardPayload objects rendered by the same frontend
 component. A `source` field on the card distinguishes them.
+
+Voice (WHOOP-style coaching, not an alarm panel): lead with what the number
+says, credit what went well, and frame a dip as something the firm can act on
+— always with the fact that backs it. Never invent a benchmark; compare only
+against the firm's own history or the threshold the card fired on.
 """
 from __future__ import annotations
 
@@ -186,20 +191,25 @@ def _wip_aging_card(org, scope, aged_total, bands) -> InsightCardPayload:
     # billing read is offered only once invoices are actually here.
     from ..permissions import firm_invoices_here
     if firm_invoices_here(org):
-        tail = "Risk of write-off — prioritize billing these clients."
+        headline = f"${aged_total:,.0f} of work is ready to bill"
+        body = (
+            f"Your team put in the work — ${bands['61_90']:,.0f} of it is 61–90 "
+            f"days old and ${bands['90_plus']:,.0f} is past 90. Billing the "
+            f"oldest first turns the most of it into cash, fastest."
+        )
     else:
-        tail = ("No invoice data has been imported, so this is time we haven't "
-                "been told was billed — some of it may already be invoiced. "
-                "Import invoices to tell the two apart.")
+        headline = f"${aged_total:,.0f} of work captured over 60 days ago"
+        body = (
+            f"That's real value on the record: ${bands['61_90']:,.0f} from 61–90 "
+            f"days and ${bands['90_plus']:,.0f} from 90+. No invoices have been "
+            f"imported yet, so some of it may already be billed — import them "
+            f"and we'll show exactly what's still open."
+        )
     return InsightCardPayload(
         id="threshold_wip_aged",
         severity="bad" if firm_invoices_here(org) else "watch",
-        headline=f"Unbilled-as-far-as-we-know, 60+ days: ${aged_total:,.0f}",
-        body=(
-            f"${bands['61_90']:,.0f} in 61-90 day band, "
-            f"${bands['90_plus']:,.0f} in 90+ band. "
-            f"{tail}"
-        ),
+        headline=headline,
+        body=body,
         evidence=[
             {"label": "61-90 days", "value": f"${bands['61_90']:,.0f}"},
             {"label": "90+ days", "value": f"${bands['90_plus']:,.0f}"},
@@ -213,10 +223,11 @@ def _low_realization_card(value: float) -> InsightCardPayload:
     return InsightCardPayload(
         id="threshold_low_realization",
         severity="bad",
-        headline=f"Realization dropped to {value:.1f}%",
+        headline=f"Realization at {value:.1f}% — room to recover",
         body=(
-            "Dollar realization below 85% indicates a combination of unbilled time "
-            "and rate discounting. Check the Realization lens for client-by-client breakdown."
+            f"You're keeping {value:.0f}¢ of every billable dollar, under the 85% "
+            f"mark. The Realization view shows which clients make up the gap — "
+            f"start with the biggest one for the quickest win."
         ),
         evidence=[{"label": "Dollar realization", "value": f"{value:.1f}%"}],
         source="threshold",
@@ -242,11 +253,12 @@ def _utilization_drift_card(recent: float, earlier: float) -> InsightCardPayload
     return InsightCardPayload(
         id="baseline_utilization_drift",
         severity="watch",
-        headline=f"Utilization trending down ({earlier:.0f}% → {recent:.0f}%)",
+        headline=f"Utilization eased from {earlier:.0f}% to {recent:.0f}%",
         body=(
-            f"Your last ~4 weeks averaged {recent:.0f}%, down from ~{earlier:.0f}% the "
-            f"month before. Each week still looks 'normal,' but the trend is slipping — "
-            f"worth a look before it becomes the new normal."
+            f"Your last 4 weeks averaged {recent:.0f}%, against {earlier:.0f}% the "
+            f"month before. Each week on its own looked normal — spotting it now, "
+            f"while it's a trend and not a habit, makes it easy to turn around. "
+            f"The Utilization view shows where the hours moved."
         ),
         evidence=[
             {"label": "Last 4 wks", "value": f"{recent:.0f}%"},
@@ -259,27 +271,30 @@ def _utilization_drift_card(recent: float, earlier: float) -> InsightCardPayload
 
 def _low_utilization_card(value: float, band: dict | None = None) -> InsightCardPayload:
     if band:
+        headline = f"Utilization at {value:.1f}% — a lighter stretch"
         body = (
-            f"Below your firm's usual {band['p25']:.0f}–{band['p75']:.0f}% range "
-            f"(≈{band['baseline']:.0f}% over the last {band['n']} weeks) — a real dip, "
-            f"not just a low textbook number. Check the Utilization lens for the "
-            f"per-staff and Mix × Coverage breakdown."
+            f"That's under your usual {band['p25']:.0f}–{band['p75']:.0f}% "
+            f"(about {band['baseline']:.0f}% across your last {band['n']} weeks). "
+            f"A quiet stretch happens — the Utilization view shows whether it's "
+            f"fewer billable hours or more internal work, so you can steer the "
+            f"next one."
         )
         evidence = [
             {"label": "This period", "value": f"{value:.1f}%"},
             {"label": "Your normal", "value": f"{band['p25']:.0f}–{band['p75']:.0f}%"},
         ]
     else:
+        headline = f"Utilization at {value:.1f}% — room to grow"
         body = (
-            "Billable share of tracked (active) working time is on the low side. "
-            "May reflect non-billable/internal work or client work not yet attributed "
-            "to a client. (Still calibrating your firm's normal range.)"
+            f"{value:.0f}% of tracked time was billable. Some of the rest can be "
+            f"client work not yet filed to a client, so clearing Daily Review can "
+            f"lift this on its own. We're still learning your firm's normal range."
         )
         evidence = [{"label": "Utilization", "value": f"{value:.1f}%"}]
     return InsightCardPayload(
         id="threshold_low_utilization",
         severity="watch",
-        headline=f"Utilization at {value:.1f}%",
+        headline=headline,
         body=body,
         evidence=evidence,
         source="threshold",
@@ -289,25 +304,29 @@ def _low_utilization_card(value: float, band: dict | None = None) -> InsightCard
 
 def _high_utilization_card(value: float, band: dict | None = None) -> InsightCardPayload:
     if band:
+        headline = f"Utilization at {value:.1f}% — a new high"
         body = (
-            f"Above your firm's usual range (best recent week was {band['max']:.0f}%). "
-            f"Great throughput — but if it's sustained, watch for burnout and consider "
-            f"capacity/hiring."
+            f"Strong stretch. You beat your best recent week ({band['max']:.0f}%) "
+            f"and your usual {band['p25']:.0f}–{band['p75']:.0f}% range. If this "
+            f"pace holds for a few weeks, it's a good signal to plan capacity "
+            f"before the team feels it."
         )
         evidence = [
             {"label": "This period", "value": f"{value:.1f}%"},
             {"label": "Your normal", "value": f"{band['p25']:.0f}–{band['p75']:.0f}%"},
         ]
     else:
+        headline = f"Utilization at {value:.1f}% — running hot"
         body = (
-            "Sustained very high utilization is hard to maintain. Watch for burnout "
-            "signals and consider hiring or workload rebalancing."
+            f"Exceptional output: {value:.0f}% of tracked time was billable. Pace "
+            f"like this is hard to hold, so it's a good moment to check workloads "
+            f"and plan capacity while things are going well."
         )
         evidence = [{"label": "Utilization", "value": f"{value:.1f}%"}]
     return InsightCardPayload(
         id="threshold_high_utilization",
         severity="watch",
-        headline=f"Utilization at {value:.1f}%",
+        headline=headline,
         body=body,
         evidence=evidence,
         source="threshold",
@@ -319,10 +338,11 @@ def _disagreement_card(count: int) -> InsightCardPayload:
     return InsightCardPayload(
         id="threshold_disagreements",
         severity="watch",
-        headline=f"{count} unresolved attribution disagreements",
+        headline=f"{count} blocks ready for a quick second look",
         body=(
-            "TimeTracker's classifier flagged blocks where AI, mail, or calendar "
-            "signals disagree with the original attribution. Review in Daily Review."
+            "TimeTracker's AI, mail or calendar signals read these differently from "
+            "the original pick. A quick pass in Daily Review makes sure every hour "
+            "sits with the right client."
         ),
         evidence=[{"label": "Open disagreements", "value": str(count)}],
         source="threshold",

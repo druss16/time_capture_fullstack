@@ -15,7 +15,7 @@ from rest_framework.test import APIClient
 from datetime import timedelta
 
 from tracker.agent_permissions import (
-    ax_capture_state, normalize_permission_status, permission_issues,
+    ax_capture_state, normalize_permission_status, permission_issues, setup_level,
 )
 from tracker.models import AgentDevice, Organization, OrganizationMembership
 from tracker.views_mavops import _org_health
@@ -95,6 +95,21 @@ class IssuesTest(SimpleTestCase):
         self.assertIn("Excel, Finder", issue["message"])
         both = {**st, "automation": {**st["automation"], "com.google.Chrome": "denied"}}
         self.assertEqual([i["severity"] for i in permission_issues(both)], ["red", "amber"])
+
+    def test_setup_level(self):
+        # Alannah, 2026-10-09: AX on, Chrome/Acrobat granted, only Finder off.
+        alannah = {**FULL, "automation": {"com.google.Chrome": "granted",
+                                          "com.adobe.Acrobat.Pro": "granted",
+                                          "com.apple.finder": "denied",
+                                          "com.adobe.Photoshop": "unknown"}}
+        self.assertEqual(setup_level(alannah, MAC), "full", "optional off is still full")
+        self.assertEqual(setup_level(NO_AX, MAC), "limited")
+        self.assertEqual(setup_level(AX_OFF, MAC), "limited")
+        self.assertEqual(setup_level(DENIED, MAC), "blocked")
+        self.assertEqual(setup_level({**FULL, "extension": "not_seen"}, MAC), "blocked")
+        self.assertEqual(setup_level({**FULL, "required_missing": ["Safari"]}, MAC), "blocked")
+        self.assertEqual(setup_level(None, MAC), "unreported")
+        self.assertIsNone(setup_level(FULL, "Windows-11-10.0.26100-SP0"))
 
     def test_never_reported_mac_is_amber(self):
         (issue,) = permission_issues(None, MAC)
@@ -251,6 +266,13 @@ class MavOpsTest(Base):
         self.assertEqual(other["permission_issues"][0]["code"], "automation_denied")
         orgs = {o["name"]: o for o in c.get("/api/mavops/orgs/").json()["orgs"]}
         self.assertIn("1 Mac with Automation/extension off", orgs["Other"]["health"]["reasons"])
+        self.assertEqual(orgs["Firm"]["mac_setup"],
+                         {"full": 0, "limited": 0, "blocked": 0, "unreported": 1})
+        body = c.get("/api/mavops/devices/").json()
+        self.assertIn("com.google.Chrome", body["required_automation"])
+        self.assertNotIn("com.apple.finder", body["required_automation"])
+        jane = next(d for d in body["devices"] if d["machine_name"] == "Janes-MacBook")
+        self.assertEqual(jane["setup_level"], "unreported")
         # Firm's Mac never reported: limited, not blocked.
         self.assertIn("1 Mac with limited capture (Accessibility off or unreported, or an optional app off)",
                       orgs["Firm"]["health"]["reasons"])

@@ -15,7 +15,9 @@ from datetime import timedelta
 import logging
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
-from tracker.agent_permissions import ax_capture_state, permission_issues, supports_ax_switch
+from tracker.agent_permissions import (
+    ax_capture_state, permission_issues, required_automation, setup_level, supports_ax_switch,
+)
 from tracker.models import (
     AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag,
     QboCompanyMapping
@@ -202,6 +204,7 @@ def mavops_orgs(request):
         # One per (user, hostname), the latest row — as device_count counts.
         perm_red = perm_amber = 0
         perm_seen = set()
+        setup = {'full': 0, 'limited': 0, 'blocked': 0, 'unreported': 0}
         for uid, host, st, plat in AgentDevice.objects.filter(
             user__memberships__organization=org, is_active=True,
         ).order_by(F('last_seen_at').desc(nulls_last=True)).values_list(
@@ -209,6 +212,9 @@ def mavops_orgs(request):
             if (uid, host) in perm_seen:
                 continue
             perm_seen.add((uid, host))
+            level = setup_level(st, plat)
+            if level:
+                setup[level] += 1
             sev = {i['severity'] for i in permission_issues(st, plat)}
             if 'red' in sev:
                 perm_red += 1
@@ -249,6 +255,9 @@ def mavops_orgs(request):
             'industry_type': getattr(org, 'industry_type', None) or 'general',
             'seat_grace_deadline': seat_grace_deadline.isoformat() if seat_grace_deadline else None,
             'health': health,
+            # Active Macs by setup level (Windows not counted): the Orgs
+            # tab's "setup 17/20 full" pill, opening the setup grid.
+            'mac_setup': setup,
             'client_hygiene': hygiene.get(org.id),
             'last_activity': last_device.last_seen_at.isoformat() if last_device and last_device.last_seen_at else None,
             'trial_ends_at': org.trial_ends_at.isoformat() if getattr(org, 'trial_ends_at', None) else None,
@@ -381,6 +390,7 @@ def mavops_devices(request):
             'permission_status': device.permission_status,
             'permission_issues': permission_issues(device.permission_status, device.platform),
             'ax_capture': ax_capture_state(device),
+            'setup_level': setup_level(device.permission_status, device.platform),
             'ax_switch_supported': supports_ax_switch(device.app_version),
             'first_seen': device.created_at.isoformat() if device.created_at else '',
             'last_seen': device.last_seen_at.isoformat() if device.last_seen_at else '',
@@ -394,6 +404,9 @@ def mavops_devices(request):
 
     return Response({
         'devices': result,
+        # Automation targets that block capture when denied (the rest are
+        # optional) — the setup grid colours a denial by this.
+        'required_automation': required_automation(),
         'total': len(result),
     })
 

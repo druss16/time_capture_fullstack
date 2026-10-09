@@ -22,6 +22,7 @@ interface Org {
   industry_type?: string;
   seat_grace_deadline?: string | null;
   client_hygiene?: ClientHygiene | null;
+  mac_setup?: Record<SetupLevel, number>;
   last_activity: string | null; trial_ends_at: string | null; created_at: string | null;
 }
 interface Device {
@@ -31,6 +32,16 @@ interface Device {
   // Mac only (null otherwise): the remote Accessibility switch's state.
   ax_capture?: AxCapture | null;
   ax_switch_supported?: boolean;
+  permission_status?: PermissionStatus | null;
+  setup_level?: SetupLevel | null;   // null = not a Mac
+}
+type SetupLevel = "full" | "limited" | "blocked" | "unreported";
+interface PermissionStatus {
+  accessibility?: "granted" | "missing" | "disabled";
+  extension?: "seen" | "not_seen" | "not_running";
+  automation?: Record<string, "granted" | "denied" | "unknown">;
+  required_missing?: string[];
+  rolled_back?: boolean;
 }
 type AxCapture = "on" | "off" | "waiting" | "rolled_back" | "turning_on" | "turning_off" | "unknown";
 interface AgentLog {
@@ -126,6 +137,135 @@ const AX_LABEL: Record<AxCapture, [string, string]> = {
   turning_off: ["turning accessibility off…", T.teal],
   unknown:     ["accessibility not reported", T.textMuted],
 };
+
+// ── Per-company setup grid: who has which Mac permission ─────────────────────
+const SETUP_LEVEL: Record<SetupLevel, [string, string]> = {
+  blocked:    ["blocked", T.red],
+  limited:    ["limited", T.yellow],
+  unreported: ["not reported", T.textMuted],
+  full:       ["full", T.green],
+};
+const SETUP_ORDER: SetupLevel[] = ["blocked", "limited", "unreported", "full"];
+// One column per app; Office folds Word/Excel/PowerPoint into one.
+const SETUP_APPS: { group: string; label: string; ids: string[] }[] = [
+  { group: "browsers", label: "Chrome", ids: ["com.google.Chrome"] },
+  { group: "browsers", label: "Safari", ids: ["com.apple.Safari"] },
+  { group: "browsers", label: "Edge", ids: ["com.microsoft.edgemac"] },
+  { group: "browsers", label: "Brave", ids: ["com.brave.Browser"] },
+  { group: "browsers", label: "Arc", ids: ["company.thebrowser.Browser"] },
+  { group: "adobe", label: "Acrobat", ids: ["com.adobe.Acrobat.Pro"] },
+  { group: "adobe", label: "Photoshop", ids: ["com.adobe.Photoshop"] },
+  { group: "adobe", label: "Illustr.", ids: ["com.adobe.illustrator"] },
+  { group: "adobe", label: "InDesign", ids: ["com.adobe.InDesign"] },
+  { group: "optional", label: "Finder", ids: ["com.apple.finder"] },
+  { group: "optional", label: "Office", ids: ["com.microsoft.Word", "com.microsoft.Excel", "com.microsoft.Powerpoint"] },
+];
+type Cell = { txt: string; color: string; title: string };
+const BLANK: Cell = { txt: "", color: T.textMuted, title: "not installed" };
+
+function appCell(st: PermissionStatus | null | undefined, ids: string[], required: Set<string>): Cell {
+  const auto = st?.automation ?? {};
+  const seen = ids.filter(b => b in auto);
+  if (!seen.length) return BLANK;
+  const denied = seen.filter(b => auto[b] === "denied");
+  if (denied.length) {
+    const req = denied.some(b => required.has(b));
+    return { txt: "✕", color: req ? T.red : T.yellow, title: req ? "denied — required" : "denied — optional" };
+  }
+  if (seen.some(b => auto[b] === "granted")) return { txt: "✓", color: T.green, title: "granted" };
+  return { txt: "·", color: T.textMuted, title: "not asked yet — asks the first time the app is open" };
+}
+
+function SetupGrid({ devices, required, showOrg }: { devices: Device[]; required: string[]; showOrg: boolean }) {
+  const req = new Set(required);
+  const macs = devices.filter(d => d.setup_level && d.is_active)
+    .sort((a, b) => SETUP_ORDER.indexOf(a.setup_level!) - SETUP_ORDER.indexOf(b.setup_level!)
+      || a.user.localeCompare(b.user));
+  const others = devices.filter(d => d.is_active && !d.setup_level).length;
+  const inactive = devices.filter(d => d.setup_level && !d.is_active).length;
+  // Show an app's column only if someone here has it installed.
+  const apps = SETUP_APPS.filter(a => macs.some(d => a.ids.some(b => b in (d.permission_status?.automation ?? {}))));
+  const groups = [{ g: "core", n: 2 }, ...["browsers", "adobe", "optional"]
+    .map(g => ({ g, n: apps.filter(a => a.group === g).length })).filter(x => x.n)];
+  const counts = SETUP_ORDER.map(l => [l, macs.filter(d => d.setup_level === l).length] as const);
+  const th = { padding: "6px 4px", fontSize: 10, color: T.textMuted, fontWeight: 500, letterSpacing: 1,
+               textTransform: "uppercase" as const, textAlign: "center" as const, borderBottom: `1px solid ${T.border}` };
+  const td = { padding: "8px 4px", textAlign: "center" as const, borderBottom: `1px solid ${T.border}`, fontSize: 14 };
+
+  const axCell = (st?: PermissionStatus | null): Cell =>
+    !st ? { txt: "?", color: T.textMuted, title: "not reported" }
+    : st.accessibility === "granted" ? { txt: "✓", color: T.green, title: "granted" }
+    : st.accessibility === "disabled" ? { txt: "off", color: T.yellow, title: st.rolled_back ? "rolled back after 2 freezes" : "turned off by disable_ax" }
+    : { txt: "✕", color: T.yellow, title: "missing — window titles not captured" };
+  const extCell = (st?: PermissionStatus | null): Cell =>
+    !st || !st.extension ? { txt: "?", color: T.textMuted, title: "not reported" }
+    : st.extension === "seen" ? { txt: "✓", color: T.green, title: "reporting" }
+    : st.extension === "not_seen" ? { txt: "✕", color: T.red, title: "browser extension not reporting" }
+    : { txt: "·", color: T.textMuted, title: "browser not running" };
+
+  if (!macs.length) {
+    return <div style={{ ...card, color: T.textMuted, fontSize: 13, ...mono }}>
+      No active Macs here{others ? ` — ${others} Windows device${others === 1 ? "" : "s"} (need none of these)` : ""}.
+    </div>;
+  }
+  return (
+    <div style={{ ...card, padding: "14px 16px" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const, marginBottom: 12 }}>
+        {counts.filter(([, n]) => n).map(([l, n]) => <Badge key={l} label={`${n} ${SETUP_LEVEL[l][0]}`} color={SETUP_LEVEL[l][1]} />)}
+        <span style={{ color: T.textMuted, fontSize: 11, ...mono, marginLeft: "auto" }}>
+          {others ? `${others} Windows (n/a) · ` : ""}{inactive ? `${inactive} inactive Mac${inactive === 1 ? "" : "s"} hidden` : ""}
+        </span>
+      </div>
+      <div style={{ overflowX: "auto" as const }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" as const, ...mono, color: T.text }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, textAlign: "left" as const, borderBottom: "none" }}></th>
+              {groups.map(g => <th key={g.g} colSpan={g.n} style={{ ...th, borderBottom: "none", color: T.textSub }}>
+                {g.g === "browsers" || g.g === "adobe" ? `${g.g} · required` : g.g}</th>)}
+              <th style={{ ...th, borderBottom: "none" }}></th>
+            </tr>
+            <tr>
+              <th style={{ ...th, textAlign: "left" as const }}>person</th>
+              <th style={th} title="Accessibility — window titles">Access.</th>
+              <th style={th} title="Browser extension">Ext.</th>
+              {apps.map(a => <th key={a.label} style={th}>{a.label}</th>)}
+              <th style={{ ...th, textAlign: "right" as const }}>setup</th>
+            </tr>
+          </thead>
+          <tbody>
+            {macs.map(d => {
+              const st = d.permission_status;
+              const cells = [axCell(st), extCell(st), ...apps.map(a => appCell(st, a.ids, req))];
+              return (
+                <tr key={d.id}>
+                  <td style={{ ...td, textAlign: "left" as const, fontSize: 12 }}>
+                    <div style={{ color: T.text, fontWeight: 600 }}>{d.user}</div>
+                    <div style={{ color: T.textMuted, fontSize: 11 }}>
+                      {showOrg ? `${d.org_name} · ` : ""}{d.machine_name} · v{d.agent_version || "?"}
+                    </div>
+                  </td>
+                  {cells.map((c, i) => <td key={i} title={c.title} style={{ ...td, color: c.color, fontWeight: 700 }}>{c.txt}</td>)}
+                  <td style={{ ...td, textAlign: "right" as const }}>
+                    <Badge label={SETUP_LEVEL[d.setup_level!][0]} color={SETUP_LEVEL[d.setup_level!][1]} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" as const, marginTop: 10, fontSize: 11, color: T.textMuted, ...mono }}>
+        <span><b style={{ color: T.green }}>✓</b> granted</span>
+        <span><b style={{ color: T.red }}>✕</b> denied (required)</span>
+        <span><b style={{ color: T.yellow }}>✕</b> denied (optional)</span>
+        <span>· not asked yet</span>
+        <span>blank = not installed</span>
+        <span>hover a mark for detail</span>
+      </div>
+    </div>
+  );
+}
 
 const mono = { fontFamily: "'DM Mono', monospace" };
 const card: React.CSSProperties = {
@@ -3211,6 +3351,8 @@ export default function MavOpsAdmin() {
 
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [setupView, setSetupView] = useState(false);
+  const [requiredAutomation, setRequiredAutomation] = useState<string[]>([]);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [errors, setErrors] = useState<AgentError[]>([]);
   const [errorSummary, setErrorSummary] = useState<ErrorSummary | null>(null);
@@ -3374,7 +3516,7 @@ export default function MavOpsAdmin() {
 
   const loadDevices = useCallback(async () => {
     if (!token) return; setLoading(true);
-    try { const d = await apiFetch(`/mavops/devices/${filterOrg ? `?org_id=${filterOrg}` : ""}`); setDevices(d.devices || []); }
+    try { const d = await apiFetch(`/mavops/devices/${filterOrg ? `?org_id=${filterOrg}` : ""}`); setDevices(d.devices || []); setRequiredAutomation(d.required_automation || []); }
     catch { flash("Failed to load devices.", "err"); }
     finally { setLoading(false); }
   }, [token, apiFetch, filterOrg]);
@@ -3829,6 +3971,25 @@ export default function MavOpsAdmin() {
                     <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, alignItems: "center",
                                   justifyContent: "flex-end", flexWrap: "wrap" as const,
                                   paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
+                      {(() => {
+                        const ms = org.mac_setup;
+                        const macs = ms ? ms.full + ms.limited + ms.blocked + ms.unreported : 0;
+                        if (!ms || !macs) return null;
+                        const worst = ms.blocked ? T.red : (ms.limited || ms.unreported) ? T.yellow : T.green;
+                        return (
+                          <button
+                            onClick={() => { setFilterOrg(org.id); setSetupView(true); setTab("devices"); }}
+                            title="Mac setup: who has Accessibility, the extension and each app's permission"
+                            style={{ marginRight: "auto", background: worst + "18", border: `1px solid ${worst}55`,
+                                     color: worst, borderRadius: 4, padding: "4px 10px", fontSize: 11,
+                                     cursor: "pointer", ...mono, whiteSpace: "nowrap" as const }}>
+                            setup {ms.full}/{macs} full
+                            {ms.limited ? ` · ${ms.limited} limited` : ""}
+                            {ms.blocked ? ` · ${ms.blocked} blocked` : ""}
+                            {ms.unreported ? ` · ${ms.unreported} not reported` : ""} →
+                          </button>
+                        );
+                      })()}
                       <div style={{ position: "relative" }} data-picker>
                         {isViewing ? (
                           <Btn label="✓ exit" onClick={clearImpersonation} color={T.green} outline tiny />
@@ -3961,6 +4122,10 @@ export default function MavOpsAdmin() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
               <span style={{ color: T.textSub, fontSize: 13, ...mono, fontWeight: 600 }}>{filteredDevices.length} devices</span>
               {filterOrg && <button onClick={() => setFilterOrg(null)} style={{ background: "none", border: "none", color: T.teal, cursor: "pointer", fontSize: 12, ...mono }}>clear filter ×</button>}
+              <div style={{ display: "flex", marginLeft: 8 }}>
+                <Btn label="list" onClick={() => setSetupView(false)} outline={setupView} color={T.teal} small />
+                <Btn label="setup grid" onClick={() => setSetupView(true)} outline={!setupView} color={T.teal} small />
+              </div>
               <div style={{ flex: 1 }} />
               <Btn label={showInactiveOnly ? "● inactive only" : "inactive only"} onClick={() => setShowInactiveOnly(!showInactiveOnly)} outline color={showInactiveOnly ? T.red : T.textMuted} small />
               <div style={{ display: "flex", gap: 10, alignItems: "center", paddingLeft: 8, borderLeft: `1px solid ${T.border}` }}>
@@ -3970,7 +4135,8 @@ export default function MavOpsAdmin() {
               </div>
             </div>
 
-            {filteredDevices.map(d => {
+            {setupView && <SetupGrid devices={filteredDevices} required={requiredAutomation} showOrg={!filterOrg} />}
+            {!setupView && filteredDevices.map(d => {
               const inactiveDays = Math.floor((Date.now() - new Date(d.last_seen).getTime()) / 86400000);
               const isInactive = inactiveDays >= 7;
               const vs = versionStatus(d.agent_version, latestVersion);

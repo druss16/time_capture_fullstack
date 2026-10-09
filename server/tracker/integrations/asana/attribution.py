@@ -137,6 +137,10 @@ def explain(block, org):
     "why" line. Same rules as project_for; adds the words.
 
     {'project_id', 'client_id', 'tier', 'reason', 'task_name', 'count'} or None.
+
+    A block with no Asana action of its own — reading, not changing — is
+    named by the actions either side of it (tier 'asana_between'), see
+    _bracket.
     """
     if not is_asana_block(block) or org is None:
         return None
@@ -178,7 +182,7 @@ def explain(block, org):
                     .order_by('-at')
                     .values('project_id', 'client_id', 'task_name', 'kind'))
         if not rows:
-            return None
+            return _bracket(block, org, integ, resolve, name_of)
         touched = [resolve(r['project_id'], r['client_id']) for r in rows]
         projects = {p for p, _ in touched}
         clients = {c for _, c in touched}
@@ -206,3 +210,50 @@ def explain(block, org):
         logger.warning('Asana explanation unavailable for block %s: %s',
                        getattr(block, 'pk', '?'), e)
         return None
+
+
+# How far either side of a quiet block an Asana action may sit and still speak
+# for it. Long enough to cover reading a task thread before replying to it;
+# short enough that a lunch break between two Easterns edits is not "Easterns".
+BRACKET_GAP = timedelta(minutes=20)
+
+
+def _bracket(block, org, integ, resolve, name_of):
+    """An Asana block in which the person changed nothing — reading tasks,
+    which Asana never records — between two actions on the SAME client.
+
+    Weaker than an action inside the block (the classifier proposes it rather
+    than filing it), and never a project: both sides must name the one client,
+    and the nearest action on each side must be within BRACKET_GAP of the
+    block's edge. Anything else — one side missing, two clients — is nothing."""
+    from tracker.models_asana import AsanaActivity
+    base = (AsanaActivity.objects.filter(integration=integ, user_id=block.user_id)
+            .exclude(project__isnull=True, client__isnull=True))
+    before = (base.filter(at__lt=block.start - ACTIVITY_SLACK,
+                          at__gte=block.start - ACTIVITY_SLACK - BRACKET_GAP)
+              .order_by('-at').values('at', 'project_id', 'client_id', 'task_name').first())
+    after = (base.filter(at__gt=block.end + ACTIVITY_SLACK,
+                         at__lte=block.end + ACTIVITY_SLACK + BRACKET_GAP)
+             .order_by('at').values('at', 'project_id', 'client_id', 'task_name').first())
+    if not (before and after):
+        return None
+    _, c1 = resolve(before['project_id'], before['client_id'])
+    _, c2 = resolve(after['project_id'], after['client_id'])
+    if not c1 or c1 != c2:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(getattr(org, 'timezone', None) or 'America/New_York')
+    except Exception:
+        tz = None
+
+    def at(t):
+        t = t.astimezone(tz) if tz else t
+        return t.strftime('%I:%M %p').lstrip('0')
+
+    task = before['task_name'] or after['task_name'] or ''
+    return {'project_id': None, 'client_id': c1, 'tier': 'asana_between',
+            'reason': f"No Asana changes in this stretch, but you worked on {name_of(c1)} "
+                      f"tasks in Asana just before ({at(before['at'])}) and just after "
+                      f"({at(after['at'])}).",
+            'task_name': task, 'count': 0}

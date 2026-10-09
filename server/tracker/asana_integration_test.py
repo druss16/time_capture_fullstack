@@ -326,6 +326,62 @@ class ClassifierTests(AttributionTests):
         self.assertEqual(display_title(self.block(app_name='Slack', window_title='Slack'), self.org), 'Slack')
 
 
+
+class BetweenTests(AttributionTests):
+    """Reading tasks leaves no Asana story. A quiet Asana block between two
+    actions on the same client is proposed for that client — never filed,
+    never given a project."""
+    classify = ClassifierTests.classify
+    blank = ClassifierTests.blank
+
+    def at(self, minutes, project, task='t'):
+        AsanaActivity.objects.create(integration=self.integ, story_gid=f'b{project.id}{minutes}',
+                                     user=self.al, at=self.T0 + timedelta(minutes=minutes),
+                                     project=project, task_name=task, kind='comment_added')
+
+    def test_quiet_block_between_one_clients_actions_is_proposed(self):
+        self.at(-10, self.reskin, 'Homepage wireframe')
+        self.at(56, self.donut)                     # block is 0..46
+        b = self.blank()
+        _, d = self.classify(b)
+        sig = next(s for s in d.matched_signals if s.type == 'asana_between')
+        self.assertEqual(sig.proposed_client_id, self.tom.id)
+        self.assertIsNone(sig.detail['project_id'])
+        self.assertEqual(d.client_id, self.tom.id)
+        self.assertNotEqual(d.recommended_state, 'committed')
+        from tracker.views_block_evidence import display_title, why_summary
+        sentence, sid, _, _ = why_summary(b, self.org)
+        self.assertEqual(sid, self.tom.id)
+        self.assertIn('just before', sentence)
+        self.assertEqual(display_title(b, self.org), 'Homepage wireframe')
+
+    def test_sweep_does_not_file_a_bracket(self):
+        self.at(-10, self.reskin)
+        self.at(56, self.reskin)
+        b = self.blank()
+        self.run_sweep()
+        b.refresh_from_db()
+        self.assertIsNone(b.client_id)
+        self.assertIsNone(b.project_id)
+
+    def test_two_clients_either_side_is_nothing(self):
+        self.at(-10, self.reskin)
+        self.at(56, self.social_f)
+        _, d = self.classify(self.blank())
+        self.assertFalse(any(s.type.startswith('asana') for s in d.matched_signals))
+
+    def test_one_side_only_is_nothing(self):
+        self.at(-10, self.reskin)
+        _, d = self.classify(self.blank())
+        self.assertFalse(any(s.type.startswith('asana') for s in d.matched_signals))
+
+    def test_too_far_away_is_nothing(self):
+        self.at(-40, self.reskin)                   # 40 min before the block
+        self.at(56, self.reskin)
+        _, d = self.classify(self.blank())
+        self.assertFalse(any(s.type.startswith('asana') for s in d.matched_signals))
+
+
 @override_settings(**ASANA)
 class ViewTests(Base):
     def setUp(self):

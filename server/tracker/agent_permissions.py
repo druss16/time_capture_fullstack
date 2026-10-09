@@ -160,6 +160,36 @@ def permission_issues(status: Optional[Dict[str, Any]],
     return issues
 
 
+def setup_level(status: Optional[Dict[str, Any]],
+                platform: Optional[str] = None) -> Optional[str]:
+    """How set up a Mac is, for MavOps' per-company setup grid. None for a
+    non-Mac (Windows needs none of these).
+
+    blocked    — something REQUIRED is off: a browser/Adobe app denied, the
+                 extension silent, or the agent's own required_missing list
+    full       — Accessibility granted and nothing required off (an optional
+                 app like Finder may still be off)
+    limited    — anything else short of full: Accessibility missing or
+                 turned off by disable_ax
+    unreported — the agent never sent a status
+    """
+    if not is_mac(platform):
+        return None
+    if not isinstance(status, dict):
+        return "unreported"
+    denied_required = any(v == "denied" and b in _REQUIRED_AUTOMATION
+                          for b, v in (status.get("automation") or {}).items())
+    if denied_required or status.get("extension") == "not_seen" or status.get("required_missing"):
+        return "blocked"
+    if status.get("accessibility") == "granted":
+        return "full"
+    return "limited"
+
+
+def required_automation() -> List[str]:
+    return sorted(_REQUIRED_AUTOMATION)
+
+
 def device_needs_attention(status: Optional[Dict[str, Any]],
                            platform: Optional[str] = None) -> bool:
     return bool(permission_issues(status, platform))

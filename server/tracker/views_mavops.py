@@ -202,14 +202,14 @@ def mavops_orgs(request):
         # One per (user, hostname), the latest row — as device_count counts.
         perm_red = perm_amber = 0
         perm_seen = set()
-        for uid, host, st in AgentDevice.objects.filter(
+        for uid, host, st, plat in AgentDevice.objects.filter(
             user__memberships__organization=org, is_active=True,
         ).order_by(F('last_seen_at').desc(nulls_last=True)).values_list(
-                'user_id', 'hostname', 'permission_status'):
+                'user_id', 'hostname', 'permission_status', 'platform'):
             if (uid, host) in perm_seen:
                 continue
             perm_seen.add((uid, host))
-            sev = {i['severity'] for i in permission_issues(st)}
+            sev = {i['severity'] for i in permission_issues(st, plat)}
             if 'red' in sev:
                 perm_red += 1
             elif 'amber' in sev:
@@ -316,7 +316,8 @@ def _org_health(*, plan, seat_count, member_count, active_devices, deactivated_d
         reasons.append(f"{n} Mac{'s' if n != 1 else ''} with Automation/extension off")
     if limited_capture_devices:
         n = limited_capture_devices
-        reasons.append(f"{n} Mac{'s' if n != 1 else ''} without Accessibility (limited capture)")
+        reasons.append(f"{n} Mac{'s' if n != 1 else ''} without Accessibility "
+                       f"(limited capture or not reported)")
     # Client list problems (services/client_hygiene.py): never 'critical', since
     # time still records, but the matcher is choosing among the wrong clients.
     reasons.extend(client_list_reasons)
@@ -378,7 +379,7 @@ def mavops_devices(request):
             'os': device.platform or '',
             'agent_version': device.app_version or '',
             'permission_status': device.permission_status,
-            'permission_issues': permission_issues(device.permission_status),
+            'permission_issues': permission_issues(device.permission_status, device.platform),
             'first_seen': device.created_at.isoformat() if device.created_at else '',
             'last_seen': device.last_seen_at.isoformat() if device.last_seen_at else '',
             'is_active': device.is_active,

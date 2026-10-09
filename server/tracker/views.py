@@ -8789,7 +8789,7 @@ def settings_devices(request):
             "device_id": device.device_id,  # ← make sure this line exists
             # macOS permissions (Mac agent): raw status + the badges to show.
             "permission_status": device.permission_status,
-            "permission_issues": permission_issues(device.permission_status),
+            "permission_issues": permission_issues(device.permission_status, device.platform),
         })
     
     return Response(result)

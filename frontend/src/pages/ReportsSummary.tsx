@@ -842,27 +842,37 @@ export default function ReportsSummary({
                 {clientSearch ? `No clients match “${clientSearch}”.` : "No client time in this period yet."}
               </div>
             ) : (
-              <div className="space-y-3">
+              // Thin bars, labels OUTSIDE them. The people count used to sit
+              // inside the fill, so on a short bar it wrapped and clipped
+              // ("1 pers…"); it now reads under the client name instead.
+              <div className="space-y-0.5">
                 {clientSlice.map((c) => {
                   const people = Array.isArray(c.breakdown) ? c.breakdown.length : undefined;
+                  const pct = maxClientBill > 0 ? (c.billable_hours / maxClientBill) * 100 : 0;
                   return (
                     <button
                       key={`${c.id}-${c.label}`}
                       onClick={() => openClientDetail(c)}
-                      className="w-full grid grid-cols-[minmax(0,1fr)_84px] sm:grid-cols-[220px_minmax(0,1fr)_84px] items-center gap-3 rounded-lg px-1.5 py-1 text-left hover:bg-slate-50 cursor-pointer"
+                      className="group w-full grid grid-cols-[minmax(0,1fr)_72px] sm:grid-cols-[220px_minmax(0,1fr)_72px] items-center gap-4 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-slate-50 cursor-pointer"
                     >
-                      <span className="truncate text-sm font-semibold text-slate-800">{displayClient(c.label)}</span>
-                      <span className="hidden sm:block h-[26px] rounded-full bg-slate-100 overflow-hidden">
-                        <span
-                          className="flex h-full items-center rounded-full bg-gradient-to-r from-primary to-accent pl-2.5 text-[11px] font-bold text-white"
-                          style={{ width: `${Math.max((c.billable_hours / maxClientBill) * 100, 6)}%` }}
-                        >
-                          {people != null ? `${people} ${people > 1 ? "people" : "person"}` : ""}
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold text-slate-800 group-hover:text-slate-950">
+                          {displayClient(c.label)}
                         </span>
+                        {people != null && (
+                          <span className="block text-[11px] font-medium text-slate-400">
+                            {people} {people > 1 ? "people" : "person"}
+                          </span>
+                        )}
+                      </span>
+                      <span className="hidden sm:block h-2 rounded-full bg-slate-100 overflow-hidden">
+                        <span
+                          className="block h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500 ease-out group-hover:brightness-110"
+                          style={{ width: `${Math.max(pct, 1.5)}%` }}
+                        />
                       </span>
                       <span className="text-right text-sm font-bold tabular-nums text-slate-800">
                         {fmtHours(c.billable_hours)}
-                        <span className="block text-[11px] font-semibold text-slate-400">billable</span>
                       </span>
                     </button>
                   );

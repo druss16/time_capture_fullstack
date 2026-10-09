@@ -14,7 +14,7 @@ Run:
 from django.test import SimpleTestCase
 
 from tracker.analytics_v2.scopes import RequestParseError, parse_filters, parse_scope
-from tracker.cost_visibility import redact_cost_sections
+from tracker.cost_visibility import redact_cost_sections, strip_non_owner_sections
 
 
 class ParseFiltersTests(SimpleTestCase):
@@ -176,6 +176,30 @@ class CostRedactionTests(SimpleTestCase):
         ])
         ids = [c["id"] for sec in out for c in sec["children"]]
         self.assertEqual(ids, ["performance_trend"])
+
+    def _overview_client_sections(self):
+        return [
+            {"type": "section", "id": "clients_busiest_preview", "children": [{
+                "type": "data_table", "id": "overview_busiest_clients",
+                "columns": [{"key": "label"}, {"key": "hours"}],
+                "rows": [{"label": "A", "hours": 5.0}],
+            }]},
+            {"type": "section", "id": "clients_preview", "children": [{
+                "type": "data_table", "id": "overview_high_efficiency_clients",
+                "columns": [{"key": "label"}, {"key": "margin_pct"}],
+                "rows": [{"label": "A", "margin_pct": 40.0}],
+            }]},
+        ]
+
+    def test_non_owner_gets_busiest_clients_in_place_of_efficiency(self):
+        out = redact_cost_sections(self._overview_client_sections())
+        ids = [c["id"] for sec in out for c in sec["children"]]
+        self.assertEqual(ids, ["overview_busiest_clients"])
+
+    def test_owner_gets_efficiency_without_the_busiest_duplicate(self):
+        out = strip_non_owner_sections(self._overview_client_sections())
+        ids = [c["id"] for sec in out for c in sec["children"]]
+        self.assertEqual(ids, ["overview_high_efficiency_clients"])
 
     def test_chart_left_with_no_series_is_dropped(self):
         out = redact_cost_sections([{"type": "section", "children": [{

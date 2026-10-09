@@ -127,7 +127,15 @@ class OverviewLens(Lens):
     # ── previews ────────────────────────────────────────────────────────────
 
     def _clients_preview(self, org, scope, time) -> list[Section]:
-        """The most and least efficient clients, by margin %.
+        """The most and least efficient clients, by margin %, for owners —
+        and the busiest clients, by hours, for everyone else.
+
+        A margin ranking is a cost disclosure even with the margin column
+        stripped (which clients make the list IS the ranking), so non-owners
+        get the hours ranking in its place. All three are built here; the
+        payload is trimmed per viewer in query.py via cost_visibility
+        (COST_RANKED_NODE_IDS for non-owners, NON_OWNER_ONLY_NODE_IDS for
+        owners).
 
         Ranked over MATERIAL clients only: twenty minutes on a client yields a
         margin % with no information in it, and would otherwise crowd both
@@ -154,7 +162,15 @@ class OverviewLens(Lens):
         note = held_out_note(unassigned, internal)
         tail = "open Clients for the full list" + (f" · {note}" if note else "")
 
-        sections = [Section(id="clients_preview", type="section", children=[
+        sections = [Section(id="clients_busiest_preview", type="section", children=[
+            client_table(
+                rows[:_PREVIEW_ROWS], time,
+                table_id="overview_busiest_clients",
+                title="Busiest clients",
+                subtitle=f"{time.label} · top {_PREVIEW_ROWS} by hours · {tail}",
+            ),
+        ])]
+        sections.append(Section(id="clients_preview", type="section", children=[
             client_table(
                 high, time,
                 table_id="overview_high_efficiency_clients",
@@ -162,7 +178,7 @@ class OverviewLens(Lens):
                 subtitle=f"{time.label} · top {_PREVIEW_ROWS} by margin % · {tail}",
                 sort_key="margin_pct", sort_direction="desc",
             ),
-        ])]
+        ]))
         if low:
             sections.append(Section(id="clients_low_preview", type="section", children=[
                 _low_efficiency_chart(low, time, tail),

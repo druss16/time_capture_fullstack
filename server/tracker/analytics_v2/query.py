@@ -69,10 +69,14 @@ def execute_query(user, body: dict, org_id_override: str | None = None) -> dict:
     # 7. Cost redaction — owners only. A manager keeps every hours/revenue/
     # utilization figure in the payload and simply doesn't get the cost and
     # margin columns, rather than being refused the lens outright.
-    from tracker.cost_visibility import can_view_cost_data, redact_cost_sections
+    from tracker.cost_visibility import (
+        can_view_cost_data, redact_cost_sections, strip_non_owner_sections,
+    )
     cost_visible = can_view_cost_data(user, org)
     section_dicts = [s.to_dict() for s in sections]
-    if not cost_visible:
+    if cost_visible:
+        section_dicts = strip_non_owner_sections(section_dicts)
+    else:
         section_dicts = redact_cost_sections(section_dicts)
     
     return {

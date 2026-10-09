@@ -2713,6 +2713,27 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
         except Exception as e:
             log(f"[CTRL] presence switch error: {e}")
 
+    # MavOps → Devices "Request logs" / "Restart". One-shot flags: the server
+    # clears them as it sends them. See remote_control.py.
+    try:
+        import remote_control
+        actions = remote_control.control_actions(data, os.getppid())
+        if actions.ship_logs:
+            log("[CTRL] Log ship requested by admin")
+            threading.Thread(
+                target=ship_logs_to_backend,
+                kwargs={"tail_lines": 500, "trigger": "mavops_request"},
+                daemon=True,
+            ).start()
+        if actions.restart == "exit":
+            log("[CTRL] Restart requested by admin — exiting for LaunchAgent relaunch")
+            os._exit(remote_control.RESTART_EXIT_CODE)
+        elif actions.restart == "refuse":
+            log("[CTRL] ⚠️ Restart requested by admin, but not launched by launchd "
+                "— cannot restart myself; staying up")
+    except Exception as e:
+        log(f"[CTRL] remote action error: {e}")
+
     if "ax_capture" in data:
         _apply_ax_switch(data.get("ax_capture"), data.get("ax_capture_id"))
 

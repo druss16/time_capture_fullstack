@@ -78,8 +78,10 @@ jobs:
             --add-data "title_fallback.py:." \
             --add-data "setup_checklist.py:." \
             --add-data "pause_state.py:." \
+            --add-data "remote_control.py:." \
             --add-data "startup_watchdog.py:." \
             --add-data "menubar_watchdog.py:." \
+            --add-data "ax_switch.py:." \
             --add-data "inference:inference" \
             --hidden-import=timetracker_gui \
             --hidden-import=notifications \
@@ -101,6 +103,7 @@ jobs:
             --hidden-import=title_fallback \
             --hidden-import=setup_checklist \
             --hidden-import=pause_state \
+            --hidden-import=remote_control \
             --hidden-import=startup_watchdog \
             --hidden-import=menubar_watchdog \
             --hidden-import=ax_switch \

@@ -189,12 +189,13 @@ def needs_review_items_table(org, scope, time: TimeRange) -> DataTablePayload | 
         id="team_needs_review_items",
         title="What's waiting for review",
         subtitle=(f"{time.label} · {shown} · oldest first · "
-                  "cleared by each person in their own Daily Review"),
+                  "click a row to see their Daily Review for that day"),
         columns=cols,
         rows=rows,
         # No default sort: the rows arrive oldest first, and "Day" is display
         # text that would sort alphabetically.
         default_sort=None,
+        row_link_key="href",
         state=MetricState.READY if rows else MetricState.EMPTY,
     )
 

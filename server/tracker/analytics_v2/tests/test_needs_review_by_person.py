@@ -129,3 +129,57 @@ class NeedsReviewByPersonTests(TestCase):
         self.assertIsNotNone(self._child(out, "team_needs_review"))
         table = self._child(out, "team_rows")
         self.assertIn("needs_review", [c["key"] for c in table["columns"]])
+
+    def test_item_rows_link_to_that_persons_day(self):
+        items = self._child(
+            self._assemble(Scope(type="staff", ids=[self.behind.id])),
+            "team_needs_review_items")
+        self.assertEqual(items["row_link_key"], "href")
+        day = (date.today() - timedelta(days=5)).isoformat()
+        self.assertEqual(items["rows"][0]["href"],
+                         f"/daily?date={day}&user={self.behind.id}")
+
+
+class ManagerDayViewTests(TestCase):
+    """`today-time?user_id=` for an org owner/admin/manager: read-only access to
+    a colleague's Daily Review, and nobody else's."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.org = Organization.objects.create(name="View Co", slug="view-co")
+        cls.other_org = Organization.objects.create(name="Elsewhere", slug="elsewhere")
+
+        def member(username, role, org):
+            u = User.objects.create(username=username, email=f"{username}@x.test",
+                                    first_name=username.title())
+            OrganizationMembership.objects.create(organization=org, user=u, role=role)
+            return u
+
+        cls.employee = member("eileen", "member", cls.org)
+        cls.manager = member("boss", "manager", cls.org)
+        cls.peer = member("peer", "member", cls.org)
+        cls.outsider = member("outsider", "owner", cls.other_org)
+
+    def _get(self, as_user, target):
+        from rest_framework.test import APIClient
+        api = APIClient()
+        api.force_authenticate(as_user)
+        return api.get("/api/today-time/", {"date": date.today().isoformat(),
+                                            "user_id": target.id})
+
+    def test_manager_can_view_a_colleagues_day_read_only(self):
+        r = self._get(self.manager, self.employee)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["viewing"],
+                         {"id": self.employee.id, "name": "Eileen", "read_only": True})
+
+    def test_a_member_cannot_view_a_peers_day(self):
+        self.assertEqual(self._get(self.peer, self.employee).status_code, 403)
+
+    def test_an_owner_of_another_firm_cannot(self):
+        self.assertEqual(self._get(self.outsider, self.employee).status_code, 403)
+
+    def test_your_own_id_is_just_your_day(self):
+        r = self._get(self.employee, self.employee)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.json()["viewing"])

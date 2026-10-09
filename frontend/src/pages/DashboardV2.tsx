@@ -106,6 +106,13 @@ export default function DashboardV2() {
   /** Table rows carry a descriptor instead; build the scope from the row. */
   const rowHandler = useCallback(
     (table: DataTablePayload) => {
+      const linkKey = table.row_link_key;
+      if (linkKey) {
+        return (row: Record<string, any>) => {
+          const href = row[linkKey];
+          if (typeof href === "string" && href.startsWith("/")) navigate(href);
+        };
+      }
       const dd = table.row_drilldown;
       if (!dd) return undefined;
       return (row: Record<string, any>) => {
@@ -125,7 +132,7 @@ export default function DashboardV2() {
         });
       };
     },
-    [push, body.scope.filters],
+    [push, body.scope.filters, navigate],
   );
 
   return (

@@ -198,6 +198,8 @@ export interface DataTablePayload {
     id_key: string;
     label_key: string;
   } | null;
+  /** Rows open an in-app path stored on the row under this key. */
+  row_link_key?: string | undefined;
   /** Columns rendered with an in-cell proportion bar, scaled to the column max. */
   bar_columns?: string[] | undefined;
   /** Number the rows in their default order. */

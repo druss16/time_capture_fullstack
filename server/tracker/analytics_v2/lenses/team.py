@@ -21,6 +21,15 @@ one number cannot show it.
 
 Staff whose cost tier is flagged non-chargeable (admin, ops) are listed but
 held out of the firm utilization roll-up, matching the utilization lens.
+
+NEEDS REVIEW
+------------
+A manager's first question about a person's time is often not "how billable"
+but "are they behind on reviewing it". Every person row carries their open
+Needs You count, the Team view charts it, and narrowing to people (a staff
+scope or an Employee filter) lists the items themselves, oldest first. The
+items are counted by `metrics.attribution` with the same predicate Daily Review
+uses, so the number here is the number that person sees.
 """
 from __future__ import annotations
 
@@ -47,6 +56,9 @@ def team_columns() -> list[dict]:
         column("capacity_pct", "Capacity %", "percent_1dp",
                tooltip="Billable hours ÷ scheduled capacity for the period, "
                        "from the work calendar and time off."),
+        column("needs_review", "Needs review", "integer",
+               tooltip="Open Needs You items in this period — time the person "
+                       "still has to confirm in Daily Review."),
         column("revenue", "Billable value", "currency_0dp"),
         # Key must stay `cost` / `margin`: those are the names the cost
         # redactor strips for non-owners. A prettier key like
@@ -60,8 +72,9 @@ def team_columns() -> list[dict]:
 
 def team_table(org, rows: list[dict], time: TimeRange, *, table_id: str,
                title: str, subtitle: str) -> DataTablePayload:
-    """Build the team table, adding capacity to the breakdown rows."""
+    """Build the team table, adding capacity and open review items to the rows."""
     _add_capacity(org, rows, time)
+    _add_needs_review(org, rows, time)
     return DataTablePayload(
         id=table_id,
         title=title,
@@ -74,6 +87,114 @@ def team_table(org, rows: list[dict], time: TimeRange, *, table_id: str,
             "id_key": "id", "label_key": "label",
         },
         bar_columns=["hours"],
+        state=MetricState.READY if rows else MetricState.EMPTY,
+    )
+
+
+def _add_needs_review(org, rows: list[dict], time: TimeRange) -> None:
+    """Annotate rows in place with `needs_review` (open Needs You items).
+
+    None when the queue can't be measured (too large for the window): a blank
+    cell, not a reassuring 0.
+    """
+    from ..metrics.attribution import needs_you
+
+    try:
+        by_user = needs_you(org.id, time)[3]
+    except Exception:
+        for r in rows:
+            r["needs_review"] = None
+        return
+    for r in rows:
+        r["needs_review"] = by_user.get(r["id"], 0)
+
+
+def scoped_user_ids(scope) -> set[int] | None:
+    """The people a view is narrowed to — a staff scope or an Employee filter —
+    or None when it covers everyone."""
+    if scope.type == "staff":
+        return set(scope.ids)
+    staff = (scope.filters or {}).get("staff")
+    return set(staff) if staff else None
+
+
+def needs_review_chart(org, scope, time: TimeRange) -> ChartCardPayload | None:
+    """Open Needs You items per person, most behind first."""
+    from ..breakdowns import _label_users
+    from ..metrics.attribution import needs_you, needs_you_hours_by_user
+
+    try:
+        by_user = needs_you(org.id, time)[3]
+        hours = needs_you_hours_by_user(org.id, time)
+    except Exception:
+        return None
+    only = scoped_user_ids(scope)
+    if only is not None:
+        by_user = {u: n for u, n in by_user.items() if u in only}
+    acc = {uid: {"label": None} for uid in by_user}
+    _label_users(org, acc)
+    data = sorted(
+        ({"label": acc[uid]["label"] or f"User {uid}",
+          "items": n, "hours": round(hours.get(uid, 0.0), 1)}
+         for uid, n in by_user.items()),
+        key=lambda d: -d["items"],
+    )
+    total = sum(d["items"] for d in data)
+    return ChartCardPayload(
+        id="team_needs_review",
+        title="Waiting for review, by person",
+        subtitle=(f"{time.label} · {total:,} open Needs You item"
+                  f"{'' if total == 1 else 's'} · most behind first"
+                  if data else f"{time.label} · nothing waiting — everyone is caught up"),
+        chart_type="horizontal_bar",
+        x_key="label",
+        data=data,
+        series=[{"key": "items", "label": "Items to review", "role": "primary"}],
+        value_format="integer",
+        state=MetricState.READY if data else MetricState.EMPTY,
+    )
+
+
+def needs_review_items_table(org, scope, time: TimeRange) -> DataTablePayload | None:
+    """The open items themselves, for a view narrowed to specific people."""
+    from ..breakdowns import _label_users
+    from ..metrics.attribution import needs_you_items
+
+    only = scoped_user_ids(scope)
+    if not only:
+        return None
+    try:
+        rows, total = needs_you_items(org.id, time, only)
+    except Exception:
+        return None
+    multi = len(only) > 1
+    if multi:
+        acc = {uid: {"label": None} for uid in only}
+        _label_users(org, acc)
+        for r in rows:
+            r["person"] = acc.get(r["user_id"], {}).get("label") or ""
+    hours = sum(r["hours"] for r in rows)
+    shown = (f"showing the oldest {len(rows):,} of {total:,}" if total > len(rows)
+             else f"{total:,} item{'' if total == 1 else 's'} · {hours:,.1f} h")
+    cols = ([column("person", "Employee", "text")] if multi else []) + [
+        column("day", "Day", "text"),
+        column("time", "Start", "text"),
+        column("app", "App", "text"),
+        column("what", "Window / file", "text"),
+        column("hours", "Hours", "hours_1dp"),
+        column("suggested", "Suggested client", "text",
+               tooltip="TimeTracker's best guess, waiting for a yes."),
+    ]
+    return DataTablePayload(
+        id="team_needs_review_items",
+        title="What's waiting for review",
+        subtitle=(f"{time.label} · {shown} · oldest first · "
+                  "cleared by each person in their own Daily Review"),
+        columns=cols,
+        rows=rows,
+        # No default sort: the rows arrive oldest first, and "Day" is display
+        # text that would sort alphabetically.
+        default_sort=None,
         state=MetricState.READY if rows else MetricState.EMPTY,
     )
 
@@ -115,20 +236,30 @@ class TeamLens(Lens):
         sections.append(Section(id="headline", type="kpi_row", children=tiles))
 
         if scope.type == "staff":
-            return sections + self._person_detail(org, scope, time)
+            return sections + self._review_sections(org, scope, time) \
+                + self._person_detail(org, scope, time)
 
         rows = breakdown(org, scope, time, "user")
         table = team_table(
             org, rows, time,
             table_id="team_rows",
             title="By person",
-            subtitle=f"{time.label} · {len(rows)} people",
+            subtitle=f"{time.label} · {len(rows)} {'person' if len(rows) == 1 else 'people'}",
         )
         sections.append(Section(
             id="team_table", type="section", title="Team performance",
             children=[self._capacity_chart(rows, time), table],
         ))
-        return sections
+        return sections + self._review_sections(org, scope, time)
+
+    def _review_sections(self, org, scope, time) -> list[Section]:
+        """Who is behind on review, and — narrowed to people — on what."""
+        children = [c for c in (needs_review_chart(org, scope, time),
+                                needs_review_items_table(org, scope, time)) if c]
+        if not children:
+            return []
+        return [Section(id="team_needs_review", type="section",
+                        title="Needs review", children=children)]
 
     # ── capacity picture ────────────────────────────────────────────────────
 

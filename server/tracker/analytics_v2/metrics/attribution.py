@@ -62,15 +62,94 @@ def needs_you(org_id: int, time) -> tuple[int, float, int, dict[int, int]]:
     Memoised briefly: the predicate is per-block Python, and two tiles plus a
     lens section ask for it inside one request.
     """
+    items, minutes, by_user, _ = _needs_you_pass(org_id, time)
+    return (items, minutes / 60.0, len(by_user), by_user)
+
+
+def needs_you_hours_by_user(org_id: int, time) -> dict[int, float]:
+    """Open Needs You HOURS per owner — the companion to `needs_you`'s counts.
+
+    Kept apart so `needs_you`'s return shape (pinned by tests and two tiles)
+    doesn't change. Served from the same memoised pass.
+    """
+    return {uid: m / 60.0 for uid, m in _needs_you_pass(org_id, time)[3].items()}
+
+
+def _needs_you_pass(org_id: int, time) -> tuple[int, int, dict[int, int], dict[int, int]]:
+    """One walk of the predicate: (items, minutes, count by user, minutes by user)."""
     import time as _time
-    from django.db.models import Q
-    from tracker.models import Block
     from tracker.views_reports import is_pending_review_block
 
     key = (org_id, time.start, time.end)
     hit = _needs_you_cache.get(key)
     if hit and (_time.monotonic() - hit[0]) < _NEEDS_YOU_TTL:
         return hit[1]
+
+    items = 0
+    minutes = 0
+    by_user: dict[int, int] = {}
+    min_by_user: dict[int, int] = {}
+    for b in _needs_you_candidates(org_id, time):
+        if is_pending_review_block(b):
+            items += 1
+            minutes += (b.minutes or 0)
+            by_user[b.user_id] = by_user.get(b.user_id, 0) + 1
+            min_by_user[b.user_id] = min_by_user.get(b.user_id, 0) + (b.minutes or 0)
+
+    result = (items, minutes, by_user, min_by_user)
+    _needs_you_cache[key] = (_time.monotonic(), result)
+    return result
+
+
+def needs_you_items(org_id: int, time, user_ids, limit: int = 200) -> tuple[list[dict], int]:
+    """The open Needs You items themselves for some people, oldest first.
+
+    Returns (rows, total) — `total` is the full count even when `rows` is cut
+    at `limit`, so the table can say "showing 200 of 340".
+    """
+    from tracker.views_reports import is_pending_review_block
+
+    qs = (_needs_you_candidates(org_id, time, user_ids)
+          .select_related("proposed_client", "client")
+          .order_by("start"))
+    rows: list[dict] = []
+    total = 0
+    for b in qs:
+        if not is_pending_review_block(b):
+            continue
+        total += 1
+        if len(rows) >= limit:
+            continue
+        guess = b.proposed_client or b.client
+        local = timezone_local(b.start)
+        rows.append({
+            "id": b.id,
+            "user_id": b.user_id,
+            "day": b.day.strftime("%a %b %-d") if b.day else "",
+            "time": local.strftime("%-I:%M %p") if local else "",
+            "app": b.app_name or "",
+            "what": (b.window_title or b.title or b.file_path or b.url or "")[:140],
+            "hours": round((b.minutes or 0) / 60.0, 2),
+            "suggested": guess.name if guess else "",
+        })
+    return rows, total
+
+
+def timezone_local(dt):
+    from django.utils import timezone
+    if dt is None:
+        return None
+    try:
+        return timezone.localtime(dt)
+    except (ValueError, OverflowError):
+        return dt
+
+
+def _needs_you_candidates(org_id: int, time, user_ids=None):
+    """Blocks that MIGHT be Needs You items. `is_pending_review_block` is the
+    authority; this only keeps it from judging every block in the window."""
+    from django.db.models import Q
+    from tracker.models import Block
 
     # Prefilter in SQL so the predicate only judges plausible rows; it stays the
     # authority. Both arms of the OR are needed — a Stage-11 re-opened block is
@@ -82,6 +161,8 @@ def needs_you(org_id: int, time) -> tuple[int, float, int, dict[int, int]]:
         .filter(Q(is_categorized=False) | Q(classification_state="proposed"))
         .exclude(classification_state="suppressed")
     )
+    if user_ids:
+        candidates = candidates.filter(user_id__in=list(user_ids))
 
     # NO .only() here, deliberately. It was an obvious win and it took a
     # production worker down: the predicate reaches through _is_material ->
@@ -102,19 +183,7 @@ def needs_you(org_id: int, time) -> tuple[int, float, int, dict[int, int]]:
             f"({candidates.count():,} candidate blocks over {time.label}). "
             f"Narrow the period."
         )
-
-    items = 0
-    minutes = 0
-    by_user: dict[int, int] = {}
-    for b in candidates:
-        if is_pending_review_block(b):
-            items += 1
-            minutes += (b.minutes or 0)
-            by_user[b.user_id] = by_user.get(b.user_id, 0) + 1
-
-    result = (items, minutes / 60.0, len(by_user), by_user)
-    _needs_you_cache[key] = (_time.monotonic(), result)
-    return result
+    return candidates
 
 
 def sample_for_window(org_id: int, time) -> tuple[dict, tuple | None]:

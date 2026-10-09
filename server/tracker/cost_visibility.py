@@ -68,6 +68,13 @@ COST_RANKED_NODE_IDS = frozenset({
     "overview_low_efficiency_clients",
 })
 
+# The reverse: nodes that exist only as the non-owner STAND-IN for a cost-ranked
+# node. An owner sees the efficiency lists, so the hours ranking that replaces
+# them for everyone else would just be a duplicate.
+NON_OWNER_ONLY_NODE_IDS = frozenset({
+    "overview_busiest_clients",
+})
+
 
 def can_view_cost_data(user, org) -> bool:
     """True only for an owner of ``org`` (or a MavOps superuser doing support).
@@ -256,6 +263,24 @@ def redact_cost_sections(sections: list[dict]) -> list[dict]:
         if node.get("type") == "section" and not node.get("children"):
             continue
         out.append(node)
+    return out
+
+
+def strip_non_owner_sections(sections: list[dict]) -> list[dict]:
+    """For an OWNER: drop the non-owner stand-ins (see NON_OWNER_ONLY_NODE_IDS).
+
+    Sections left with no children are dropped, as in redact_cost_sections.
+    """
+    out = []
+    for section in sections:
+        children = section.get("children")
+        if isinstance(children, list):
+            kept = [c for c in children
+                    if not (isinstance(c, dict) and c.get("id") in NON_OWNER_ONLY_NODE_IDS)]
+            if not kept and children:
+                continue
+            section = {**section, "children": kept}
+        out.append(section)
     return out
 
 

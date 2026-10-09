@@ -44,7 +44,7 @@ interface Props {
   onChange: (next: Partial<AnalyticsQueryBody>) => void;
 }
 
-const BILLABLE_OPTIONS: Array<{ value: BillableFilter; label: string }> = [
+export const BILLABLE_OPTIONS: Array<{ value: BillableFilter; label: string }> = [
   { value: "all",          label: "All time" },
   { value: "billable",     label: "Billable only" },
   { value: "non_billable", label: "Non-billable only" },
@@ -375,7 +375,7 @@ function PeriodPicker({
 
 // ─── Multi-select filter ─────────────────────────────────────────────────────
 
-interface Option { id: number; label: string }
+export interface Option { id: number; label: string }
 
 function MultiFilter({
   title, options, selected, onChange,
@@ -423,7 +423,7 @@ function MultiFilter({
 
 // ─── Option lists ────────────────────────────────────────────────────────────
 
-function useClientOptions(enabled: boolean): Option[] {
+export function useClientOptions(enabled: boolean): Option[] {
   const { data } = useAnalyticsClients(enabled);
   return useMemo(
     () => (data ?? [])
@@ -434,7 +434,7 @@ function useClientOptions(enabled: boolean): Option[] {
   );
 }
 
-function useStaffOptions(enabled: boolean): Option[] {
+export function useStaffOptions(enabled: boolean): Option[] {
   const { data } = useAnalyticsStaff(enabled);
   return useMemo(
     () => (data ?? [])
@@ -445,7 +445,7 @@ function useStaffOptions(enabled: boolean): Option[] {
   );
 }
 
-function useProjectOptions(): Option[] {
+export function useProjectOptions(): Option[] {
   const { data } = useAnalyticsProjects(true);
   return useMemo(
     () => (data ?? [])
@@ -455,7 +455,7 @@ function useProjectOptions(): Option[] {
   );
 }
 
-function useCategoryOptions(): Option[] {
+export function useCategoryOptions(): Option[] {
   const { data } = useAnalyticsCategories(true);
   return useMemo(
     () => (data ?? [])

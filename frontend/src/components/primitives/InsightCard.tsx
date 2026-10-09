@@ -4,7 +4,7 @@
  * Severity drives color treatment. Source tag (rule/threshold/ai) is shown subtly.
  * Drilldown click takes the user to the relevant lens at the relevant scope.
  */
-import { AlertTriangle, AlertCircle, CheckCircle2, Info, ChevronRight, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Lightbulb, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/design-system";
 import type { InsightCardPayload } from "@/lib/analytics_v2/types";
 
@@ -23,13 +23,16 @@ const SEVERITY_CONFIG = {
     label: "Needs attention",
     labelClass: "text-rose-700 bg-rose-100/80",
   },
+  // "Watch" reads as an insight, not a warning: these cards surface data worth
+  // a look (aging WIP, open disagreements), so they get the light-blue
+  // analytics treatment rather than an amber alert.
   watch: {
-    icon: AlertCircle,
-    iconClass: "text-amber-600",
-    borderClass: "border-amber-200",
-    bgClass: "bg-amber-50/40",
-    label: "Watch",
-    labelClass: "text-amber-800 bg-amber-100/80",
+    icon: Lightbulb,
+    iconClass: "text-sky-600",
+    borderClass: "border-sky-200",
+    bgClass: "bg-sky-50/60",
+    label: "Insight",
+    labelClass: "text-sky-800 bg-sky-100/80",
   },
   good: {
     icon: CheckCircle2,
@@ -40,12 +43,12 @@ const SEVERITY_CONFIG = {
     labelClass: "text-emerald-700 bg-emerald-100/80",
   },
   info: {
-    icon: Info,
-    iconClass: "text-slate-600",
-    borderClass: "border-slate-200",
-    bgClass: "bg-slate-50/40",
-    label: "Info",
-    labelClass: "text-slate-700 bg-slate-100/80",
+    icon: Lightbulb,
+    iconClass: "text-sky-600",
+    borderClass: "border-sky-200",
+    bgClass: "bg-sky-50/60",
+    label: "Insight",
+    labelClass: "text-sky-800 bg-sky-100/80",
   },
 } as const;
 
@@ -99,9 +102,9 @@ export default function InsightCard({ card, onDrilldown, onDismiss }: Props) {
           {card.evidence?.length > 0 && (
             <div className="mt-2.5 flex flex-wrap gap-2">
               {card.evidence.map((e, i) => (
-                <div key={i} className="inline-flex items-center gap-1.5 text-[11px] bg-white/70 border border-slate-200/60 rounded-md px-2 py-1">
-                  <span className="text-slate-500">{e.label}:</span>
-                  <span className="font-medium text-slate-800">{e.value}</span>
+                <div key={i} className="inline-flex items-baseline gap-1.5 text-[11px] bg-white/80 border border-sky-100 rounded-md px-2 py-1">
+                  <span className="text-slate-500">{e.label}</span>
+                  <span className="font-semibold tabular-nums text-slate-900">{e.value}</span>
                 </div>
               ))}
             </div>

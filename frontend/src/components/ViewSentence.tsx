@@ -2,6 +2,7 @@
  * ViewSentence — top bar showing the current query as a sentence,
  * with refresh button, freshness indicator, and "back to classic" link.
  */
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCw, Clock, Settings, Printer } from "lucide-react";
 import { cn } from "@/lib/design-system";
@@ -18,11 +19,13 @@ interface Props {
   dataFreshness?: string | null | undefined;
   isFetching: boolean;
   onRefresh: () => void;
+  /** Active-filter chips, shown under the title so a view says what narrows it. */
+  filters?: ReactNode;
 }
 
 export default function ViewSentence({
   subject, period, compare, sentence, generatedAt, dataFreshness,
-  isFetching, onRefresh,
+  isFetching, onRefresh, filters,
 }: Props) {
   return (
     // Deliberately not sticky: the control bar above it is what stays pinned.
@@ -81,6 +84,7 @@ export default function ViewSentence({
               <span>Data through {formatRelative(dataFreshness)}</span>
             </p>
           )}
+          {filters}
         </div>
 
         {/* Actions — pill controls matching the Timesheet / Reports hero.

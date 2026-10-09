@@ -173,6 +173,17 @@ const ClientBillingProfilePanel: React.FC<{
         </div>
       )}
 
+      {/* Non-billable is a whole-product rule, and it rewrites existing time,
+          so say so before they save. */}
+      {p.billing_type === 'non_billable' && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+          All of this client's time counts as non-billable everywhere — Daily Review,
+          Reports, timesheets and Analytics — including time already captured
+          (except anything already invoiced). Use this for the firm's own company.
+          Switching back to hourly won't re-mark past time as billable.
+        </p>
+      )}
+
       {/* Target system */}
       {p.billing_type !== 'non_billable' && (
         <div>

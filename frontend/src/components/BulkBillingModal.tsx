@@ -99,6 +99,12 @@ const BulkBillingModal: React.FC<{
                 <option value="flat_fee">Flat fee / retainer</option>
                 <option value="non_billable">Non-billable</option>
               </select>
+              {billingType === 'non_billable' && (
+                <p className="mt-1.5 text-[11px] leading-snug text-amber-800">
+                  Marks their existing un-invoiced time non-billable too. Switching
+                  back won't re-mark it.
+                </p>
+              )}
             </div>
             <div>
               <label className={LABEL}>Billing system</label>

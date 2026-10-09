@@ -4335,9 +4335,12 @@ class ClassificationService:
         hit = explain(block, self.org)
         if not hit or not hit.get('client_id'):
             return
+        # Actions inside the block are evidence; actions either side of a
+        # quiet stretch are a strong hint — proposed, not filed.
+        between = hit['tier'] == 'asana_between'
         decision.matched_signals.append(Signal(
-            type='asana',
-            strength=0.9,
+            type='asana_between' if between else 'asana',
+            strength=0.75 if between else 0.9,
             evidence=hit['reason'],
             detail={
                 'client_id':  hit['client_id'],

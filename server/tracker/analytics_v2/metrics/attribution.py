@@ -399,6 +399,40 @@ class HoursWaitingMetric(Metric):
         )
 
 
+@register_metric("needs_review_suggestion_rate")
+class SuggestionRateMetric(Metric):
+    """Of the time still waiting, how much already has a client guess on it."""
+
+    label = "Suggestion Rate"
+    format = "percent_1dp"
+    tooltip = (
+        "Suggestion Rate = waiting items with a suggestion ÷ items waiting\n\n"
+        "Of the open Needs You items, the share where TimeTracker already has\n"
+        "a client guess — each is a single tap to confirm. The rest need a\n"
+        "person to pick the client. Higher is better."
+    )
+    valid_scopes = ("firm", "staff", "composite")
+    delta_good_when = "up"
+
+    def compute(self, org, scope, time):
+        from ..lenses.team import scoped_user_ids
+
+        only = scoped_user_ids(scope)
+        by_user = needs_you(org.id, time)[3]
+        suggested = needs_you_suggested_by_user(org.id, time)
+        items = sum(n for u, n in by_user.items() if only is None or u in only)
+        sug = sum(n for u, n in suggested.items() if only is None or u in only)
+        if not items:
+            # Nothing waiting is a clean queue, not a 0% suggestion rate.
+            return MetricValue(state=MetricState.EMPTY)
+        return MetricValue(
+            value=round(sug / items * 100, 1),
+            secondary_value=float(sug),
+            secondary_label=f"of {items:,} waiting item{'' if items == 1 else 's'}",
+            secondary_format="integer",
+        )
+
+
 # A person "reviews" if they have actually worked a queue lately — not if their
 # job title suggests they should. Role is the wrong lever here: a partner doing
 # bookkeeping reviews their own time, and an owner who never opens Daily Review

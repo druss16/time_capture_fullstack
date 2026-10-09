@@ -143,6 +143,14 @@ class NeedsReviewByPersonTests(TestCase):
         self.assertEqual(stats["needs_review_suggested"], 0)
         self.assertEqual(stats["needs_review_suggestion_rate"], 0.0)
 
+    def test_overview_headline_carries_the_suggestion_rate(self):
+        overview = [s.to_dict() for s in get_lens("overview").assemble(
+            self.org, Scope(type="firm"), self.time)]
+        head = next(s for s in overview if s["id"] == "headline")
+        tile = next(t for t in head["tiles"] if t["id"] == "needs_review_suggestion_rate")
+        self.assertEqual(tile["metric"]["value"], 25.0)
+        self.assertEqual(tile["metric"]["secondary_value"], 1.0)
+
     def test_firm_stats_count_suggestions_and_their_rate(self):
         stats = self._stats(self._assemble(Scope(type="firm")))
         self.assertEqual(stats["needs_review_items"], 4)

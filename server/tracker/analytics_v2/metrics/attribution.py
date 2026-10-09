@@ -62,7 +62,7 @@ def needs_you(org_id: int, time) -> tuple[int, float, int, dict[int, int]]:
     Memoised briefly: the predicate is per-block Python, and two tiles plus a
     lens section ask for it inside one request.
     """
-    items, minutes, by_user, _ = _needs_you_pass(org_id, time)
+    items, minutes, by_user, _, _ = _needs_you_pass(org_id, time)
     return (items, minutes / 60.0, len(by_user), by_user)
 
 
@@ -75,8 +75,16 @@ def needs_you_hours_by_user(org_id: int, time) -> dict[int, float]:
     return {uid: m / 60.0 for uid, m in _needs_you_pass(org_id, time)[3].items()}
 
 
-def _needs_you_pass(org_id: int, time) -> tuple[int, int, dict[int, int], dict[int, int]]:
-    """One walk of the predicate: (items, minutes, count by user, minutes by user)."""
+def needs_you_suggested_by_user(org_id: int, time) -> dict[int, int]:
+    """Open Needs You items per owner that ALREADY carry a client guess —
+    the ones a person can clear with one tap. Same memoised pass."""
+    return dict(_needs_you_pass(org_id, time)[4])
+
+
+def _needs_you_pass(org_id: int, time) -> tuple[
+        int, int, dict[int, int], dict[int, int], dict[int, int]]:
+    """One walk of the predicate: (items, minutes, count by user, minutes by
+    user, suggested count by user)."""
     import time as _time
     from tracker.views_reports import is_pending_review_block
 
@@ -89,14 +97,19 @@ def _needs_you_pass(org_id: int, time) -> tuple[int, int, dict[int, int], dict[i
     minutes = 0
     by_user: dict[int, int] = {}
     min_by_user: dict[int, int] = {}
+    sug_by_user: dict[int, int] = {}
     for b in _needs_you_candidates(org_id, time):
         if is_pending_review_block(b):
             items += 1
             minutes += (b.minutes or 0)
             by_user[b.user_id] = by_user.get(b.user_id, 0) + 1
             min_by_user[b.user_id] = min_by_user.get(b.user_id, 0) + (b.minutes or 0)
+            # A suggestion = a client guess is already on the block (the
+            # classifier's proposal, or a client it was filed under).
+            if b.proposed_client_id or b.client_id:
+                sug_by_user[b.user_id] = sug_by_user.get(b.user_id, 0) + 1
 
-    result = (items, minutes, by_user, min_by_user)
+    result = (items, minutes, by_user, min_by_user, sug_by_user)
     _needs_you_cache[key] = (_time.monotonic(), result)
     return result
 

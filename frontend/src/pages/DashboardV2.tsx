@@ -231,6 +231,18 @@ function SectionRenderer({
   return (
     <>
       {data.sections.map(section => {
+        if (section.type === "kpi_row" && section.title) {
+          return (
+            <section key={section.id} className="space-y-3">
+              <SectionHeader title={section.title}><FilterBadge /></SectionHeader>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {section.tiles.map(tile => (
+                  <KPITile key={tile.id} tile={tile} onDrilldown={onDrilldown} />
+                ))}
+              </div>
+            </section>
+          );
+        }
         if (section.type === "kpi_row") {
           return (
             <div

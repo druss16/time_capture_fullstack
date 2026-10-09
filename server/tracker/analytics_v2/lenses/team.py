@@ -35,7 +35,8 @@ from __future__ import annotations
 
 from ..breakdowns import breakdown
 from ..types import (
-    ChartCardPayload, DataTablePayload, MetricState, Section, TimeRange,
+    ChartCardPayload, DataTablePayload, KPITile, MetricState, MetricValue,
+    Section, TimeRange,
 )
 from .base import Lens, register_lens
 from .helpers import column, kpi_tile, safe_sparklines
@@ -146,6 +147,10 @@ def needs_review_chart(org, scope, time: TimeRange) -> ChartCardPayload | None:
          for uid, n in by_user.items()),
         key=lambda d: -d["items"],
     )
+    # One person is a number, not a chart: a single full-width bar says
+    # nothing the stat tiles above it don't. The chart is for comparing people.
+    if len(data) < 2:
+        return None
     total = sum(d["items"] for d in data)
     return ChartCardPayload(
         id="team_needs_review",
@@ -216,17 +221,60 @@ def needs_review_items_table(org, scope, time: TimeRange) -> DataTablePayload | 
     )
 
 
+def needs_review_stats(org, scope, time: TimeRange) -> Section | None:
+    """The headline numbers: items and hours waiting, and how many of those
+    already have a suggestion (a one-tap confirm) — summed over the people the
+    view covers."""
+    from ..metrics.attribution import (
+        needs_you, needs_you_hours_by_user, needs_you_suggested_by_user,
+    )
+
+    try:
+        by_user = needs_you(org.id, time)[3]
+        hours = needs_you_hours_by_user(org.id, time)
+        suggested = needs_you_suggested_by_user(org.id, time)
+    except Exception:
+        return None
+    only = scoped_user_ids(scope)
+
+    def total(d):
+        return sum(v for u, v in d.items() if only is None or u in only)
+
+    items, hrs, sug = total(by_user), total(hours), total(suggested)
+    rate = round(sug / items * 100, 1) if items else None
+
+    def tile(tid, label, fmt, value, tooltip):
+        return KPITile(id=tid, label=label, format=fmt, tooltip=tooltip,
+                       metric=MetricValue(value=value))
+
+    return Section(id="needs_review_stats", type="kpi_row", title="Needs review", children=[
+        tile("needs_review_items", "Items waiting", "integer", items,
+             "Open Needs You items — time still to confirm in Daily Review."),
+        tile("needs_review_hours", "Hours waiting", "hours_1dp", round(hrs, 1),
+             "Hours of those open items."),
+        tile("needs_review_suggested", "With a suggestion", "integer", sug,
+             "Waiting items where TimeTracker already has a client guess — "
+             "each one is a single tap to confirm."),
+        tile("needs_review_suggestion_rate", "Suggestion rate", "percent_1dp", rate,
+             "With a suggestion ÷ items waiting. The rest need a person to "
+             "pick the client."),
+    ])
+
+
 def needs_review_sections(org, scope, time: TimeRange) -> list[Section]:
     """Who is behind on review, and — narrowed to people — on what.
 
     Shared by Team and Overview so the two can't show different numbers.
     """
+    out: list[Section] = []
+    stats = needs_review_stats(org, scope, time)
+    if stats:
+        out.append(stats)
     children = [c for c in (needs_review_chart(org, scope, time),
                             needs_review_items_table(org, scope, time)) if c]
-    if not children:
-        return []
-    return [Section(id="team_needs_review", type="section",
-                    title="Needs review", children=children)]
+    if children:
+        out.append(Section(id="team_needs_review", type="section", children=children))
+    return out
 
 
 def _add_capacity(org, rows: list[dict], time: TimeRange) -> None:

@@ -355,6 +355,8 @@ class Section:
             return {
                 "type": "kpi_row",
                 "id": self.id,
+                # Optional: a titled KPI row gets a section header above it.
+                "title": self.title,
                 "tiles": [c.to_dict() for c in self.children],
             }
         return {

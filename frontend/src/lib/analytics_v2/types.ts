@@ -232,6 +232,8 @@ export type SectionChild =
 
 export interface KPIRow {
   type: "kpi_row";
+  /** Optional section header above the row. */
+  title?: string | undefined;
   id: string;
   tiles: KPITilePayload[];
 }

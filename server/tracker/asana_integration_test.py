@@ -257,6 +257,75 @@ class AttributionTests(Base):
         self.assertNotEqual(b.project_id, self.reskin.id)
 
 
+class ClassifierTests(AttributionTests):
+    """The classifier treats Asana as evidence. Before, the matter sweep set the
+    client Asana named and the classifier — seeing only the title "Asana" —
+    cleared it again on its next pass, ~every 90 seconds, for hours."""
+
+    def classify(self, b):
+        from tracker.services.classification_service import ClassificationService
+        svc = ClassificationService(self.org, self.al)
+        d = svc.classify(b, skip_ai=True)
+        return svc, d
+
+    def blank(self):
+        return self.block(client=None, classification_state='captured', is_categorized=False,
+                          categorized_by='ai')
+
+    def test_desktop_block_gets_the_client_asana_names(self):
+        AsanaActivity.objects.create(integration=self.integ, story_gid='s1', user=self.al,
+                                     at=self.T0 + timedelta(minutes=5), project=self.reskin,
+                                     task_name='Homepage wireframe', kind='due_date_changed')
+        _, d = self.classify(self.blank())
+        self.assertEqual(d.client_id, self.tom.id)
+        sig = next(s for s in d.matched_signals if s.type == 'asana')
+        self.assertEqual(sig.detail['project_id'], self.reskin.id)
+        self.assertIn('changed the due date on “Homepage wireframe”', sig.evidence)
+        self.assertIn('Tom Gill Buick GMC', sig.evidence)
+
+    def test_sweep_and_classifier_agree_instead_of_fighting(self):
+        self.did(self.reskin, 5)
+        self.did(self.donut, 20)        # two projects, one client: client only
+        b = self.blank()
+        self.run_sweep()
+        b.refresh_from_db()
+        self.assertEqual(b.client_id, self.tom.id)
+        svc, d = self.classify(b)
+        svc.apply(b, d)
+        b.refresh_from_db()
+        self.assertEqual(b.client_id, self.tom.id)
+
+    def test_two_clients_touched_names_nobody(self):
+        self.did(self.reskin, 5)
+        self.did(self.social_f, 20)
+        _, d = self.classify(self.blank())
+        self.assertFalse(any(s.type == 'asana' for s in d.matched_signals))
+
+    def test_activity_outside_the_block_is_not_evidence(self):
+        self.did(self.reskin, 90)       # block ends at +46m
+        _, d = self.classify(self.blank())
+        self.assertFalse(any(s.type == 'asana' for s in d.matched_signals))
+
+    def test_daily_review_row_says_what_was_done_in_asana(self):
+        from tracker.views_block_evidence import suggested_client_for, why_summary
+        self.did(self.reskin, 5)
+        b = self.blank()
+        sentence, sid, _name, _ = why_summary(b, self.org)
+        self.assertEqual(sid, self.tom.id)
+        self.assertTrue(sentence.startswith('In Asana you commented on'))
+        self.assertEqual(suggested_client_for(b, self.org), self.tom.id)
+
+    def test_row_title_names_the_task_not_untitled(self):
+        from tracker.views_block_evidence import display_title
+        AsanaActivity.objects.create(integration=self.integ, story_gid='s9', user=self.al,
+                                     at=self.T0 + timedelta(minutes=5), project=self.reskin,
+                                     task_name='Homepage wireframe', kind='comment_added')
+        self.assertEqual(display_title(self.blank(), self.org), 'Homepage wireframe')
+        self.assertEqual(display_title(self.block(window_title='', start=self.T0 + timedelta(hours=3),
+                                                  end=self.T0 + timedelta(hours=4)), self.org), '')
+        self.assertEqual(display_title(self.block(app_name='Slack', window_title='Slack'), self.org), 'Slack')
+
+
 @override_settings(**ASANA)
 class ViewTests(Base):
     def setUp(self):

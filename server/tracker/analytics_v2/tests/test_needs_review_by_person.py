@@ -88,6 +88,13 @@ class NeedsReviewByPersonTests(TestCase):
         self.assertEqual(by_id[self.behind.id], 3)
         self.assertEqual(by_id[self.caught_up.id], 0)
 
+    def test_team_rows_carry_hours_waiting(self):
+        table = self._child(self._assemble(Scope(type="firm")), "team_rows")
+        by_id = {r["id"]: r["needs_review_hours"] for r in table["rows"]}
+        self.assertAlmostEqual(by_id[self.behind.id], 1.5, places=2)
+        self.assertEqual(by_id[self.caught_up.id], 0)
+        self.assertIn("needs_review_hours", [c["key"] for c in table["columns"]])
+
     def test_chart_ranks_whoever_is_most_behind_first(self):
         chart = self._child(self._assemble(Scope(type="firm")), "team_needs_review")
         self.assertEqual(chart["data"][0]["label"], "Behind")

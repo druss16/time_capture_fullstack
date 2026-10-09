@@ -188,9 +188,9 @@ function SetupGrid({ devices, required, showOrg }: { devices: Device[]; required
   const groups = [{ g: "core", n: 2 }, ...["browsers", "adobe", "optional"]
     .map(g => ({ g, n: apps.filter(a => a.group === g).length })).filter(x => x.n)];
   const counts = SETUP_ORDER.map(l => [l, macs.filter(d => d.setup_level === l).length] as const);
-  const th = { padding: "6px 4px", fontSize: 10, color: T.textMuted, fontWeight: 500, letterSpacing: 1,
+  const th = { padding: "8px 6px", fontSize: 12, color: T.textMuted, fontWeight: 500, letterSpacing: 1,
                textTransform: "uppercase" as const, textAlign: "center" as const, borderBottom: `1px solid ${T.border}` };
-  const td = { padding: "8px 4px", textAlign: "center" as const, borderBottom: `1px solid ${T.border}`, fontSize: 14 };
+  const td = { padding: "12px 6px", textAlign: "center" as const, borderBottom: `1px solid ${T.border}`, fontSize: 20 };
 
   const axCell = (st?: PermissionStatus | null): Cell =>
     !st ? { txt: "?", color: T.textMuted, title: "not reported" }
@@ -209,10 +209,10 @@ function SetupGrid({ devices, required, showOrg }: { devices: Device[]; required
     </div>;
   }
   return (
-    <div style={{ ...card, padding: "14px 16px" }}>
+    <div style={{ ...card, padding: "18px 20px" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const, marginBottom: 12 }}>
         {counts.filter(([, n]) => n).map(([l, n]) => <Badge key={l} label={`${n} ${SETUP_LEVEL[l][0]}`} color={SETUP_LEVEL[l][1]} />)}
-        <span style={{ color: T.textMuted, fontSize: 11, ...mono, marginLeft: "auto" }}>
+        <span style={{ color: T.textMuted, fontSize: 13, ...mono, marginLeft: "auto" }}>
           {others ? `${others} Windows (n/a) · ` : ""}{inactive ? `${inactive} inactive Mac${inactive === 1 ? "" : "s"} hidden` : ""}
         </span>
       </div>
@@ -239,9 +239,9 @@ function SetupGrid({ devices, required, showOrg }: { devices: Device[]; required
               const cells = [axCell(st), extCell(st), ...apps.map(a => appCell(st, a.ids, req))];
               return (
                 <tr key={d.id}>
-                  <td style={{ ...td, textAlign: "left" as const, fontSize: 12 }}>
+                  <td style={{ ...td, textAlign: "left" as const, fontSize: 15 }}>
                     <div style={{ color: T.text, fontWeight: 600 }}>{d.user}</div>
-                    <div style={{ color: T.textMuted, fontSize: 11 }}>
+                    <div style={{ color: T.textMuted, fontSize: 13, marginTop: 2 }}>
                       {showOrg ? `${d.org_name} · ` : ""}{d.machine_name} · v{d.agent_version || "?"}
                     </div>
                   </td>
@@ -255,7 +255,7 @@ function SetupGrid({ devices, required, showOrg }: { devices: Device[]; required
           </tbody>
         </table>
       </div>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" as const, marginTop: 10, fontSize: 11, color: T.textMuted, ...mono }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" as const, marginTop: 12, fontSize: 13, color: T.textMuted, ...mono }}>
         <span><b style={{ color: T.green }}>✓</b> granted</span>
         <span><b style={{ color: T.red }}>✕</b> denied (required)</span>
         <span><b style={{ color: T.yellow }}>✕</b> denied (optional)</span>

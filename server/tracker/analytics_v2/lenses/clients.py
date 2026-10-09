@@ -88,7 +88,9 @@ def client_columns() -> list[dict]:
 
 def client_table(rows: list[dict], time: TimeRange, *, table_id: str,
                  title: str, subtitle: str,
-                 footnote: str = "") -> DataTablePayload:
+                 footnote: str = "",
+                 sort_key: str = "hours",
+                 sort_direction: str = "desc") -> DataTablePayload:
     """Build the client table from breakdown rows (already flagged and sorted)."""
     return DataTablePayload(
         id=table_id,
@@ -96,7 +98,7 @@ def client_table(rows: list[dict], time: TimeRange, *, table_id: str,
         subtitle=subtitle,
         columns=client_columns(),
         rows=rows,
-        default_sort={"key": "hours", "direction": "desc"},
+        default_sort={"key": sort_key, "direction": sort_direction},
         row_drilldown={
             "scope_type": "client", "lens": "clients",
             "id_key": "id", "label_key": "label",

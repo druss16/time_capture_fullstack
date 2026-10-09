@@ -32,6 +32,7 @@ import type {
 
 import ControlBar from "@/components/analytics/ControlBar";
 import ViewSentence from "@/components/ViewSentence";
+import ActiveFilters from "@/components/analytics/ActiveFilters";
 import EmptyStateInvoiceless from "@/components/EmptyStateInvoiceless";
 import KPITile from "@/components/primitives/KPITile";
 import ChartCard from "@/components/primitives/ChartCard";
@@ -140,6 +141,12 @@ export default function DashboardV2() {
         dataFreshness={data?.meta?.data_freshness}
         isFetching={isFetching}
         onRefresh={() => refetch()}
+        filters={
+          <ActiveFilters
+            filters={body.scope.filters}
+            onChange={next => push({ scope: { ...body.scope, filters: next } })}
+          />
+        }
       />
 
       <main className="mx-auto max-w-[1560px] px-6 py-8 print:px-0 print:py-3">

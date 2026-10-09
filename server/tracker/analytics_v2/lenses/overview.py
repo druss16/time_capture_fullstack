@@ -10,7 +10,7 @@ What an owner should be able to answer without clicking anything:
     What should I look at?                    → Insights, then the top tables
 
 Everything below the fold is a PREVIEW that drills into a dedicated view — the
-top five clients, the team, where the time went. The full tables live in the
+most and least efficient clients, the team, where the time went. The full tables live in the
 `clients`, `team` and `distribution` lenses so that the landing page stays one
 screen of decisions rather than four screens of data.
 
@@ -78,7 +78,7 @@ class OverviewLens(Lens):
         ))
 
         if scope.type in ("firm", "composite"):
-            sections.append(self._clients_preview(org, scope, time))
+            sections.extend(self._clients_preview(org, scope, time))
             sections.append(self._team_preview(org, scope, time))
 
         return sections
@@ -105,24 +105,54 @@ class OverviewLens(Lens):
 
     # ── previews ────────────────────────────────────────────────────────────
 
-    def _clients_preview(self, org, scope, time) -> Section:
+    def _clients_preview(self, org, scope, time) -> list[Section]:
+        """The most and least efficient clients, by margin %.
+
+        Ranked over MATERIAL clients only: twenty minutes on a client yields a
+        margin % with no information in it, and would otherwise crowd both
+        lists with noise. A client appears in one list at most — with fewer
+        than ten material clients the two would otherwise overlap.
+        """
         from ..breakdowns import breakdown, held_out_note, split_client_rows
+        from ..stats import partition_material
         from .clients import client_table
 
         rows, unassigned, internal = split_client_rows(
             breakdown(org, scope, time, "client"))
-        subtitle = (f"{time.label} · top {_PREVIEW_ROWS} by hours · "
-                    "open Clients for the full list")
-        note = held_out_note(unassigned, internal)
-        if note:
-            subtitle += f" · {note}"
-        table = client_table(
-            rows[:_PREVIEW_ROWS], time,
-            table_id="overview_top_clients",
-            title="Busiest clients",
-            subtitle=subtitle,
+        material, _ = partition_material(
+            rows, weight_key="hours", revenue_key="revenue",
+            min_weight=1.0, min_revenue=250.0,
         )
-        return Section(id="clients_preview", type="section", children=[table])
+        ranked = [r for r in material if r["margin_pct"] is not None]
+        ranked.sort(key=lambda r: (-r["margin_pct"], -r["hours"]))
+
+        high = ranked[:_PREVIEW_ROWS]
+        high_ids = {r["id"] for r in high}
+        low = [r for r in reversed(ranked) if r["id"] not in high_ids][:_PREVIEW_ROWS]
+
+        note = held_out_note(unassigned, internal)
+        tail = "open Clients for the full list" + (f" · {note}" if note else "")
+
+        sections = [Section(id="clients_preview", type="section", children=[
+            client_table(
+                high, time,
+                table_id="overview_high_efficiency_clients",
+                title="High Efficiency Clients",
+                subtitle=f"{time.label} · top {_PREVIEW_ROWS} by margin % · {tail}",
+                sort_key="margin_pct", sort_direction="desc",
+            ),
+        ])]
+        if low:
+            sections.append(Section(id="clients_low_preview", type="section", children=[
+                client_table(
+                    low, time,
+                    table_id="overview_low_efficiency_clients",
+                    title="Low Efficiency Clients",
+                    subtitle=f"{time.label} · bottom {_PREVIEW_ROWS} by margin % · {tail}",
+                    sort_key="margin_pct", sort_direction="asc",
+                ),
+            ]))
+        return sections
 
     def _team_preview(self, org, scope, time) -> Section:
         from ..breakdowns import breakdown

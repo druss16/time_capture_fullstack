@@ -76,7 +76,9 @@ export default function BudgetsPage() {
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  // Clients start collapsed — the client rows are the page; projects on demand.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [showIdle, setShowIdle] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +101,18 @@ export default function BudgetsPage() {
     return m;
   }, [data]);
 
+  // Clients with time this month first (most hours on top); clients with a
+  // budget but nothing tracked yet sit behind a "show" row.
+  const { working, idle } = useMemo(() => {
+    const cs = data?.clients ?? [];
+    return {
+      working: cs.filter((c) => c.actual_hours > 0)
+        .sort((a, b) => b.actual_hours - a.actual_hours || a.client.localeCompare(b.client)),
+      idle: cs.filter((c) => c.actual_hours <= 0)
+        .sort((a, b) => a.client.localeCompare(b.client)),
+    };
+  }, [data]);
+
   const totals = useMemo(() => {
     const cs = data?.clients ?? [];
     const budget = cs.reduce((s, c) => s + c.budget_hours, 0);
@@ -115,11 +129,14 @@ export default function BudgetsPage() {
   }
 
   const elapsed = data?.month_elapsed ?? 0;
-  const toggle = (id: number) => setCollapsed((prev) => {
+  const toggle = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
+  const visible = showIdle ? [...working, ...idle] : working;
+  const allOpen = visible.length > 0 && visible.every((c) => expanded.has(c.client_id));
+  const toggleAll = () => setExpanded(allOpen ? new Set() : new Set(visible.map((c) => c.client_id)));
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6" style={{ fontFamily: '"Inter", sans-serif' }}>
@@ -185,7 +202,13 @@ export default function BudgetsPage() {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="border-b border-border/60 bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-4 py-2.5">{terms.client} / {terms.project}</th>
+                <th className="px-4 py-2.5">
+                  {terms.client} / {terms.project}
+                  <button onClick={toggleAll}
+                    className="ml-3 text-[11px] font-medium normal-case tracking-normal text-primary hover:underline">
+                    {allOpen ? 'Collapse all' : 'Expand all'}
+                  </button>
+                </th>
                 <th className="px-3 py-2.5 text-right">Budgeted</th>
                 <th className="px-3 py-2.5 text-right">Tracked</th>
                 <th className="w-[22%] px-3 py-2.5" />
@@ -193,8 +216,15 @@ export default function BudgetsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.clients.map((c) => {
-                const open = !collapsed.has(c.client_id);
+              {working.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-4 text-center text-slate-400">
+                    No time tracked against a {terms.client.toLowerCase()} in {monthLabel(month)} yet.
+                  </td>
+                </tr>
+              )}
+              {visible.map((c) => {
+                const open = expanded.has(c.client_id);
                 const projects = (byClient.get(c.client_id) || [])
                   .slice().sort((a, b) => a.project.localeCompare(b.project));
                 return (
@@ -241,6 +271,18 @@ export default function BudgetsPage() {
                   </Fragment>
                 );
               })}
+              {idle.length > 0 && (
+                <tr className="border-t border-border/50">
+                  <td colSpan={5} className="px-4 py-2">
+                    <button onClick={() => setShowIdle((v) => !v)}
+                      className="text-[12px] font-medium text-slate-500 hover:text-primary">
+                      {showIdle
+                        ? `Hide ${terms.clients.toLowerCase()} with no time`
+                        : `Show ${idle.length} ${idle.length === 1 ? terms.client.toLowerCase() : terms.clients.toLowerCase()} with no time this month`}
+                    </button>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

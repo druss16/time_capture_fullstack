@@ -335,3 +335,23 @@ class CarryToActivityTests(ProjectPickTests):
                       {'prefix': 'DeNooyer', 'client_id': self.denooyer.id}, format='json')
         act.refresh_from_db()
         self.assertEqual(act.client_id, self.denooyer.id)
+
+
+class PicksByActivityTests(ProjectPickTests):
+    def test_busiest_first_and_no_match_still_listed(self):
+        from tracker.models_asana import AsanaActivity
+        self.sync('Tom Gill Buick GMC: Website Changes', 'Beaver Mazda: Totally Unrelated Thing')
+        quiet = AsanaProjectLink.objects.get(asana_name='Tom Gill Buick GMC: Website Changes')
+        busy = AsanaProjectLink.objects.get(asana_name='Beaver Mazda: Totally Unrelated Thing')
+        for i in range(3):
+            AsanaActivity.objects.create(integration=self.integ, story_gid=f'b{i}', user=self.operator,
+                                         at=timezone.now(), asana_project_gid=busy.asana_gid,
+                                         client=self.bm, kind='comment_added')
+        r = self.api.get(f'/api/onboard/projects/{self.p.id}/asana-links/').json()
+        names = [x['asana_name'] for x in r['project_picks']]
+        self.assertEqual(names[0], busy.asana_name)              # 3 actions, no close match
+        self.assertIn(quiet.asana_name, names)
+        top = r['project_picks'][0]
+        self.assertEqual(top['activity_7d'], 3)
+        self.assertIn(self.logo.id, [o['id'] for o in top['others']])
+        self.assertEqual(r['project_picks_activity_7d'], 3)

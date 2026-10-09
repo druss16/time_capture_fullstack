@@ -87,18 +87,40 @@ def link_report(integration) -> dict:
 
     # Client known, project not: the closest projects of that client, for a
     # person to accept in one click. Best guesses first.
+    from datetime import timedelta
+    from django.utils import timezone
+    from tracker.models import Project
+    from tracker.models_asana import AsanaActivity
+    # What was actually worked on this week. A pick that moves 40 of a
+    # person's actions matters more than one that moves none, so the list
+    # leads with them — not with the closest-looking name.
+    recent = Counter(AsanaActivity.objects
+                     .filter(integration=integration, project__isnull=True, client__isnull=False,
+                             at__gte=timezone.now() - timedelta(days=7))
+                     .values_list('asana_project_gid', flat=True))
+    by_client = defaultdict(list)
+    for pid, name, cid in (Project.objects.filter(org=integration.organization, is_active=True)
+                           .values_list('id', 'name', 'client_id').order_by('name')):
+        by_client[cid].append({'id': pid, 'name': name})
     picks = []
     for link in links:
         if link.project_id or not link.client_id or link.link_source in ('manual', 'ignored'):
             continue
         cands = matcher.project_candidates(link.client_id, link.asana_name)
-        if cands:
-            picks.append({
-                'asana_gid': link.asana_gid, 'asana_name': link.asana_name,
-                'client_name': link.client.name if link.client else None,
-                'candidates': [{'project_id': p.id, 'name': p.name, 'score': sc} for sc, p in cands],
-            })
-    picks.sort(key=lambda r: -r['candidates'][0]['score'])
+        worked = recent.get(link.asana_gid, 0)
+        if not cands and not worked:
+            continue
+        picks.append({
+            'asana_gid': link.asana_gid, 'asana_name': link.asana_name,
+            'client_name': link.client.name if link.client else None,
+            'activity_7d': worked,
+            'candidates': [{'project_id': p.id, 'name': p.name, 'score': sc} for sc, p in cands],
+            # The client's other projects, for when no guess is right.
+            'others': by_client.get(link.client_id, [])[:80],
+        })
+    picks.sort(key=lambda r: (-r['activity_7d'],
+                              -(r['candidates'][0]['score'] if r['candidates'] else 0)))
+    picks_activity = sum(r['activity_7d'] for r in picks)
 
     live = len(links)
     matched = counts['project'] + counts['client'] + counts['ignored']
@@ -112,6 +134,8 @@ def link_report(integration) -> dict:
         'groups': rows[:GROUP_LIMIT],
         'project_picks': picks[:PICK_LIMIT],
         'project_picks_total': len(picks),
+        # Client-only actions this week that one pick each would move to a project.
+        'project_picks_activity_7d': picks_activity,
         'clients': [{'id': c.id, 'name': c.name} for c in clients],
         'has_team_or_field': any(l.asana_team or l.client_hint or l.qbt_ref for l in links),
         # Linked exactly through a "QB Time Project" field in Asana.

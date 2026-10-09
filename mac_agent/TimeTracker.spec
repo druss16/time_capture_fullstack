@@ -32,8 +32,10 @@ a = Analysis(
         ('title_fallback.py', '.'),
         ('setup_checklist.py', '.'),
         ('pause_state.py', '.'),
+        ('remote_control.py', '.'),
         ('startup_watchdog.py', '.'),
         ('menubar_watchdog.py', '.'),
+        ('ax_switch.py', '.'),
         ('sync_manager.py', '.'),
         # Org-token pairing. Imported from inside run_agent, so the analysis
         # cannot see it; without this an IT-deployed Mac silently falls back
@@ -63,8 +65,10 @@ a = Analysis(
         'title_fallback',
         'setup_checklist',
         'pause_state',
+        'remote_control',
         'startup_watchdog',
         'menubar_watchdog',
+        'ax_switch',
         'mdm_deploy',
         'version',
         'inference',

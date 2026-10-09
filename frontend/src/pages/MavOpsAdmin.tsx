@@ -3513,7 +3513,9 @@ export default function MavOpsAdmin() {
   // health/grace/archived badges so they never crowd the name; ACTIONS is a
   // fixed width sized to the 6-button cluster, right-aligned.
   // Columns: ORG | STATUS | PLAN | MRR | SEATS | DEVICES | ACTIVE | ACTIONS
-  const ORG_GRID = "minmax(150px, 1.2fr) 136px 98px 78px 90px 86px 72px 352px";
+  // Actions sit on their own full-width line under each row: ten controls
+  // never fit one column and spilled over the MRR/seats/devices numbers.
+  const ORG_GRID = "minmax(150px, 1.2fr) 136px 98px 78px 90px 86px 72px";
   const filteredDevices = devices.filter(d => {
     if (showInactiveOnly && (Date.now() - new Date(d.last_seen).getTime()) < 7 * 86400000) return false;
     if (!search) return true;
@@ -3692,7 +3694,6 @@ export default function MavOpsAdmin() {
                 <div style={{ textAlign: "right" as const }}>Seats</div>
                 <div style={{ textAlign: "right" as const }}>Devices</div>
                 <div style={{ textAlign: "right" as const }}>Active</div>
-                <div></div>
               </div>
             )}
 
@@ -3747,7 +3748,7 @@ export default function MavOpsAdmin() {
                     </div>
 
                     {/* COL 2 — status badges */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const, minWidth: 0 }}>
                       {org.health && org.health.status !== "ok" && (
                         <span
                           title={org.health.reasons.join(" · ")}
@@ -3778,7 +3779,7 @@ export default function MavOpsAdmin() {
                         <span
                           title={org.client_hygiene.reasons.join(" · ")}
                           style={{
-                            ...mono, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" as const,
+                            ...mono, fontSize: 11, fontWeight: 700, maxWidth: "100%", lineHeight: 1.5,
                             padding: "2px 8px", borderRadius: 3, cursor: "help",
                             color: T.yellow, background: T.yellow + "18", border: `1px solid ${T.yellow}44`,
                           }}
@@ -3824,8 +3825,10 @@ export default function MavOpsAdmin() {
                       {org.last_activity ? timeAgo(org.last_activity) : "—"}
                     </div>
 
-                    {/* COL 8 — actions */}
-                    <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
+                    {/* actions — own line, full width */}
+                    <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, alignItems: "center",
+                                  justifyContent: "flex-end", flexWrap: "wrap" as const,
+                                  paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
                       <div style={{ position: "relative" }} data-picker>
                         {isViewing ? (
                           <Btn label="✓ exit" onClick={clearImpersonation} color={T.green} outline tiny />

@@ -154,6 +154,19 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
+def disabled_report(now: float) -> dict:
+    """The hello2 permission report when `disable_ax` is set in the config.
+
+    No monitor runs then (that is the point of the switch: the macOS 26
+    AEDetermine hang), so nothing is probed. Saying so beats saying nothing:
+    a silent Mac looked fully healthy on the Devices page while every window
+    title was empty, and switching Accessibility on in System Settings does
+    nothing until the config switch is removed.
+    """
+    return {"accessibility": "disabled", "capture_mode": "ax_disabled",
+            "checked_at": _iso(now)}
+
+
 # ---------------------------------------------------------------------------
 # macOS probes. Everything that touches the OS lives here; tests swap in a
 # fake with the same methods.

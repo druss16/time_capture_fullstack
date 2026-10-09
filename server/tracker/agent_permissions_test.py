@@ -31,6 +31,10 @@ FULL = {
 NO_AX = {**FULL, "accessibility": "missing", "capture_mode": "no_accessibility"}
 DENIED = {**FULL, "automation": {"com.google.Chrome": "denied"},
           "required_missing": ["Google Chrome"]}
+# mac_agent/permissions.disabled_report(): `disable_ax` in the agent config.
+AX_OFF = {"accessibility": "disabled", "capture_mode": "ax_disabled",
+          "checked_at": "2026-10-08T15:00:00+00:00"}
+MAC = "macOS-26.6.2-arm64-arm-64bit"
 
 
 class NormalizeTest(SimpleTestCase):
@@ -78,6 +82,22 @@ class IssuesTest(SimpleTestCase):
         self.assertIn("Limited capture", issue["message"])
         self.assertIn("Slack", issue["message"])
 
+    def test_never_reported_mac_is_amber(self):
+        (issue,) = permission_issues(None, MAC)
+        self.assertEqual((issue["severity"], issue["code"]),
+                         ("amber", "permissions_unreported"))
+        self.assertEqual(permission_issues(None, "Darwin-23.1.0-x86_64-i386-64bit")[0]["code"],
+                         "permissions_unreported")
+        self.assertEqual(permission_issues(None, "Windows-11-10.0.26100-SP0"), [])
+        self.assertEqual(permission_issues(None, ""), [])
+
+    def test_config_disabled_is_amber_and_survives_normalizing(self):
+        self.assertEqual(normalize_permission_status(AX_OFF), AX_OFF)
+        (issue,) = permission_issues(AX_OFF, MAC)
+        self.assertEqual((issue["severity"], issue["code"]),
+                         ("amber", "accessibility_disabled"))
+        self.assertIn("disable_ax", issue["message"])
+
     def test_denied_automation_and_extension_are_red(self):
         st = {**DENIED, "extension": "not_seen"}
         sev = [(i["severity"], i["code"]) for i in permission_issues(st)]
@@ -90,7 +110,8 @@ class IssuesTest(SimpleTestCase):
                         permission_blocked_devices=1, limited_capture_devices=2)
         self.assertEqual(h["status"], "warn")
         self.assertIn("1 Mac with Automation/extension off", h["reasons"])
-        self.assertIn("2 Macs without Accessibility (limited capture)", h["reasons"])
+        self.assertIn("2 Macs without Accessibility (limited capture or not reported)",
+                      h["reasons"])
         ok = _org_health(plan="pro", seat_count=5, member_count=3, active_devices=3,
                          deactivated_devices=0, now=timezone.now())
         self.assertEqual(ok["status"], "ok")
@@ -125,6 +146,12 @@ class Base(TestCase):
 
 
 class Hello2StoresStatusTest(Base):
+    def test_stores_config_disabled_status(self):
+        r = self.hello({"hostname": "Janes-MacBook", "permissions": AX_OFF})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.dev.refresh_from_db()
+        self.assertEqual(self.dev.permission_status, AX_OFF)
+
     def test_stores_sanitised_status(self):
         r = self.hello({"hostname": "Janes-MacBook", "app_version": "1.9.18",
                         "device_id": "mac-1",
@@ -170,12 +197,22 @@ class SettingsDevicesTest(Base):
         self.assertEqual(row["permission_status"]["capture_mode"], "no_accessibility")
         self.assertEqual([i["severity"] for i in row["permission_issues"]], ["amber"])
 
-    def test_never_reported_is_null_not_an_error(self):
+    def test_never_reported_mac_is_flagged(self):
+        # A silent Mac used to show a clean "Active" while every title was
+        # empty (More Than Cars, 2026-10-08).
         c = APIClient()
         c.force_authenticate(self.owner)
         row = c.get(self.URL).json()[0]
         self.assertIsNone(row["permission_status"])
-        self.assertEqual(row["permission_issues"], [])
+        self.assertEqual([i["code"] for i in row["permission_issues"]],
+                         ["permissions_unreported"])
+
+    def test_never_reported_windows_is_not_an_error(self):
+        self.dev.platform = "Windows-11-10.0.26100-SP0"
+        self.dev.save(update_fields=["platform"])
+        c = APIClient()
+        c.force_authenticate(self.owner)
+        self.assertEqual(c.get(self.URL).json()[0]["permission_issues"], [])
 
     def test_member_cannot_list_devices(self):
         c = APIClient()
@@ -200,7 +237,10 @@ class MavOpsTest(Base):
         self.assertEqual(other["permission_issues"][0]["code"], "automation_denied")
         orgs = {o["name"]: o for o in c.get("/api/mavops/orgs/").json()["orgs"]}
         self.assertIn("1 Mac with Automation/extension off", orgs["Other"]["health"]["reasons"])
-        self.assertFalse(any("Mac" in r for r in orgs["Firm"]["health"]["reasons"]))
+        # Firm's Mac never reported: limited, not blocked.
+        self.assertIn("1 Mac without Accessibility (limited capture or not reported)",
+                      orgs["Firm"]["health"]["reasons"])
+        self.assertFalse(any("Automation" in r for r in orgs["Firm"]["health"]["reasons"]))
 
     def test_non_staff_is_refused(self):
         c = APIClient()

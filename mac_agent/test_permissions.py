@@ -443,6 +443,14 @@ def test_ae_status_never_asks_macos_about_an_app_that_is_not_running():
         P._ae_determine = real
 
 
+
+def test_disabled_report_says_accessibility_is_off_by_config():
+    # disable_ax set: no monitor runs, but the server must still hear that
+    # titles are off (a silent Mac looked healthy on the Devices page).
+    r = P.disabled_report(1_000_000.0)
+    assert r["accessibility"] == "disabled" and r["capture_mode"] == "ax_disabled", r
+    assert r["checked_at"].startswith("1970-01-12"), r
+
 if __name__ == "__main__":
     failures = 0
     names = [n for n in sorted(globals()) if n.startswith("test_") and callable(globals()[n])]

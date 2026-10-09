@@ -68,15 +68,16 @@ export type Device = {
   last_seen: string;
   is_active: boolean;
   // macOS privacy permissions as the Mac agent last reported them (null =
-  // never reported: Windows, or an older Mac agent).
+  // never reported: Windows, or a Mac whose agent never ran the check — the
+  // server then sends a 'permissions_unreported' issue for the Mac).
   permission_status?: DevicePermissionStatus | null;
   permission_issues?: DevicePermissionIssue[];
 };
 
 export type DevicePermissionStatus = {
-  accessibility?: 'granted' | 'missing';
+  accessibility?: 'granted' | 'missing' | 'disabled';
   automation?: Record<string, 'granted' | 'denied' | 'unknown'>;
-  capture_mode?: 'full' | 'no_accessibility';
+  capture_mode?: 'full' | 'no_accessibility' | 'ax_disabled';
   extension?: 'seen' | 'not_seen' | 'not_running';
   required_missing?: string[];
   checked_at?: string;

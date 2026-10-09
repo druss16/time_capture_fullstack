@@ -3,9 +3,9 @@
 The Mac agent reports what macOS lets it do in every hello2 check-in
 (mac_agent/permissions.py PermissionMonitor.report()):
 
-    {"accessibility": "granted" | "missing",
+    {"accessibility": "granted" | "missing" | "disabled",
      "automation": {"com.google.Chrome": "granted" | "denied" | "unknown", ...},
-     "capture_mode": "full" | "no_accessibility",
+     "capture_mode": "full" | "no_accessibility" | "ax_disabled",
      "extension": "seen" | "not_seen" | "not_running",   (optional)
      "required_missing": ["Google Chrome", ...],
      "stale_entry_reset": true,                          (optional)
@@ -20,9 +20,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-_AX = {"granted", "missing"}
+_AX = {"granted", "missing", "disabled"}
 _AE = {"granted", "denied", "unknown"}
-_MODES = {"full", "no_accessibility"}
+# ax_disabled: `disable_ax` in the agent's config turned the permission
+# check and every Accessibility read off (the macOS 26 startup-hang
+# workaround), so whatever System Settings says, no titles are read.
+_MODES = {"full", "no_accessibility", "ax_disabled"}
 _EXT = {"seen", "not_seen", "not_running"}
 _MAX_TARGETS = 40
 _MAX_STR = 120
@@ -81,16 +84,33 @@ def normalize_permission_status(raw: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
-def permission_issues(status: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+def is_mac(platform: Optional[str]) -> bool:
+    """AgentDevice.platform is Python's platform.platform() on the Mac
+    ('macOS-26.6.2-arm64-arm-64bit'; older Pythons say 'Darwin-…')."""
+    p = (platform or "").strip().lower()
+    return p.startswith("macos") or p.startswith("darwin")
+
+
+def permission_issues(status: Optional[Dict[str, Any]],
+                      platform: Optional[str] = None) -> List[Dict[str, str]]:
     """[{severity: 'red'|'amber', code, message}] for the Devices page.
 
     red   — something REQUIRED is off: an Automation target was denied (that
             app's page/file never reaches us) or the browser extension is off.
-    amber — limited capture: Accessibility is missing, so window titles of
-            apps with no scripting (Slack desktop, Figma, Canva) are empty.
-            Browsers and documents still come through.
+    amber — limited capture: Accessibility is missing or turned off in the
+            agent's config, so window titles of apps with no scripting (Slack
+            desktop, Figma, Canva) are empty. Browsers and documents still come
+            through. Also amber: a Mac that has never reported at all (agent
+            older than 1.9.18, or its launch check was skipped) — we can't say
+            capture is full, and a clean "Active" hid exactly that.
+
+    `platform` is AgentDevice.platform; without it a missing status is no issue.
     """
     if not isinstance(status, dict):
+        if is_mac(platform):
+            return [{"severity": "amber", "code": "permissions_unreported",
+                     "message": "Permissions not reported — Accessibility may be off; "
+                                "update the agent or check its log"}]
         return []
     issues: List[Dict[str, str]] = []
     denied = [b for b, v in (status.get("automation") or {}).items() if v == "denied"]
@@ -101,12 +121,17 @@ def permission_issues(status: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
     if status.get("extension") == "not_seen":
         issues.append({"severity": "red", "code": "extension_off",
                        "message": "Browser extension not reporting"})
-    if status.get("accessibility") == "missing" or status.get("capture_mode") == "no_accessibility":
+    if status.get("accessibility") == "disabled" or status.get("capture_mode") == "ax_disabled":
+        issues.append({"severity": "amber", "code": "accessibility_disabled",
+                       "message": "Limited capture: Accessibility turned off in the agent's "
+                                  "config (disable_ax) — window titles not captured"})
+    elif status.get("accessibility") == "missing" or status.get("capture_mode") == "no_accessibility":
         issues.append({"severity": "amber", "code": "accessibility_missing",
                        "message": "Limited capture: Accessibility missing — Slack/desktop app "
                                   "window titles not captured"})
     return issues
 
 
-def device_needs_attention(status: Optional[Dict[str, Any]]) -> bool:
-    return bool(permission_issues(status))
+def device_needs_attention(status: Optional[Dict[str, Any]],
+                           platform: Optional[str] = None) -> bool:
+    return bool(permission_issues(status, platform))

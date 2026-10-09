@@ -1575,6 +1575,34 @@ def start_permission_monitor(version_changed: bool):
     return mon
 
 
+PERMISSION_RETRY_DELAY_S = 120
+
+
+def _retry_permission_check_later(delay_s: float = PERMISSION_RETRY_DELAY_S) -> None:
+    """After a launch that skipped the permission check (it hung last time),
+    run it once on a background thread, off the startup path.
+
+    Without this the agent ran the whole session with PERMISSIONS None: no
+    report to the server, no "Accessibility missing" warning, and a Mac with
+    no titles looked healthy. A hang here parks only this daemon thread; the
+    tracking loop never waits on it. Success re-sends the check-in through
+    the listeners. The menu-bar checklist was set up without a monitor, so it
+    stays off until the next normal launch.
+    """
+    def _run():
+        time.sleep(delay_s)
+        if PERMISSIONS is not None:
+            return
+        log("[PERMS] Retrying the skipped permission check in the background")
+        try:
+            if start_permission_monitor(False) is not None:
+                _permissions_changed()
+        except Exception as e:
+            log(f"[PERMS] background permission check failed: {e}")
+
+    threading.Thread(target=_run, daemon=True, name="PermsRetry").start()
+
+
 def _permissions_changed() -> None:
     for fn in list(_permissions_listeners):
         try:
@@ -2999,7 +3027,9 @@ def hello(server_url: str, user: str, host: str, device_id: str):
     }
     # Accessibility / Automation / extension status, so the Devices page can
     # say which Mac needs attention. Re-sent whenever it changes.
-    if PERMISSIONS is not None and PERMISSIONS.checked_at:
+    if DISABLE_AX and _perms is not None:
+        payload["permissions"] = _perms.disabled_report(time.time())
+    elif PERMISSIONS is not None and PERMISSIONS.checked_at:
         try:
             payload["permissions"] = PERMISSIONS.report()
         except Exception as e:
@@ -3945,7 +3975,8 @@ def run_agent():
     # and AppleScript). If it hung the last launch, run without it this time.
     if _startup.should_skip("permissions"):
         log("[STARTUP] ⚠️ The permission check hung on the last launch — "
-            "starting without it this time")
+            "starting without it this time; retrying it in the background")
+        _retry_permission_check_later()
     else:
         _startup.stage("permissions", skippable=True)
         start_permission_monitor(_VERSION_CHANGED)

@@ -59,6 +59,9 @@ def team_columns() -> list[dict]:
         column("needs_review", "Needs review", "integer",
                tooltip="Open Needs You items in this period — time the person "
                        "still has to confirm in Daily Review."),
+        column("needs_review_hours", "Hours waiting", "hours_1dp",
+               tooltip="Hours of those open Needs You items — the per-person "
+                       "share of the Hours Waiting on You tile."),
         column("revenue", "Billable value", "currency_0dp"),
         # Key must stay `cost` / `margin`: those are the names the cost
         # redactor strips for non-owners. A prettier key like
@@ -92,21 +95,25 @@ def team_table(org, rows: list[dict], time: TimeRange, *, table_id: str,
 
 
 def _add_needs_review(org, rows: list[dict], time: TimeRange) -> None:
-    """Annotate rows in place with `needs_review` (open Needs You items).
+    """Annotate rows in place with `needs_review` (open Needs You items) and
+    `needs_review_hours` (their hours).
 
     None when the queue can't be measured (too large for the window): a blank
     cell, not a reassuring 0.
     """
-    from ..metrics.attribution import needs_you
+    from ..metrics.attribution import needs_you, needs_you_hours_by_user
 
     try:
         by_user = needs_you(org.id, time)[3]
+        hours = needs_you_hours_by_user(org.id, time)
     except Exception:
         for r in rows:
             r["needs_review"] = None
+            r["needs_review_hours"] = None
         return
     for r in rows:
         r["needs_review"] = by_user.get(r["id"], 0)
+        r["needs_review_hours"] = round(hours.get(r["id"], 0.0), 2)
 
 
 def scoped_user_ids(scope) -> set[int] | None:

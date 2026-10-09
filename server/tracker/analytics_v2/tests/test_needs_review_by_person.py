@@ -114,6 +114,15 @@ class NeedsReviewByPersonTests(TestCase):
             "team_needs_review_items")
         self.assertEqual(len(items["rows"]), 3)
 
+    def test_overview_carries_the_same_chart_and_list(self):
+        overview = [s.to_dict() for s in get_lens("overview").assemble(
+            self.org, Scope(type="firm", filters={"staff": [self.behind.id]}),
+            self.time)]
+        chart = self._child(overview, "team_needs_review")
+        self.assertEqual([d["items"] for d in chart["data"]], [3])
+        items = self._child(overview, "team_needs_review_items")
+        self.assertEqual(len(items["rows"]), 3)
+
     def test_managers_keep_it_after_cost_redaction(self):
         """Counts and hours, no cost: a manager is exactly who this is for."""
         out = redact_cost_sections(self._assemble(Scope(type="firm")))

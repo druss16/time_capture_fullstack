@@ -1329,21 +1329,53 @@ def _norm_name_toks(text: str) -> list[str]:
     return _tokenize((text or "").replace("’", "").replace("'", ""))
 
 
-def _contiguous_run(ctoks: list[str], label_join: str, distinct) -> tuple[int, float]:
-    """Longest run of consecutive client-name tokens (in name order) that appears
-    as a contiguous phrase in the label. Returns (run_length, distinctive_mass)."""
-    best_len, best_mass = 0, 0.0
-    L = len(ctoks)
-    for i in range(L):
-        for j in range(i + 1, L + 1):
-            if (" " + " ".join(ctoks[i:j]) + " ") in label_join:
-                length = j - i
-                mass = sum(distinct(t) for t in ctoks[i:j])
-                if (length, mass) > (best_len, best_mass):
-                    best_len, best_mass = length, mass
-            else:
-                break  # ctoks[i:j] not contiguous → i:j+1 can't be either
-    return best_len, best_mass
+# Words that sit inside a client's name without saying whose it is. Rare in a
+# roster, so their weight alone would make them look identifying.
+_NAME_FILLER = {"our", "my", "your", "on", "in", "at", "to", "for", "by", "with", "from"}
+
+
+def _contiguous_run(ctoks: list[str], label_toks: list[str], distinct) -> tuple[int, float, int]:
+    """Runs of consecutive client-name words (in name order) that appear as
+    consecutive words in the label. Returns (claim_len, claim_mass, any_len):
+
+      any_len   — the longest run of any kind. A rival's any_len still makes a
+                  label ambiguous: "Tom Gill" names Tom Gill Chevrolet no more
+                  than it names Tom Gill Buick GMC.
+      claim_len — the longest run that may NAME this client: it carries the
+                  name's first identifying word.
+
+    That word says who the client is: "Matthews" of "Matthews Auto Group",
+    "Anthony" of "The Church of St. Anthony & St. Agnes", "Lady" of "Church of
+    Our Lady of The Rosary". A run without it is wording other names share —
+    "Auto Group" sat inside the Dropbox folder "0074_Easterns-Auto-Group",
+    out-ran Easterns' own one-word hits, and pre-filled the split with
+    Matthews; "of Our" put "Transfiguration of Our Lord" under the Rosary.
+
+    Inside a run, a label word may shorten the name's word ("Easterns-Auto-Group"
+    == "Easterns Automotive Group"), the way agencies abbreviate client folders
+    (services/naming_convention.py)."""
+    from tracker.utils.client_name_match import _STOPish, CORROBORATION_FLOOR
+    ident = [i for i, t in enumerate(ctoks)
+             if t not in _STOPish and t not in _NAME_FILLER
+             and distinct(t) > CORROBORATION_FLOOR]
+    best_len, best_mass, any_len = 0, 0.0, 0
+    for i in range(len(ctoks)):
+        for s, tok in enumerate(label_toks):
+            if tok != ctoks[i]:
+                continue
+            k = 1
+            while (i + k < len(ctoks) and s + k < len(label_toks)
+                   and (label_toks[s + k] == ctoks[i + k]
+                        or (len(label_toks[s + k]) >= 3
+                            and ctoks[i + k].startswith(label_toks[s + k])))):
+                k += 1
+            any_len = max(any_len, k)
+            if not ident or not i <= ident[0] < i + k:
+                continue                 # misses the word that says who it is
+            mass = sum(distinct(t) for t in ctoks[i:i + k])
+            if (k, mass) > (best_len, best_mass):
+                best_len, best_mass = k, mass
+    return best_len, best_mass, any_len
 
 
 def _phrase_client_for_label(label, names, index):
@@ -1363,22 +1395,23 @@ def _phrase_client_for_label(label, names, index):
     label_toks = _norm_name_toks(label)
     if not label_toks:
         return None
-    label_join = " " + " ".join(label_toks) + " "
     distinct = index["distinctiveness"] if index else (lambda t: 1.0)
 
-    scored = []
+    scored, any_runs = [], {}
     for cid, name in names.items():
         ctoks = _norm_name_toks(name)
         if not ctoks:
             continue
-        run_len, run_mass = _contiguous_run(ctoks, label_join, distinct)
+        run_len, run_mass, any_len = _contiguous_run(ctoks, label_toks, distinct)
+        any_runs[cid] = any_len
         if run_len:
             scored.append((run_len, run_mass, cid))
     if not scored:
         return None
     scored.sort(reverse=True)
     run_len, run_mass, cid = scored[0]
-    second_len = scored[1][0] if len(scored) > 1 else 0
+    # Any rival run as long counts, even one that could not name its client.
+    second_len = max((n for c, n in any_runs.items() if c != cid), default=0)
     if run_len < 2 or run_mass < 0.8 or run_len <= second_len:
         return None
     return cid
@@ -1405,7 +1438,8 @@ def _slice_suggestions(block, org, breakdown=None, names=None, index=None):
         return {}
 
     if names is None:
-        names = {c.id: c.name for c in Client.objects.filter(org=org).only("id", "name")}
+        # Live clients only: a folded or retired client must never be offered.
+        names = {c.id: c.name for c in Client.objects.filter(org=org, is_active=True).only("id", "name")}
         index = None  # a caller-supplied index would not match a fresh name map
     if index is None:
         index = build_token_index(names) if names else None

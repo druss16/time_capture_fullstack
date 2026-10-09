@@ -132,11 +132,12 @@ export interface AsanaLinkReport {
   live: number; linked_project: number; linked_client: number; ignored: number; unlinked: number;
   matched_pct: number; groups: AsanaLinkGroup[]; clients: { id: number; name: string }[];
   has_team_or_field: boolean;
-  project_picks?: AsanaProjectPick[]; project_picks_total?: number;
+  project_picks?: AsanaProjectPick[]; project_picks_total?: number; project_picks_activity_7d?: number;
 }
 export interface AsanaProjectPick {
   asana_gid: string; asana_name: string; client_name: string | null;
   candidates: { project_id: number; name: string; score: number }[];
+  activity_7d?: number; others?: { id: number; name: string }[];
 }
 
 export type ConnectProvider = "quickbooks" | "qb_time" | "asana";

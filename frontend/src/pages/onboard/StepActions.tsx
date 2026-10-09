@@ -886,7 +886,9 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
             <div className="space-y-2">
               <div className="text-sm font-semibold text-slate-800">
                 Pick the project <span className="font-normal text-slate-500">
-                  — {r.project_picks_total} Asana project{r.project_picks_total === 1 ? "" : "s"} know their client but not their project. Closest guesses first; one click links it for good.
+                  — {r.project_picks_total} Asana project{r.project_picks_total === 1 ? "" : "s"} know their client but not their project.
+                  {(r.project_picks_activity_7d ?? 0) > 0 && ` ${r.project_picks_activity_7d} actions this week are waiting on these picks — the busiest are first.`}
+                  {" "}One click links it for good.
                 </span>
               </div>
               <div className="max-h-[45vh] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
@@ -895,6 +897,9 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
                     <div className="text-sm">
                       <span className="font-medium text-slate-800">{pk.asana_name}</span>
                       {pk.client_name && <span className="text-slate-500"> · {pk.client_name}</span>}
+                      {(pk.activity_7d ?? 0) > 0 && (
+                        <span className="ml-2"><Pill tone="amber">{pk.activity_7d} action{pk.activity_7d === 1 ? "" : "s"} this week</Pill></span>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {pk.candidates.map((c) => (
@@ -904,6 +909,17 @@ function AsanaLinksDialog({ project, onClose, onChanged }: Props) {
                           {c.name} <span className="text-xs text-slate-400">{Math.round(c.score * 100)}%</span>
                         </button>
                       ))}
+                      {pk.candidates.length === 0 && <span className="text-xs text-slate-500">No close match —</span>}
+                      {(pk.others?.length ?? 0) > 0 && (
+                        <select className={inputClass + " w-auto max-w-[16rem]"} disabled={!!busy} value=""
+                          onChange={(e) => {
+                            const o = pk.others!.find((x) => String(x.id) === e.target.value);
+                            if (o) accept(pk.asana_gid, pk.asana_name, o.id, o.name);
+                          }}>
+                          <option value="">Another project…</option>
+                          {pk.others!.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </select>
+                      )}
                       {busy === pk.asana_gid && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
                     </div>
                   </div>

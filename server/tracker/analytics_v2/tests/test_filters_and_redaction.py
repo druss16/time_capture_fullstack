@@ -158,6 +158,41 @@ class CostRedactionTests(SimpleTestCase):
         self.assertEqual(card["data"][0]["hours"], 10.0)
         self.assertEqual(card["data"][0]["revenue"], 750.0)
 
+    def test_margin_ranked_client_lists_are_dropped_whole(self):
+        """Which five clients make the high/low efficiency lists IS the margin
+        ranking; stripping the column would still disclose it."""
+        out = redact_cost_sections([
+            {"type": "section", "children": [{
+                "type": "data_table", "id": "overview_high_efficiency_clients",
+                "columns": [{"key": "label"}, {"key": "hours"}],
+                "rows": [{"label": "A", "hours": 5.0}],
+            }]},
+            {"type": "section", "children": [{
+                "type": "chart_card", "id": "overview_low_efficiency_clients",
+                "series": [{"key": "margin_pct", "label": "Margin %"}],
+                "data": [{"label": "B", "margin_pct": 12.0}],
+            }]},
+            {"type": "section", "children": [self._trend_card()]},
+        ])
+        ids = [c["id"] for sec in out for c in sec["children"]]
+        self.assertEqual(ids, ["performance_trend"])
+
+    def test_chart_left_with_no_series_is_dropped(self):
+        out = redact_cost_sections([{"type": "section", "children": [{
+            "type": "chart_card", "id": "margin_only",
+            "series": [{"key": "margin", "label": "Margin"}],
+            "data": [{"label": "x", "margin": 1.0}],
+        }]}])
+        self.assertEqual(out, [])
+
+    def test_chart_that_never_used_series_survives(self):
+        """Pie and WIP-aging charts carry no `series`; they are not cost-only."""
+        out = redact_cost_sections([{"type": "section", "children": [{
+            "type": "chart_card", "id": "wip_aging", "series": [],
+            "data": [{"label": "0-30", "value": 100.0}],
+        }]}])
+        self.assertEqual(out[0]["children"][0]["id"], "wip_aging")
+
     def test_margin_clause_is_scrubbed_from_the_subtitle(self):
         card = redact_cost_sections([{
             "type": "section", "children": [self._trend_card()],

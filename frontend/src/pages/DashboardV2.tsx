@@ -32,7 +32,8 @@ import type {
 
 import ControlBar from "@/components/analytics/ControlBar";
 import ViewSentence from "@/components/ViewSentence";
-import ActiveFilters from "@/components/analytics/ActiveFilters";
+import ActiveFilters, { useFilterChips } from "@/components/analytics/ActiveFilters";
+import FilterBadge, { ActiveFilterContext } from "@/components/analytics/FilterBadge";
 import EmptyStateInvoiceless from "@/components/EmptyStateInvoiceless";
 import KPITile from "@/components/primitives/KPITile";
 import ChartCard from "@/components/primitives/ChartCard";
@@ -51,6 +52,11 @@ export default function DashboardV2() {
   );
 
   const { data, error, isLoading, isFetching, refetch } = useAnalyticsQuery(body);
+  const filterChips = useFilterChips(body.scope.filters);
+  const filterLabels = useMemo(
+    () => filterChips.map(c => `${c.dim}: ${c.value}`),
+    [filterChips],
+  );
   const { data: perms } = useAnalyticsPermissions();
 
   // Until permissions land, offer the executive dashboard only. Showing every
@@ -160,15 +166,17 @@ export default function DashboardV2() {
         {error && <ErrorPanel error={error} onRetry={() => refetch()} />}
 
         {data && (
-          <div className="space-y-10 print:space-y-4">
-            <SectionRenderer
-              body={body}
-              data={data}
-              onDrilldown={handleDrilldown}
-              onGrainChange={handleGrainChange}
-              rowHandler={rowHandler}
-            />
-          </div>
+          <ActiveFilterContext.Provider value={filterLabels}>
+            <div className="space-y-10 print:space-y-4">
+              <SectionRenderer
+                body={body}
+                data={data}
+                onDrilldown={handleDrilldown}
+                onGrainChange={handleGrainChange}
+                rowHandler={rowHandler}
+              />
+            </div>
+          </ActiveFilterContext.Provider>
         )}
       </main>
     </div>
@@ -253,7 +261,13 @@ function CollapsibleSection({
   if (!section.collapsible) {
     return (
       <section className="space-y-3">
-        {section.title && <SectionHeader title={section.title} />}
+        {section.title && (
+          <SectionHeader title={section.title}>
+            {/* Charts and tables carry their own badge; insight cards don't,
+                so the section header carries it for them. */}
+            {section.children.some(c => c.type === "insight_card") && <FilterBadge />}
+          </SectionHeader>
+        )}
         {children}
       </section>
     );

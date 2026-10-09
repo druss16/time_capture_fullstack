@@ -18,9 +18,10 @@ interface Props {
   onChange: (next: ScopeFilters) => void;
 }
 
-interface Chip { key: string; dim: string; value: string; remove: () => ScopeFilters }
+export interface Chip { key: string; dim: string; value: string; remove: () => ScopeFilters }
 
-export default function ActiveFilters({ filters, onChange }: Props) {
+/** One entry per active filter, labelled — shared with each card's FilterBadge. */
+export function useFilterChips(filters: ScopeFilters | undefined): Chip[] {
   const { data: perms } = useAnalyticsPermissions();
   // Same queries the control bar already holds, so these resolve from cache.
   const options: Record<FilterDim, Option[]> = {
@@ -59,6 +60,11 @@ export default function ActiveFilters({ filters, onChange }: Props) {
     });
   }
 
+  return chips;
+}
+
+export default function ActiveFilters({ filters, onChange }: Props) {
+  const chips = useFilterChips(filters);
   if (!chips.length) return null;
 
   return (

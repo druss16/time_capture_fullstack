@@ -182,10 +182,13 @@ class KPITile:
     tooltip: str = ""
     metric: MetricValue = field(default_factory=MetricValue)
     drilldown: Optional[dict] = None  # {scope: {...}, lens: "realization"} for click-through
+    # Surface tint for tiles that form a group ("amber" = Needs review).
+    tone: str = ""
     
     def to_dict(self) -> dict:
         return {
             "type": "kpi_tile",
+            "tone": self.tone,
             "id": self.id,
             "label": self.label,
             "size": self.size,

@@ -427,8 +427,10 @@ class SuggestionRateMetric(Metric):
             return MetricValue(state=MetricState.EMPTY)
         return MetricValue(
             value=round(sug / items * 100, 1),
-            secondary_value=float(sug),
-            secondary_label=f"of {items:,} waiting item{'' if items == 1 else 's'}",
+            # Renders "Items waiting: 309" — the denominator. The numerator
+            # already has its own tile; "of 309 waiting items: 87" read backwards.
+            secondary_value=float(items),
+            secondary_label="Items waiting",
             secondary_format="integer",
         )
 

@@ -245,10 +245,13 @@ def needs_review_stats(org, scope, time: TimeRange) -> Section | None:
         return sum(v for u, v in d.items() if only is None or u in only)
 
     items, hrs, sug = total(by_user), total(hours), total(suggested)
+    rate_tile = kpi_tile("needs_review_suggestion_rate", org, scope, time)
+    # The row is one group — waiting work — and is tinted as one.
+    rate_tile.tone = "amber"
 
     def tile(tid, label, fmt, value, tooltip):
         return KPITile(id=tid, label=label, format=fmt, tooltip=tooltip,
-                       metric=MetricValue(value=value))
+                       metric=MetricValue(value=value), tone="amber")
 
     return Section(id="needs_review_stats", type="kpi_row", title="Needs review", children=[
         tile("needs_review_items", "Items waiting", "integer", items,
@@ -260,7 +263,7 @@ def needs_review_stats(org, scope, time: TimeRange) -> Section | None:
              "each one is a single tap to confirm."),
         # The registered metric, so this tile and the Overview headline's
         # can't disagree.
-        kpi_tile("needs_review_suggestion_rate", org, scope, time),
+        rate_tile,
     ])
 
 

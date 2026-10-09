@@ -107,6 +107,8 @@ export interface KPITilePayload {
   tooltip: string;
   metric: MetricValue;
   drilldown?: { scope: Scope; lens: LensKey } | null;
+  /** Surface tint for a tile that belongs to a group, e.g. "amber" for Needs review. */
+  tone?: "amber" | "" | undefined;
 }
 
 export type ChartType =

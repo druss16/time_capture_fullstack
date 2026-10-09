@@ -249,7 +249,13 @@ function TileShell({
         // a threshold lost its border and background along with it — the zone
         // classes happened to re-supply a tint, which hid the bug until the
         // tint was removed.
-        "rounded-2xl border border-[rgba(15,42,60,0.08)] bg-white text-left",
+        "rounded-2xl border text-left",
+        // A toned tile REPLACES the white surface rather than layering on it:
+        // `cn` doesn't merge Tailwind classes, so bg-white + bg-amber-50 would
+        // be decided by stylesheet order, not by intent.
+        tile.tone === "amber"
+          ? "border-amber-200/80 bg-amber-50"
+          : "border-[rgba(15,42,60,0.08)] bg-white",
         "shadow-[0_1px_2px_rgba(16,27,46,0.04),0_8px_24px_-12px_rgba(16,27,46,0.10)]",
         "transition-[transform,box-shadow,border-color] duration-200 ease-out",
         interactive && "cursor-pointer hover:-translate-y-px hover:border-[rgba(15,42,60,0.14)] hover:shadow-[0_1px_2px_rgba(16,27,46,0.05),0_16px_40px_-16px_rgba(16,27,46,0.18)] focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600/30",

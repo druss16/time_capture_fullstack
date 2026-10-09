@@ -111,7 +111,8 @@ export interface KPITilePayload {
 
 export type ChartType =
   | "line" | "area" | "bar" | "horizontal_bar" | "stacked_bar"
-  | "pie" | "wip_aging" | "sparkline" | "proportion_bar" | "dot_matrix";
+  | "pie" | "wip_aging" | "sparkline" | "proportion_bar" | "dot_matrix"
+  | "ring";
 
 export interface ChartSeries {
   key: string;

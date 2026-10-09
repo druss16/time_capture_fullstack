@@ -204,7 +204,10 @@ class ChartCardPayload:
     subtitle: str = ""
     chart_type: Literal[
         "line", "area", "bar", "horizontal_bar", "stacked_bar",
-        "pie", "wip_aging", "sparkline", "proportion_bar", "dot_matrix"
+        "pie", "wip_aging", "sparkline", "proportion_bar", "dot_matrix",
+        # One TimeTracker-mark ring per row: the primary series' share of the
+        # row's total, percentage in the middle. For a handful of rows.
+        "ring",
     ] = "line"
     data: list[dict] = field(default_factory=list)
     series: list[dict] = field(default_factory=list)  # [{key, label, color}]

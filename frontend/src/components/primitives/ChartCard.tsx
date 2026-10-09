@@ -195,7 +195,7 @@ export default function ChartCard({ card, onGrainChange }: Props) {
               ))}
             </ul>
           )}
-          <div style={{ height: chartHeight(shown) }}>
+          <div style={chartHeight(shown) ? { height: chartHeight(shown) } : undefined}>
             <ChartByType card={shown} format={format} />
           </div>
         </>
@@ -209,7 +209,9 @@ export default function ChartCard({ card, onGrainChange }: Props) {
  * A twelve-client ranking squeezed into 16rem gives each bar 13px, which is
  * too thin to compare and too thin to label.
  */
-function chartHeight(card: ChartCardPayload): number {
+function chartHeight(card: ChartCardPayload): number | undefined {
+  // Rings lay themselves out and size to their rows.
+  if (card.chart_type === "ring") return undefined;
   if (card.chart_type !== "horizontal_bar") return 256;
   return Math.min(Math.max(card.data.length * 28 + 40, 180), 620);
 }
@@ -253,8 +255,71 @@ function ChartByType({ card, format }: ViewProps) {
     case "wip_aging":     return <WipAgingChart card={card} />;
     case "proportion_bar":return <ProportionBarView card={card} />;
     case "dot_matrix":    return <DotMatrixView card={card} />;
+    case "ring":          return <RingGridView card={card} format={format} />;
     default:              return <BarChartView card={card} format={format} />;
   }
+}
+
+// ─── ring ────────────────────────────────────────────────────────────────────
+//
+// The TimeTracker mark — a progress ring — used as the chart. One ring per
+// row: the arc is the primary series' share of the row's total (billable of
+// tracked), the percentage sits where the mark's check would. Made for a few
+// rows: one person's split as a single bar was a wall of colour that said
+// "73%" less clearly than a ring with 73% in it.
+
+const RING_R = 46;
+const RING_C = 2 * Math.PI * RING_R;
+
+function RingGridView({ card, format }: ViewProps) {
+  const primary = card.series.find(s => s.role === "primary") ?? card.series[0];
+  const x = xKey(card);
+  if (!primary) return null;
+  return (
+    <div className="flex flex-wrap justify-center gap-x-10 gap-y-8 py-2">
+      {card.data.map((row, i) => {
+        const part = Number(row[primary.key] ?? 0);
+        const whole = card.series.reduce((t, s) => t + Number(row[s.key] ?? 0), 0);
+        const pct = whole > 0 ? Math.min(part / whole, 1) : 0;
+        const label = String(row[x] ?? "");
+        return (
+          <figure
+            key={`${label}-${i}`}
+            className="flex w-[168px] flex-col items-center text-center"
+            title={`${label}: ${formatValue(part, format ?? "hours_1dp")} ${primary.label.toLowerCase()} of ${formatValue(whole, format ?? "hours_1dp")}`}
+          >
+            <svg viewBox="0 0 120 120" className="h-[132px] w-[132px]" role="img"
+                 aria-label={`${label} ${Math.round(pct * 100)}% ${primary.label}`}>
+              <circle cx="60" cy="60" r={RING_R} fill="none"
+                      stroke={EMPHASIS.muted} strokeOpacity={0.55} strokeWidth="11" />
+              <circle
+                cx="60" cy="60" r={RING_R} fill="none"
+                stroke={colorFor(card, primary.key, primary.color)} strokeWidth="11"
+                strokeLinecap="round"
+                strokeDasharray={`${pct * RING_C} ${RING_C}`}
+                transform="rotate(-90 60 60)"
+                style={{ transition: "stroke-dasharray 600ms ease-out" }}
+              />
+              <text x="60" y="60" textAnchor="middle" dominantBaseline="central"
+                    className="fill-slate-900" style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em" }}>
+                {Math.round(pct * 100)}%
+              </text>
+              <text x="60" y="81" textAnchor="middle"
+                    className="fill-slate-400" style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.08em" }}>
+                {primary.label.toUpperCase()}
+              </text>
+            </svg>
+            <figcaption className="mt-2 w-full">
+              <div className="truncate text-sm font-semibold text-slate-800">{label}</div>
+              <div className="mt-0.5 text-xs tabular-nums text-slate-500">
+                {formatValue(part, format ?? "hours_1dp")} of {formatValue(whole, format ?? "hours_1dp")}
+              </div>
+            </figcaption>
+          </figure>
+        );
+      })}
+    </div>
+  );
 }
 
 // ─── X-axis key inference ────────────────────────────────────────────────────

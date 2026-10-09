@@ -4863,7 +4863,7 @@ def today_time(request):
             FALLBACK_CATEGORIES, FALLBACK_CATEGORIES_DEFAULT,
         )
         from tracker.views_block_evidence import _block_breakdown, _slice_suggestions
-        _names = {c.id: c.name for c in Client.objects.filter(org=org).only('id', 'name')} if org else {}
+        _names = {c.id: c.name for c in Client.objects.filter(org=org, is_active=True).only('id', 'name')} if org else {}
         if _names:
             _index = build_token_index(_names)
             # The category a NO-CLIENT row should carry once it moves to a real

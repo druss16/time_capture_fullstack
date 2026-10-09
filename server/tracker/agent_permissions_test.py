@@ -12,8 +12,10 @@ from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from datetime import timedelta
+
 from tracker.agent_permissions import (
-    normalize_permission_status, permission_issues,
+    ax_capture_state, normalize_permission_status, permission_issues,
 )
 from tracker.models import AgentDevice, Organization, OrganizationMembership
 from tracker.views_mavops import _org_health
@@ -246,3 +248,90 @@ class MavOpsTest(Base):
         c = APIClient()
         c.force_authenticate(self.owner)
         self.assertEqual(c.get("/api/mavops/devices/").status_code, 403)
+
+
+class AxSwitchTest(Base):
+    """MavOps' remote Accessibility switch (mac_agent/ax_switch.py)."""
+
+    def setUp(self):
+        super().setUp()
+        self.dev.platform = MAC
+        self.dev.app_version = "1.9.34"
+        self.dev.permission_status = AX_OFF
+        self.dev.save()
+        self.staff = User.objects.create_user("ops", email="ops@mavops.ai", password="x",
+                                              is_staff=True)
+
+    def flip(self, state, user=None, pk=None):
+        c = APIClient()
+        c.force_authenticate(user or self.staff)
+        return c.post(f"/api/mavops/devices/{pk or self.dev.pk}/ax-capture/",
+                      {"state": state}, format="json")
+
+    def control(self):
+        return APIClient().get("/api/agent/control/", {"host": "Janes-MacBook"},
+                               HTTP_X_AGENT_KEY=self.dev.api_key).json()
+
+    def test_control_is_silent_until_someone_flips_it(self):
+        self.assertNotIn("ax_capture", self.control())
+
+    def test_flip_on_reaches_the_agent_with_a_stable_id(self):
+        r = self.flip("on")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["ax_capture"], "turning_on")
+        d1, d2 = self.control(), self.control()
+        self.assertEqual(d1["ax_capture"], "on")
+        self.assertEqual(d1["ax_capture_id"], d2["ax_capture_id"], "same click, same id")
+        self.flip("off")
+        d3 = self.control()
+        self.assertEqual(d3["ax_capture"], "off")
+        self.assertNotEqual(d3["ax_capture_id"], d1["ax_capture_id"])
+
+    def test_state_follows_what_the_agent_reports_after_the_click(self):
+        self.flip("on")
+        self.dev.refresh_from_db()
+        self.assertEqual(ax_capture_state(self.dev), "turning_on")
+        after = (self.dev.ax_switch_at + timedelta(seconds=20)).isoformat()
+        self.dev.permission_status = {**NO_AX, "checked_at": after}
+        self.assertEqual(ax_capture_state(self.dev), "waiting")
+        self.dev.permission_status = {**FULL, "checked_at": after}
+        self.assertEqual(ax_capture_state(self.dev), "on")
+        self.dev.permission_status = {**AX_OFF, "rolled_back": True, "checked_at": after}
+        self.assertEqual(ax_capture_state(self.dev), "rolled_back")
+        self.assertEqual(permission_issues(self.dev.permission_status, MAC)[0]["code"],
+                         "accessibility_rolled_back")
+
+    def test_state_without_a_click(self):
+        self.assertEqual(ax_capture_state(self.dev), "off")
+        self.dev.permission_status = None
+        self.assertEqual(ax_capture_state(self.dev), "unknown")
+        self.dev.platform = "Windows-11-10.0.26100-SP0"
+        self.assertIsNone(ax_capture_state(self.dev))
+
+    def test_rolled_back_survives_normalizing(self):
+        st = {**AX_OFF, "rolled_back": True}
+        self.assertEqual(normalize_permission_status(st), st)
+
+    def test_old_agent_windows_and_bad_state_are_refused(self):
+        self.assertEqual(self.flip("sideways").status_code, 400)
+        self.dev.app_version = "1.9.33"
+        self.dev.save(update_fields=["app_version"])
+        self.assertEqual(self.flip("on").status_code, 409)
+        self.dev.app_version, self.dev.platform = "1.9.34", "Windows-11"
+        self.dev.save(update_fields=["app_version", "platform"])
+        self.assertEqual(self.flip("on").status_code, 400)
+        self.assertEqual(self.flip("on", pk=999999).status_code, 404)
+        self.dev.refresh_from_db()
+        self.assertEqual(self.dev.ax_switch, "")
+
+    def test_staff_only(self):
+        self.assertEqual(self.flip("on", user=self.owner).status_code, 403)
+
+    def test_mavops_list_carries_the_state(self):
+        self.flip("on")
+        c = APIClient()
+        c.force_authenticate(self.staff)
+        row = next(d for d in c.get("/api/mavops/devices/").json()["devices"]
+                   if d["machine_name"] == "Janes-MacBook")
+        self.assertEqual(row["ax_capture"], "turning_on")
+        self.assertTrue(row["ax_switch_supported"])

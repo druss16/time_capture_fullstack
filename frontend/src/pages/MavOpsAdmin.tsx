@@ -27,7 +27,12 @@ interface Org {
 interface Device {
   id: number; device_id: string; user: string; machine_name: string;
   os: string; agent_version: string; last_seen: string; is_active: boolean; org_name: string;
+  permission_issues?: { severity: "red" | "amber"; code: string; message: string }[];
+  // Mac only (null otherwise): the remote Accessibility switch's state.
+  ax_capture?: AxCapture | null;
+  ax_switch_supported?: boolean;
 }
+type AxCapture = "on" | "off" | "waiting" | "rolled_back" | "turning_on" | "turning_off" | "unknown";
 interface AgentLog {
   id: number; user: string; device_id: string; hostname: string; platform: string;
   app_version: string; trigger: string; line_count: number; created_at: string;
@@ -111,6 +116,15 @@ const T = {
   red:       "#f87171",   // was "#ef4444" — softer, less alarming
   purple:    "#c4b5fd",   // was "#a78bfa" — gentler
   green:     "#34d399",   // was "#10b981" — brighter, stays readable
+};
+const AX_LABEL: Record<AxCapture, [string, string]> = {
+  on:          ["accessibility on", T.green],
+  waiting:     ["accessibility: waiting for the user to allow it", T.yellow],
+  off:         ["accessibility off (disable_ax)", T.yellow],
+  rolled_back: ["accessibility rolled back after 2 freezes", T.red],
+  turning_on:  ["turning accessibility on…", T.teal],
+  turning_off: ["turning accessibility off…", T.teal],
+  unknown:     ["accessibility not reported", T.textMuted],
 };
 
 const mono = { fontFamily: "'DM Mono', monospace" };
@@ -3205,6 +3219,7 @@ export default function MavOpsAdmin() {
   const [loading, setLoading] = useState(false);
   const [requestingDevice, setRequestingDevice] = useState<string | null>(null);
   const [restartingDevice, setRestartingDevice] = useState<string | null>(null);
+  const [axSwitching, setAxSwitching] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
   const [msgType, setMsgType] = useState<"ok" | "err">("ok");
 
@@ -3409,6 +3424,20 @@ export default function MavOpsAdmin() {
     try { await apiFetch("/mavops/restart-device/", { method: "POST", body: JSON.stringify({ device_id: deviceId }) }); flash("✓ Restart queued — agent will restart within 10s."); }
     catch { flash("Restart failed.", "err"); }
     finally { setRestartingDevice(null); }
+  };
+
+  const switchAx = async (d: Device, state: "on" | "off") => {
+    const ask = state === "on"
+      ? `Turn Accessibility capture on for ${d.machine_name}?\n\nThe agent restarts within ~10s and macOS asks ${d.user} to allow TimeTracker. If it freezes twice in the next 10 minutes it turns itself back off.`
+      : `Turn Accessibility capture off for ${d.machine_name}?\n\nThe agent restarts within ~10s; window titles stop until it's turned back on.`;
+    if (!window.confirm(ask)) return;
+    setAxSwitching(d.id);
+    try {
+      const r = await apiFetch(`/mavops/devices/${d.id}/ax-capture/`, { method: "POST", body: JSON.stringify({ state }) });
+      setDevices(prev => prev.map(x => x.id === d.id ? { ...x, ax_capture: r.ax_capture } : x));
+      flash(`✓ ${r.message || "Queued."}`);
+    } catch (e: unknown) { flash(e instanceof Error && e.message ? e.message : "Switch failed.", "err"); }
+    finally { setAxSwitching(null); }
   };
 
   const resolveError = async (id: number) => {
@@ -3960,11 +3989,25 @@ export default function MavOpsAdmin() {
                         <span style={{ color: T.textMuted }}>{d.device_id?.slice(0, 10)}…</span>
                         <CopyButton text={d.device_id} />
                       </div>
+                      {(d.ax_capture || (d.permission_issues ?? []).length > 0) && (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                          {d.ax_capture && <Badge label={AX_LABEL[d.ax_capture][0]} color={AX_LABEL[d.ax_capture][1]} />}
+                          {(d.permission_issues ?? []).filter(i => !i.code.startsWith("accessibility_")).map(i => (
+                            <Badge key={i.code} label={i.message} color={i.severity === "red" ? T.red : T.yellow} />
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <Btn label="view logs" onClick={() => { setFilterHostname(d.machine_name); setTab("logs"); }} outline />
                       <Btn label={requestingDevice === d.device_id ? "requesting…" : "request logs"} onClick={() => d.device_id ? requestLogs(d.device_id) : flash("No device_id", "err")} disabled={requestingDevice === d.device_id} />
                       <Btn label={restartingDevice === d.device_id ? "restarting…" : "restart"} onClick={() => restartDevice(d.device_id)} outline color={T.yellow} disabled={restartingDevice === d.device_id} />
+                      {d.ax_capture && d.ax_switch_supported && (["off", "rolled_back", "unknown", "turning_off"] as AxCapture[]).includes(d.ax_capture) && (
+                        <Btn label={axSwitching === d.id ? "switching…" : d.ax_capture === "rolled_back" ? "try accessibility again" : "turn accessibility on"} onClick={() => switchAx(d, "on")} disabled={axSwitching === d.id} />
+                      )}
+                      {d.ax_capture && d.ax_switch_supported && (["on", "waiting", "turning_on"] as AxCapture[]).includes(d.ax_capture) && (
+                        <Btn label={axSwitching === d.id ? "switching…" : "turn accessibility off"} onClick={() => switchAx(d, "off")} outline color={T.textMuted} disabled={axSwitching === d.id} />
+                      )}
                     </div>
                   </div>
                 </div>

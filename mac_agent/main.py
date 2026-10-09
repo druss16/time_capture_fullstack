@@ -595,6 +595,23 @@ def _meeting_sig(meeting_app: str, title: str = None):
 MAX_EVENT_DURATION_S = int(_get("max_event_duration_seconds", 300))  # 5 min
 VERBOSE           = bool(_get("verbose", os.getenv("AGENT_VERBOSE") == "1"))
 PRINT_EVERY_POLL  = bool(_get("print_every", os.getenv("AGENT_PRINT_EVERY") == "1"))
+# Remote Accessibility switch (ax_switch.py): count this launch against a
+# trial MavOps started, BEFORE disable_ax is read — two freezes inside the
+# trial put disable_ax back for this very launch.
+try:
+    import ax_switch as _ax_switch
+except Exception as _e:  # pragma: no cover - shipped with the app
+    _ax_switch = None
+    print(f"[WARN] ax_switch.py not available: {_e}")
+AX_LAUNCH = "none"
+if _ax_switch is not None:
+    try:
+        AX_LAUNCH = _ax_switch.on_launch(config, time.time())
+        if AX_LAUNCH != "none":
+            save_config(config)
+            print(f"[AX] Accessibility trial: {AX_LAUNCH}")
+    except Exception as _e:
+        print(f"[WARN] Accessibility trial check failed: {_e}")
 DISABLE_AX        = bool(_get("disable_ax", os.getenv("AGENT_DISABLE_AX") == "1"))
 # Filter blanks. "".split(",") is [""], so an unset AGENT_EXCLUDE_BUNDLES put
 # the EMPTY STRING in this set — and the tracking loop excludes a window when
@@ -1537,8 +1554,12 @@ def start_permission_monitor(version_changed: bool):
     if _perms is None or sys.platform != "darwin":
         return None
     if DISABLE_AX:
+        if AX_LAUNCH == "rolled_back":
+            log("[AX] ⚠️ Froze twice right after Accessibility was turned back on — "
+                "turned it off again (disable_ax); MavOps shows it as rolled back")
         log("[AX] disabled by config (disable_ax) — not checking permissions")
         return None
+    _watch_ax_trial()
     mon = _perms.PermissionMonitor(
         _perms.MacProbes(), _PERMS_STATE_PATH, log=log, version=APP_VERSION,
         extension_last_seen=lambda: _CONTEXT_SEEN.get("browser_extension"))
@@ -1601,6 +1622,25 @@ def _retry_permission_check_later(delay_s: float = PERMISSION_RETRY_DELAY_S) -> 
             log(f"[PERMS] background permission check failed: {e}")
 
     threading.Thread(target=_run, daemon=True, name="PermsRetry").start()
+
+
+def _watch_ax_trial() -> None:
+    """End an Accessibility trial that lasted TRIAL_S without two freezes,
+    so a later, unrelated restart is not counted against it."""
+    if _ax_switch is None or AX_LAUNCH != "trial":
+        return
+    log("[AX] Accessibility back on — on trial for 10 min; two freezes turn it off again")
+
+    def _run():
+        time.sleep(_ax_switch.TRIAL_S + 5)
+        try:
+            if _ax_switch.finish_trial(config, time.time()):
+                save_config(config)
+                log("[AX] Accessibility trial passed")
+        except Exception as e:
+            log(f"[AX] trial check failed: {e}")
+
+    threading.Thread(target=_run, daemon=True, name="AxTrial").start()
 
 
 def _permissions_changed() -> None:
@@ -2673,10 +2713,36 @@ def should_stop(control_url: str, user: str, host: str) -> bool:
         except Exception as e:
             log(f"[CTRL] presence switch error: {e}")
 
+    if "ax_capture" in data:
+        _apply_ax_switch(data.get("ax_capture"), data.get("ax_capture_id"))
+
     stop = bool(data.get("stop"))
     if stop:
         log(f"[CTRL] Stop received from server: reason={data.get('reason','')}")
     return stop
+
+
+def _apply_ax_switch(state, switch_id) -> None:
+    """MavOps turned Accessibility capture on or off for this Mac. The
+    config change takes a restart: DISABLE_AX is read once, at import."""
+    if _ax_switch is None or not switch_id or config.get("ax_switch_applied") == switch_id:
+        return   # nothing new: polled every 10s, acted on once per id
+    try:
+        restart = _ax_switch.apply_remote(config, state, switch_id, time.time())
+    except Exception as e:
+        log(f"[AX] remote switch failed: {e}")
+        return
+    if config.get("ax_switch_applied") != switch_id:
+        return   # not a valid instruction
+    save_config(config)
+    log(f"[AX] MavOps turned Accessibility capture {state} (id {switch_id})")
+    if not restart:
+        return
+    if os.getppid() != 1:
+        log("[AX] Not launched by launchd — the change applies at the next launch")
+        return
+    log("[AX] Restarting to apply it")
+    os._exit(3)   # non-zero → the LaunchAgent starts us again
 
 def looks_toolish(bundle_id: Optional[str], url: Optional[str]) -> tuple[bool, str, str]:
     """Return (toolish, reason, host)."""
@@ -3028,7 +3094,8 @@ def hello(server_url: str, user: str, host: str, device_id: str):
     # Accessibility / Automation / extension status, so the Devices page can
     # say which Mac needs attention. Re-sent whenever it changes.
     if DISABLE_AX and _perms is not None:
-        payload["permissions"] = _perms.disabled_report(time.time())
+        payload["permissions"] = _perms.disabled_report(
+            time.time(), rolled_back=bool(config.get("ax_rolled_back")))
     elif PERMISSIONS is not None and PERMISSIONS.checked_at:
         try:
             payload["permissions"] = PERMISSIONS.report()

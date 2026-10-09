@@ -41,6 +41,7 @@ class NeedsReviewByPersonTests(TestCase):
 
         cls.behind = member("behind")
         cls.caught_up = member("caughtup")
+        cls.slightly = member("slightly")
 
         now = timezone.now()
         today = date.today()
@@ -54,6 +55,16 @@ class NeedsReviewByPersonTests(TestCase):
                 app_name="Excel", window_title=f"Workpapers {days_ago}",
                 classification_state="captured", is_categorized=False,
             )
+        # One item that already carries a client guess: a "suggestion".
+        Block.objects.create(
+            org=cls.org, user=cls.slightly, hostname="h",
+            start=now - timedelta(days=4, hours=1),
+            end=now - timedelta(days=4),
+            day=today - timedelta(days=4), minutes=30,
+            app_name="Word", window_title="Acme engagement letter",
+            classification_state="proposed", is_categorized=False,
+            proposed_client=cls.acme, proposed_confidence=0.6,
+        )
         # Confirmed time for both, so both have a Team row.
         for u in (cls.behind, cls.caught_up):
             Block.objects.create(
@@ -97,7 +108,7 @@ class NeedsReviewByPersonTests(TestCase):
 
     def test_chart_ranks_whoever_is_most_behind_first(self):
         chart = self._child(self._assemble(Scope(type="firm")), "team_needs_review")
-        self.assertEqual(chart["data"][0]["label"], "Behind")
+        self.assertEqual([d["label"] for d in chart["data"]], ["Behind", "Slightly"])
         self.assertEqual(chart["data"][0]["items"], 3)
         self.assertAlmostEqual(chart["data"][0]["hours"], 1.5, places=1)
 
@@ -117,8 +128,26 @@ class NeedsReviewByPersonTests(TestCase):
         items = self._child(self._assemble(scope), "team_needs_review_items")
         self.assertEqual([r["what"] for r in items["rows"]],
                          ["Workpapers 5", "Workpapers 3", "Workpapers 2"])
-        chart = self._child(self._assemble(scope), "team_needs_review")
-        self.assertEqual([d["label"] for d in chart["data"]], ["Behind"])
+
+    def _stats(self, payload):
+        row = next(s for s in payload if s["id"] == "needs_review_stats")
+        return {t["id"]: t["metric"]["value"] for t in row["tiles"]}
+
+    def test_one_person_is_numbers_not_a_single_bar(self):
+        scope = Scope(type="firm", filters={"staff": [self.behind.id]})
+        payload = self._assemble(scope)
+        self.assertIsNone(self._child(payload, "team_needs_review"))
+        stats = self._stats(payload)
+        self.assertEqual(stats["needs_review_items"], 3)
+        self.assertAlmostEqual(stats["needs_review_hours"], 1.5, places=1)
+        self.assertEqual(stats["needs_review_suggested"], 0)
+        self.assertEqual(stats["needs_review_suggestion_rate"], 0.0)
+
+    def test_firm_stats_count_suggestions_and_their_rate(self):
+        stats = self._stats(self._assemble(Scope(type="firm")))
+        self.assertEqual(stats["needs_review_items"], 4)
+        self.assertEqual(stats["needs_review_suggested"], 1)
+        self.assertEqual(stats["needs_review_suggestion_rate"], 25.0)
 
     def test_staff_scope_lists_their_items(self):
         items = self._child(
@@ -130,8 +159,7 @@ class NeedsReviewByPersonTests(TestCase):
         overview = [s.to_dict() for s in get_lens("overview").assemble(
             self.org, Scope(type="firm", filters={"staff": [self.behind.id]}),
             self.time)]
-        chart = self._child(overview, "team_needs_review")
-        self.assertEqual([d["items"] for d in chart["data"]], [3])
+        self.assertEqual(self._stats(overview)["needs_review_items"], 3)
         items = self._child(overview, "team_needs_review_items")
         self.assertEqual(len(items["rows"]), 3)
 

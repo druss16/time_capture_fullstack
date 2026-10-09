@@ -151,6 +151,15 @@ class NeedsReviewByPersonTests(TestCase):
         self.assertEqual(tile["metric"]["value"], 25.0)
         self.assertEqual(tile["metric"]["secondary_value"], 1.0)
 
+    def test_overview_team_section_shows_the_rings(self):
+        overview = [s.to_dict() for s in get_lens("overview").assemble(
+            self.org, Scope(type="firm"), self.time)]
+        rings = self._child(overview, "overview_team_rings")
+        self.assertEqual(rings["chart_type"], "ring")
+        table = self._child(overview, "overview_team")
+        self.assertEqual({d["label"] for d in rings["data"]},
+                         {r["label"] for r in table["rows"]})
+
     def test_firm_stats_count_suggestions_and_their_rate(self):
         stats = self._stats(self._assemble(Scope(type="firm")))
         self.assertEqual(stats["needs_review_items"], 4)

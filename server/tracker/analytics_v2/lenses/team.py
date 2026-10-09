@@ -35,10 +35,15 @@ from .helpers import column, kpi_tile, safe_sparklines
 def team_columns() -> list[dict]:
     return [
         column("label", "Employee", "text"),
-        column("hours", "Total hours", "hours_1dp"),
+        # Same basis as the Total Hours / Utilization tiles (see breakdowns).
+        column("hours", "Total hours", "hours_1dp",
+               tooltip="Confirmed working time. Idle/lock time and internal, "
+                       "flat-fee and non-billable client time excluded, as in "
+                       "the Total Hours tile."),
         column("billable_hours", "Billable hours", "hours_1dp"),
         column("billable_pct", "Billable %", "percent_1dp",
-               tooltip="Billable hours ÷ tracked hours."),
+               tooltip="Billable hours ÷ total hours — the same as the "
+                       "Utilization tile, per person."),
         column("capacity_pct", "Capacity %", "percent_1dp",
                tooltip="Billable hours ÷ scheduled capacity for the period, "
                        "from the work calendar and time off."),

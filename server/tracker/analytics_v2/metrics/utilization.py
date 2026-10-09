@@ -122,7 +122,7 @@ class BillableMixMetric(Metric):
     utilization, which divides active time by wall-clock hours)."""
     label = "Utilization"
     format = "percent_1dp"
-    tooltip = "Utilization = billable hrs ÷ tracked hrs\n\nBoth sides: confirmed, active (idle excluded),\nchargeable staff only. Unreviewed time is in neither."
+    tooltip = "Utilization = billable hrs ÷ tracked hrs\n\nBoth sides: confirmed, active (idle excluded),\nchargeable staff only. Internal, flat-fee and\nnon-billable client time and unreviewed time\nare in neither."
     threshold = ThresholdRange(low=55, high=75, direction="higher_is_better")
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
@@ -185,7 +185,7 @@ class BillableHoursMetric(Metric):
 class TotalHoursMetric(Metric):
     label = "Total Hours"
     format = "hours_1dp"
-    tooltip = "Total Hours = denominator of Utilization\n\nConfirmed active time of chargeable staff.\nIdle/lock time and admin/ops staff excluded."
+    tooltip = "Total Hours = denominator of Utilization\n\nConfirmed active time of chargeable staff.\nIdle/lock time, admin/ops staff and internal,\nflat-fee and non-billable client time excluded."
     valid_scopes = ("firm", "client", "staff", "service", "engagement", "composite")
     delta_good_when = "up"
 

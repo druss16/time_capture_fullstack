@@ -63,7 +63,10 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
 
     from tracker.services.billing_totals import billable_block_q, internal_client_ids
 
-    from .blocks import billable_q, confirmed_qs
+    from .blocks import (
+        IDLE_APP_NAMES, IDLE_TASK_TYPE_NAMES, billable_q, confirmed_qs,
+        utilization_excluded_client_ids,
+    )
     from .cost_rates import bill_rate_map, cost_rate_map, default_cost_rate
     from .metrics.base import apply_scope
     from .metrics.revenue_sources import flat_fee_client_ids, non_billable_client_ids
@@ -107,10 +110,29 @@ def breakdown(org, scope: Scope, time: TimeRange, dimension: str) -> list[dict]:
     if rev_exclude:
         rev_q = rev_q & ~Q(client_id__in=list(rev_exclude))
 
+    # PER-PERSON hours sit under the Total Hours / Utilization tiles, which
+    # count WORKING time (blocks.working_qs): no idle/lock-screen blocks and no
+    # internal, flat-fee or non-billable client time. Counting all confirmed
+    # time here put 19.4 h / 72.2% in Eileen's row under a 19.0 h / 73.8% tile.
+    # Client/project/category rows keep every confirmed hour — "Internal" has
+    # to show up in Where Time Goes — and money columns are unaffected (none
+    # of the excluded time is billing time).
+    working = ~Q(app_name__iexact=IDLE_APP_NAMES[0])
+    for name in IDLE_APP_NAMES[1:]:
+        working &= ~Q(app_name__iexact=name)
+    for name in IDLE_TASK_TYPE_NAMES:
+        working &= ~Q(task_type__name__iexact=name)
+    excluded = utilization_excluded_client_ids(org) if dimension == "user" else set()
+    if excluded:
+        working &= ~Q(client_id__in=list(excluded))
+    is_user = dimension == "user"
+
     rows = list(
         qs.values(*values).annotate(
-            total_min=Coalesce(Sum("minutes"), 0),
-            billable_min=Coalesce(Sum("minutes", filter=billable), 0),
+            total_min=Coalesce(
+                Sum("minutes", filter=working) if is_user else Sum("minutes"), 0),
+            billable_min=Coalesce(
+                Sum("minutes", filter=(billable & working) if is_user else billable), 0),
             billing_min=Coalesce(Sum("minutes", filter=billing), 0),
             rated=Coalesce(
                 Sum("billing_amount", filter=rev_q),

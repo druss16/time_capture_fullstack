@@ -101,6 +101,11 @@ class NeedsReviewByPersonTests(TestCase):
         self.assertEqual(chart["data"][0]["items"], 3)
         self.assertAlmostEqual(chart["data"][0]["hours"], 1.5, places=1)
 
+    def test_chart_offers_items_and_hours(self):
+        chart = self._child(self._assemble(Scope(type="firm")), "team_needs_review")
+        self.assertEqual([v["key"] for v in chart["toggle_views"]], ["items", "hours"])
+        self.assertEqual(chart["toggle_views"][1]["format"], "hours_1dp")
+
     def test_firm_view_lists_no_items(self):
         """Everyone's items at once is a wall, not an answer; the list appears
         only once the view is narrowed to people."""

@@ -77,7 +77,14 @@ export default function ChartCard({ card, onGrainChange }: Props) {
         series: active.series.map(key => ({
           key,
           label: active.label,
+          role: active.role,
         })),
+        // A ranked bar chart ranks by what it is showing: switch "Items" to
+        // "Hours" and the longest bar has to move to the top with it.
+        data: (active.chart_type ?? card.chart_type) === "horizontal_bar" && active.series[0]
+          ? [...card.data].sort((a, b) =>
+              Number(b[active.series[0]!] ?? 0) - Number(a[active.series[0]!] ?? 0))
+          : card.data,
       }
     : card;
   const format: NumberFormat | undefined =

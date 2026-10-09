@@ -1245,6 +1245,23 @@ class ClientBillingProfile(models.Model):
     def __str__(self):
         return f"{self.client.name} — {self.get_billing_type_display()}"
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # "Non-billable" has to mean non-billable everywhere — Daily Review,
+        # Reports, the timesheet, billing export, Analytics — and those read the
+        # stored Block.is_billable flag. So marking a client non-billable clears
+        # the flag on its existing time, the way Internal clients are handled
+        # (Block.save §1b keeps new time in line). Invoiced and locked blocks are
+        # left alone: they have already gone downstream as billed.
+        #
+        # One-way by design: switching the client back to hourly does NOT
+        # re-mark old time billable, because nothing records which blocks were.
+        if self.billing_type == 'non_billable':
+            Block.objects.filter(
+                client_id=self.client_id, is_billable=True,
+                invoiced=False, locked=False,
+            ).update(is_billable=False)
+
 
 # tracker/models.py - Update ClientAssignment
 
@@ -2318,6 +2335,12 @@ class Block(models.Model):
                     .first()
                 )
             if client_name and is_internal_client_name(client_name):
+                self.is_billable = False
+            # A client the firm marked Non-billable (e.g. the firm's own
+            # company) — same rule, set on its billing profile. See
+            # ClientBillingProfile.save for the existing-time half.
+            elif ClientBillingProfile.objects.filter(
+                    client_id=self.client_id, billing_type='non_billable').exists():
                 self.is_billable = False
 
         # ===============================

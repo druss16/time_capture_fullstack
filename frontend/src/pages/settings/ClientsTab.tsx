@@ -4,7 +4,7 @@ import {
   Briefcase, Plus, Pencil, Trash2, Upload, Search, X, Tag,
   ChevronDown, Check, RefreshCw, CheckSquare, Square,
   MinusSquare, UserPlus, UserMinus, FileSpreadsheet,
-  Copy, AlertCircle, CheckCircle2, Loader2, Download, Receipt, FolderKanban,
+  Copy, AlertCircle, CheckCircle2, Loader2, Download, Receipt, FolderKanban, Ban,
 } from 'lucide-react';
 import { cn } from '@/lib/design-system';
 import { safeFetchJson } from '@/lib/api';
@@ -445,6 +445,21 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
   }, [localProjects]);
   useEffect(() => { loadProjectCounts(); }, [loadProjectCounts]);
 
+  // Each client's billing arrangement, so a Non-billable (or flat-fee) client
+  // says so in the list — "Non-billable" changes how all its time counts,
+  // and that shouldn't be visible only inside the billing modal.
+  const [billingTypes, setBillingTypes] = useState<Record<number, string>>({});
+  const loadBillingTypes = useCallback(async () => {
+    try {
+      const rows: { client_id: number; billing_type: string }[] =
+        await safeFetchJson(`${API_BASE}/billing/clients/billing-profiles/`);
+      const map: Record<number, string> = {};
+      for (const r of rows) map[r.client_id] = r.billing_type;
+      setBillingTypes(map);
+    } catch { /* a badge is a convenience; the table still works */ }
+  }, []);
+  useEffect(() => { loadBillingTypes(); }, [loadBillingTypes]);
+
   const searchedClients = useMemo(() => {
     if (!search.trim()) return clients;
     const q = search.toLowerCase();
@@ -698,7 +713,31 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
                         </button>
                       </td>
                     )}
-                    <td className="px-4 py-3 font-semibold text-slate-800">{client.name}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        {client.name}
+                        {billingTypes[client.id] === 'non_billable' && (
+                          <button
+                            type="button"
+                            onClick={() => setBillingClientId(client.id)}
+                            title="Non-billable — none of this client's time counts as billable (Daily Review, Reports, timesheets, Analytics). Click to change."
+                            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-200"
+                          >
+                            <Ban className="h-3 w-3" /> Non-billable
+                          </button>
+                        )}
+                        {billingTypes[client.id] === 'flat_fee' && (
+                          <button
+                            type="button"
+                            onClick={() => setBillingClientId(client.id)}
+                            title="Flat fee / retainer — billed a fixed amount, not by the hour. Click to change."
+                            className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100"
+                          >
+                            <Receipt className="h-3 w-3" /> Flat fee
+                          </button>
+                        )}
+                      </span>
+                    </td>
                     {localProjects && (
                       <td className="px-4 py-3">
                         <button onClick={() => setProjectsClientId(client.id)}
@@ -767,7 +806,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
       {/* Modals */}
       {showImportWizard   && <ClientImportWizard onClose={() => setShowImportWizard(false)} onSuccess={() => { onRefresh(); onSuccess('Clients imported!'); }} users={users} />}
       {showBulkAssignModal && <BulkAssignModal isOpen={showBulkAssignModal} onClose={() => setShowBulkAssignModal(false)} selectedClients={selectedClients} users={users} onSuccess={() => { onRefresh(); clearSelection(); onSuccess('Team assigned!'); }} />}
-      {showBulkBillingModal && <BulkBillingModal isOpen={showBulkBillingModal} onClose={() => setShowBulkBillingModal(false)} clientIds={Array.from(selectedClientIds)} onSuccess={(m) => { setShowBulkBillingModal(false); clearSelection(); onSuccess(m); }} onError={onError} />}
+      {showBulkBillingModal && <BulkBillingModal isOpen={showBulkBillingModal} onClose={() => setShowBulkBillingModal(false)} clientIds={Array.from(selectedClientIds)} onSuccess={(m) => { setShowBulkBillingModal(false); clearSelection(); onSuccess(m); loadBillingTypes(); }} onError={onError} />}
         {taskTypeClientId !== null && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col" style={{ maxHeight: '90vh' }}>
@@ -811,7 +850,7 @@ export default function ClientsTab({ clients, currentUserRole, users, onRefresh,
               <ClientBillingProfilePanel
                 clientId={billingClientId}
                 canManage={canManage}
-                onSuccess={(m) => { onSuccess(m); setBillingClientId(null); }}
+                onSuccess={(m) => { onSuccess(m); setBillingClientId(null); loadBillingTypes(); }}
                 onError={onError}
               />
             </div>

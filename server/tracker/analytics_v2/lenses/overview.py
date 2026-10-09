@@ -101,6 +101,10 @@ class OverviewLens(Lens):
         if scope.type in ("firm", "composite"):
             sections.extend(self._clients_preview(org, scope, time))
             sections.append(self._team_preview(org, scope, time))
+        if scope.type in ("firm", "composite", "staff"):
+            # Who is behind on review — and, narrowed to people, on what.
+            from .team import needs_review_sections
+            sections.extend(needs_review_sections(org, scope, time))
 
         return sections
 

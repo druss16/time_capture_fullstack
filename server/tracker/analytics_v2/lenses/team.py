@@ -199,6 +199,19 @@ def needs_review_items_table(org, scope, time: TimeRange) -> DataTablePayload | 
     )
 
 
+def needs_review_sections(org, scope, time: TimeRange) -> list[Section]:
+    """Who is behind on review, and — narrowed to people — on what.
+
+    Shared by Team and Overview so the two can't show different numbers.
+    """
+    children = [c for c in (needs_review_chart(org, scope, time),
+                            needs_review_items_table(org, scope, time)) if c]
+    if not children:
+        return []
+    return [Section(id="team_needs_review", type="section",
+                    title="Needs review", children=children)]
+
+
 def _add_capacity(org, rows: list[dict], time: TimeRange) -> None:
     """Annotate rows in place with `capacity_hours` and `capacity_pct`."""
     from ..capacity import capacity_hours_map
@@ -253,13 +266,7 @@ class TeamLens(Lens):
         return sections + self._review_sections(org, scope, time)
 
     def _review_sections(self, org, scope, time) -> list[Section]:
-        """Who is behind on review, and — narrowed to people — on what."""
-        children = [c for c in (needs_review_chart(org, scope, time),
-                                needs_review_items_table(org, scope, time)) if c]
-        if not children:
-            return []
-        return [Section(id="team_needs_review", type="section",
-                        title="Needs review", children=children)]
+        return needs_review_sections(org, scope, time)
 
     # ── capacity picture ────────────────────────────────────────────────────
 

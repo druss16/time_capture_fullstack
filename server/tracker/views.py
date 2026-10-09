@@ -1129,6 +1129,7 @@ def agents_hello(request):
 @permission_classes([AllowAny])
 def agent_control(request):
     from tracker.services.agent_presence_switch import presence_enabled_for
+    from tracker.agent_permissions import ax_switch_payload
     username = (request.GET.get("user") or "").strip()
     host = (request.GET.get("host") or "").strip()
     device = None
@@ -1179,6 +1180,8 @@ def agent_control(request):
         # Remote off switch for the agent-presence measurement (never affects
         # tracking). See services/agent_presence_switch.py.
         "agent_presence": presence_enabled_for(presence_device),
+        # MavOps' remote Accessibility switch, only once someone has used it.
+        **ax_switch_payload(presence_device),
     })
 
 

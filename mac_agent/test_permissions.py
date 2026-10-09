@@ -450,6 +450,8 @@ def test_disabled_report_says_accessibility_is_off_by_config():
     r = P.disabled_report(1_000_000.0)
     assert r["accessibility"] == "disabled" and r["capture_mode"] == "ax_disabled", r
     assert r["checked_at"].startswith("1970-01-12"), r
+    assert "rolled_back" not in r
+    assert P.disabled_report(1_000_000.0, rolled_back=True)["rolled_back"] is True
 
 if __name__ == "__main__":
     failures = 0

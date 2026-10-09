@@ -707,6 +707,13 @@ class AgentDevice(models.Model):
     # (Windows agents, and Mac agents released before this field existed).
     permission_status = models.JSONField(null=True, blank=True)
 
+    # MavOps' remote Accessibility switch (mac_agent/ax_switch.py): 'on'
+    # clears the agent's disable_ax, 'off' sets it; '' = never used. Sent
+    # on /api/agent/control/ with ax_switch_at as the id, so the agent acts
+    # once per click and a self-rollback is not undone by the next poll.
+    ax_switch = models.CharField(max_length=3, blank=True, default="")
+    ax_switch_at = models.DateTimeField(null=True, blank=True)
+
     def rotate_key(self):
         import secrets
         self.api_key = secrets.token_hex(16)

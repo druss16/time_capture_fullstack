@@ -103,6 +103,7 @@ jobs:
             --hidden-import=pause_state \
             --hidden-import=startup_watchdog \
             --hidden-import=menubar_watchdog \
+            --hidden-import=ax_switch \
             --hidden-import=ApplicationServices \
             --hidden-import=CoreMediaIO \
             --hidden-import=inference \

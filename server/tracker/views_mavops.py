@@ -15,7 +15,7 @@ from datetime import timedelta
 import logging
 
 from tracker.auth import AgentKeyAuthentication, BearerTokenAuthentication
-from tracker.agent_permissions import permission_issues
+from tracker.agent_permissions import ax_capture_state, permission_issues, supports_ax_switch
 from tracker.models import (
     AgentDevice, AgentLog, Organization, OrganizationMembership, OrgRoutingRule, Client, MismatchFlag,
     QboCompanyMapping
@@ -380,6 +380,8 @@ def mavops_devices(request):
             'agent_version': device.app_version or '',
             'permission_status': device.permission_status,
             'permission_issues': permission_issues(device.permission_status, device.platform),
+            'ax_capture': ax_capture_state(device),
+            'ax_switch_supported': supports_ax_switch(device.app_version),
             'first_seen': device.created_at.isoformat() if device.created_at else '',
             'last_seen': device.last_seen_at.isoformat() if device.last_seen_at else '',
             'is_active': device.is_active,
@@ -807,6 +809,36 @@ def mavops_restart_device(request):
         return Response({'error': f'Device not found'}, status=404)
 
     return Response({'ok': True, 'message': f'Restart queued — agent will restart within 10s'})
+
+
+@api_view(['POST'])
+@authentication_classes([AgentKeyAuthentication, BearerTokenAuthentication])
+@permission_classes([IsAuthenticated, IsStaff])
+def mavops_ax_capture(request, pk):
+    """Turn a Mac's Accessibility capture on or off remotely: clears or sets
+    the agent's `disable_ax` (the macOS 26 hang workaround) without anyone
+    at the Mac. The agent picks it up on its next control poll (10s),
+    restarts, and rolls itself back if it freezes twice within 10 minutes.
+    See mac_agent/ax_switch.py."""
+    from tracker.agent_permissions import ax_capture_state, is_mac, supports_ax_switch
+    state = request.data.get('state')
+    if state not in ('on', 'off'):
+        return Response({'error': "state must be 'on' or 'off'"}, status=400)
+    device = AgentDevice.objects.filter(pk=pk).first()
+    if device is None:
+        return Response({'error': 'Device not found'}, status=404)
+    if not is_mac(device.platform):
+        return Response({'error': 'Only Mac agents have this switch'}, status=400)
+    if not supports_ax_switch(device.app_version):
+        return Response({'error': f'Agent {device.app_version or "?"} is too old — '
+                                  f'needs v1.9.34 or later'}, status=409)
+    device.ax_switch = state
+    device.ax_switch_at = timezone.now()
+    device.save(update_fields=['ax_switch', 'ax_switch_at'])
+    logger.info("[MAVOPS] %s turned Accessibility capture %s for device %s (%s)",
+                request.user, state, device.pk, device.hostname)
+    return Response({'ok': True, 'ax_capture': ax_capture_state(device),
+                     'message': f'Accessibility {state} queued — the agent restarts within ~10s'})
 
 
 @api_view(['POST'])

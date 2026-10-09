@@ -448,6 +448,7 @@ urlpatterns = [
     path('mavops/errors/<int:error_id>/resolve/', views_mavops.mavops_resolve_error, name='mavops-resolve-error'),
 
     path('mavops/restart-device/', views_mavops.mavops_restart_device, name='mavops-restart-device'),
+    path('mavops/devices/<int:pk>/ax-capture/', views_mavops.mavops_ax_capture, name='mavops-ax-capture'),
     path('mavops/impersonate/',        views_mavops.impersonate_org,         name='mavops-impersonate'),
     path('mavops/impersonate/clear/',  views_mavops.clear_impersonation,     name='mavops-impersonate-clear'),
     path('mavops/impersonate/status/', views_mavops.impersonation_status,    name='mavops-impersonate-status'),

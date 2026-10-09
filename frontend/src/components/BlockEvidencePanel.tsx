@@ -13,6 +13,9 @@
  * misleading "Likely X". Helps the human attribute nameless QuickBooks
  * splash/modal blocks the classifier correctly refused to guess on.
  *
+ * v0.3: clues render as same-shaped cards (merged per client), and the raw
+ * event list collapses to one row per distinct window with a time summary.
+ *
  * Design language follows CategorySummary:
  *   - Slate type scale, primary brand color for accents
  *   - Tabular nums for any time/count column
@@ -310,57 +313,59 @@ function MailEvidenceSection({ mail }: { mail: MailEvidence }) {
 }
 
 
-// ─── Surrounding context section (v0.2 — honest memory-jogger) ────────────────
+// ─── Surrounding context section (v0.3 — clue cards) ─────────────────────────
+// Every clue (best guess, before, after, most-of-day) renders as the same card
+// shape side by side, so the choice reads as "pick one of these" instead of a
+// stack of differently styled sentences. Clues naming the same client merge
+// into one card carrying every reason.
 
-function NeighborAssignButton({
-  side,
-  info,
-  onAssign,
-  assigning,
-}: {
-  side: "before" | "after";
-  info: NeighborInfo | null;
-  onAssign: (clientId: number, clientName: string, category?: string) => void;
-  assigning: boolean;
-}) {
-  if (!info) {
-    return (
-      <div className="flex gap-2 text-[12px] py-1">
-        <span className="text-slate-400 w-24 shrink-0">
-          {side === "before" ? "Right before" : "Right after"}
-        </span>
-        <span className="text-slate-400 italic">nothing else tracked nearby</span>
-      </div>
-    );
+interface Clue {
+  client_id: number;
+  client_name: string;
+  labels: string[];
+  billable: boolean | null;
+  category?: string | undefined;
+  strong: boolean;
+}
+
+function buildClues(s: Surrounding): Clue[] {
+  const clues: Clue[] = [];
+  const add = (c: Omit<Clue, "labels"> & { label: string }) => {
+    const hit = clues.find((x) => x.client_id === c.client_id);
+    if (hit) {
+      hit.labels.push(c.label);
+      hit.strong = hit.strong || c.strong;
+      if (hit.billable === null) hit.billable = c.billable;
+      hit.category = hit.category ?? c.category;
+      return;
+    }
+    const { label, ...rest } = c;
+    clues.push({ ...rest, labels: [label] });
+  };
+  if (s.suggestion?.client_id) {
+    add({
+      client_id: s.suggestion.client_id, client_name: s.suggestion.client_name || "",
+      label: "Best guess", billable: null, strong: true,
+    });
   }
-
-  const when =
-    info.gap_seconds !== null
-      ? `${fmtGapHuman(info.gap_seconds)} ${side === "before" ? "before" : "after"}`
-      : side === "before" ? "before" : "after";
-
-  const billable = info.is_billable;
-  const styles = billable
-    ? { bg: "#E1F5EE", border: "#5DCAA5", text: "#04342C", sub: "#0F6E56" }
-    : { bg: "#F1EFE8", border: "#B4B2A9", text: "#2C2C2A", sub: "#5F5E5A" };
-
-  return (
-    <button
-      onClick={() => onAssign(info.client_id, info.client_name || "", info.category)}
-      disabled={assigning}
-      className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md text-left disabled:opacity-50 transition-colors"
-      style={{ background: styles.bg, border: `0.5px solid ${styles.border}` }}
-    >
-      <span className="text-[13px]" style={{ color: styles.text }}>
-        <span style={{ color: styles.sub }}>{when} · </span>
-        <span className="font-semibold">{info.client_name}</span>
-        <span style={{ color: styles.sub }}> · {billable ? "billable" : "non-billable"}</span>
-      </span>
-      <span className="text-[12px] font-semibold whitespace-nowrap" style={{ color: styles.sub }}>
-        use this →
-      </span>
-    </button>
-  );
+  for (const side of ["before", "after"] as const) {
+    const n = s[side];
+    if (!n?.client_id) continue;
+    const gap = n.gap_seconds !== null ? `${fmtGapHuman(n.gap_seconds)} ` : "";
+    add({
+      client_id: n.client_id, client_name: n.client_name || "",
+      label: side === "before" ? `${gap}before` : `${gap}after`,
+      billable: n.is_billable, category: n.category, strong: false,
+    });
+  }
+  if (s.day_dominant) {
+    add({
+      client_id: s.day_dominant.client_id, client_name: s.day_dominant.client_name,
+      label: `${s.day_dominant.pct}% of your day`, billable: null, strong: false,
+    });
+  }
+  // A client that shows up for several reasons is the stronger clue.
+  return clues.sort((a, b) => Number(b.strong) - Number(a.strong) || b.labels.length - a.labels.length);
 }
 
 function SurroundingContext({
@@ -369,78 +374,142 @@ function SurroundingContext({
   assigning,
 }: {
   surrounding: Surrounding;
-  onAssign: (clientId: number, clientName: string) => void;
+  onAssign: (clientId: number, clientName: string, category?: string) => void;
   assigning: boolean;
 }) {
-  const { before, after, suggestion, day_dominant } = surrounding;
-  if (!before && !after && !day_dominant) return null;
+  const clues = buildClues(surrounding);
+  if (clues.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 my-2">
-      {/* Plain-English explanation of what this is */}
-      <div className="flex items-start gap-1.5 mb-2">
-        <Compass className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
-        <p className="text-[11px] text-slate-500 leading-snug">
-          We couldn&rsquo;t automatically tell which client this block belongs to.
-          Here&rsquo;s what you were doing around it &mdash; to help you remember.
-        </p>
+    <div className="border-b border-slate-200/70 px-3 py-3">
+      <div className="mb-2 flex items-center gap-1.5">
+        <Compass className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+          Clues from around this time
+        </span>
+        <span className="truncate text-[11px] text-slate-400">&middot; no client name in the block itself</span>
       </div>
 
-      {/* Trustworthy suggestion → offer a one-click assign */}
-      {suggestion && suggestion.client_id && (
-        <div className={cn(
-          "rounded-md border px-2.5 py-2 mb-2",
-          suggestion.confidence === "high"
-            ? "bg-emerald-50 border-emerald-200"
-            : "bg-amber-50 border-amber-200",
-        )}>
-          <p className="text-[12px] leading-snug mb-1.5 text-slate-700">
-            <span className="font-bold">Best guess: {suggestion.client_name}</span>
-            <span className="text-slate-600"> &mdash; {suggestion.reason}</span>
-          </p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {clues.map((c) => (
           <button
-            onClick={() => onAssign(suggestion.client_id, suggestion.client_name || "")}
+            key={c.client_id}
+            onClick={() => onAssign(c.client_id, c.client_name, c.category)}
             disabled={assigning}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold
-                       bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            title={`Assign to ${c.client_name}`}
+            className={cn(
+              "group flex min-w-0 flex-col items-start gap-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50",
+              c.strong
+                ? "border-emerald-300 bg-emerald-50 hover:bg-emerald-100/70"
+                : "border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/60",
+            )}
           >
-            {assigning
-              ? <><Check className="w-3 h-3" /> Assigning&hellip;</>
-              : <>Assign to {suggestion.client_name} <ArrowRight className="w-3 h-3" /></>}
+            <div className="flex w-full flex-wrap gap-1">
+              {c.labels.map((l) => (
+                <span key={l} className={cn(
+                  "rounded px-1.5 py-px text-[10px] font-semibold",
+                  l === "Best guess" ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500",
+                )}>
+                  {l}
+                </span>
+              ))}
+            </div>
+            <span className="w-full truncate text-[13px] font-semibold text-slate-800">{c.client_name}</span>
+            <span className="flex w-full items-center justify-between text-[11px]">
+              <span className="text-slate-400">
+                {c.billable === null ? "\u00a0" : c.billable ? "billable" : "non-billable"}
+              </span>
+              <span className="inline-flex items-center gap-0.5 font-semibold text-emerald-700 opacity-60 transition-opacity group-hover:opacity-100">
+                Use <ArrowRight className="h-3 w-3" />
+              </span>
+            </span>
           </button>
-        </div>
-      )}
-
-      {/* Before/after neighbors as one-tap assign buttons, colored by billable */}
-      <div className="flex flex-col gap-2 mb-1">
-        <NeighborAssignButton side="before" info={before} onAssign={onAssign} assigning={assigning} />
-        <NeighborAssignButton side="after" info={after} onAssign={onAssign} assigning={assigning} />
+        ))}
       </div>
 
-      {/* Day-dominant cue — only present when one client owned the majority of the day */}
-      {day_dominant && (
-        <div className="mt-2 pt-2 border-t border-slate-200/70">
-          <p className="text-[12px] text-slate-600 leading-snug">
-            <span className="text-slate-400">Most of this day </span>
-            (<span className="font-semibold tabular-nums">{day_dominant.pct}%</span>)
-            <span className="text-slate-400"> was spent on </span>
-            <span className="font-semibold text-slate-700">{day_dominant.client_name}</span>
-            <span className="text-slate-400">, if that helps narrow it down.</span>
-          </p>
-          {/* Only offer the day-dominant as a click if there was NO better suggestion */}
-          {!suggestion && (
-            <button
-              onClick={() => onAssign(day_dominant.client_id, day_dominant.client_name)}
-              disabled={assigning}
-              className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold
-                         bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
-            >
-              Assign to {day_dominant.client_name} <ArrowRight className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+      {surrounding.suggestion?.reason && (
+        <p className="mt-2 text-[11px] leading-snug text-slate-500">
+          <span className="font-semibold text-slate-600">Why the best guess:</span> {surrounding.suggestion.reason}
+        </p>
       )}
     </div>
+  );
+}
+
+
+// ─── Activity digest ──────────────────────────────────────────────────────────
+// The raw list repeated app name, title and host on three lines per event, so
+// a 15-event block scrolled forever and repeats of one window read as new work.
+// Instead: a one-line "where the time went" summary, then one row per distinct
+// window (same app + title + host), in the order first seen.
+
+interface ActivityGroup {
+  key: string;
+  first_offset: number;
+  duration_seconds: number;
+  count: number;
+  app_name: string;
+  title: string;
+  where: string | null;
+  signals: Signal[];
+  hit: Signal | undefined;
+}
+
+function groupEvents(events: EventRow[]): ActivityGroup[] {
+  const groups = new Map<string, ActivityGroup>();
+  for (const ev of events) {
+    const where = ev.url_host || ev.file_basename;
+    const key = `${ev.app_name}\u0000${ev.window_title}\u0000${where ?? ""}`;
+    const g = groups.get(key);
+    const hit = ev.signals.find((s) => s.type === "title_alias" && s.match_position);
+    if (g) {
+      g.duration_seconds += ev.duration_seconds;
+      g.count += 1;
+      for (const s of ev.signals) {
+        if (!g.signals.some((x) => x.type === s.type && x.client_id === s.client_id)) g.signals.push(s);
+      }
+      g.hit = g.hit ?? hit;
+    } else {
+      groups.set(key, {
+        key, first_offset: ev.offset_seconds, duration_seconds: ev.duration_seconds, count: 1,
+        app_name: ev.app_name, title: ev.window_title || "(no title)", where,
+        signals: [...ev.signals], hit,
+      });
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.first_offset - b.first_offset);
+}
+
+// Top places (site, file or app) by time, for the one-line summary.
+function topPlaces(events: EventRow[], n = 3): { name: string; seconds: number }[] {
+  const by = new Map<string, number>();
+  for (const ev of events) {
+    const name = ev.url_host || ev.file_basename || ev.app_name || "Unknown";
+    by.set(name, (by.get(name) ?? 0) + ev.duration_seconds);
+  }
+  return [...by.entries()]
+    .map(([name, seconds]) => ({ name, seconds }))
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, n);
+}
+
+function SignalChip({ sig }: { sig: Signal }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-semibold",
+        sig.type === "agent_selection"
+          ? "border-slate-200 bg-slate-100 text-slate-600"
+          : "border-amber-200 bg-amber-50 text-amber-800",
+      )}
+      title={sig.description}
+    >
+      <SignalIcon type={sig.type} />
+      <span className="max-w-[140px] truncate">{sig.client_name}</span>
+      {sig.confidence !== undefined && (
+        <span className="tabular-nums opacity-60">{Math.round(sig.confidence * 100)}%</span>
+      )}
+    </span>
   );
 }
 
@@ -454,6 +523,7 @@ export function BlockEvidencePanel({ blockId, onAssigned }: Props) {
   const [assigning, setAssigning] = useState(false);
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
   const [showEvents, setShowEvents] = useState(false);
+  const [showAllGroups, setShowAllGroups] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -527,13 +597,15 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
     );
   }
 
-  // Find the strongest title-alias signal per event for inline highlighting
-  const titleHit = (signals: Signal[]) =>
-    signals.find((s) => s.type === "title_alias" && s.match_position);
-
-  // Sort the time-breakdown summary by duration descending
-  const rollupEntries = Object.entries(data.summary.events_per_client)
-    .sort(([, a], [, b]) => b.duration_seconds - a.duration_seconds);
+  const groups = groupEvents(data.events);
+  const places = topPlaces(data.events);
+  const totalSeconds = data.events.reduce((t, e) => t + e.duration_seconds, 0);
+  const rollupEntries = Object.values(data.summary.events_per_client)
+    .sort((a, b) => b.duration_seconds - a.duration_seconds);
+  // Don't hide a single straggler behind a "show all" click.
+  const VISIBLE = 6;
+  const collapsible = groups.length > VISIBLE + 2;
+  const shownGroups = showAllGroups || !collapsible ? groups : groups.slice(0, VISIBLE);
 
   return (
     <div className="text-[13px]">
@@ -549,107 +621,96 @@ const handleAssign = async (clientId: number, clientName: string, category?: str
         />
       )}
 
-      {/* ─── Activity detail: collapsed by default. The surrounding-context
-            clue above is what the user needs to decide; the raw event list is
-            reference, shown only on request so the card stays scannable. ─── */}
-      {(rollupEntries.length > 0 || data.events.length > 0) && (
+      {/* ─── Activity: collapsed by default. The clues above are what the
+            user decides from; this is reference, one row per distinct window. ─── */}
+      {data.events.length > 0 && (
         <div>
           <button
             onClick={(e) => { e.stopPropagation(); setShowEvents((v) => !v); }}
-            className="w-full flex items-center gap-1.5 px-3 py-2 text-[11px] font-semibold
-                       text-slate-400 hover:text-slate-600 transition-colors"
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] text-slate-400 transition-colors hover:text-slate-600"
           >
-            {showEvents ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            {showEvents ? "Hide activity" : `Show activity (${data.summary.total_events} ${data.summary.total_events === 1 ? "event" : "events"})`}
+            {showEvents ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+            <span className="font-semibold">{showEvents ? "Hide activity" : "What you were doing"}</span>
+            <span className="truncate">
+              &middot; {groups.length} {groups.length === 1 ? "window" : "windows"}
+              {places.length > 0 && <> &middot; mostly {places[0].name}</>}
+            </span>
           </button>
 
           {showEvents && (
-            <>
-              {/* Time breakdown roll-up */}
-              {rollupEntries.length > 0 && (
-                <div className="px-3 py-2.5 border-b border-slate-200/70">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                    Time breakdown
-                  </div>
-                  <div className="space-y-1">
-                    {rollupEntries.map(([cid, info]) => (
-                      <div key={cid} className="flex items-baseline justify-between gap-2">
-                        <span className="text-slate-700 font-medium truncate">{info.name}</span>
-                        <span className="font-mono text-slate-900 tabular-nums text-xs shrink-0">
-                          {fmtDuration(info.duration_seconds)}
-                          <span className="text-slate-400 ml-1.5">
-                            &middot; {info.event_count} {info.event_count === 1 ? "event" : "events"}
-                          </span>
-                        </span>
-                      </div>
+            <div className="px-3 pb-3">
+              {/* Where the time went: a proportional strip plus legend. */}
+              {totalSeconds > 0 && (
+                <div className="mb-3">
+                  <div className="flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    {places.map((p, i) => (
+                      <div
+                        key={p.name}
+                        className={["bg-slate-500", "bg-slate-400", "bg-slate-300"][i]}
+                        style={{ width: `${(p.seconds / totalSeconds) * 100}%` }}
+                      />
                     ))}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                    {places.map((p, i) => (
+                      <span key={p.name} className="inline-flex items-center gap-1">
+                        <span className={cn("h-1.5 w-1.5 rounded-full", ["bg-slate-500", "bg-slate-400", "bg-slate-300"][i])} />
+                        <span className="font-mono">{p.name}</span>
+                        <span className="tabular-nums text-slate-400">{fmtDuration(p.seconds)}</span>
+                      </span>
+                    ))}
+                    {rollupEntries.length > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-slate-400">client names seen:</span>
+                        {rollupEntries.map((r) => (
+                          <span key={r.name} className="font-semibold text-slate-600">
+                            {r.name} <span className="font-normal tabular-nums text-slate-400">{fmtDuration(r.duration_seconds)}</span>
+                          </span>
+                        ))}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Event list (chronological) */}
-              {data.events.length === 0 ? (
-                <div className="px-3 py-4 text-xs text-slate-400 text-center italic">
-                  No events recorded for this block.
-                </div>
-              ) : (
-                <ol className="divide-y divide-slate-200/70">
-                  {data.events.map((ev) => {
-                    const hit = titleHit(ev.signals);
-                    return (
-                      <li key={ev.id} className="px-3 py-2.5">
-                        <div className="flex items-baseline gap-2 mb-1">
-                          <span className="font-mono text-[10px] text-slate-500 tabular-nums shrink-0">
-                            {fmtOffset(ev.offset_seconds)}
-                          </span>
-                          <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
-                            ({fmtDuration(ev.duration_seconds)})
-                          </span>
-                          <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
-                            {ev.app_name}
-                          </span>
+              {/* One row per distinct window, in the order first seen. */}
+              <ol className="divide-y divide-slate-100 rounded-md border border-slate-200/70">
+                {shownGroups.map((g) => (
+                  <li key={g.key} className="flex items-start gap-3 px-2.5 py-1.5">
+                    <span className="w-11 shrink-0 pt-px font-mono text-[10.5px] tabular-nums text-slate-400">
+                      {fmtOffset(g.first_offset)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <span className="truncate text-[13px] text-slate-800" title={g.title}>
+                          <HighlightedTitle title={g.title} position={g.hit?.match_position} />
+                        </span>
+                        <span className="shrink-0 truncate font-mono text-[10.5px] text-slate-400">
+                          {g.where || g.app_name}
+                        </span>
+                      </div>
+                      {g.signals.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {g.signals.map((sig, i) => <SignalChip key={i} sig={sig} />)}
                         </div>
-                        <div className="text-[13px] text-slate-800 leading-snug break-words">
-                          <HighlightedTitle
-                            title={ev.window_title || "(no title)"}
-                            position={hit?.match_position}
-                          />
-                        </div>
-                        {(ev.url_host || ev.file_basename) && (
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            {ev.url_host || ev.file_basename}
-                          </div>
-                        )}
-                        {ev.signals.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {ev.signals.map((sig, idx) => (
-                              <span
-                                key={idx}
-                                className={cn(
-                                  "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-semibold",
-                                  sig.type === "agent_selection"
-                                    ? "bg-slate-100 text-slate-600 border-slate-200"
-                                    : "bg-amber-50 text-amber-800 border-amber-200"
-                                )}
-                                title={sig.description}
-                              >
-                                <SignalIcon type={sig.type} />
-                                <span className="truncate max-w-[160px]">{sig.client_name}</span>
-                                {sig.confidence !== undefined && (
-                                  <span className="opacity-60 tabular-nums">
-                                    {Math.round(sig.confidence * 100)}%
-                                  </span>
-                                )}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ol>
+                      )}
+                    </div>
+                    <span className="shrink-0 pt-px text-right font-mono text-[11px] tabular-nums text-slate-600">
+                      {fmtDuration(g.duration_seconds)}
+                      {g.count > 1 && <span className="ml-1 text-slate-400">&times;{g.count}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {collapsible && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowAllGroups((v) => !v); }}
+                  className="mt-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600"
+                >
+                  {showAllGroups ? "Show fewer" : `Show all ${groups.length} windows`}
+                </button>
               )}
-            </>
+            </div>
           )}
         </div>
       )}
